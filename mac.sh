@@ -8,10 +8,10 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Print functions for readability
-print_message() { echo -e "${CYAN}\u27A1 ${1}${NC}"; }
-print_success() { echo -e "${GREEN}\u2714 ${1}${NC}"; }
-print_warning() { echo -e "${YELLOW}\u2757 ${1}${NC}"; }
-print_error() { echo -e "${RED}\u2718 ${1}${NC}"; }
+print_message() { printf "${CYAN}\u27A1 %s${NC}\n" "$1"; }
+print_success() { printf "${GREEN}\u2714 %s${NC}\n" "$1"; }
+print_warning() { printf "${YELLOW}\u2757 %s${NC}\n" "$1"; }
+print_error() { printf "${RED}\u2718 %s${NC}\n" "$1"; }
 
 # Install core packages with Homebrew if missing
 install_core_packages() {
