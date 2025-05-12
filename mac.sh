@@ -159,7 +159,7 @@ update_brew() {
 }
 
 # Run the setup tasks
-print_message "Version 4 (macOS)"
+print_message "Version 5 (macOS)"
 install_homebrew
 install_core_packages
 setup_ssh_key
