@@ -8,18 +8,18 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Print functions for readability
-print_message() { echo -e "${CYAN}==> ${1}${NC}"; }
-print_success() { echo -e "${GREEN}✔ ${1}${NC}"; }
-print_warning() { echo -e "${YELLOW}! ${1}${NC}"; }
-print_error() { echo -e "${RED}✘ ${1}${NC}"; }
+print_message() { printf "${CYAN} %s${NC}\n" "$1"; }
+print_success() { printf "${GREEN} %s${NC}\n" "$1"; }
+print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
+print_error() { printf "${RED} %s${NC}\n" "$1"; }
 
 # Check if running on Raspberry Pi OS
 check_raspberry_pi() {
-    print_message "Detecting Raspberry Pi hardware or OS…"
+    print_message "Detecting Raspberry Pi hardware or OS…"
 
     local is_pi=false
 
-    # 1) Look for Raspberry Pi OS IDs
+    # 1) Look for Raspberry Pi OS IDs
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         if [[ "$ID" =~ ^(raspbian|raspios)$ ]] || [[ "$PRETTY_NAME" =~ Raspberry\ Pi ]]; then
@@ -40,9 +40,9 @@ check_raspberry_pi() {
     fi
 
     if [ "$is_pi" = true ]; then
-        print_success "Raspberry Pi hardware/OS detected."
+        print_success "Raspberry Pi hardware/OS detected."
     else
-        print_warning "Could not confirm Raspberry Pi. Continuing anyway…"
+        print_warning "Could not confirm Raspberry Pi. Continuing anyway…"
     fi
 }
 
@@ -239,7 +239,7 @@ install_chezmoi() {
 
 # Initialize chezmoi with Raspberry Pi optimizations
 initialize_chezmoi() {
-    # If chezmoi isn’t on PATH, fall back to ~/bin/chezmoi
+    # If chezmoi isn't on PATH, fall back to ~/bin/chezmoi
     if ! command -v chezmoi >/dev/null; then
         if [ -x "$HOME/bin/chezmoi" ]; then
             local chezmoi_cmd="$HOME/bin/chezmoi"
@@ -255,7 +255,7 @@ initialize_chezmoi() {
 
     # ---------- NEW: re‑try if the repo directory exists but is empty ----------
     if [ -d "$chez_src" ] && [ -z "$(ls -A "$chez_src")" ]; then
-        print_warning "chezmoi directory exists but is empty – retrying initialization…"
+        print_warning "chezmoi directory exists but is empty – retrying initialization…"
         rm -rf "$chez_src"
     fi
     # --------------------------------------------------------------------------
@@ -371,7 +371,7 @@ apply_chezmoi_config() {
 
     # Run verbosely; bail if anything returns non‑zero
     if ! $chezmoi_cmd apply --verbose; then
-        print_error "chezmoi apply failed – fix the dotfiles, then rerun the script."
+        print_error "chezmoi apply failed – fix the dotfiles, then rerun the script."
         exit 1
     fi
 
@@ -433,7 +433,7 @@ enable_ssh_server() {
 ensure_ssh_agent() {
     print_message "Making sure ssh‑agent is running and key is loaded…"
 
-    # If a key is already listed, we’re done.
+    # If a key is already listed, we're done.
     if ssh-add -l >/dev/null 2>&1; then
         print_success "ssh‑agent already running with a key loaded."
         return
@@ -474,17 +474,17 @@ EOF
     # ------------------------------------------------------------
 }
 
-# ----------------------[ Fast Node Manager ]--------------------
+# ----------------------[ Fast Node Manager ]--------------------
 install_fnm() {
     if command -v fnm >/dev/null; then
         print_warning "fnm already installed."
         return
     fi
 
-    print_message "Installing fnm (Fast Node Manager)…"
+    print_message "Installing fnm (Fast Node Manager)…"
     curl -fsSL https://fnm.vercel.app/install | bash
 
-    # fnm’s installer drops a snippet in ~/.bashrc; make sure Fish picks it up too
+    # fnm's installer drops a snippet in ~/.bashrc; make sure Fish picks it up too
     if [ -f ~/.config/fish/conf.d ]; then
         # only add once
         if ! grep -q "fnm env" ~/.config/fish/conf.d/fnm.fish 2>/dev/null; then

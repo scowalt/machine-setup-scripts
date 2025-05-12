@@ -8,10 +8,10 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Print functions for readability
-print_message() { echo -e "${CYAN}==> ${1}${NC}"; }
-print_success() { echo -e "${GREEN}✔ ${1}${NC}"; }
-print_warning() { echo -e "${YELLOW}! ${1}${NC}"; }
-print_error() { echo -e "${RED}✘ ${1}${NC}"; }
+print_message() { printf "${CYAN} %s${NC}\n" "$1"; }
+print_success() { printf "${GREEN} %s${NC}\n" "$1"; }
+print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
+print_error() { printf "${RED} %s${NC}\n" "$1"; }
 
 # Update dependencies non-silently
 update_dependencies() {
