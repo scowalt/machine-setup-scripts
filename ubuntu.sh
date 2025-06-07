@@ -13,6 +13,31 @@ print_success() { printf "${GREEN} %s${NC}\n" "$1"; }
 print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
 print_error() { printf "${RED} %s${NC}\n" "$1"; }
 
+# Enforce that the script is run as the 'scowalt' user
+enforce_scowalt_user() {
+    if [ "$(whoami)" != "scowalt" ]; then
+        print_error "This script must be run as the 'scowalt' user for security reasons."
+
+        # Check if the 'scowalt' user exists
+        if ! id "scowalt" &>/dev/null; then
+            print_message "User 'scowalt' not found. Creating user..."
+            sudo useradd --create-home --shell /bin/bash scowalt
+            sudo usermod -aG sudo scowalt
+            print_success "User 'scowalt' created and added to the sudo group."
+            print_warning "A password must be set for 'scowalt' to continue."
+            print_message "Please run 'sudo passwd scowalt' to set a password."
+            print_message "Then, switch to the 'scowalt' user and re-run this script."
+        else
+            print_warning "User 'scowalt' already exists."
+            print_message "Please switch to the 'scowalt' user and re-run this script."
+        fi
+
+        exit 1
+    else
+        print_success "Running as 'scowalt' user. Proceeding with setup."
+    fi
+}
+
 # Update dependencies non-silently
 update_dependencies() {
     print_message "Updating package lists..."
@@ -178,6 +203,7 @@ install_tmux_plugins() {
     print_success "tmux plugins installed and updated."
 }
 
+enforce_scowalt_user
 update_dependencies # I do this first b/c on raspberry pi, it's slow
 update_and_install_core
 setup_ssh_key
