@@ -143,7 +143,7 @@ setup_ssh_key() {
 install_starship() {
     if ! command -v starship &> /dev/null; then
         print_message "Installing Starship prompt..."
-        sh -c "$(curl -fsSL https://starship.rs/install.sh)"
+        sh -c "$(curl -fsSL https://starship.rs/install.sh)" -- -y
         print_success "Starship installed."
     else
         print_warning "Starship is already installed."
