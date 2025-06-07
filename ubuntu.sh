@@ -75,6 +75,37 @@ update_and_install_core() {
     fi
 }
 
+# Install and enable SSH server
+setup_ssh_server() {
+    print_message "Checking and setting up SSH server..."
+
+    # Check if openssh-server is installed
+    if ! dpkg -s "openssh-server" &> /dev/null; then
+        print_message "Installing openssh-server..."
+        sudo apt install -qq -y openssh-server > /dev/null
+        print_success "openssh-server installed."
+    else
+        print_warning "openssh-server is already installed."
+    fi
+
+    # Check if ssh service is active
+    if ! systemctl is-active --quiet ssh; then
+        print_message "Starting ssh service..."
+        sudo systemctl start ssh
+        print_success "ssh service started."
+    else
+        print_warning "ssh service is already active."
+    fi
+
+    # Check if ssh service is enabled to start on boot
+    if ! systemctl is-enabled --quiet ssh; then
+        print_message "Enabling ssh service to start on boot..."
+        sudo systemctl enable ssh
+        print_success "ssh service enabled."
+    else
+        print_warning "ssh service is already enabled."
+    fi
+}
 
 # Check and set up SSH key
 setup_ssh_key() {
@@ -206,6 +237,7 @@ install_tmux_plugins() {
 enforce_scowalt_user
 update_dependencies # I do this first b/c on raspberry pi, it's slow
 update_and_install_core
+setup_ssh_server
 setup_ssh_key
 install_starship
 install_chezmoi
