@@ -269,16 +269,16 @@ install_tmux_plugins() {
 }
 
 enforce_scowalt_user
-fix_dpkg_and_broken_dependencies
-update_dependencies # I do this first b/c on raspberry pi, it's slow
-update_and_install_core
 setup_ssh_server
 setup_ssh_key
-install_starship
-install_infisical
 install_chezmoi
 initialize_chezmoi
 configure_chezmoi_git
 chezmoi apply
+fix_dpkg_and_broken_dependencies
+update_dependencies
+update_and_install_core
+install_starship
+install_infisical
 set_fish_as_default_shell
 install_tmux_plugins
