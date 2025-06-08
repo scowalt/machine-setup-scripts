@@ -190,7 +190,7 @@ install_infisical() {
 install_chezmoi() {
     if ! command -v chezmoi &> /dev/null; then
         print_message "Installing chezmoi..."
-        if ! (curl -fsLS https://chezmoi.io/get-chezmoi-repo | sudo -E bash); then
+        if ! (sh -c "$(curl -fsLS get.chezmoi.io)" -- init --apply scowalt); then
             print_error "Failed to add chezmoi repository."
             exit 1
         fi
