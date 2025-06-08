@@ -146,7 +146,7 @@ setup_ssh_key() {
     else
         # Generate a new SSH key and log details
         print_warning "No SSH key found. Generating a new SSH key..."
-        ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N "" -C "scowalt@wsl"
+        ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N "" -C "scowalt@$(hostname)"
         print_success "SSH key generated."
         print_message "Please add the following SSH key to GitHub:"
         cat ~/.ssh/id_rsa.pub
