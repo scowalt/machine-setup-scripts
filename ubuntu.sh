@@ -165,6 +165,25 @@ install_starship() {
     fi
 }
 
+# Install Infisical if not installed
+install_infisical() {
+    if ! command -v infisical &> /dev/null; then
+        print_message "Installing Infisical CLI..."
+        if ! (curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash); then
+            print_error "Failed to add Infisical repository."
+            exit 1
+        fi
+        sudo apt-get update
+        if ! sudo apt-get install -y infisical; then
+            print_error "Failed to install Infisical CLI. Please review the output above."
+            exit 1
+        fi
+        print_success "Infisical CLI installed."
+    else
+        print_warning "Infisical CLI is already installed."
+    fi
+}
+
 # Install chezmoi if not installed
 install_chezmoi() {
     if ! command -v chezmoi &> /dev/null; then
@@ -256,6 +275,7 @@ update_and_install_core
 setup_ssh_server
 setup_ssh_key
 install_starship
+install_infisical
 install_chezmoi
 initialize_chezmoi
 configure_chezmoi_git
