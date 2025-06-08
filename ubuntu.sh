@@ -48,6 +48,8 @@ enforce_scowalt_user() {
     else
         print_success "Running as 'scowalt' user. Proceeding with setup."
     fi
+
+    cd ~
 }
 
 # Update dependencies non-silently
