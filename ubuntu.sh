@@ -255,18 +255,27 @@ install_tmux_plugins() {
         print_warning "tmux plugin manager already installed."
     fi
 
-    for plugin in tmux-resurrect tmux-continuum; do
-        if [ ! -d "$plugin_dir/$plugin" ]; then
-            print_message "Installing $plugin..."
-            git clone -q https://github.com/tmux-plugins/$plugin "$plugin_dir/$plugin"
-            print_success "$plugin installed."
-        else
-            print_warning "$plugin already installed."
-        fi
-    done
+    print_message "Installing/updating tmux plugins via tpm..."
+    local tpm_installer=~/.tmux/plugins/tpm/bin/install_plugins
+    
+    # Let tpm script install plugins. It handles finding tmux.conf and starting a server.
+    # Capture output to show only on failure.
+    local output
+    if ! output=$($tpm_installer 2>&1); then
+        print_error "Failed to install tmux plugins. tpm output was:"
+        echo "$output"
+        # Not exiting, to maintain original script's behavior.
+        return
+    fi
 
-    tmux source ~/.tmux.conf 2> /dev/null || print_warning "tmux not started; source tmux.conf manually if needed."
-    ~/.tmux/plugins/tpm/bin/install_plugins > /dev/null
+    # Try to source the config to make plugins available in a running session.
+    # This might fail if tmux server is not running, which is fine.
+    local tmux_conf="$HOME/.config/tmux/tmux.conf"
+    if [ -f "$tmux_conf" ]; then
+        tmux source-file "$tmux_conf" >/dev/null 2>&1
+    elif [ -f "$HOME/.tmux.conf" ]; then # fallback to old location
+        tmux source-file "$HOME/.tmux.conf" >/dev/null 2>&1
+    fi
     print_success "tmux plugins installed and updated."
 }
 
