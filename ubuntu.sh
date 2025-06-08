@@ -190,10 +190,14 @@ install_infisical() {
 install_chezmoi() {
     if ! command -v chezmoi &> /dev/null; then
         print_message "Installing chezmoi..."
-        sh -c "$(curl -fsLS get.chezmoi.io)"
-        # Add ~/bin to PATH if not already present
-        if ! grep -q "PATH=\$HOME/bin" ~/.bashrc; then
-            echo 'export PATH=$HOME/bin:$PATH' >> ~/.bashrc
+        if ! (curl -fsLS https://chezmoi.io/get-chezmoi-repo | sudo -E bash); then
+            print_error "Failed to add chezmoi repository."
+            exit 1
+        fi
+        sudo apt-get update
+        if ! sudo apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confnew" install -y chezmoi; then
+            print_error "Failed to install chezmoi. Please review the output above."
+            exit 1
         fi
         print_success "chezmoi installed."
     else
