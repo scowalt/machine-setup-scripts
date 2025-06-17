@@ -285,6 +285,8 @@ install_tmux_plugins() {
     print_success "tmux plugins installed and updated."
 }
 
+
+print_message "Setup script v2"
 enforce_scowalt_user
 fix_dpkg_and_broken_dependencies
 update_dependencies # I do this first b/c on raspberry pi, it's slow
