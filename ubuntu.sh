@@ -156,6 +156,27 @@ setup_ssh_key() {
     fi
 }
 
+# Add GitHub to known hosts to avoid prompts
+add_github_to_known_hosts() {
+    print_message "Ensuring GitHub is in known hosts..."
+    local known_hosts_file=~/.ssh/known_hosts
+    mkdir -p ~/.ssh
+    chmod 700 ~/.ssh
+    touch "$known_hosts_file"
+    chmod 600 "$known_hosts_file"
+
+    if ! ssh-keygen -F github.com &>/dev/null; then
+        print_message "Adding GitHub's SSH key to known_hosts..."
+        if ! ssh-keyscan github.com >> "$known_hosts_file" 2>/dev/null; then
+            print_error "Failed to add GitHub's SSH key to known_hosts."
+            exit 1
+        fi
+        print_success "GitHub's SSH key added."
+    else
+        print_warning "GitHub's SSH key already exists in known_hosts."
+    fi
+}
+
 # Install Starship if not installed
 install_starship() {
     if ! command -v starship &> /dev/null; then
@@ -209,7 +230,10 @@ install_chezmoi() {
 initialize_chezmoi() {
     if [ ! -d ~/.local/share/chezmoi ]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
-        chezmoi init --apply scowalt/dotfiles --ssh > /dev/null
+        if ! chezmoi init --apply scowalt/dotfiles --ssh; then
+            print_error "Failed to initialize chezmoi. Please review the output above."
+            exit 1
+        fi
         print_success "chezmoi initialized with scowalt/dotfiles."
     else
         print_warning "chezmoi is already initialized."
@@ -284,13 +308,14 @@ install_tmux_plugins() {
 }
 
 
-print_message "Setup script v5"
+print_message "Setup script v6"
 enforce_scowalt_user
 fix_dpkg_and_broken_dependencies
 update_dependencies # I do this first b/c on raspberry pi, it's slow
 update_and_install_core
 setup_ssh_server
 setup_ssh_key
+add_github_to_known_hosts
 install_starship
 install_infisical
 install_chezmoi
