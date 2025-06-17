@@ -20,8 +20,8 @@ fix_dpkg_and_broken_dependencies() {
     print_message "Checking for and fixing dpkg interruptions or broken dependencies..."
     # The following commands will fix most common dpkg/apt issues.
     # They are safe to run even if there are no issues.
-    sudo dpkg --force-confold --configure -a
-    sudo apt-get -o Dpkg::Options::="--force-confold" install -f -y
+    sudo DEBIAN_FRONTEND=noninteractive dpkg --force-confold --configure -a
+    sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" install -f -y
     print_success "dpkg and dependencies check/fix complete."
 }
 
@@ -55,9 +55,9 @@ enforce_scowalt_user() {
 # Update dependencies non-silently
 update_dependencies() {
     print_message "Updating package lists..."
-    sudo apt-get update
-    sudo apt-get -o Dpkg::Options::="--force-confold" upgrade -y
-    sudo apt-get autoremove -y
+    sudo DEBIAN_FRONTEND=noninteractive apt-get update
+    sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" upgrade -y
+    sudo DEBIAN_FRONTEND=noninteractive apt-get autoremove -y
     print_success "Package lists updated."
 }
 
@@ -81,7 +81,7 @@ update_and_install_core() {
     # Install any packages that are not yet installed
     if [ "${#to_install[@]}" -gt 0 ]; then
         print_message "Installing missing packages: ${to_install[*]}"
-        if ! sudo apt-get -o Dpkg::Options::="--force-confold" install -qq -y "${to_install[@]}"; then
+        if ! sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" install -qq -y "${to_install[@]}"; then
             print_error "Failed to install some core packages. Please review the output above."
             exit 1
         fi
@@ -98,7 +98,7 @@ setup_ssh_server() {
     # Check if openssh-server is installed
     if ! dpkg -s "openssh-server" &> /dev/null; then
         print_message "Installing openssh-server..."
-        if ! sudo apt-get -o Dpkg::Options::="--force-confold" install -qq -y openssh-server; then
+        if ! sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" install -qq -y openssh-server; then
             print_error "Failed to install openssh-server."
             exit 1
         fi
@@ -177,8 +177,8 @@ install_infisical() {
             print_error "Failed to add Infisical repository."
             exit 1
         fi
-        sudo apt-get update
-        if ! sudo apt-get -o Dpkg::Options::="--force-confold" install -y infisical; then
+        sudo DEBIAN_FRONTEND=noninteractive apt-get update
+        if ! sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" install -y infisical; then
             print_error "Failed to install Infisical CLI. Please review the output above."
             exit 1
         fi
@@ -196,8 +196,8 @@ install_chezmoi() {
             print_error "Failed to add chezmoi repository."
             exit 1
         fi
-        sudo apt-get update
-        if ! sudo apt-get -o Dpkg::Options::="--force-confold" install -y chezmoi; then
+        sudo DEBIAN_FRONTEND=noninteractive apt-get update
+        if ! sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" install -y chezmoi; then
             print_error "Failed to install chezmoi. Please review the output above."
             exit 1
         fi
@@ -286,7 +286,7 @@ install_tmux_plugins() {
 }
 
 
-print_message "Setup script v2"
+print_message "Setup script v3"
 enforce_scowalt_user
 fix_dpkg_and_broken_dependencies
 update_dependencies # I do this first b/c on raspberry pi, it's slow
