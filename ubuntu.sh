@@ -49,7 +49,7 @@ enforce_scowalt_user() {
         print_success "Running as 'scowalt' user. Proceeding with setup."
     fi
 
-    cd ~
+    cd ~ || exit 1
 }
 
 # Update dependencies non-silently
@@ -286,7 +286,7 @@ install_tmux_plugins() {
 }
 
 
-print_message "Setup script v3"
+print_message "Setup script v4"
 enforce_scowalt_user
 fix_dpkg_and_broken_dependencies
 update_dependencies # I do this first b/c on raspberry pi, it's slow
