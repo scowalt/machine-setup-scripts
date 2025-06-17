@@ -1,0 +1,6 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+If you ever touch a setup script, you should bump its version so that I know if the latest version is running on my server. The version is printed near the bottom of each script. 
