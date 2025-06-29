@@ -64,7 +64,7 @@ update_and_install_core() {
     print_message "Checking and installing core packages as needed..."
 
     # Define an array of required packages
-    local packages=("git" "curl" "fish" "tmux" "fonts-firacode")
+    local packages=("git" "curl" "fish" "tmux" "fonts-firacode" "gh")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
