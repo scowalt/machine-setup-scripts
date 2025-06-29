@@ -176,6 +176,11 @@ EOF
     print_success "fnm installed. Restart your shell or run 'eval \"$(fnm env)\"' to activate it now."
 }
 
+# Install Tailscale
+install_tailscale() {
+    print_message "Skipping Tailscale installation as it is not needed on WSL."
+}
+
 # Install tmux plugins for session persistence
 install_tmux_plugins() {
     local plugin_dir=~/.tmux/plugins
@@ -219,6 +224,7 @@ setup_ssh_key
 install_homebrew
 install_starship
 install_fnm
+install_tailscale
 install_chezmoi
 initialize_chezmoi
 configure_chezmoi_git

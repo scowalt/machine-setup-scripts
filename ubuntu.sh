@@ -296,6 +296,28 @@ EOF
     print_success "fnm installed. Restart your shell or run 'eval \"$(fnm env)\"' to activate it now."
 }
 
+# Install Tailscale
+install_tailscale() {
+    if ! command -v tailscale &>/dev/null; then
+        print_message "Installing Tailscale..."
+        # Official install script (adds repo + installs package)
+        curl -fsSL https://tailscale.com/install.sh | sudo sh
+        sudo systemctl enable --now tailscaled
+        print_success "Tailscale installed and service started."
+
+        # Optional immediate login
+        read -p "Run 'tailscale up' now to authenticate? (y/n): " ts_up
+        if [[ "$ts_up" =~ ^[Yy]$ ]]; then
+            print_message "Bringing interface up..."
+            sudo tailscale up       # add --authkey=... if you prefer key-based auth
+        else
+            print_warning "Skip for now; run 'sudo tailscale up' later to log in."
+        fi
+    else
+        print_warning "Tailscale already installed."
+    fi
+}
+
 # Install tmux plugins for session persistence
 install_tmux_plugins() {
     local plugin_dir=~/.tmux/plugins
@@ -342,6 +364,7 @@ setup_ssh_key
 add_github_to_known_hosts
 install_starship
 install_fnm
+install_tailscale
 install_infisical
 install_chezmoi
 initialize_chezmoi
