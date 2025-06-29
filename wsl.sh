@@ -145,7 +145,7 @@ set_fish_as_default_shell() {
         if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
             echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
         fi
-        chsh -s /usr/bin/fish
+        sudo chsh -s /usr/bin/fish $USER
         print_success "Fish shell set as default."
     else
         print_warning "Fish shell is already the default shell."
