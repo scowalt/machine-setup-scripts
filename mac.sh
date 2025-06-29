@@ -19,7 +19,7 @@ install_core_packages() {
 
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
-    local packages=("git" "curl" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "infisical")
+    local packages=("git" "curl" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "infisical" "git-town")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
@@ -146,6 +146,47 @@ add_github_to_known_hosts() {
     fi
 }
 
+# Configure git-town completions
+configure_git_town() {
+    if command -v git-town &> /dev/null; then
+        print_message "Configuring git-town completions..."
+        
+        # Set up Fish shell completions for git-town
+        if [ -d ~/.config/fish/completions ]; then
+            if ! [ -f ~/.config/fish/completions/git-town.fish ]; then
+                git town completion fish > ~/.config/fish/completions/git-town.fish
+                print_success "git-town Fish completions configured."
+            else
+                print_warning "git-town Fish completions already configured."
+            fi
+        fi
+        
+        # Set up Bash completions for git-town
+        local bash_completion_dir="$(brew --prefix)/etc/bash_completion.d"
+        if [ -d "$bash_completion_dir" ]; then
+            if ! [ -f "$bash_completion_dir/git-town" ]; then
+                git town completion bash > "$bash_completion_dir/git-town"
+                print_success "git-town Bash completions configured."
+            else
+                print_warning "git-town Bash completions already configured."
+            fi
+        fi
+        
+        # Set up Zsh completions for git-town
+        local zsh_completion_dir="$(brew --prefix)/share/zsh/site-functions"
+        if [ -d "$zsh_completion_dir" ]; then
+            if ! [ -f "$zsh_completion_dir/_git-town" ]; then
+                git town completion zsh > "$zsh_completion_dir/_git-town"
+                print_success "git-town Zsh completions configured."
+            else
+                print_warning "git-town Zsh completions already configured."
+            fi
+        fi
+    else
+        print_warning "git-town not found, skipping completion setup."
+    fi
+}
+
 # Configure fnm for Fish shell
 configure_fnm() {
     # Set up Fish shell integration for fnm
@@ -199,11 +240,12 @@ update_brew() {
 }
 
 # Run the setup tasks
-print_message "Version 6 (macOS)"
+print_message "Version 7 (macOS)"
 install_homebrew
 install_core_packages
 setup_ssh_key
 add_github_to_known_hosts
+configure_git_town
 configure_fnm
 initialize_chezmoi
 configure_chezmoi_git

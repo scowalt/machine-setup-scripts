@@ -24,7 +24,8 @@ $wingetPackages = (
     "GnuWin32.Which",
     "strayge.tray-monitor",
     "DEVCOM.JetBrainsMonoNerdFont",
-    "Infisical.CLI"
+    "Infisical.CLI",
+    "git-town.git-town"
 )
 
 # Define Nerd Font symbols using Unicode code points
@@ -142,6 +143,33 @@ function Test-GitHubSSHKey {
     } while ($keyadded -eq $false)
 }
 
+# Function to configure git-town completions
+function Set-GitTownCompletions {
+    if (Get-Command git-town -ErrorAction SilentlyContinue) {
+        Write-Host "$arrow Configuring git-town completions..." -ForegroundColor Cyan
+        
+        # Set up PowerShell completions for git-town
+        $profileDir = Split-Path $PROFILE
+        if (-not (Test-Path $profileDir)) {
+            New-Item -ItemType Directory -Force -Path $profileDir
+        }
+        
+        $gitTownCompletionCommand = 'git town completion powershell | Out-String | Invoke-Expression'
+        $escapedPattern = [regex]::Escape($gitTownCompletionCommand)
+        
+        if (-not (Select-String -Path $PROFILE -Pattern $escapedPattern -Quiet)) {
+            Add-Content -Path $PROFILE -Value "`n$gitTownCompletionCommand"
+            Write-Host "$success git-town PowerShell completions configured." -ForegroundColor Green
+        }
+        else {
+            Write-Host "$warnIcon git-town PowerShell completions already configured." -ForegroundColor Yellow
+        }
+    }
+    else {
+        Write-Host "$warnIcon git-town not found, skipping completion setup." -ForegroundColor Yellow
+    }
+}
+
 # Function to add Starship initialization to PowerShell profile
 function Set-StarshipInit {
     $profilePath = $PROFILE
@@ -254,10 +282,11 @@ function Set-WindowsTerminalConfiguration {
 
 # Main setup function to call all necessary steps
 function Initialize-WindowsEnvironment {
-    Write-Host "$arrow Starting Windows setup v18" -ForegroundColor Cyan
+    Write-Host "$arrow Starting Windows setup v19" -ForegroundColor Cyan
     Install-WingetPackages
     Test-GitHubSSHKey # this needs to be run before chezmoi to get access to dotfiles
     Install-Chezmoi
+    Set-GitTownCompletions
     Set-StarshipInit
     Set-WindowsTerminalConfiguration
     Install-WingetUpdates

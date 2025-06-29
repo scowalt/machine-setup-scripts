@@ -25,7 +25,7 @@ update_and_install_core() {
     print_message "Checking and installing core packages as needed..."
 
     # Define an array of required packages
-    local packages=("git" "curl" "fish" "tmux" "gh")
+    local packages=("git" "curl" "fish" "tmux" "gh" "git-town")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
@@ -212,6 +212,37 @@ set_fish_as_default_shell() {
     fi
 }
 
+# Configure git-town completions
+configure_git_town() {
+    if command -v git-town &> /dev/null; then
+        print_message "Configuring git-town completions..."
+        
+        # Set up Fish shell completions for git-town
+        if [ -d ~/.config/fish/completions ]; then
+            if ! [ -f ~/.config/fish/completions/git-town.fish ]; then
+                git town completion fish > ~/.config/fish/completions/git-town.fish
+                print_success "git-town Fish completions configured."
+            else
+                print_warning "git-town Fish completions already configured."
+            fi
+        fi
+        
+        # Set up Bash completions for git-town via Homebrew
+        ensure_brew_available
+        local bash_completion_dir="$(brew --prefix)/etc/bash_completion.d"
+        if [ -d "$bash_completion_dir" ]; then
+            if ! [ -f "$bash_completion_dir/git-town" ]; then
+                git town completion bash > "$bash_completion_dir/git-town"
+                print_success "git-town Bash completions configured."
+            else
+                print_warning "git-town Bash completions already configured."
+            fi
+        fi
+    else
+        print_warning "git-town not found, skipping completion setup."
+    fi
+}
+
 # Install fnm (Fast Node Manager)
 install_fnm() {
     if command -v fnm &> /dev/null; then
@@ -314,12 +345,13 @@ update_packages() {
 }
 
 # Run the setup tasks
-print_message "WSL Setup v2"
+print_message "WSL Setup v3"
 update_and_install_core
 setup_ssh_key
 add_github_to_known_hosts
 install_homebrew
 install_starship
+configure_git_town
 install_fnm
 install_1password_cli
 install_infisical
