@@ -21,7 +21,8 @@ $wingetPackages = (
     "gerardog.gsudo",
     "GnuWin32.Which",
     "strayge.tray-monitor",
-    "DEVCOM.JetBrainsMonoNerdFont"
+    "DEVCOM.JetBrainsMonoNerdFont",
+    "Infisical.CLI"
 )
 
 # Define Nerd Font symbols using Unicode code points

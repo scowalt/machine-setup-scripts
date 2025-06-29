@@ -188,6 +188,18 @@ install_1password_cli() {
     print_success "1Password CLI installed."
 }
 
+# Install Infisical CLI
+install_infisical() {
+    if command -v infisical &> /dev/null; then
+        print_warning "Infisical CLI is already installed."
+        return
+    fi
+
+    print_message "Installing Infisical CLI..."
+    brew install infisical > /dev/null
+    print_success "Infisical CLI installed."
+}
+
 # Install Tailscale
 install_tailscale() {
     print_message "Skipping Tailscale installation as it is not needed on WSL."
@@ -237,6 +249,7 @@ install_homebrew
 install_starship
 install_fnm
 install_1password_cli
+install_infisical
 install_tailscale
 install_chezmoi
 initialize_chezmoi

@@ -498,6 +498,26 @@ EOF
     print_success "fnm installed. Restart your shell or run 'eval \"$(fnm env)\"' to activate it now."
 }
 
+# Install Infisical CLI
+install_infisical() {
+    if command -v infisical &> /dev/null; then
+        print_warning "Infisical CLI is already installed."
+        return
+    fi
+
+    print_message "Installing Infisical CLI..."
+    if ! (curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash); then
+        print_error "Failed to add Infisical repository."
+        exit 1
+    fi
+    sudo apt update -qq
+    if ! sudo apt install -y infisical; then
+        print_error "Failed to install Infisical CLI. Please review the output above."
+        exit 1
+    fi
+    print_success "Infisical CLI installed."
+}
+
 # Main execution
 print_message "Starting Raspberry Pi setup script v4..."
 check_raspberry_pi
@@ -506,6 +526,7 @@ update_dependencies
 update_and_install_core
 install_1password_cli
 install_fnm
+install_infisical
 enable_ssh_server
 install_tailscale         
 setup_ssh_key
