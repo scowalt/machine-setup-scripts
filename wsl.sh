@@ -176,6 +176,18 @@ EOF
     print_success "fnm installed. Restart your shell or run 'eval \"$(fnm env)\"' to activate it now."
 }
 
+# Install 1Password CLI
+install_1password_cli() {
+    if command -v op >/dev/null; then
+        print_warning "1Password CLI already installed."
+        return
+    fi
+
+    print_message "Installing 1Password CLI..."
+    brew install --cask 1password-cli > /dev/null
+    print_success "1Password CLI installed."
+}
+
 # Install Tailscale
 install_tailscale() {
     print_message "Skipping Tailscale installation as it is not needed on WSL."
@@ -224,6 +236,7 @@ setup_ssh_key
 install_homebrew
 install_starship
 install_fnm
+install_1password_cli
 install_tailscale
 install_chezmoi
 initialize_chezmoi

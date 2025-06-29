@@ -296,6 +296,48 @@ EOF
     print_success "fnm installed. Restart your shell or run 'eval \"$(fnm env)\"' to activate it now."
 }
 
+# Install 1Password CLI
+install_1password_cli() {
+    if command -v op >/dev/null; then
+        print_warning "1Password CLI already installed."
+        return
+    fi
+
+    print_message "Installing 1Password CLI..."
+
+    # Make sure gnupg is available for key import
+    sudo apt install -y gnupg >/dev/null
+
+    # Import signing key
+    curl -sS https://downloads.1password.com/linux/keys/1password.asc \
+      | sudo gpg --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg
+
+    # Figure out repo path for the current CPU architecture
+    local dpkg_arch
+    dpkg_arch="$(dpkg --print-architecture)"       # arm64, armhf, amd64…
+    local repo_arch="$dpkg_arch"
+    [[ "$dpkg_arch" == "armhf" ]] && repo_arch="arm"   # 32-bit Pi
+
+    # Add repo
+    echo \
+"deb [arch=$dpkg_arch signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] \
+https://downloads.1password.com/linux/debian/${repo_arch} stable main" \
+        | sudo tee /etc/apt/sources.list.d/1password-cli.list >/dev/null
+
+    # Add debsig-verify policy (required for future updates)
+    sudo mkdir -p /etc/debsig/policies/AC2D62742012EA22/
+    curl -sS https://downloads.1password.com/linux/debsig/1password.pol \
+      | sudo tee /etc/debsig/policies/AC2D62742012EA22/1password.pol >/dev/null
+    curl -sS https://downloads.1password.com/linux/keys/1password.asc \
+      | sudo tee /etc/debsig/keys/AC2D62742012EA22.asc >/dev/null
+
+    # Install package
+    sudo apt update -qq
+    sudo apt install -y 1password-cli
+
+    print_success "1Password CLI installed."
+}
+
 # Install Tailscale
 install_tailscale() {
     if ! command -v tailscale &>/dev/null; then
@@ -364,6 +406,7 @@ setup_ssh_key
 add_github_to_known_hosts
 install_starship
 install_fnm
+install_1password_cli
 install_tailscale
 install_infisical
 install_chezmoi
