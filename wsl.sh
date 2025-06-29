@@ -74,6 +74,27 @@ setup_ssh_key() {
     fi
 }
 
+# Add GitHub to known hosts to avoid prompts
+add_github_to_known_hosts() {
+    print_message "Ensuring GitHub is in known hosts..."
+    local known_hosts_file=~/.ssh/known_hosts
+    mkdir -p ~/.ssh
+    chmod 700 ~/.ssh
+    touch "$known_hosts_file"
+    chmod 600 "$known_hosts_file"
+
+    if ! ssh-keygen -F github.com &>/dev/null; then
+        print_message "Adding GitHub's SSH key to known_hosts..."
+        if ! ssh-keyscan github.com >> "$known_hosts_file" 2>/dev/null; then
+            print_error "Failed to add GitHub's SSH key to known_hosts."
+            exit 1
+        fi
+        print_success "GitHub's SSH key added."
+    else
+        print_warning "GitHub's SSH key already exists in known_hosts."
+    fi
+}
+
 # Install Homebrew if not installed
 install_homebrew() {
     if ! command -v brew &> /dev/null; then
@@ -247,6 +268,7 @@ update_packages() {
 print_message "WSL Setup v2"
 update_and_install_core
 setup_ssh_key
+add_github_to_known_hosts
 install_homebrew
 install_starship
 install_fnm

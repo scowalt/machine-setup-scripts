@@ -125,6 +125,27 @@ set_fish_as_default_shell() {
     fi
 }
 
+# Add GitHub to known hosts to avoid prompts
+add_github_to_known_hosts() {
+    print_message "Ensuring GitHub is in known hosts..."
+    local known_hosts_file=~/.ssh/known_hosts
+    mkdir -p ~/.ssh
+    chmod 700 ~/.ssh
+    touch "$known_hosts_file"
+    chmod 600 "$known_hosts_file"
+
+    if ! ssh-keygen -F github.com &>/dev/null; then
+        print_message "Adding GitHub's SSH key to known_hosts..."
+        if ! ssh-keyscan github.com >> "$known_hosts_file" 2>/dev/null; then
+            print_error "Failed to add GitHub's SSH key to known_hosts."
+            exit 1
+        fi
+        print_success "GitHub's SSH key added."
+    else
+        print_warning "GitHub's SSH key already exists in known_hosts."
+    fi
+}
+
 # Configure fnm for Fish shell
 configure_fnm() {
     # Set up Fish shell integration for fnm
@@ -182,6 +203,7 @@ print_message "Version 6 (macOS)"
 install_homebrew
 install_core_packages
 setup_ssh_key
+add_github_to_known_hosts
 configure_fnm
 initialize_chezmoi
 configure_chezmoi_git
