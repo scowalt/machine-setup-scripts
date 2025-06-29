@@ -13,7 +13,14 @@ print_success() { printf "${GREEN} %s${NC}\n" "$1"; }
 print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
 print_error() { printf "${RED} %s${NC}\n" "$1"; }
 
-# Update and install core dependencies silently
+# Fix apt issues if they exist
+fix_apt_issues() {
+    print_message "Checking for package manager issues..."
+    sudo apt-get update -qq
+    sudo apt-get install -f -y -qq
+}
+
+# Update and install core dependencies with error handling
 update_and_install_core() {
     print_message "Checking and installing core packages as needed..."
 
@@ -33,8 +40,16 @@ update_and_install_core() {
     # Install any packages that are not yet installed
     if [ "${#to_install[@]}" -gt 0 ]; then
         print_message "Installing missing packages: ${to_install[*]}"
-        sudo apt update -qq > /dev/null
-        sudo apt install -qq -y "${to_install[@]}" > /dev/null
+        sudo apt update -qq
+        if ! sudo apt install -qq -y "${to_install[@]}"; then
+            print_error "Failed to install core packages: ${to_install[*]}"
+            print_message "Trying to fix package issues..."
+            fix_apt_issues
+            if ! sudo apt install -qq -y "${to_install[@]}"; then
+                print_error "Failed to install core packages after fixing. Please check manually."
+                exit 1
+            fi
+        fi
         print_success "Missing core packages installed."
     else
         print_success "All core packages are already installed."
@@ -99,12 +114,23 @@ add_github_to_known_hosts() {
 install_homebrew() {
     if ! command -v brew &> /dev/null; then
         print_message "Installing Homebrew..."
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" > /dev/null
+        if ! /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
+            print_error "Failed to install Homebrew. Please check your internet connection."
+            exit 1
+        fi
         eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
         print_success "Homebrew installed."
     else
         print_warning "Homebrew is already installed."
         eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+    fi
+}
+
+# Ensure Homebrew is available before using it
+ensure_brew_available() {
+    if ! command -v brew &> /dev/null; then
+        print_error "Homebrew not available. Previous installation may have failed."
+        exit 1
     fi
 }
 
@@ -114,7 +140,11 @@ install_homebrew() {
 install_starship() {
     if ! command -v starship &> /dev/null; then
         print_message "Installing Starship prompt..."
-        brew install starship > /dev/null
+        ensure_brew_available
+        if ! brew install starship; then
+            print_error "Failed to install Starship via Homebrew."
+            exit 1
+        fi
         print_success "Starship installed."
     else
         print_warning "Starship is already installed."
@@ -125,7 +155,11 @@ install_starship() {
 install_chezmoi() {
     if ! command -v chezmoi &> /dev/null; then
         print_message "Installing chezmoi..."
-        brew install chezmoi > /dev/null
+        ensure_brew_available
+        if ! brew install chezmoi; then
+            print_error "Failed to install chezmoi via Homebrew."
+            exit 1
+        fi
         print_success "chezmoi installed."
     else
         print_warning "chezmoi is already installed."
@@ -136,7 +170,10 @@ install_chezmoi() {
 initialize_chezmoi() {
     if [ ! -d ~/.local/share/chezmoi ]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
-        chezmoi init --apply scowalt/dotfiles --ssh > /dev/null
+        if ! chezmoi init --apply scowalt/dotfiles --ssh; then
+            print_error "Failed to initialize chezmoi. Check SSH key and network connectivity."
+            exit 1
+        fi
         print_success "chezmoi initialized with scowalt/dotfiles."
     else
         print_warning "chezmoi is already initialized."
@@ -183,7 +220,11 @@ install_fnm() {
     fi
 
     print_message "Installing fnm (Fast Node Manager)..."
-    brew install fnm > /dev/null
+    ensure_brew_available
+    if ! brew install fnm; then
+        print_error "Failed to install fnm via Homebrew."
+        exit 1
+    fi
 
     # Set up Fish shell integration for fnm
     if [ -d ~/.config/fish/conf.d ]; then
@@ -207,7 +248,11 @@ install_1password_cli() {
     fi
 
     print_message "Installing 1Password CLI..."
-    brew install --cask 1password-cli > /dev/null
+    ensure_brew_available
+    if ! brew install --cask 1password-cli; then
+        print_error "Failed to install 1Password CLI via Homebrew."
+        exit 1
+    fi
     print_success "1Password CLI installed."
 }
 
@@ -219,7 +264,11 @@ install_infisical() {
     fi
 
     print_message "Installing Infisical CLI..."
-    brew install infisical > /dev/null
+    ensure_brew_available
+    if ! brew install infisical; then
+        print_error "Failed to install Infisical CLI via Homebrew."
+        exit 1
+    fi
     print_success "Infisical CLI installed."
 }
 
