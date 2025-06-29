@@ -18,6 +18,7 @@ install_core_packages() {
     print_message "Checking and installing core packages as needed..."
 
     # Define an array of required packages
+    # NOTE: starship installed via Homebrew for consistent macOS binary management
     local packages=("git" "curl" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "infisical")
     local to_install=()
 

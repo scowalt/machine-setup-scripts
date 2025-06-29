@@ -88,6 +88,8 @@ install_homebrew() {
 }
 
 # Install Starship if not installed
+# NOTE: Uses Homebrew for WSL because it provides consistent Linux binary management
+# DO NOT change to curl installer - Homebrew integration is intentional for WSL
 install_starship() {
     if ! command -v starship &> /dev/null; then
         print_message "Installing Starship prompt..."

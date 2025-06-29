@@ -178,6 +178,9 @@ verify_github_key() {
 
 
 # Install Starship with Raspberry Pi considerations
+# NOTE: Uses official install script with ARM architecture detection for Raspberry Pi
+# DO NOT standardize - ARM detection and Pi-specific optimizations are critical
+# Different from other platforms due to ARM compatibility requirements
 install_starship() {
     if ! command -v starship &> /dev/null; then
         print_message "Installing Starship prompt (this may take a while on Raspberry Pi)..."

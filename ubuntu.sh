@@ -178,6 +178,8 @@ add_github_to_known_hosts() {
 }
 
 # Install Starship if not installed
+# NOTE: Uses official install script because starship not available in Ubuntu repos
+# DO NOT change to Homebrew - this ensures latest version and proper permissions
 install_starship() {
     if ! command -v starship &> /dev/null; then
         print_message "Installing Starship prompt..."

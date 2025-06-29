@@ -1,3 +1,5 @@
+# NOTE: starship installed via WinGet for Windows ecosystem integration
+# DO NOT change to other methods - WinGet provides automatic updates and system integration
 $wingetPackages = (
     "tailscale.tailscale",
     "Readdle.Spark",
