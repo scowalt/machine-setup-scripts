@@ -282,7 +282,8 @@ function Set-WindowsTerminalConfiguration {
 
 # Main setup function to call all necessary steps
 function Initialize-WindowsEnvironment {
-    Write-Host "$arrow Starting Windows setup v19" -ForegroundColor Cyan
+    Write-Host "$arrow Starting Windows setup v20" -ForegroundColor Cyan
+    Write-Host "$arrow Last changed: Added git-town with completions" -ForegroundColor Cyan
     Install-WingetPackages
     Test-GitHubSSHKey # this needs to be run before chezmoi to get access to dotfiles
     Install-Chezmoi

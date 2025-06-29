@@ -572,7 +572,8 @@ install_infisical() {
 }
 
 # Main execution
-print_message "Starting Raspberry Pi setup script v5..."
+print_message "Starting Raspberry Pi setup script v6..."
+print_message "Last changed: Added git-town with completions"
 check_raspberry_pi
 setup_swap
 update_dependencies

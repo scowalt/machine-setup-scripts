@@ -240,7 +240,8 @@ update_brew() {
 }
 
 # Run the setup tasks
-print_message "Version 7 (macOS)"
+print_message "Version 8 (macOS)"
+print_message "Last changed: Added git-town with completions"
 install_homebrew
 install_core_packages
 setup_ssh_key

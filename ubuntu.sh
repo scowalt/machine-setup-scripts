@@ -428,7 +428,8 @@ install_tmux_plugins() {
 }
 
 
-print_message "Setup script v7"
+print_message "Setup script v8"
+print_message "Last changed: Added git-town with completions"
 enforce_scowalt_user
 fix_dpkg_and_broken_dependencies
 update_dependencies # I do this first b/c on raspberry pi, it's slow

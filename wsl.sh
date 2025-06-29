@@ -345,7 +345,8 @@ update_packages() {
 }
 
 # Run the setup tasks
-print_message "WSL Setup v3"
+print_message "WSL Setup v4"
+print_message "Last changed: Added git-town with completions"
 update_and_install_core
 setup_ssh_key
 add_github_to_known_hosts
