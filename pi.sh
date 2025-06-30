@@ -551,6 +551,21 @@ EOF
     print_success "fnm installed. Restart your shell or run 'eval \"$(fnm env)\"' to activate it now."
 }
 
+# Install act for running GitHub Actions locally
+install_act() {
+    if ! command -v act &> /dev/null; then
+        print_message "Installing act (GitHub Actions runner)..."
+        # Use the official install script
+        if ! (curl -s https://raw.githubusercontent.com/nektos/act/master/install.sh | sudo bash); then
+            print_error "Failed to install act."
+            exit 1
+        fi
+        print_success "act installed."
+    else
+        print_warning "act is already installed."
+    fi
+}
+
 # Install Infisical CLI
 install_infisical() {
     if command -v infisical &> /dev/null; then
@@ -572,8 +587,8 @@ install_infisical() {
 }
 
 # Main execution
-print_message "Starting Raspberry Pi setup script v6..."
-print_message "Last changed: Added git-town with completions"
+print_message "Starting Raspberry Pi setup script v7..."
+print_message "Last changed: Added act for running GitHub Actions locally"
 check_raspberry_pi
 setup_swap
 update_dependencies
@@ -594,6 +609,7 @@ initialize_chezmoi
 configure_chezmoi_git
 apply_chezmoi_config
 set_fish_as_default_shell
+install_act
 install_tmux_plugins
 
 print_success "Setup complete! Please log out and log back in for all changes to take effect."

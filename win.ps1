@@ -25,7 +25,8 @@ $wingetPackages = (
     "strayge.tray-monitor",
     "DEVCOM.JetBrainsMonoNerdFont",
     "Infisical.CLI",
-    "git-town.git-town"
+    "git-town.git-town",
+    "nektos.act"
 )
 
 # Define Nerd Font symbols using Unicode code points
@@ -282,8 +283,8 @@ function Set-WindowsTerminalConfiguration {
 
 # Main setup function to call all necessary steps
 function Initialize-WindowsEnvironment {
-    Write-Host "$arrow Starting Windows setup v20" -ForegroundColor Cyan
-    Write-Host "$arrow Last changed: Added git-town with completions" -ForegroundColor Cyan
+    Write-Host "$arrow Starting Windows setup v21" -ForegroundColor Cyan
+    Write-Host "$arrow Last changed: Added act for running GitHub Actions locally" -ForegroundColor Cyan
     Install-WingetPackages
     Test-GitHubSSHKey # this needs to be run before chezmoi to get access to dotfiles
     Install-Chezmoi

@@ -19,7 +19,7 @@ install_core_packages() {
 
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
-    local packages=("git" "curl" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "infisical" "git-town")
+    local packages=("git" "curl" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "infisical" "git-town" "act")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
@@ -240,8 +240,8 @@ update_brew() {
 }
 
 # Run the setup tasks
-print_message "Version 8 (macOS)"
-print_message "Last changed: Added git-town with completions"
+print_message "Version 9 (macOS)"
+print_message "Last changed: Added act for running GitHub Actions locally"
 install_homebrew
 install_core_packages
 setup_ssh_key

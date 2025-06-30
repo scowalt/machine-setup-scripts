@@ -392,6 +392,21 @@ install_tailscale() {
     fi
 }
 
+# Install act for running GitHub Actions locally
+install_act() {
+    if ! command -v act &> /dev/null; then
+        print_message "Installing act (GitHub Actions runner)..."
+        # Use the official install script
+        if ! (curl -s https://raw.githubusercontent.com/nektos/act/master/install.sh | sudo bash); then
+            print_error "Failed to install act."
+            exit 1
+        fi
+        print_success "act installed."
+    else
+        print_warning "act is already installed."
+    fi
+}
+
 # Install tmux plugins for session persistence
 install_tmux_plugins() {
     local plugin_dir=~/.tmux/plugins
@@ -428,8 +443,8 @@ install_tmux_plugins() {
 }
 
 
-print_message "Setup script v8"
-print_message "Last changed: Added git-town with completions"
+print_message "Setup script v9"
+print_message "Last changed: Added act for running GitHub Actions locally"
 enforce_scowalt_user
 fix_dpkg_and_broken_dependencies
 update_dependencies # I do this first b/c on raspberry pi, it's slow
@@ -448,4 +463,5 @@ initialize_chezmoi
 configure_chezmoi_git
 chezmoi apply
 set_fish_as_default_shell
+install_act
 install_tmux_plugins

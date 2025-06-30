@@ -308,6 +308,21 @@ install_tailscale() {
     print_message "Skipping Tailscale installation as it is not needed on WSL."
 }
 
+# Install act for running GitHub Actions locally
+install_act() {
+    if ! command -v act &> /dev/null; then
+        print_message "Installing act (GitHub Actions runner)..."
+        ensure_brew_available
+        if ! brew install act; then
+            print_error "Failed to install act via Homebrew."
+            exit 1
+        fi
+        print_success "act installed."
+    else
+        print_warning "act is already installed."
+    fi
+}
+
 # Install tmux plugins for session persistence
 install_tmux_plugins() {
     local plugin_dir=~/.tmux/plugins
@@ -345,8 +360,8 @@ update_packages() {
 }
 
 # Run the setup tasks
-print_message "WSL Setup v4"
-print_message "Last changed: Added git-town with completions"
+print_message "WSL Setup v5"
+print_message "Last changed: Added act for running GitHub Actions locally"
 update_and_install_core
 setup_ssh_key
 add_github_to_known_hosts
@@ -362,5 +377,6 @@ initialize_chezmoi
 configure_chezmoi_git
 chezmoi apply
 set_fish_as_default_shell
+install_act
 install_tmux_plugins
 update_packages
