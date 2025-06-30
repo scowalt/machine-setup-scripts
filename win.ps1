@@ -18,14 +18,12 @@ $wingetPackages = (
     "GitHub.cli",
     "Anysphere.Cursor",
     "Oven-sh.Bun",
-    "Beeper.Beeper",
+    "NovaTechnology.Beeper",
     "Flow-Launcher.Flow-Launcher",
     "gerardog.gsudo",
-    "GnuWin32.Which",
     "strayge.tray-monitor",
     "DEVCOM.JetBrainsMonoNerdFont",
-    "Infisical.CLI",
-    "git-town.git-town",
+    "Infisical.infisical-cli",
     "nektos.act"
 )
 
@@ -142,6 +140,43 @@ function Test-GitHubSSHKey {
             [void][System.Console]::ReadLine()
         }
     } while ($keyadded -eq $false)
+}
+
+# Function to install git-town by downloading binary directly (not available via winget)
+function Install-GitTown {
+    if (-not (Get-Command git-town -ErrorAction SilentlyContinue)) {
+        Write-Host "$arrow Installing git-town via direct binary download..." -ForegroundColor Cyan
+        
+        # Create directory for git-town if it doesn't exist
+        $gitTownPath = "$env:LOCALAPPDATA\git-town"
+        if (-not (Test-Path $gitTownPath)) {
+            New-Item -ItemType Directory -Force -Path $gitTownPath
+        }
+        
+        # Download the latest Windows binary
+        $downloadUrl = "https://github.com/git-town/git-town/releases/latest/download/git-town-windows-amd64.exe"
+        $binaryPath = "$gitTownPath\git-town.exe"
+        
+        try {
+            Write-Host "$arrow Downloading git-town binary..." -ForegroundColor Cyan
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $binaryPath
+            
+            # Add to PATH if not already there
+            $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+            if ($currentPath -notlike "*$gitTownPath*") {
+                [Environment]::SetEnvironmentVariable("PATH", "$currentPath;$gitTownPath", "User")
+                Write-Host "$success Added git-town to PATH." -ForegroundColor Green
+            }
+            
+            Write-Host "$success git-town installed." -ForegroundColor Green
+        }
+        catch {
+            Write-Host "$failIcon Failed to download git-town: $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
+    else {
+        Write-Host "$warnIcon git-town is already installed." -ForegroundColor Yellow
+    }
 }
 
 # Function to configure git-town completions
@@ -283,11 +318,12 @@ function Set-WindowsTerminalConfiguration {
 
 # Main setup function to call all necessary steps
 function Initialize-WindowsEnvironment {
-    Write-Host "$arrow Starting Windows setup v21" -ForegroundColor Cyan
-    Write-Host "$arrow Last changed: Added act for running GitHub Actions locally" -ForegroundColor Cyan
+    Write-Host "$arrow Starting Windows setup v22" -ForegroundColor Cyan
+    Write-Host "$arrow Last changed: Fixed winget package IDs and added git-town via direct binary download" -ForegroundColor Cyan
     Install-WingetPackages
     Test-GitHubSSHKey # this needs to be run before chezmoi to get access to dotfiles
     Install-Chezmoi
+    Install-GitTown
     Set-GitTownCompletions
     Set-StarshipInit
     Set-WindowsTerminalConfiguration
