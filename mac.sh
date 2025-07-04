@@ -5,13 +5,17 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
+GRAY='\033[0;90m'
+BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 # Print functions for readability
+print_section() { printf "\n${BOLD}=== %s ===${NC}\n\n" "$1"; }
 print_message() { printf "${CYAN} %s${NC}\n" "$1"; }
 print_success() { printf "${GREEN} %s${NC}\n" "$1"; }
 print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
 print_error() { printf "${RED} %s${NC}\n" "$1"; }
+print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 
 # Install core packages with Homebrew if missing
 install_core_packages() {
@@ -33,7 +37,7 @@ install_core_packages() {
         if [[ ! "$all_installed" =~ " $package " ]]; then
             to_install+=("$package")
         else
-            print_warning "$package is already installed."
+            print_debug "$package is already installed."
         fi
     done
 
@@ -83,7 +87,7 @@ install_homebrew() {
         eval "$(/opt/homebrew/bin/brew shellenv)"
         print_success "Homebrew installed."
     else
-        print_warning "Homebrew is already installed."
+        print_debug "Homebrew is already installed."
         eval "$(/opt/homebrew/bin/brew shellenv)"
     fi
 }
@@ -95,7 +99,7 @@ initialize_chezmoi() {
         chezmoi init --apply scowalt/dotfiles --ssh > /dev/null
         print_success "chezmoi initialized with scowalt/dotfiles."
     else
-        print_warning "chezmoi is already initialized."
+        print_debug "chezmoi is already initialized."
     fi
 }
 
@@ -113,7 +117,7 @@ autoPull = true
 EOF
         print_success "chezmoi configuration set."
     else
-        print_warning "chezmoi configuration already exists."
+        print_debug "chezmoi configuration already exists."
     fi
 }
 
@@ -127,7 +131,7 @@ set_fish_as_default_shell() {
         chsh -s /opt/homebrew/bin/fish
         print_success "Fish shell set as default."
     else
-        print_warning "Fish shell is already the default shell."
+        print_debug "Fish shell is already the default shell."
     fi
 }
 
@@ -148,7 +152,7 @@ add_github_to_known_hosts() {
         fi
         print_success "GitHub's SSH key added."
     else
-        print_warning "GitHub's SSH key already exists in known_hosts."
+        print_debug "GitHub's SSH key already exists in known_hosts."
     fi
 }
 
@@ -163,7 +167,7 @@ configure_git_town() {
                 git town completion fish > ~/.config/fish/completions/git-town.fish
                 print_success "git-town Fish completions configured."
             else
-                print_warning "git-town Fish completions already configured."
+                print_debug "git-town Fish completions already configured."
             fi
         fi
         
@@ -174,7 +178,7 @@ configure_git_town() {
                 git town completion bash > "$bash_completion_dir/git-town"
                 print_success "git-town Bash completions configured."
             else
-                print_warning "git-town Bash completions already configured."
+                print_debug "git-town Bash completions already configured."
             fi
         fi
         
@@ -185,7 +189,7 @@ configure_git_town() {
                 git town completion zsh > "$zsh_completion_dir/_git-town"
                 print_success "git-town Zsh completions configured."
             else
-                print_warning "git-town Zsh completions already configured."
+                print_debug "git-town Zsh completions already configured."
             fi
         fi
     else
@@ -203,7 +207,7 @@ install_tmux_plugins() {
         git clone -q https://github.com/tmux-plugins/tpm "$plugin_dir/tpm"
         print_success "tmux plugin manager installed."
     else
-        print_warning "tmux plugin manager already installed."
+        print_debug "tmux plugin manager already installed."
     fi
 
     for plugin in tmux-resurrect tmux-continuum; do
@@ -212,7 +216,7 @@ install_tmux_plugins() {
             git clone -q https://github.com/tmux-plugins/$plugin "$plugin_dir/$plugin"
             print_success "$plugin installed."
         else
-            print_warning "$plugin already installed."
+            print_debug "$plugin already installed."
         fi
     done
 
@@ -230,16 +234,32 @@ update_brew() {
 }
 
 # Run the setup tasks
-print_message "Version 14 (macOS)"
-print_message "Last changed: Removed fnm config (managed by chezmoi)"
+printf "\n${BOLD}🍎 macOS Development Environment Setup${NC}\n"
+printf "${GRAY}Version 15 | Last changed: Improved formatting with sections and debug messages${NC}\n"
+
+print_section "Package Manager Setup"
 install_homebrew
+
+print_section "Core Packages"
 install_core_packages
+
+print_section "SSH Configuration"
 setup_ssh_key
 add_github_to_known_hosts
+
+print_section "Development Tools"
 configure_git_town
+
+print_section "Dotfiles Management"
 initialize_chezmoi
 configure_chezmoi_git
 chezmoi apply
+
+print_section "Shell Configuration"
 set_fish_as_default_shell
 install_tmux_plugins
+
+print_section "Final Updates"
 update_brew
+
+printf "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n\n"
