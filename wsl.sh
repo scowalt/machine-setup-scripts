@@ -204,12 +204,12 @@ EOF
 
 # Set Fish as the default shell if it isn't already
 set_fish_as_default_shell() {
-    if [ "$(getent passwd $USER | cut -d: -f7)" != "/usr/bin/fish" ]; then
+    if [ "$(getent passwd "$USER" | cut -d: -f7)" != "/usr/bin/fish" ]; then
         print_message "Setting Fish as the default shell..."
         if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
             echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
         fi
-        sudo chsh -s /usr/bin/fish $USER
+        sudo chsh -s /usr/bin/fish "$USER"
         print_success "Fish shell set as default."
     else
         print_debug "Fish shell is already the default shell."
@@ -233,7 +233,8 @@ configure_git_town() {
         
         # Set up Bash completions for git-town via Homebrew
         ensure_brew_available
-        local bash_completion_dir="$(brew --prefix)/etc/bash_completion.d"
+        local bash_completion_dir
+        bash_completion_dir="$(brew --prefix)/etc/bash_completion.d"
         if [ -d "$bash_completion_dir" ]; then
             if ! [ -f "$bash_completion_dir/git-town" ]; then
                 git town completion bash > "$bash_completion_dir/git-town"
@@ -368,8 +369,8 @@ update_packages() {
 }
 
 # Run the setup tasks
-printf "\n${BOLD}🐧 WSL Development Environment Setup${NC}\n"
-printf "${GRAY}Version 9 | Last changed: Improved formatting with sections and debug messages${NC}\n"
+printf "\n%s🐧 WSL Development Environment Setup%s\n" "${BOLD}" "${NC}"
+printf "%sVersion 9 | Last changed: Improved formatting with sections and debug messages%s\n" "${GRAY}" "${NC}"
 
 print_section "System Setup"
 update_and_install_core
@@ -406,4 +407,4 @@ install_tmux_plugins
 print_section "Final Updates"
 update_packages
 
-printf "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n\n"
+printf "\n%s%s✨ Setup complete!%s\n\n" "${GREEN}" "${BOLD}" "${NC}"

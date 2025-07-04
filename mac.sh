@@ -28,13 +28,15 @@ install_core_packages() {
     
     # Get all installed packages at once (much faster than checking individually)
     print_message "Getting list of installed packages..."
-    local installed_formulae=$(brew list --formula -1 2>/dev/null | tr '\n' ' ')
-    local installed_casks=$(brew list --cask -1 2>/dev/null | tr '\n' ' ')
+    local installed_formulae
+    installed_formulae=$(brew list --formula -1 2>/dev/null | tr '\n' ' ')
+    local installed_casks
+    installed_casks=$(brew list --cask -1 2>/dev/null | tr '\n' ' ')
     local all_installed=" $installed_formulae $installed_casks "
     
     # Check each required package against the installed list
     for package in "${packages[@]}"; do
-        if [[ ! "$all_installed" =~ " $package " ]]; then
+        if [[ ! "$all_installed" =~ \ $package\  ]]; then
             to_install+=("$package")
         else
             print_debug "$package is already installed."
@@ -172,7 +174,8 @@ configure_git_town() {
         fi
         
         # Set up Bash completions for git-town
-        local bash_completion_dir="$(brew --prefix)/etc/bash_completion.d"
+        local bash_completion_dir
+        bash_completion_dir="$(brew --prefix)/etc/bash_completion.d"
         if [ -d "$bash_completion_dir" ]; then
             if ! [ -f "$bash_completion_dir/git-town" ]; then
                 git town completion bash > "$bash_completion_dir/git-town"
@@ -183,7 +186,8 @@ configure_git_town() {
         fi
         
         # Set up Zsh completions for git-town
-        local zsh_completion_dir="$(brew --prefix)/share/zsh/site-functions"
+        local zsh_completion_dir
+        zsh_completion_dir="$(brew --prefix)/share/zsh/site-functions"
         if [ -d "$zsh_completion_dir" ]; then
             if ! [ -f "$zsh_completion_dir/_git-town" ]; then
                 git town completion zsh > "$zsh_completion_dir/_git-town"
@@ -234,8 +238,8 @@ update_brew() {
 }
 
 # Run the setup tasks
-printf "\n${BOLD}🍎 macOS Development Environment Setup${NC}\n"
-printf "${GRAY}Version 15 | Last changed: Improved formatting with sections and debug messages${NC}\n"
+printf "\n%s🍎 macOS Development Environment Setup%s\n" "${BOLD}" "${NC}"
+printf "%sVersion 15 | Last changed: Improved formatting with sections and debug messages%s\n" "${GRAY}" "${NC}"
 
 print_section "Package Manager Setup"
 install_homebrew
@@ -262,4 +266,4 @@ install_tmux_plugins
 print_section "Final Updates"
 update_brew
 
-printf "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n\n"
+printf "\n%s%s✨ Setup complete!%s\n\n" "${GREEN}" "${BOLD}" "${NC}"

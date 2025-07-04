@@ -372,7 +372,7 @@ install_tailscale() {
         print_success "Tailscale installed and service started."
 
         # Optional immediate login
-        read -p "Run 'tailscale up' now to authenticate? (y/n): " ts_up
+        read -rp "Run 'tailscale up' now to authenticate? (y/n): " ts_up
         if [[ "$ts_up" =~ ^[Yy]$ ]]; then
             print_message "Bringing interface up..."
             sudo tailscale up       # add --authkey=... if you prefer key-based auth
@@ -447,8 +447,8 @@ install_tmux_plugins() {
 }
 
 
-printf "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}\n"
-printf "${GRAY}Version 13 | Last changed: Improved formatting with sections and debug messages${NC}\n"
+printf "\n%s🐧 Ubuntu Development Environment Setup%s\n" "${BOLD}" "${NC}"
+printf "%sVersion 13 | Last changed: Improved formatting with sections and debug messages%s\n" "${GRAY}" "${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user
@@ -485,4 +485,4 @@ set_fish_as_default_shell
 install_act
 install_tmux_plugins
 
-printf "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n\n"
+printf "\n%s%s✨ Setup complete!%s\n\n" "${GREEN}" "${BOLD}" "${NC}"

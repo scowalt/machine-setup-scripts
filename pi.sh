@@ -25,6 +25,7 @@ check_raspberry_pi() {
 
     # 1) Look for Raspberry Pi OS IDs
     if [ -f /etc/os-release ]; then
+        # shellcheck source=/dev/null
         . /etc/os-release
         if [[ "$ID" =~ ^(raspbian|raspios)$ ]] || [[ "$PRETTY_NAME" =~ Raspberry\ Pi ]]; then
             is_pi=true
@@ -210,7 +211,8 @@ install_starship() {
         print_message "Installing Starship prompt (this may take a while on Raspberry Pi)..."
         
         # Check architecture for compatibility
-        local arch=$(uname -m)
+        local arch
+        arch=$(uname -m)
         if [[ "$arch" == "armv"* || "$arch" == "aarch64" ]]; then
             print_message "Detected ARM architecture: $arch"
             curl -sS https://starship.rs/install.sh | sh -s -- -y
@@ -234,7 +236,7 @@ install_tailscale() {
         print_success "Tailscale installed and service started."
 
         # Optional immediate login
-        read -p "Run 'tailscale up' now to authenticate? (y/n): " ts_up
+        read -rp "Run 'tailscale up' now to authenticate? (y/n): " ts_up
         if [[ "$ts_up" =~ ^[Yy]$ ]]; then
             print_message "Bringing interface up…"
             sudo tailscale up       # add --authkey=... if you prefer key‑based auth
@@ -254,7 +256,7 @@ install_chezmoi() {
         
         # Add ~/bin to PATH if not already present
         if ! grep -q "PATH=\$HOME/bin" ~/.bashrc; then
-            echo 'export PATH=$HOME/bin:$PATH' >> ~/.bashrc
+            echo "export PATH=\$HOME/bin:\$PATH" >> ~/.bashrc
             # Source bashrc in the current session to make chezmoi available
             export PATH=$HOME/bin:$PATH
         fi
@@ -293,8 +295,7 @@ initialize_chezmoi() {
             print_success "chezmoi initialized via SSH."
         else
             print_error "SSH clone failed. Retrying with HTTPS…"
-            $chezmoi_cmd init --apply https://github.com/scowalt/dotfiles.git
-            if [ $? -eq 0 ]; then
+            if $chezmoi_cmd init --apply https://github.com/scowalt/dotfiles.git; then
                 print_success "chezmoi initialized via HTTPS."
             else
                 print_error "chezmoi initialization still failed. Check your git credentials."
@@ -328,12 +329,12 @@ EOF
 
 # Set Fish as the default shell if it isn't already
 set_fish_as_default_shell() {
-    if [ "$(getent passwd $USER | cut -d: -f7)" != "/usr/bin/fish" ]; then
+    if [ "$(getent passwd "$USER" | cut -d: -f7)" != "/usr/bin/fish" ]; then
         print_message "Setting Fish as the default shell..."
         if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
             echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
         fi
-        sudo chsh -s /usr/bin/fish $USER
+        sudo chsh -s /usr/bin/fish "$USER"
         print_success "Fish shell set as default. Please log out and back in for changes to take effect."
     else
         print_debug "Fish shell is already the default shell."
@@ -408,7 +409,8 @@ apply_chezmoi_config() {
 
 # Setup a small swap file if memory is limited
 setup_swap() {
-    local total_mem=$(free -m | awk '/^Mem:/{print $2}')
+    local total_mem
+    total_mem=$(free -m | awk '/^Mem:/{print $2}')
     
     if [ "$total_mem" -lt 2048 ]; then
         print_message "Limited RAM detected ($total_mem MB). Setting up swap file..."
@@ -587,7 +589,8 @@ install_pyenv() {
         print_success "pyenv installed. Shell configuration will be managed by chezmoi."
         
         # Check available memory for warning about Python compilation
-        local total_mem=$(free -m | awk '/^Mem:/{print $2}')
+        local total_mem
+    total_mem=$(free -m | awk '/^Mem:/{print $2}')
         if [ "$total_mem" -lt 1024 ]; then
             print_warning "Low memory detected. Python compilation may take a very long time."
             print_message "Consider using system Python instead if compilation fails."
@@ -598,8 +601,8 @@ install_pyenv() {
 }
 
 # Main execution
-printf "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}\n"
-printf "${GRAY}Version 11 | Last changed: Improved formatting with sections and debug messages${NC}\n"
+printf "\n%s🍓 Raspberry Pi Development Environment Setup%s\n" "${BOLD}" "${NC}"
+printf "%sVersion 11 | Last changed: Improved formatting with sections and debug messages%s\n" "${GRAY}" "${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
@@ -638,4 +641,4 @@ set_fish_as_default_shell
 install_act
 install_tmux_plugins
 
-printf "\n${GREEN}${BOLD}✨ Setup complete! Please log out and log back in for all changes to take effect.${NC}\n\n"
+printf "\n%s%s✨ Setup complete! Please log out and log back in for all changes to take effect.%s\n\n" "${GREEN}" "${BOLD}" "${NC}"
