@@ -246,32 +246,7 @@ function Install-PyenvWin {
             [Environment]::SetEnvironmentVariable("PYENV_HOME", "$pyenvPath\pyenv-win", "User")
             [Environment]::SetEnvironmentVariable("PYENV", "$pyenvPath\pyenv-win", "User")
             
-            # Configure PowerShell profile for pyenv
-            $profileDir = Split-Path $PROFILE
-            if (-not (Test-Path $profileDir)) {
-                New-Item -ItemType Directory -Force -Path $profileDir
-            }
-            
-            $pyenvInitCommand = '$env:PYENV_HOME = "$env:USERPROFILE\.pyenv\pyenv-win"'
-            $pyenvPathCommand = '$env:PATH = "$env:PYENV_HOME\bin;$env:PYENV_HOME\shims;$env:PATH"'
-            
-            if (-not (Select-String -Path $PROFILE -Pattern ([regex]::Escape($pyenvInitCommand)) -Quiet)) {
-                Add-Content -Path $PROFILE -Value "`n$pyenvInitCommand"
-                Add-Content -Path $PROFILE -Value $pyenvPathCommand
-                Write-Host "$success pyenv PowerShell configuration added." -ForegroundColor Green
-            }
-            
-            Write-Host "$success pyenv-win installed." -ForegroundColor Green
-            
-            # Refresh environment for current session
-            $env:PYENV_HOME = "$pyenvPath\pyenv-win"
-            $env:PATH = "$env:PYENV_HOME\bin;$env:PYENV_HOME\shims;$env:PATH"
-            
-            # Install a default Python version
-            Write-Host "$arrow Installing Python 3.12 as default version..." -ForegroundColor Cyan
-            & "$pyenvPath\pyenv-win\bin\pyenv.bat" install 3.12
-            & "$pyenvPath\pyenv-win\bin\pyenv.bat" global 3.12
-            Write-Host "$success Python 3.12 installed and set as global default." -ForegroundColor Green
+            Write-Host "$success pyenv-win installed. PowerShell profile configuration will be managed by chezmoi." -ForegroundColor Green
         }
         else {
             Write-Host "$failIcon Git is required to install pyenv-win. Please install Git first." -ForegroundColor Red
@@ -379,8 +354,8 @@ function Set-WindowsTerminalConfiguration {
 
 # Main setup function to call all necessary steps
 function Initialize-WindowsEnvironment {
-    Write-Host "$arrow Starting Windows setup v23" -ForegroundColor Cyan
-    Write-Host "$arrow Last changed: Added pyenv-win for Python version management" -ForegroundColor Cyan
+    Write-Host "$arrow Starting Windows setup v24" -ForegroundColor Cyan
+    Write-Host "$arrow Last changed: Removed pyenv config (managed by chezmoi)" -ForegroundColor Cyan
     Install-WingetPackages
     Test-GitHubSSHKey # this needs to be run before chezmoi to get access to dotfiles
     Install-Chezmoi
