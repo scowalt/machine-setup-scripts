@@ -449,8 +449,8 @@ update_packages() {
 }
 
 # Run the setup tasks
-printf "\n%s🐧 WSL Development Environment Setup%s\n" "${BOLD}" "${NC}"
-printf "%sVersion 11 | Last changed: Fix git-town installation by downloading binary directly%s\n" "${GRAY}" "${NC}"
+echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
+echo -e "${GRAY}Version 12 | Last changed: Fix ANSI color codes not rendering correctly${NC}"
 
 print_section "System Setup"
 update_and_install_core
@@ -491,4 +491,4 @@ install_claude_code
 print_section "Final Updates"
 update_packages
 
-printf "\n%s%s✨ Setup complete!%s\n\n" "${GREEN}" "${BOLD}" "${NC}"
+echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"

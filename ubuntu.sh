@@ -544,8 +544,8 @@ install_tmux_plugins() {
 }
 
 
-printf "\n%s🐧 Ubuntu Development Environment Setup%s\n" "${BOLD}" "${NC}"
-printf "%sVersion 15 | Last changed: Fix git-town installation by downloading binary directly%s\n" "${GRAY}" "${NC}"
+echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
+echo -e "${GRAY}Version 16 | Last changed: Fix ANSI color codes not rendering correctly${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user
@@ -586,4 +586,4 @@ install_tmux_plugins
 print_section "Additional Development Tools"
 install_claude_code
 
-printf "\n%s%s✨ Setup complete!%s\n\n" "${GREEN}" "${BOLD}" "${NC}"
+echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"

@@ -269,8 +269,8 @@ update_brew() {
 }
 
 # Run the setup tasks
-printf "\n%s🍎 macOS Development Environment Setup%s\n" "${BOLD}" "${NC}"
-printf "%sVersion 16 | Last changed: Add Claude Code installation after chezmoi apply%s\n" "${GRAY}" "${NC}"
+echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
+echo -e "${GRAY}Version 17 | Last changed: Fix ANSI color codes rendering for consistency${NC}"
 
 print_section "Package Manager Setup"
 install_homebrew
@@ -300,4 +300,4 @@ install_claude_code
 print_section "Final Updates"
 update_brew
 
-printf "\n%s%s✨ Setup complete!%s\n\n" "${GREEN}" "${BOLD}" "${NC}"
+echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
