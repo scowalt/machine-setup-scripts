@@ -1,0 +1,13 @@
+pre-commit:
+  commands:
+    shellcheck:
+      glob: "*.sh"
+      run: bunx shellcheck {staged_files}
+      stage_fixed: true
+      fail_text: "Shellcheck found issues in shell scripts"
+      
+pre-push:
+  commands:
+    shellcheck-all:
+      run: bunx shellcheck *.sh
+      fail_text: "Shellcheck found issues in shell scripts"
