@@ -24,11 +24,13 @@ install_core_packages() {
     
     # Get all installed packages at once (much faster than checking individually)
     print_message "Getting list of installed packages..."
-    local installed_packages=$(brew list --formula -1 2>/dev/null | tr '\n' ' ')
+    local installed_formulae=$(brew list --formula -1 2>/dev/null | tr '\n' ' ')
+    local installed_casks=$(brew list --cask -1 2>/dev/null | tr '\n' ' ')
+    local all_installed=" $installed_formulae $installed_casks "
     
     # Check each required package against the installed list
     for package in "${packages[@]}"; do
-        if [[ ! " $installed_packages " =~ " $package " ]]; then
+        if [[ ! "$all_installed" =~ " $package " ]]; then
             to_install+=("$package")
         else
             print_warning "$package is already installed."
