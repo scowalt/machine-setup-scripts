@@ -80,3 +80,40 @@ All scripts follow a consistent pattern:
 - All scripts configure fish as the default shell
 - Chezmoi manages dotfiles with automatic git operations
 - **IMPORTANT**: Do not add shell configuration (bashrc, zshrc, fish config, PowerShell profiles) in setup scripts - these are managed by chezmoi and will be overridden
+
+## Nerd Font Symbols
+
+### What are Nerd Fonts?
+
+Nerd Fonts are patched fonts that include thousands of icons from popular icon sets (Font Awesome, Devicons, Octicons, etc.). These scripts use Nerd Font symbols extensively for visual feedback in terminal output.
+
+### Working with Nerd Font Symbols as an LLM
+
+**CRITICAL**: Nerd Font symbols appear as special Unicode characters in the code. They are essential to the visual design and MUST be preserved exactly as they appear.
+
+#### How to handle them:
+
+1. **Never remove or replace** existing Nerd Font symbols - they may appear as boxes, question marks, or strange characters in your text view
+2. **To preserve them**: Copy the exact bytes/characters when editing lines containing these symbols
+3. **To add new ones**: Use Unicode escape sequences or copy from existing usage:
+   - Arrow: → (U+2192)
+   - Checkmark: ✓ (U+2713)
+   - Warning: ⚠ (U+26A0)
+   - Cross/Error: ✗ (U+2717)
+   - Sparkles: ✨ (U+2728)
+   - Or copy the exact characters from existing print functions
+
+#### Common symbols used in these scripts:
+
+- Success indicators: ✓ (checkmark)
+- Error indicators: ✗ (cross)
+- Warning indicators: ⚠ (warning sign)
+- Action indicators: → (arrow)
+- Special icons: 🍎 (Apple emoji for macOS)
+
+#### Example:
+```bash
+print_success() { printf "${GREEN}✓ %s${NC}\n" "$1"; }  # The ✓ is a Nerd Font symbol
+```
+
+**Remember**: These symbols are part of the user experience design. They make terminal output more readable and visually appealing.
