@@ -89,19 +89,21 @@ Nerd Fonts are patched fonts that include thousands of icons from popular icon s
 
 ### Working with Nerd Font Symbols as an LLM
 
-**CRITICAL**: Nerd Font symbols appear as special Unicode characters in the code. They are essential to the visual design and MUST be preserved exactly as they appear.
+**IMPORTANT UPDATE**: Claude Code CAN successfully edit files containing Nerd Font symbols and preserve them correctly. The symbols are essential to the visual design.
 
 #### How to handle them:
 
-1. **Never remove or replace** existing Nerd Font symbols - they may appear as boxes, question marks, or strange characters in your text view
-2. **To preserve them**: Copy the exact bytes/characters when editing lines containing these symbols
-3. **To add new ones**: Use Unicode escape sequences or copy from existing usage:
+1. **When editing**: Nerd Font symbols will be preserved automatically when using the Edit tool
+2. **To add new ones**: Use Unicode characters directly in your edits:
    - Arrow: → (U+2192)
    - Checkmark: ✓ (U+2713)
    - Warning: ⚠ (U+26A0)
    - Cross/Error: ✗ (U+2717)
    - Sparkles: ✨ (U+2728)
-   - Or copy the exact characters from existing print functions
+   - Apple: 🍎 (U+1F34E)
+   - Penguin: 🐧 (U+1F427)
+   - Strawberry: 🍓 (U+1F353)
+   - Window: 🪟 (U+1FA9F)
 
 #### Common symbols used in these scripts:
 
@@ -117,3 +119,46 @@ print_success() { printf "${GREEN}✓ %s${NC}\n" "$1"; }  # The ✓ is a Nerd Fo
 ```
 
 **Remember**: These symbols are part of the user experience design. They make terminal output more readable and visually appealing.
+
+## Logging Conventions
+
+### Print Functions (Bash Scripts)
+
+All bash scripts use consistent logging functions with Nerd Font symbols:
+
+```bash
+print_section()  # Bold section headers with === borders
+print_message()  # Cyan messages with → arrow
+print_success()  # Green messages with ✓ checkmark  
+print_warning()  # Yellow messages with ⚠ warning sign
+print_error()    # Red messages with ✗ cross
+print_debug()    # Gray messages with subtle indent
+```
+
+### When to Use Each Level
+
+- **print_section**: Major stages of the setup process
+- **print_message**: General information and actions being taken
+- **print_success**: Successful completions
+- **print_warning**: ONLY for actual warnings (not for "already installed")
+- **print_error**: Failures that stop execution
+- **print_debug**: Informational messages like "already installed" or "already configured"
+
+### PowerShell Equivalents
+
+```powershell
+Write-Section   # White on dark blue background
+Write-Message   # Cyan with arrow symbol
+Write-Success   # Green with checkmark
+Write-Warning   # Yellow with warning icon
+Write-Error     # Red with cross icon
+Write-Debug     # Dark gray with indent
+```
+
+### Visual Structure
+
+Scripts are organized into clear sections with:
+1. Emoji header showing platform (🍎 macOS, 🐧 Linux, 🍓 Pi, 🪟 Windows)
+2. Version and last change info in gray
+3. Logical sections for different setup stages
+4. Sparkle emoji (✨) for completion message
