@@ -74,6 +74,13 @@ All scripts follow a consistent pattern:
 - Terminal: Starship prompt
 - CI/CD: act (local GitHub Actions)
 
+### Tool Installation Methods
+
+- **git-town**:
+  - macOS: Installed via Homebrew
+  - Linux (Ubuntu/WSL/Pi): Downloaded directly from GitHub releases (not available in apt repositories)
+  - Windows: Downloaded directly from GitHub releases
+
 ### Important Notes
 
 - Scripts require SSH keys to be registered with GitHub before running
@@ -180,6 +187,16 @@ When installing tools that depend on package managers or shell configuration:
 This is critical because tools like fnm are initialized in shell configuration files deployed by chezmoi. Installing npm packages before the shell is configured will fail.
 
 ### Platform-Specific Considerations
+
+#### Git-Town Binary Installation
+
+On Linux platforms (Ubuntu, WSL, Raspberry Pi), git-town is not available in package repositories and must be downloaded directly from GitHub releases. The scripts automatically detect the system architecture and download the appropriate binary:
+
+- `linux-amd64` for x86_64/amd64 systems
+- `linux-arm64` for aarch64 systems (newer Raspberry Pi)
+- `linux-arm` for armv7l/armhf systems (older Raspberry Pi)
+
+The binary is installed to `~/.local/bin` and the PATH is updated in `~/.bashrc` if needed.
 
 #### Raspberry Pi Color Output
 

@@ -29,7 +29,7 @@ update_and_install_core() {
     print_message "Checking and installing core packages as needed..."
 
     # Define an array of required packages
-    local packages=("git" "curl" "fish" "tmux" "gh" "git-town" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev")
+    local packages=("git" "curl" "fish" "tmux" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
@@ -214,6 +214,54 @@ set_fish_as_default_shell() {
     else
         print_debug "Fish shell is already the default shell."
     fi
+}
+
+# Install git-town by downloading binary directly
+install_git_town() {
+    if command -v git-town &> /dev/null; then
+        print_debug "git-town is already installed."
+        return
+    fi
+
+    print_message "Installing git-town via direct binary download..."
+    
+    # WSL typically uses amd64
+    local git_town_arch="linux-amd64"
+    
+    # Create local bin directory if it doesn't exist
+    local bin_dir="$HOME/.local/bin"
+    mkdir -p "$bin_dir"
+    
+    # Download the latest binary
+    local download_url="https://github.com/git-town/git-town/releases/latest/download/git-town-${git_town_arch}.tar.gz"
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    
+    print_message "Downloading git-town binary..."
+    if curl -sL "$download_url" | tar -xz -C "$temp_dir"; then
+        # Move binary to local bin
+        if mv "$temp_dir/git-town" "$bin_dir/git-town"; then
+            chmod +x "$bin_dir/git-town"
+            print_success "git-town installed to $bin_dir/git-town"
+            
+            # Add to PATH if not already present
+            if ! echo "$PATH" | grep -q "$bin_dir"; then
+                print_message "Adding $bin_dir to PATH in ~/.bashrc"
+                echo "export PATH=\$HOME/.local/bin:\$PATH" >> ~/.bashrc
+                export PATH="$bin_dir:$PATH"
+            fi
+        else
+            print_error "Failed to move git-town binary."
+            rm -rf "$temp_dir"
+            return 1
+        fi
+    else
+        print_error "Failed to download git-town."
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    
+    rm -rf "$temp_dir"
 }
 
 # Configure git-town completions
@@ -402,7 +450,7 @@ update_packages() {
 
 # Run the setup tasks
 printf "\n%s🐧 WSL Development Environment Setup%s\n" "${BOLD}" "${NC}"
-printf "%sVersion 10 | Last changed: Add Claude Code installation after chezmoi apply%s\n" "${GRAY}" "${NC}"
+printf "%sVersion 11 | Last changed: Fix git-town installation by downloading binary directly%s\n" "${GRAY}" "${NC}"
 
 print_section "System Setup"
 update_and_install_core
@@ -416,6 +464,7 @@ install_homebrew
 
 print_section "Development Tools"
 install_starship
+install_git_town
 configure_git_town
 install_fnm
 install_pyenv
