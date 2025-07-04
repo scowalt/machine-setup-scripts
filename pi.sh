@@ -606,8 +606,8 @@ install_pyenv() {
 }
 
 # Main execution
-printf "\n%s🍓 Raspberry Pi Development Environment Setup%s\n" "${BOLD}" "${NC}"
-printf "%sVersion 12 | Last changed: Add note about Claude Code not being installed on Pi%s\n" "${GRAY}" "${NC}"
+echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
+echo -e "${GRAY}Version 13 | Last changed: Fix ANSI color codes not rendering correctly${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
@@ -646,4 +646,4 @@ set_fish_as_default_shell
 install_act
 install_tmux_plugins
 
-printf "\n%s%s✨ Setup complete! Please log out and log back in for all changes to take effect.%s\n\n" "${GREEN}" "${BOLD}" "${NC}"
+echo -e "\n${GREEN}${BOLD}✨ Setup complete! Please log out and log back in for all changes to take effect.${NC}\n"
