@@ -5,13 +5,17 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
+GRAY='\033[0;90m'
+BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 # Print functions for readability
+print_section() { printf "\n${BOLD}=== %s ===${NC}\n\n" "$1"; }
 print_message() { printf "${CYAN} %s${NC}\n" "$1"; }
 print_success() { printf "${GREEN} %s${NC}\n" "$1"; }
 print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
 print_error() { printf "${RED} %s${NC}\n" "$1"; }
+print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 
 # Fix dpkg interruptions if they exist
 fix_dpkg_and_broken_dependencies() {
@@ -72,7 +76,7 @@ update_and_install_core() {
         if ! dpkg -s "$package" &> /dev/null; then
             to_install+=("$package")
         else
-            print_warning "$package is already installed."
+            print_debug "$package is already installed."
         fi
     done
 
@@ -102,7 +106,7 @@ setup_ssh_server() {
         fi
         print_success "openssh-server installed."
     else
-        print_warning "openssh-server is already installed."
+        print_debug "openssh-server is already installed."
     fi
 
     # Check if ssh service is active
@@ -111,7 +115,7 @@ setup_ssh_server() {
         sudo systemctl start ssh
         print_success "ssh service started."
     else
-        print_warning "ssh service is already active."
+        print_debug "ssh service is already active."
     fi
 
     # Check if ssh service is enabled to start on boot
@@ -120,7 +124,7 @@ setup_ssh_server() {
         sudo systemctl enable ssh
         print_success "ssh service enabled."
     else
-        print_warning "ssh service is already enabled."
+        print_debug "ssh service is already enabled."
     fi
 }
 
@@ -173,7 +177,7 @@ add_github_to_known_hosts() {
         fi
         print_success "GitHub's SSH key added."
     else
-        print_warning "GitHub's SSH key already exists in known_hosts."
+        print_debug "GitHub's SSH key already exists in known_hosts."
     fi
 }
 
@@ -186,7 +190,7 @@ install_starship() {
         sh -c "$(curl -fsSL https://starship.rs/install.sh)" -- -y
         print_success "Starship installed."
     else
-        print_warning "Starship is already installed."
+        print_debug "Starship is already installed."
     fi
 }
 
@@ -205,7 +209,7 @@ install_infisical() {
         fi
         print_success "Infisical CLI installed."
     else
-        print_warning "Infisical CLI is already installed."
+        print_debug "Infisical CLI is already installed."
     fi
 }
 
@@ -224,7 +228,7 @@ install_chezmoi() {
             exit 1
         fi
     else
-        print_warning "chezmoi is already installed."
+        print_debug "chezmoi is already installed."
     fi
 }
 
@@ -238,7 +242,7 @@ initialize_chezmoi() {
         fi
         print_success "chezmoi initialized with scowalt/dotfiles."
     else
-        print_warning "chezmoi is already initialized."
+        print_debug "chezmoi is already initialized."
     fi
 }
 
@@ -256,7 +260,7 @@ autoPull = true
 EOF
         print_success "chezmoi configuration set."
     else
-        print_warning "chezmoi configuration already exists."
+        print_debug "chezmoi configuration already exists."
     fi
 }
 
@@ -270,7 +274,7 @@ set_fish_as_default_shell() {
         sudo chsh -s /usr/bin/fish "$USER"
         print_success "Fish shell set as default."
     else
-        print_warning "Fish shell is already the default shell."
+        print_debug "Fish shell is already the default shell."
     fi
 }
 
@@ -285,7 +289,7 @@ configure_git_town() {
                 git town completion fish > ~/.config/fish/completions/git-town.fish
                 print_success "git-town Fish completions configured."
             else
-                print_warning "git-town Fish completions already configured."
+                print_debug "git-town Fish completions already configured."
             fi
         fi
         
@@ -296,7 +300,7 @@ configure_git_town() {
                 git town completion bash | sudo tee "$bash_completion_dir/git-town" > /dev/null
                 print_success "git-town Bash completions configured."
             else
-                print_warning "git-town Bash completions already configured."
+                print_debug "git-town Bash completions already configured."
             fi
         fi
     else
@@ -307,7 +311,7 @@ configure_git_town() {
 # Install fnm (Fast Node Manager)
 install_fnm() {
     if command -v fnm &> /dev/null; then
-        print_warning "fnm already installed."
+        print_debug "fnm already installed."
         return
     fi
 
@@ -319,7 +323,7 @@ install_fnm() {
 # Install 1Password CLI
 install_1password_cli() {
     if command -v op >/dev/null; then
-        print_warning "1Password CLI already installed."
+        print_debug "1Password CLI already installed."
         return
     fi
 
@@ -376,7 +380,7 @@ install_tailscale() {
             print_warning "Skip for now; run 'sudo tailscale up' later to log in."
         fi
     else
-        print_warning "Tailscale already installed."
+        print_debug "Tailscale already installed."
     fi
 }
 
@@ -391,7 +395,7 @@ install_act() {
         fi
         print_success "act installed."
     else
-        print_warning "act is already installed."
+        print_debug "act is already installed."
     fi
 }
 
@@ -403,7 +407,7 @@ install_pyenv() {
         curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer | bash
         print_success "pyenv installed. Shell configuration will be managed by chezmoi."
     else
-        print_warning "pyenv is already installed."
+        print_debug "pyenv is already installed."
     fi
 }
 
@@ -415,7 +419,7 @@ install_tmux_plugins() {
         git clone -q https://github.com/tmux-plugins/tpm "$plugin_dir/tpm"
         print_success "tmux plugin manager installed."
     else
-        print_warning "tmux plugin manager already installed."
+        print_debug "tmux plugin manager already installed."
     fi
 
     print_message "Installing/updating tmux plugins via tpm..."
@@ -443,26 +447,42 @@ install_tmux_plugins() {
 }
 
 
-print_message "Setup script v12"
-print_message "Last changed: Removed fnm config (managed by chezmoi)"
+printf "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}\n"
+printf "${GRAY}Version 13 | Last changed: Improved formatting with sections and debug messages${NC}\n"
+
+print_section "User & System Setup"
 enforce_scowalt_user
 fix_dpkg_and_broken_dependencies
+
+print_section "System Updates"
 update_dependencies # I do this first b/c on raspberry pi, it's slow
 update_and_install_core
+
+print_section "SSH Configuration"
 setup_ssh_server
 setup_ssh_key
 add_github_to_known_hosts
+
+print_section "Development Tools"
 install_starship
 configure_git_town
 install_fnm
 install_pyenv
+
+print_section "Security Tools"
 install_1password_cli
 install_tailscale
 install_infisical
+
+print_section "Dotfiles Management"
 install_chezmoi
 initialize_chezmoi
 configure_chezmoi_git
 chezmoi apply
+
+print_section "Shell Configuration"
 set_fish_as_default_shell
 install_act
 install_tmux_plugins
+
+printf "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n\n"

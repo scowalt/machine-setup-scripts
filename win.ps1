@@ -32,6 +32,33 @@ $arrow = [char]0xf0a9      # Arrow icon for actions
 $success = [char]0xf00c    # Checkmark icon for success
 $warnIcon = [char]0xf071   # Warning icon for warnings
 $failIcon = [char]0xf00d   # Cross icon for errors
+$sparkles = [char]0x2728   # Sparkles for completion
+
+# Define print functions for consistency
+function Write-Section($message) {
+    Write-Host "`n=== $message ===" -ForegroundColor White -BackgroundColor DarkBlue
+    Write-Host ""
+}
+
+function Write-Message($message) {
+    Write-Host "$arrow $message" -ForegroundColor Cyan
+}
+
+function Write-Success($message) {
+    Write-Host "$success $message" -ForegroundColor Green
+}
+
+function Write-Warning($message) {
+    Write-Host "$warnIcon $message" -ForegroundColor Yellow
+}
+
+function Write-Error($message) {
+    Write-Host "$failIcon $message" -ForegroundColor Red
+}
+
+function Write-Debug($message) {
+    Write-Host "  $message" -ForegroundColor DarkGray
+}
 
 function Install-Chezmoi {
     if (-not (Get-Command chezmoi -ErrorAction SilentlyContinue)) {
@@ -39,7 +66,7 @@ function Install-Chezmoi {
         exit 1
     }
     else {
-        Write-Host "$warnIcon chezmoi is already installed." -ForegroundColor Yellow
+        Write-Debug "chezmoi is already installed."
     }
 
     # Initialize chezmoi if not already initialized
@@ -50,7 +77,7 @@ function Install-Chezmoi {
         Write-Host "$success chezmoi initialized with scowalt/dotfiles." -ForegroundColor Green
     }
     else {
-        Write-Host "$warnIcon chezmoi is already initialized." -ForegroundColor Yellow
+        Write-Debug "chezmoi is already initialized."
     }
 
     # Configure chezmoi for auto-commit, auto-push, and auto-pull
@@ -67,7 +94,7 @@ autoPull = true
         Write-Host "$success chezmoi configuration set." -ForegroundColor Green
     }
     else {
-        Write-Host "$warnIcon chezmoi configuration already exists." -ForegroundColor Yellow
+        Write-Debug "chezmoi configuration already exists."
     }
 
     Write-Host "$arrow Applying chezmoi dotfiles..." -ForegroundColor Cyan
@@ -175,7 +202,7 @@ function Install-GitTown {
         }
     }
     else {
-        Write-Host "$warnIcon git-town is already installed." -ForegroundColor Yellow
+        Write-Debug "git-town is already installed."
     }
 }
 
@@ -198,7 +225,7 @@ function Set-GitTownCompletions {
             Write-Host "$success git-town PowerShell completions configured." -ForegroundColor Green
         }
         else {
-            Write-Host "$warnIcon git-town PowerShell completions already configured." -ForegroundColor Yellow
+            Write-Debug "git-town PowerShell completions already configured."
         }
     }
     else {
@@ -217,7 +244,7 @@ function Set-StarshipInit {
         Write-Host "$success Starship initialization command added to PowerShell profile." -ForegroundColor Green
     }
     else {
-        Write-Host "$warnIcon Starship initialization command is already in PowerShell profile." -ForegroundColor Yellow
+        Write-Debug "Starship initialization command is already in PowerShell profile."
     }
 }
 
@@ -253,7 +280,7 @@ function Install-PyenvWin {
         }
     }
     else {
-        Write-Host "$warnIcon pyenv-win is already installed." -ForegroundColor Yellow
+        Write-Debug "pyenv-win is already installed."
     }
 }
 
@@ -354,20 +381,32 @@ function Set-WindowsTerminalConfiguration {
 
 # Main setup function to call all necessary steps
 function Initialize-WindowsEnvironment {
-    Write-Host "$arrow Starting Windows setup v24" -ForegroundColor Cyan
-    Write-Host "$arrow Last changed: Removed pyenv config (managed by chezmoi)" -ForegroundColor Cyan
+    Write-Host "`n🪟 Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
+    Write-Host "Version 25 | Last changed: Improved formatting with sections and debug messages" -ForegroundColor DarkGray
+    
+    Write-Section "Package Installation"
     Install-WingetPackages
+    
+    Write-Section "SSH Configuration"
     Test-GitHubSSHKey # this needs to be run before chezmoi to get access to dotfiles
+    
+    Write-Section "Dotfiles Management"
     Install-Chezmoi
+    
+    Write-Section "Development Tools"
     Install-GitTown
     Set-GitTownCompletions
     Install-PyenvWin
+    
+    Write-Section "Terminal Configuration"
     Set-StarshipInit
     Set-WindowsTerminalConfiguration
+    
+    Write-Section "System Updates"
     Install-WingetUpdates
-
     Install-WindowsUpdates # this should always be LAST since it may prompt a system reboot
-    Write-Host "$success Done" -ForegroundColor Green
+    
+    Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen
 }
 
 # Run the main setup function

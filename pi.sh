@@ -5,12 +5,16 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
+GRAY='\033[0;90m'
+BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 # Print functions for readability
+print_section() { printf "\n${BOLD}=== %s ===${NC}\n\n" "$1"; }
 print_message() { printf "${CYAN} %s${NC}\n" "$1"; }
 print_success() { printf "${GREEN} %s${NC}\n" "$1"; }
 print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
+print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 print_error() { printf "${RED} %s${NC}\n" "$1"; }
 
 # Check if running on Raspberry Pi OS
@@ -74,7 +78,7 @@ update_and_install_core() {
         if ! dpkg -s "$package" &> /dev/null; then
             to_install+=("$package")
         else
-            print_warning "$package is already installed."
+            print_debug "$package is already installed."
         fi
     done
 
@@ -92,7 +96,7 @@ update_and_install_core() {
 # ----------------------[ 1Password CLI ]-------------------------
 install_1password_cli() {
     if command -v op >/dev/null; then
-        print_warning "1Password CLI already installed."
+        print_debug "1Password CLI already installed."
         return
     fi
 
@@ -193,7 +197,7 @@ add_github_to_known_hosts() {
         fi
         print_success "GitHub's SSH key added."
     else
-        print_warning "GitHub's SSH key already exists in known_hosts."
+        print_debug "GitHub's SSH key already exists in known_hosts."
     fi
 }
 
@@ -217,7 +221,7 @@ install_starship() {
             curl -sS https://starship.rs/install.sh | sh -s -- -y
         fi
     else
-        print_warning "Starship is already installed."
+        print_debug "Starship is already installed."
     fi
 }
 
@@ -238,7 +242,7 @@ install_tailscale() {
             print_warning "Skip for now; run 'sudo tailscale up' later to log in."
         fi
     else
-        print_warning "Tailscale already installed."
+        print_debug "Tailscale already installed."
     fi
 }
 
@@ -256,7 +260,7 @@ install_chezmoi() {
         fi
         print_success "chezmoi installed."
     else
-        print_warning "chezmoi is already installed."
+        print_debug "chezmoi is already installed."
     fi
 }
 
@@ -298,7 +302,7 @@ initialize_chezmoi() {
             fi
         fi
     else
-        print_warning "chezmoi already initialized."
+        print_debug "chezmoi already initialized."
         $chezmoi_cmd update
         print_success "chezmoi repository updated."
     fi
@@ -318,7 +322,7 @@ autoPull = true
 EOF
         print_success "chezmoi configuration set."
     else
-        print_warning "chezmoi configuration already exists."
+        print_debug "chezmoi configuration already exists."
     fi
 }
 
@@ -332,7 +336,7 @@ set_fish_as_default_shell() {
         sudo chsh -s /usr/bin/fish $USER
         print_success "Fish shell set as default. Please log out and back in for changes to take effect."
     else
-        print_warning "Fish shell is already the default shell."
+        print_debug "Fish shell is already the default shell."
     fi
 }
 
@@ -346,7 +350,7 @@ install_tmux_plugins() {
         git clone -q https://github.com/tmux-plugins/tpm "$plugin_dir/tpm"
         print_success "tmux plugin manager installed."
     else
-        print_warning "tmux plugin manager already installed."
+        print_debug "tmux plugin manager already installed."
         # Update TPM
         (cd "$plugin_dir/tpm" && git pull -q origin master)
         print_success "tmux plugin manager updated."
@@ -358,7 +362,7 @@ install_tmux_plugins() {
             git clone -q https://github.com/tmux-plugins/$plugin "$plugin_dir/$plugin"
             print_success "$plugin installed."
         else
-            print_warning "$plugin already installed."
+            print_debug "$plugin already installed."
             # Update plugin
             (cd "$plugin_dir/$plugin" && git pull -q origin master)
             print_success "$plugin updated."
@@ -411,7 +415,7 @@ setup_swap() {
         
         # Check if swap is already configured
         if [ "$(swapon --show | wc -l)" -gt 0 ]; then
-            print_warning "Swap already configured."
+            print_debug "Swap already configured."
             swapon --show
             return
         fi
@@ -444,7 +448,7 @@ enable_ssh_server() {
         print_message "Installing OpenSSH server…"
         sudo apt install -y openssh-server
     else
-        print_warning "OpenSSH server already installed."
+        print_debug "OpenSSH server already installed."
     fi
 
     # Enable and start the service now and on boot
@@ -508,7 +512,7 @@ configure_git_town() {
                 git town completion fish > ~/.config/fish/completions/git-town.fish
                 print_success "git-town Fish completions configured."
             else
-                print_warning "git-town Fish completions already configured."
+                print_debug "git-town Fish completions already configured."
             fi
         fi
         
@@ -519,7 +523,7 @@ configure_git_town() {
                 git town completion bash | sudo tee "$bash_completion_dir/git-town" > /dev/null
                 print_success "git-town Bash completions configured."
             else
-                print_warning "git-town Bash completions already configured."
+                print_debug "git-town Bash completions already configured."
             fi
         fi
     else
@@ -530,7 +534,7 @@ configure_git_town() {
 # ----------------------[ Fast Node Manager ]--------------------
 install_fnm() {
     if command -v fnm >/dev/null; then
-        print_warning "fnm already installed."
+        print_debug "fnm already installed."
         return
     fi
 
@@ -550,14 +554,14 @@ install_act() {
         fi
         print_success "act installed."
     else
-        print_warning "act is already installed."
+        print_debug "act is already installed."
     fi
 }
 
 # Install Infisical CLI
 install_infisical() {
     if command -v infisical &> /dev/null; then
-        print_warning "Infisical CLI is already installed."
+        print_debug "Infisical CLI is already installed."
         return
     fi
 
@@ -589,35 +593,49 @@ install_pyenv() {
             print_message "Consider using system Python instead if compilation fails."
         fi
     else
-        print_warning "pyenv is already installed."
+        print_debug "pyenv is already installed."
     fi
 }
 
 # Main execution
-print_message "Starting Raspberry Pi setup script v10..."
-print_message "Last changed: Removed fnm config (managed by chezmoi)"
+printf "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}\n"
+printf "${GRAY}Version 11 | Last changed: Improved formatting with sections and debug messages${NC}\n"
+
+print_section "System Detection & Setup"
 check_raspberry_pi
 setup_swap
+
+print_section "System Updates"
 update_dependencies
 update_and_install_core
+
+print_section "Development Tools"
 install_1password_cli
 install_fnm
 install_pyenv
 install_infisical
+
+print_section "Network & SSH"
 enable_ssh_server
 install_tailscale         
 setup_ssh_key
 verify_github_key
 add_github_to_known_hosts
+ensure_ssh_agent
+
+print_section "Terminal & Shell"
 install_starship
 configure_git_town
+
+print_section "Dotfiles Management"
 install_chezmoi
-ensure_ssh_agent
 initialize_chezmoi
 configure_chezmoi_git
 apply_chezmoi_config
+
+print_section "Shell Configuration"
 set_fish_as_default_shell
 install_act
 install_tmux_plugins
 
-print_success "Setup complete! Please log out and log back in for all changes to take effect."
+printf "\n${GREEN}${BOLD}✨ Setup complete! Please log out and log back in for all changes to take effect.${NC}\n\n"
