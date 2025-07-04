@@ -36,6 +36,7 @@ Scripts are hosted at `https://scripts.scowalt.com/setup/` for remote execution 
 ### Repository Management
 
 Use `git town` and `gh` CLI tools to manage this repository:
+
 - `git town sync` - Keep branches in sync with main
 - `git town new-pull-request` - Create feature branches and PRs
 - `gh pr create` - Create pull requests via GitHub CLI
@@ -91,7 +92,7 @@ Nerd Fonts are patched fonts that include thousands of icons from popular icon s
 
 **IMPORTANT UPDATE**: Claude Code CAN successfully edit files containing Nerd Font symbols and preserve them correctly. The symbols are essential to the visual design.
 
-#### How to handle them:
+#### How to handle them
 
 1. **When editing**: Nerd Font symbols will be preserved automatically when using the Edit tool
 2. **To add new ones**: Use Unicode characters directly in your edits:
@@ -105,7 +106,7 @@ Nerd Fonts are patched fonts that include thousands of icons from popular icon s
    - Strawberry: 🍓 (U+1F353)
    - Window: 🪟 (U+1FA9F)
 
-#### Common symbols used in these scripts:
+#### Common symbols used in these scripts
 
 - Success indicators: ✓ (checkmark)
 - Error indicators: ✗ (cross)
@@ -113,7 +114,8 @@ Nerd Fonts are patched fonts that include thousands of icons from popular icon s
 - Action indicators: → (arrow)
 - Special icons: 🍎 (Apple emoji for macOS)
 
-#### Example:
+#### Example
+
 ```bash
 print_success() { printf "${GREEN}✓ %s${NC}\n" "$1"; }  # The ✓ is a Nerd Font symbol
 ```
@@ -158,6 +160,7 @@ Write-Debug     # Dark gray with indent
 ### Visual Structure
 
 Scripts are organized into clear sections with:
+
 1. Emoji header showing platform (🍎 macOS, 🐧 Linux, 🍓 Pi, 🪟 Windows)
 2. Version and last change info in gray
 3. Logical sections for different setup stages
