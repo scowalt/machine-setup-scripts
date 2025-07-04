@@ -381,7 +381,8 @@ function Set-WindowsTerminalConfiguration {
 
 # Main setup function to call all necessary steps
 function Initialize-WindowsEnvironment {
-    Write-Host "`n🪟 Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
+    $windowsIcon = [char]0xf17a  # Windows logo
+    Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
     Write-Host "Version 25 | Last changed: Improved formatting with sections and debug messages" -ForegroundColor DarkGray
     
     Write-Section "Package Installation"
