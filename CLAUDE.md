@@ -60,12 +60,14 @@ All scripts follow a consistent pattern:
 - **Error Handling**: Failed installations are logged but don't stop execution
 - **User Feedback**: Color-coded output for status messages
 - **Platform-Specific**: Each script optimized for its target OS
+- **Dotfile Management**: Shell configurations are managed by chezmoi - scripts should only install tools, not configure shells
 
 ### Common Tools Installed
 
 - Version Control: git, gh (GitHub CLI), git-town
 - Shell: fish (with completions), tmux
 - Node.js: fnm (Fast Node Manager)
+- Python: pyenv (Python version management)
 - Security: 1Password CLI, Tailscale, Infisical
 - Dotfiles: Chezmoi (with auto-sync)
 - Terminal: Starship prompt
@@ -77,3 +79,4 @@ All scripts follow a consistent pattern:
 - Ubuntu script enforces creation of 'scowalt' user
 - All scripts configure fish as the default shell
 - Chezmoi manages dotfiles with automatic git operations
+- **IMPORTANT**: Do not add shell configuration (bashrc, zshrc, fish config, PowerShell profiles) in setup scripts - these are managed by chezmoi and will be overridden
