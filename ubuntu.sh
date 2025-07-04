@@ -308,6 +308,37 @@ configure_git_town() {
     fi
 }
 
+# Install Claude Code via npm
+install_claude_code() {
+    if command -v claude &> /dev/null; then
+        print_debug "Claude Code is already installed."
+        return
+    fi
+    
+    print_message "Installing Claude Code..."
+    
+    # Source fnm initialization to make npm available
+    if [ -s "$HOME/.local/share/fnm/fnm" ]; then
+        export PATH="$HOME/.local/share/fnm:$PATH"
+        eval "$(fnm env --use-on-cd)"
+    fi
+    
+    # Make sure npm is available
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Make sure fnm is installed and Node.js is set up."
+        print_message "You may need to install Claude Code manually after setting up Node.js:"
+        print_message "  npm install -g @anthropic-ai/claude-code"
+        return
+    fi
+    
+    # Install Claude Code globally via npm
+    if npm install -g @anthropic-ai/claude-code &> /dev/null; then
+        print_success "Claude Code installed."
+    else
+        print_error "Failed to install Claude Code."
+    fi
+}
+
 # Install fnm (Fast Node Manager)
 install_fnm() {
     if command -v fnm &> /dev/null; then
@@ -448,7 +479,7 @@ install_tmux_plugins() {
 
 
 printf "\n%s🐧 Ubuntu Development Environment Setup%s\n" "${BOLD}" "${NC}"
-printf "%sVersion 13 | Last changed: Improved formatting with sections and debug messages%s\n" "${GRAY}" "${NC}"
+printf "%sVersion 14 | Last changed: Add Claude Code installation after chezmoi apply%s\n" "${GRAY}" "${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user
@@ -484,5 +515,8 @@ print_section "Shell Configuration"
 set_fish_as_default_shell
 install_act
 install_tmux_plugins
+
+print_section "Additional Development Tools"
+install_claude_code
 
 printf "\n%s%s✨ Setup complete!%s\n\n" "${GREEN}" "${BOLD}" "${NC}"

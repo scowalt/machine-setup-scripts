@@ -545,6 +545,11 @@ install_fnm() {
     print_success "fnm installed. Shell configuration will be managed by chezmoi."
 }
 
+# NOTE: Claude Code is not installed on Raspberry Pi
+# Primary development is not expected to happen on Pi devices
+# Claude Code can be manually installed via npm if needed:
+# npm install -g @anthropic-ai/claude-code
+
 # Install act for running GitHub Actions locally
 install_act() {
     if ! command -v act &> /dev/null; then
@@ -602,7 +607,7 @@ install_pyenv() {
 
 # Main execution
 printf "\n%s🍓 Raspberry Pi Development Environment Setup%s\n" "${BOLD}" "${NC}"
-printf "%sVersion 11 | Last changed: Improved formatting with sections and debug messages%s\n" "${GRAY}" "${NC}"
+printf "%sVersion 12 | Last changed: Add note about Claude Code not being installed on Pi%s\n" "${GRAY}" "${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi

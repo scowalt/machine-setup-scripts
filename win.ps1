@@ -284,6 +284,44 @@ function Install-PyenvWin {
     }
 }
 
+# Function to install Claude Code via npm
+function Install-ClaudeCode {
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+        Write-Debug "Claude Code is already installed."
+        return
+    }
+    
+    Write-Host "$arrow Installing Claude Code..." -ForegroundColor Cyan
+    
+    # Try to initialize fnm if available
+    if (Get-Command fnm -ErrorAction SilentlyContinue) {
+        # Initialize fnm for the current PowerShell session
+        fnm env --use-on-cd | Out-String | Invoke-Expression
+    }
+    
+    # Make sure npm is available
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Host "$warnIcon npm not found. Make sure fnm is installed and Node.js is set up." -ForegroundColor Yellow
+        Write-Host "$arrow You may need to install Claude Code manually after setting up Node.js:" -ForegroundColor Cyan
+        Write-Host "  npm install -g @anthropic-ai/claude-code" -ForegroundColor Cyan
+        return
+    }
+    
+    # Install Claude Code globally via npm
+    try {
+        npm install -g @anthropic-ai/claude-code
+        if ($?) {
+            Write-Host "$success Claude Code installed." -ForegroundColor Green
+        }
+        else {
+            Write-Host "$failIcon Failed to install Claude Code." -ForegroundColor Red
+        }
+    }
+    catch {
+        Write-Host "$failIcon Failed to install Claude Code: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
 function Install-WingetPackages {
     Write-Host "$arrow Checking for missing winget packages..." -ForegroundColor Cyan
 
@@ -383,7 +421,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 25 | Last changed: Improved formatting with sections and debug messages" -ForegroundColor DarkGray
+    Write-Host "Version 26 | Last changed: Add Claude Code installation after Terminal Configuration" -ForegroundColor DarkGray
     
     Write-Section "Package Installation"
     Install-WingetPackages
@@ -402,6 +440,9 @@ function Initialize-WindowsEnvironment {
     Write-Section "Terminal Configuration"
     Set-StarshipInit
     Set-WindowsTerminalConfiguration
+    
+    Write-Section "Additional Development Tools"
+    Install-ClaudeCode
     
     Write-Section "System Updates"
     Install-WingetUpdates
