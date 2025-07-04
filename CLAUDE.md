@@ -165,3 +165,87 @@ Scripts are organized into clear sections with:
 2. Version and last change info in gray
 3. Logical sections for different setup stages
 4. Sparkle emoji (✨) for completion message
+
+## Important Implementation Notes
+
+### Tool Installation Order
+
+When installing tools that depend on package managers or shell configuration:
+
+1. **Install package managers first** (Homebrew, fnm, pyenv)
+2. **Apply dotfiles configuration** (chezmoi apply)
+3. **Configure shell** (set default shell, install plugins)
+4. **Install tools that require the configured environment** (e.g., Claude Code via npm)
+
+This is critical because tools like fnm are initialized in shell configuration files deployed by chezmoi. Installing npm packages before the shell is configured will fail.
+
+### Platform-Specific Considerations
+
+#### Raspberry Pi Color Output
+
+On Raspberry Pi, `printf` with format specifiers may not render ANSI color codes correctly. Use `echo -e` instead:
+
+```bash
+# May show raw escape codes on Pi
+printf "\n%s🍓 Raspberry Pi Setup%s\n" "${BOLD}" "${NC}"
+
+# Works correctly on Pi
+echo -e "\n${BOLD}🍓 Raspberry Pi Setup${NC}"
+```
+
+#### Windows Unicode Support
+
+Newer Unicode characters (like 🪟 window emoji from Unicode 13.0) may not display correctly in all Windows terminals. Use Nerd Font symbols instead:
+
+```powershell
+# May show as ?????? in some terminals
+Write-Host "🪟 Windows Setup"
+
+# More compatible approach
+$windowsIcon = [char]0xf17a  # Windows logo from Nerd Fonts
+Write-Host "$windowsIcon Windows Setup"
+```
+
+### Shell Integration Best Practices
+
+When setup scripts need to use tools installed during the setup process:
+
+1. **Source the appropriate initialization** for the current shell session
+2. **Provide fallback instructions** if the tool isn't available
+3. **Check tool availability** before attempting to use it
+
+Example from Claude Code installation:
+
+```bash
+# Try to initialize fnm for current session
+if [ -f ~/.config/fish/config.fish ]; then
+    eval "$(fnm env --use-on-cd)"
+fi
+
+# Check if npm is now available
+if ! command -v npm &> /dev/null; then
+    print_warning "npm not found. Install manually with:"
+    print_message "  npm install -g @anthropic-ai/claude-code"
+    return
+fi
+```
+
+## Development Practices
+
+### Code Quality Tools
+
+This repository uses automated tools to maintain code quality:
+
+- **Shellcheck**: Validates all shell scripts for common issues and best practices
+- **Markdownlint**: Ensures consistent markdown formatting
+  - Configuration: `.markdownlint.json`
+  - MD013 (line length) is disabled to allow long lines in documentation
+- **Lefthook**: Manages git hooks for pre-commit and pre-push validation
+  - Runs via `bunx` (preferred over `npx`)
+
+### Commit Guidelines
+
+- Always run shellcheck on modified shell scripts before committing
+- Include version updates in scripts when making changes
+- Use descriptive commit messages that explain the "why" not just the "what"
+- Include the robot emoji and Claude Code attribution for AI-assisted commits
