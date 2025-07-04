@@ -21,10 +21,14 @@ install_core_packages() {
     # NOTE: starship installed via Homebrew for consistent macOS binary management
     local packages=("git" "curl" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "infisical" "git-town" "act" "terminal-notifier" "pyenv")
     local to_install=()
-
-    # Check each package and add missing ones to the to_install array
+    
+    # Get all installed packages at once (much faster than checking individually)
+    print_message "Getting list of installed packages..."
+    local installed_packages=$(brew list --formula -1 2>/dev/null | tr '\n' ' ')
+    
+    # Check each required package against the installed list
     for package in "${packages[@]}"; do
-        if ! brew list "$package" &> /dev/null; then
+        if [[ ! " $installed_packages " =~ " $package " ]]; then
             to_install+=("$package")
         else
             print_warning "$package is already installed."
@@ -279,8 +283,8 @@ update_brew() {
 }
 
 # Run the setup tasks
-print_message "Version 11 (macOS)"
-print_message "Last changed: Added pyenv for Python version management"
+print_message "Version 12 (macOS)"
+print_message "Last changed: Optimized package checking for faster execution"
 install_homebrew
 install_core_packages
 setup_ssh_key
