@@ -421,6 +421,55 @@ install_fnm() {
     fi
 }
 
+# Setup Node.js using fnm
+setup_nodejs() {
+    print_message "Setting up Node.js with fnm..."
+    
+    # Initialize fnm for current session
+    if [ -s "$HOME/.local/share/fnm/fnm" ]; then
+        export PATH="$HOME/.local/share/fnm:$PATH"
+        eval "$(fnm env --use-on-cd)"
+    else
+        print_warning "fnm not found in expected location. Skipping Node.js setup."
+        return
+    fi
+    
+    # Check if fnm is now available
+    if ! command -v fnm &> /dev/null; then
+        print_warning "fnm command not available. Skipping Node.js setup."
+        return
+    fi
+    
+    # Check if any Node.js version is installed
+    if fnm list | grep -q .; then
+        print_debug "Node.js version already installed."
+        
+        # Check if a default/global version is set
+        if fnm current &> /dev/null; then
+            print_debug "Global Node.js version already set: $(fnm current)"
+        else
+            print_message "No global Node.js version set. Setting the first installed version as default..."
+            local first_version
+            first_version=$(fnm list | grep -v "system" | head -n1 | sed 's/[* ]*//')
+            if [ -n "$first_version" ]; then
+                fnm default "$first_version"
+                print_success "Set $first_version as default Node.js version."
+            fi
+        fi
+    else
+        print_message "No Node.js version installed. Installing latest LTS..."
+        if fnm install --lts; then
+            print_success "Installed latest LTS Node.js."
+            # Set it as default
+            fnm default "$(fnm current)"
+            print_success "Set $(fnm current) as default Node.js version."
+        else
+            print_error "Failed to install Node.js."
+            return 1
+        fi
+    fi
+}
+
 # Install 1Password CLI
 install_1password_cli() {
     if command -v op >/dev/null; then
@@ -567,7 +616,7 @@ install_tmux_plugins() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 20 | Last changed: Add --skip-shell to fnm install for chezmoi compatibility${NC}"
+echo -e "${GRAY}Version 21 | Last changed: Add Node.js setup with conditional LTS installation${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user
@@ -587,6 +636,7 @@ install_starship
 install_git_town
 configure_git_town
 install_fnm
+setup_nodejs
 install_pyenv
 
 print_section "Security Tools"

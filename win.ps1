@@ -284,6 +284,65 @@ function Install-PyenvWin {
     }
 }
 
+# Function to setup Node.js using fnm
+function Setup-Nodejs {
+    Write-Host "$arrow Setting up Node.js with fnm..." -ForegroundColor Cyan
+    
+    # Initialize fnm for current session
+    if (Get-Command fnm -ErrorAction SilentlyContinue) {
+        fnm env --use-on-cd | Out-String | Invoke-Expression
+    }
+    else {
+        Write-Host "$warnIcon fnm command not available. Skipping Node.js setup." -ForegroundColor Yellow
+        return
+    }
+    
+    # Check if any Node.js version is installed
+    $installedVersions = fnm list 2>$null
+    if ($installedVersions) {
+        Write-Debug "Node.js version already installed."
+        
+        # Check if a default/global version is set
+        try {
+            $currentVersion = fnm current 2>$null
+            if ($currentVersion) {
+                Write-Debug "Global Node.js version already set: $currentVersion"
+            }
+            else {
+                Write-Host "$arrow No global Node.js version set. Setting the first installed version as default..." -ForegroundColor Cyan
+                $firstVersion = ($installedVersions | Select-Object -First 1) -replace '\*?\s*', ''
+                if ($firstVersion) {
+                    fnm default $firstVersion
+                    Write-Host "$success Set $firstVersion as default Node.js version." -ForegroundColor Green
+                }
+            }
+        }
+        catch {
+            # fnm current may fail if no version is set
+            Write-Host "$arrow No global Node.js version set. Setting the first installed version as default..." -ForegroundColor Cyan
+            $firstVersion = ($installedVersions | Select-Object -First 1) -replace '\*?\s*', ''
+            if ($firstVersion) {
+                fnm default $firstVersion
+                Write-Host "$success Set $firstVersion as default Node.js version." -ForegroundColor Green
+            }
+        }
+    }
+    else {
+        Write-Host "$arrow No Node.js version installed. Installing latest LTS..." -ForegroundColor Cyan
+        fnm install --lts
+        if ($?) {
+            Write-Host "$success Installed latest LTS Node.js." -ForegroundColor Green
+            # Set it as default
+            $currentVersion = fnm current
+            fnm default $currentVersion
+            Write-Host "$success Set $currentVersion as default Node.js version." -ForegroundColor Green
+        }
+        else {
+            Write-Host "$failIcon Failed to install Node.js." -ForegroundColor Red
+        }
+    }
+}
+
 # Function to install Claude Code via npm
 function Install-ClaudeCode {
     if (Get-Command claude -ErrorAction SilentlyContinue) {
@@ -421,7 +480,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 27 | Last changed: Fix git-town download URL to match new naming" -ForegroundColor DarkGray
+    Write-Host "Version 28 | Last changed: Add Node.js setup with conditional LTS installation" -ForegroundColor DarkGray
     
     Write-Section "Package Installation"
     Install-WingetPackages
@@ -442,6 +501,7 @@ function Initialize-WindowsEnvironment {
     Set-WindowsTerminalConfiguration
     
     Write-Section "Additional Development Tools"
+    Setup-Nodejs
     Install-ClaudeCode
     
     Write-Section "System Updates"
