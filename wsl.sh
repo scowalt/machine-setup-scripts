@@ -226,14 +226,14 @@ install_git_town() {
     print_message "Installing git-town via direct binary download..."
     
     # WSL typically uses amd64
-    local git_town_arch="linux-amd64"
+    local git_town_arch="linux_intel_64"
     
     # Create local bin directory if it doesn't exist
     local bin_dir="$HOME/.local/bin"
     mkdir -p "$bin_dir"
     
     # Download the latest binary
-    local download_url="https://github.com/git-town/git-town/releases/latest/download/git-town-${git_town_arch}.tar.gz"
+    local download_url="https://github.com/git-town/git-town/releases/latest/download/git-town_${git_town_arch}.tar.gz"
     local temp_dir
     temp_dir=$(mktemp -d)
     
@@ -450,7 +450,7 @@ update_packages() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 12 | Last changed: Fix ANSI color codes not rendering correctly${NC}"
+echo -e "${GRAY}Version 13 | Last changed: Fix git-town download URL to match new naming${NC}"
 
 print_section "System Setup"
 update_and_install_core

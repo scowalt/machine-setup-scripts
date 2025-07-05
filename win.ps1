@@ -181,7 +181,7 @@ function Install-GitTown {
         }
         
         # Download the latest Windows binary
-        $downloadUrl = "https://github.com/git-town/git-town/releases/latest/download/git-town-windows-amd64.exe"
+        $downloadUrl = "https://github.com/git-town/git-town/releases/latest/download/git-town_windows_intel_64.exe"
         $binaryPath = "$gitTownPath\git-town.exe"
         
         try {
@@ -421,7 +421,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 26 | Last changed: Add Claude Code installation after Terminal Configuration" -ForegroundColor DarkGray
+    Write-Host "Version 27 | Last changed: Fix git-town download URL to match new naming" -ForegroundColor DarkGray
     
     Write-Section "Package Installation"
     Install-WingetPackages
