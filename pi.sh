@@ -531,13 +531,13 @@ install_git_town() {
     
     case "$arch" in
         x86_64)
-            git_town_arch="linux-amd64"
+            git_town_arch="linux_intel_64"
             ;;
         aarch64)
-            git_town_arch="linux-arm64"
+            git_town_arch="linux_arm_64"
             ;;
         armv7l)
-            git_town_arch="linux-arm"
+            git_town_arch="linux_arm_32"
             ;;
         *)
             print_error "Unsupported architecture: $arch"
@@ -550,7 +550,7 @@ install_git_town() {
     mkdir -p "$bin_dir"
     
     # Download the latest binary
-    local download_url="https://github.com/git-town/git-town/releases/latest/download/git-town-${git_town_arch}.tar.gz"
+    local download_url="https://github.com/git-town/git-town/releases/latest/download/git-town_${git_town_arch}.tar.gz"
     local temp_dir
     temp_dir=$(mktemp -d)
     
@@ -670,6 +670,27 @@ install_infisical() {
 # Install pyenv for Python version management with Raspberry Pi optimizations
 install_pyenv() {
     if ! command -v pyenv &> /dev/null; then
+        # Check if ~/.pyenv exists but pyenv command is not available
+        if [ -d "$HOME/.pyenv" ]; then
+            print_warning "pyenv directory exists but command not found. Trying to fix PATH..."
+            export PYENV_ROOT="$HOME/.pyenv"
+            export PATH="$PYENV_ROOT/bin:$PATH"
+            if command -v pyenv &> /dev/null; then
+                print_success "pyenv found after fixing PATH."
+                # Still show memory warning for Pi
+                local total_mem
+                total_mem=$(free -m | awk '/^Mem:/{print $2}')
+                if [ "$total_mem" -lt 1024 ]; then
+                    print_warning "Limited RAM detected. Python compilation may be slow or fail."
+                    print_message "Consider using pre-built Python packages or increasing swap."
+                fi
+                return
+            else
+                print_error "pyenv directory exists but binary not found. Manual intervention may be required."
+                return 1
+            fi
+        fi
+        
         print_message "Installing pyenv (this may take a while on Raspberry Pi)..."
         # Use the official install script
         if curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer | bash; then
@@ -693,7 +714,7 @@ install_pyenv() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 15 | Last changed: Add unzip package for fnm compatibility and fix error handling${NC}"
+echo -e "${GRAY}Version 16 | Last changed: Fix git-town download URL and handle existing pyenv${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi

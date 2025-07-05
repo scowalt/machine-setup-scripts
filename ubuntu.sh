@@ -294,13 +294,13 @@ install_git_town() {
     
     case "$arch" in
         amd64)
-            git_town_arch="linux-amd64"
+            git_town_arch="linux_intel_64"
             ;;
         arm64)
-            git_town_arch="linux-arm64"
+            git_town_arch="linux_arm_64"
             ;;
         armhf)
-            git_town_arch="linux-arm"
+            git_town_arch="linux_arm_32"
             ;;
         *)
             print_error "Unsupported architecture: $arch"
@@ -313,7 +313,7 @@ install_git_town() {
     mkdir -p "$bin_dir"
     
     # Download the latest binary
-    local download_url="https://github.com/git-town/git-town/releases/latest/download/git-town-${git_town_arch}.tar.gz"
+    local download_url="https://github.com/git-town/git-town/releases/latest/download/git-town_${git_town_arch}.tar.gz"
     local temp_dir
     temp_dir=$(mktemp -d)
     
@@ -503,6 +503,20 @@ install_act() {
 # Install pyenv for Python version management
 install_pyenv() {
     if ! command -v pyenv &> /dev/null; then
+        # Check if ~/.pyenv exists but pyenv command is not available
+        if [ -d "$HOME/.pyenv" ]; then
+            print_warning "pyenv directory exists but command not found. Trying to fix PATH..."
+            export PYENV_ROOT="$HOME/.pyenv"
+            export PATH="$PYENV_ROOT/bin:$PATH"
+            if command -v pyenv &> /dev/null; then
+                print_success "pyenv found after fixing PATH."
+                return
+            else
+                print_error "pyenv directory exists but binary not found. Manual intervention may be required."
+                return 1
+            fi
+        fi
+        
         print_message "Installing pyenv..."
         # Use the official install script
         if curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer | bash; then
@@ -553,7 +567,7 @@ install_tmux_plugins() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 18 | Last changed: Fix error handling for fnm and pyenv installations${NC}"
+echo -e "${GRAY}Version 19 | Last changed: Fix git-town download URL and handle existing pyenv${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user
