@@ -68,7 +68,7 @@ update_and_install_core() {
     print_message "Checking and installing core packages as needed..."
 
     # Define an array of required packages
-    local packages=("git" "curl" "fish" "tmux" "fonts-firacode" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev")
+    local packages=("git" "curl" "fish" "tmux" "fonts-firacode" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "unzip" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
@@ -413,8 +413,12 @@ install_fnm() {
     fi
 
     print_message "Installing fnm (Fast Node Manager)..."
-    curl -fsSL https://fnm.vercel.app/install | bash
-    print_success "fnm installed. Shell configuration will be managed by chezmoi."
+    if curl -fsSL https://fnm.vercel.app/install | bash; then
+        print_success "fnm installed. Shell configuration will be managed by chezmoi."
+    else
+        print_error "Failed to install fnm."
+        return 1
+    fi
 }
 
 # Install 1Password CLI
@@ -501,8 +505,12 @@ install_pyenv() {
     if ! command -v pyenv &> /dev/null; then
         print_message "Installing pyenv..."
         # Use the official install script
-        curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer | bash
-        print_success "pyenv installed. Shell configuration will be managed by chezmoi."
+        if curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer | bash; then
+            print_success "pyenv installed. Shell configuration will be managed by chezmoi."
+        else
+            print_error "Failed to install pyenv."
+            return 1
+        fi
     else
         print_debug "pyenv is already installed."
     fi
@@ -545,7 +553,7 @@ install_tmux_plugins() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 16 | Last changed: Fix ANSI color codes not rendering correctly${NC}"
+echo -e "${GRAY}Version 18 | Last changed: Fix error handling for fnm and pyenv installations${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user

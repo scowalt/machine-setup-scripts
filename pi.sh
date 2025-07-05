@@ -71,7 +71,7 @@ update_and_install_core() {
     print_message "Checking and installing core packages as needed..."
 
     # Define an array of required packages
-    local packages=("git" "curl" "fish" "tmux" "fonts-firacode" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev")
+    local packages=("git" "curl" "fish" "tmux" "fonts-firacode" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "unzip" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
@@ -215,12 +215,21 @@ install_starship() {
         arch=$(uname -m)
         if [[ "$arch" == "armv"* || "$arch" == "aarch64" ]]; then
             print_message "Detected ARM architecture: $arch"
-            curl -sS https://starship.rs/install.sh | sh -s -- -y
-            print_success "Starship installed."
+            if curl -sS https://starship.rs/install.sh | sh -s -- -y; then
+                print_success "Starship installed."
+            else
+                print_error "Failed to install Starship."
+                return 1
+            fi
         else
             print_error "Unsupported architecture: $arch. Starship might not work correctly."
             print_message "Attempting installation anyway..."
-            curl -sS https://starship.rs/install.sh | sh -s -- -y
+            if curl -sS https://starship.rs/install.sh | sh -s -- -y; then
+                print_success "Starship installed despite architecture warning."
+            else
+                print_error "Failed to install Starship."
+                return 1
+            fi
         fi
     else
         print_debug "Starship is already installed."
@@ -252,15 +261,18 @@ install_tailscale() {
 install_chezmoi() {
     if ! command -v chezmoi &> /dev/null; then
         print_message "Installing chezmoi (this may take a while on Raspberry Pi)..."
-        sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/bin"
-        
-        # Add ~/bin to PATH if not already present
-        if ! grep -q "PATH=\$HOME/bin" ~/.bashrc; then
-            echo "export PATH=\$HOME/bin:\$PATH" >> ~/.bashrc
-            # Source bashrc in the current session to make chezmoi available
-            export PATH=$HOME/bin:$PATH
+        if sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$HOME/bin"; then
+            # Add ~/bin to PATH if not already present
+            if ! grep -q "PATH=\$HOME/bin" ~/.bashrc; then
+                echo "export PATH=\$HOME/bin:\$PATH" >> ~/.bashrc
+                # Source bashrc in the current session to make chezmoi available
+                export PATH=$HOME/bin:$PATH
+            fi
+            print_success "chezmoi installed."
+        else
+            print_error "Failed to install chezmoi."
+            return 1
         fi
-        print_success "chezmoi installed."
     else
         print_debug "chezmoi is already installed."
     fi
@@ -607,8 +619,12 @@ install_fnm() {
     fi
 
     print_message "Installing fnm (Fast Node Manager)…"
-    curl -fsSL https://fnm.vercel.app/install | bash
-    print_success "fnm installed. Shell configuration will be managed by chezmoi."
+    if curl -fsSL https://fnm.vercel.app/install | bash; then
+        print_success "fnm installed. Shell configuration will be managed by chezmoi."
+    else
+        print_error "Failed to install fnm."
+        return 1
+    fi
 }
 
 # NOTE: Claude Code is not installed on Raspberry Pi
@@ -656,8 +672,12 @@ install_pyenv() {
     if ! command -v pyenv &> /dev/null; then
         print_message "Installing pyenv (this may take a while on Raspberry Pi)..."
         # Use the official install script
-        curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer | bash
-        print_success "pyenv installed. Shell configuration will be managed by chezmoi."
+        if curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer | bash; then
+            print_success "pyenv installed. Shell configuration will be managed by chezmoi."
+        else
+            print_error "Failed to install pyenv."
+            return 1
+        fi
         
         # Check available memory for warning about Python compilation
         local total_mem
@@ -673,7 +693,7 @@ install_pyenv() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 14 | Last changed: Fix git-town installation by downloading binary directly${NC}"
+echo -e "${GRAY}Version 15 | Last changed: Add unzip package for fnm compatibility and fix error handling${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
