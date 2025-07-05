@@ -445,8 +445,10 @@ setup_nodejs() {
         print_debug "Node.js version already installed."
         
         # Check if a default/global version is set
-        if fnm current &> /dev/null; then
-            print_debug "Global Node.js version already set: $(fnm current)"
+        local current_version
+        current_version=$(fnm current 2>/dev/null || echo "none")
+        if [ "$current_version" != "none" ] && [ -n "$current_version" ]; then
+            print_debug "Global Node.js version already set: $current_version"
         else
             print_message "No global Node.js version set. Setting the first installed version as default..."
             local first_version
@@ -616,7 +618,7 @@ install_tmux_plugins() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 21 | Last changed: Add Node.js setup with conditional LTS installation${NC}"
+echo -e "${GRAY}Version 22 | Last changed: Fix Node.js version detection for 'none' case${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user

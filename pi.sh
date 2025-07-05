@@ -651,8 +651,10 @@ setup_nodejs() {
         print_debug "Node.js version already installed."
         
         # Check if a default/global version is set
-        if fnm current &> /dev/null; then
-            print_debug "Global Node.js version already set: $(fnm current)"
+        local current_version
+        current_version=$(fnm current 2>/dev/null || echo "none")
+        if [ "$current_version" != "none" ] && [ -n "$current_version" ]; then
+            print_debug "Global Node.js version already set: $current_version"
         else
             print_message "No global Node.js version set. Setting the first installed version as default..."
             local first_version
@@ -764,7 +766,7 @@ install_pyenv() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 18 | Last changed: Add Node.js setup with conditional LTS installation${NC}"
+echo -e "${GRAY}Version 19 | Last changed: Fix Node.js version detection for 'none' case${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
