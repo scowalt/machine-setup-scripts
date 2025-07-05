@@ -413,7 +413,7 @@ install_fnm() {
     fi
 
     print_message "Installing fnm (Fast Node Manager)..."
-    if curl -fsSL https://fnm.vercel.app/install | bash; then
+    if curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell; then
         print_success "fnm installed. Shell configuration will be managed by chezmoi."
     else
         print_error "Failed to install fnm."
@@ -567,7 +567,7 @@ install_tmux_plugins() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 19 | Last changed: Fix git-town download URL and handle existing pyenv${NC}"
+echo -e "${GRAY}Version 20 | Last changed: Add --skip-shell to fnm install for chezmoi compatibility${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user

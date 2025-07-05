@@ -619,7 +619,7 @@ install_fnm() {
     fi
 
     print_message "Installing fnm (Fast Node Manager)…"
-    if curl -fsSL https://fnm.vercel.app/install | bash; then
+    if curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell; then
         print_success "fnm installed. Shell configuration will be managed by chezmoi."
     else
         print_error "Failed to install fnm."
@@ -714,7 +714,7 @@ install_pyenv() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 16 | Last changed: Fix git-town download URL and handle existing pyenv${NC}"
+echo -e "${GRAY}Version 17 | Last changed: Add --skip-shell to fnm install for chezmoi compatibility${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
