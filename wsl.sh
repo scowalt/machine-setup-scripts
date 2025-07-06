@@ -369,7 +369,7 @@ setup_nodejs() {
         else
             print_message "No global Node.js version set. Setting the first installed version as default..."
             local first_version
-            first_version=$(fnm list | grep -v "system" | head -n1 | sed 's/[* ]*//')
+            first_version=$(fnm list | grep -v "system" | head -n1 | awk '{print $2}')
             if [ -n "$first_version" ]; then
                 fnm default "$first_version"
                 print_success "Set $first_version as default Node.js version."
@@ -494,7 +494,7 @@ update_packages() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 15 | Last changed: Fix Node.js version detection for 'none' case${NC}"
+echo -e "${GRAY}Version 16 | Last changed: Fix fnm version parsing with awk${NC}"
 
 print_section "System Setup"
 update_and_install_core

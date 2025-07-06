@@ -428,7 +428,7 @@ setup_nodejs() {
     # Initialize fnm for current session
     if [ -s "$HOME/.local/share/fnm/fnm" ]; then
         export PATH="$HOME/.local/share/fnm:$PATH"
-        eval "$(fnm env --use-on-cd)"
+        eval "$("$HOME"/.local/share/fnm/fnm env --use-on-cd)"
     else
         print_warning "fnm not found in expected location. Skipping Node.js setup."
         return
@@ -452,10 +452,18 @@ setup_nodejs() {
         else
             print_message "No global Node.js version set. Setting the first installed version as default..."
             local first_version
-            first_version=$(fnm list | grep -v "system" | head -n1 | sed 's/[* ]*//')
+            first_version=$(fnm list | grep -v "system" | head -n1 | awk '{print $2}')
             if [ -n "$first_version" ]; then
-                fnm default "$first_version"
-                print_success "Set $first_version as default Node.js version."
+                print_debug "Attempting to set default version to: $first_version"
+                if fnm default "$first_version"; then
+                    print_success "Set $first_version as default Node.js version."
+                    # Re-initialize fnm to pick up the new default
+                    eval "$("$HOME"/.local/share/fnm/fnm env --use-on-cd)"
+                else
+                    print_error "Failed to set default Node.js version. You may need to run: fnm default $first_version"
+                fi
+            else
+                print_warning "Could not determine Node.js version from fnm list output."
             fi
         fi
     else
@@ -618,7 +626,7 @@ install_tmux_plugins() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 22 | Last changed: Fix Node.js version detection for 'none' case${NC}"
+echo -e "${GRAY}Version 23 | Last changed: Fix fnm version parsing and reinit after setting default${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user
