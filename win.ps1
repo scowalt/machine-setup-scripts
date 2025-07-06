@@ -23,7 +23,6 @@ $wingetPackages = (
     "gerardog.gsudo",
     "strayge.tray-monitor",
     "DEVCOM.JetBrainsMonoNerdFont",
-    "Infisical.infisical-cli",
     "nektos.act"
 )
 
@@ -245,6 +244,33 @@ function Set-StarshipInit {
     }
     else {
         Write-Debug "Starship initialization command is already in PowerShell profile."
+    }
+}
+
+# Function to install Infisical CLI via Scoop
+function Install-Infisical {
+    if (-not (Get-Command infisical -ErrorAction SilentlyContinue)) {
+        Write-Host "$arrow Installing Infisical CLI via Scoop..." -ForegroundColor Cyan
+        
+        # Check if Scoop is installed
+        if (-not (Get-Command scoop -ErrorAction SilentlyContinue)) {
+            Write-Host "$arrow Installing Scoop package manager..." -ForegroundColor Cyan
+            Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+            Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression
+            Write-Host "$success Scoop installed." -ForegroundColor Green
+        }
+        
+        # Install Infisical via Scoop
+        scoop install infisical
+        if ($?) {
+            Write-Host "$success Infisical CLI installed." -ForegroundColor Green
+        }
+        else {
+            Write-Host "$failIcon Failed to install Infisical CLI." -ForegroundColor Red
+        }
+    }
+    else {
+        Write-Debug "Infisical CLI is already installed."
     }
 }
 
@@ -480,7 +506,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 28 | Last changed: Add Node.js setup with conditional LTS installation" -ForegroundColor DarkGray
+    Write-Host "Version 29 | Last changed: Fix Infisical installation via Scoop instead of winget" -ForegroundColor DarkGray
     
     Write-Section "Package Installation"
     Install-WingetPackages
@@ -495,6 +521,7 @@ function Initialize-WindowsEnvironment {
     Install-GitTown
     Set-GitTownCompletions
     Install-PyenvWin
+    Install-Infisical
     
     Write-Section "Terminal Configuration"
     Set-StarshipInit
