@@ -18,7 +18,7 @@ $wingetPackages = (
     "GitHub.cli",
     "Anysphere.Cursor",
     "Oven-sh.Bun",
-    "NovaTechnology.Beeper",
+    "Beeper.Beeper",
     "Flow-Launcher.Flow-Launcher",
     "gerardog.gsudo",
     "strayge.tray-monitor",
@@ -506,7 +506,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 29 | Last changed: Fix Infisical installation via Scoop instead of winget" -ForegroundColor DarkGray
+    Write-Host "Version 30 | Last changed: Update Beeper package ID from NovaTechnology.Beeper to Beeper.Beeper" -ForegroundColor DarkGray
     
     Write-Section "Package Installation"
     Install-WingetPackages
