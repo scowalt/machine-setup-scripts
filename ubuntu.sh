@@ -448,7 +448,8 @@ setup_nodejs() {
         return 1
     fi
     
-    if echo "$fnm_list_output" | grep -q .; then
+    # Check if only system version is available
+    if echo "$fnm_list_output" | grep -v "system" | grep -q "v[0-9]"; then
         print_debug "Node.js version already installed."
         
         # Check if a default/global version is set
@@ -459,34 +460,11 @@ setup_nodejs() {
         else
             print_message "No global Node.js version set. Setting the first installed version as default..."
             
-            # Debug: Show raw fnm list output
-            print_debug "Raw fnm list output:"
-            fnm list 2>&1 | while read -r line; do
-                print_debug "  $line"
-            done
-            
-            # Debug: Show filtered output
-            print_debug "Filtered fnm list (excluding 'system'):"
-            fnm list | grep -v "system" | while read -r line; do
-                print_debug "  $line"
-            done
-            
             local first_version
-            # Try different parsing methods
-            first_version=$(fnm list | grep -v "system" | head -n1 | awk '{print $2}')
-            print_debug "Method 1 - Extracted version: '$first_version'"
+            # Extract the first non-system version
+            first_version=$(fnm list | grep -E "^[[:space:]]*\*?[[:space:]]*v[0-9]" | head -n1 | sed 's/^[[:space:]]*\*\?[[:space:]]*//' | awk '{print $1}')
             
-            # If that didn't work, try another approach
-            if [ -z "$first_version" ]; then
-                first_version=$(fnm list | grep -E "^[[:space:]]*v[0-9]" | head -n1 | sed 's/^[[:space:]]*//' | cut -d' ' -f1)
-                print_debug "Method 2 - Extracted version: '$first_version'"
-            fi
-            
-            # If still nothing, try without any prefix
-            if [ -z "$first_version" ]; then
-                first_version=$(fnm list | grep -v "system" | head -n1 | tr -d '* ' | awk '{print $1}')
-                print_debug "Method 3 - Extracted version: '$first_version'"
-            fi
+            print_debug "Found version to set as default: '$first_version'"
             
             if [ -n "$first_version" ]; then
                 print_debug "Attempting to set default version to: $first_version"
@@ -498,9 +476,23 @@ setup_nodejs() {
                     print_error "Failed to set default Node.js version. You may need to run: fnm default $first_version"
                 fi
             else
-                print_warning "Could not determine Node.js version from fnm list output."
-                print_message "You may need to manually install Node.js with: fnm install --lts"
-                print_message "Then set it as default with: fnm default <version>"
+                print_warning "No Node.js versions found (only system version available)."
+                print_message "Installing Node.js LTS version..."
+                if fnm install --lts; then
+                    print_success "Installed latest LTS Node.js."
+                    # Get the version that was just installed
+                    local installed_version
+                    installed_version=$(fnm list | grep -E "^[[:space:]]*\*?[[:space:]]*v[0-9]" | head -n1 | sed 's/^[[:space:]]*\*\?[[:space:]]*//' | awk '{print $1}')
+                    if [ -n "$installed_version" ]; then
+                        fnm default "$installed_version"
+                        print_success "Set $installed_version as default Node.js version."
+                        eval "$("$HOME"/.local/share/fnm/fnm env --use-on-cd)"
+                    fi
+                else
+                    print_error "Failed to install Node.js LTS version."
+                    print_message "You may need to manually install Node.js with: fnm install --lts"
+                    print_message "Then set it as default with: fnm default <version>"
+                fi
             fi
         fi
     else
@@ -663,7 +655,7 @@ install_tmux_plugins() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 24 | Last changed: Add extensive debugging for fnm list parsing${NC}"
+echo -e "${GRAY}Version 25 | Last changed: Auto-install Node.js LTS when only system version exists${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user
