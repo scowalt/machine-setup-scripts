@@ -192,11 +192,13 @@ This is critical because tools like fnm are initialized in shell configuration f
 
 On Linux platforms (Ubuntu, WSL, Raspberry Pi), git-town is not available in package repositories and must be downloaded directly from GitHub releases. The scripts automatically detect the system architecture and download the appropriate binary:
 
-- `linux-amd64` for x86_64/amd64 systems
-- `linux-arm64` for aarch64 systems (newer Raspberry Pi)
-- `linux-arm` for armv7l/armhf systems (older Raspberry Pi)
+- `linux_intel_64` for x86_64/amd64 systems
+- `linux_arm_64` for aarch64 systems (newer Raspberry Pi)
+- `linux_arm_32` for armv7l/armhf systems (older Raspberry Pi)
 
 The binary is installed to `~/.local/bin` and the PATH is updated in `~/.bashrc` if needed.
+
+**Important**: Git-town changed their release naming convention. Old format was `git-town-linux-amd64`, new format is `git-town_linux_intel_64`.
 
 #### Raspberry Pi Color Output
 
@@ -246,6 +248,54 @@ if ! command -v npm &> /dev/null; then
     return
 fi
 ```
+
+### Node.js and fnm Management
+
+#### Key Learnings from Implementation
+
+1. **fnm Installation with Chezmoi**: When using fnm with chezmoi-managed dotfiles:
+   - Use `--skip-shell` flag during fnm installation to prevent it from modifying shell configs
+   - Let chezmoi handle all shell configuration including fnm initialization
+
+2. **Node.js Version Detection**: fnm behavior can be tricky:
+   - `fnm current` returns exit code 0 even when no version is set (outputs "none")
+   - `fnm list` may show only "* system" when no Node.js versions are installed
+   - Always check the actual output content, not just exit codes
+
+3. **Parsing fnm list Output**: The output format varies:
+   - With versions: `* v20.11.0 default`
+   - Without versions: `* system`
+   - Use regex to specifically look for version numbers: `grep -E "^[[:space:]]*\*?[[:space:]]*v[0-9]"`
+
+4. **Automatic Node.js Installation**: The scripts now:
+   - Check if any real Node.js versions exist (not just system)
+   - Install LTS automatically if none found
+   - Set the first available version as default if none is set
+   - Re-initialize fnm environment after setting default
+
+5. **PATH Considerations**:
+   - fnm installs to different locations on different platforms
+   - Ubuntu/Pi: `~/.local/share/fnm`
+   - macOS/WSL (via Homebrew): Managed by brew
+   - Always use full path to fnm binary during initialization: `"$HOME"/.local/share/fnm/fnm`
+
+#### Common Issues and Solutions
+
+- **"fnm: command not found"**: PATH not set correctly, use full path to binary
+- **"none" as current version**: No default set, need to run `fnm default <version>`
+- **Only "system" in fnm list**: No Node.js versions installed, need to run `fnm install --lts`
+- **npm not found after fnm install**: Need to re-source fnm env after installing Node.js
+
+### pyenv Installation Handling
+
+The pyenv installer will fail if `~/.pyenv` directory already exists. The scripts now handle this by:
+
+1. Checking if the directory exists when `pyenv` command is not found
+2. Attempting to fix PATH by adding `$HOME/.pyenv/bin`
+3. If pyenv is found after PATH fix, continue normally
+4. If not found, warn user that manual intervention may be required
+
+This prevents the confusing situation where pyenv is partially installed but not functional.
 
 ## Development Practices
 
