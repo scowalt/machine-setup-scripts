@@ -456,6 +456,25 @@ install_pyenv() {
     fi
 }
 
+# Install Bun JavaScript runtime and package manager
+install_bun() {
+    if command -v bun &> /dev/null; then
+        print_debug "Bun is already installed."
+        return
+    fi
+
+    print_message "Installing Bun..."
+    if ! curl -fsSL https://bun.sh/install | bash; then
+        print_error "Failed to install Bun."
+        exit 1
+    fi
+    
+    # Add bun to PATH for current session
+    export PATH="$HOME/.bun/bin:$PATH"
+    
+    print_success "Bun installed."
+}
+
 # Install tmux plugins for session persistence
 install_tmux_plugins() {
     local plugin_dir=~/.tmux/plugins
@@ -494,7 +513,7 @@ update_packages() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 16 | Last changed: Fix fnm version parsing with awk${NC}"
+echo -e "${GRAY}Version 17 | Last changed: Add Bun JavaScript runtime and package manager${NC}"
 
 print_section "System Setup"
 update_and_install_core
@@ -513,6 +532,7 @@ configure_git_town
 install_fnm
 setup_nodejs
 install_pyenv
+install_bun
 
 print_section "Security Tools"
 install_1password_cli
