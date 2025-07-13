@@ -16,7 +16,6 @@ $wingetPackages = (
     "Starship.Starship",
     "mulaRahul.Keyviz",
     "GitHub.cli",
-    "Anysphere.Cursor",
     "Oven-sh.Bun",
     "Beeper.Beeper",
     "Flow-Launcher.Flow-Launcher",
@@ -506,7 +505,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 30 | Last changed: Update Beeper package ID from NovaTechnology.Beeper to Beeper.Beeper" -ForegroundColor DarkGray
+    Write-Host "Version 31 | Last changed: Remove Cursor editor (keep VSCode only)" -ForegroundColor DarkGray
     
     Write-Section "Package Installation"
     Install-WingetPackages

@@ -276,6 +276,21 @@ install_claude_code() {
     fi
 }
 
+# Install Visual Studio Code
+install_vscode() {
+    if brew list --cask visual-studio-code &> /dev/null; then
+        print_debug "Visual Studio Code is already installed."
+        return
+    fi
+    
+    print_message "Installing Visual Studio Code..."
+    if ! brew install --cask visual-studio-code > /dev/null; then
+        print_error "Failed to install Visual Studio Code."
+        exit 1
+    fi
+    print_success "Visual Studio Code installed."
+}
+
 
 
 # Install tmux plugins for session persistence
@@ -314,7 +329,7 @@ update_brew() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 20 | Last changed: Fix fnm version parsing with awk${NC}"
+echo -e "${GRAY}Version 21 | Last changed: Add Visual Studio Code installation${NC}"
 
 print_section "Package Manager Setup"
 install_homebrew
@@ -341,6 +356,7 @@ install_tmux_plugins
 print_section "Additional Development Tools"
 setup_nodejs
 install_claude_code
+install_vscode
 
 print_section "Final Updates"
 update_brew
