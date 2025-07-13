@@ -389,6 +389,24 @@ setup_nodejs() {
     fi
 }
 
+# Fix 1Password repository GPG key issues
+fix_1password_repository() {
+    print_message "Checking for 1Password repository issues..."
+    
+    # Check if 1Password repository exists and has key issues
+    if apt-cache policy 2>/dev/null | grep -q "1password.com" && apt update 2>&1 | grep -q "EXPKEYSIG.*1Password"; then
+        print_message "Fixing expired 1Password repository key..."
+        
+        # Remove the problematic repository
+        sudo rm -f /etc/apt/sources.list.d/1password.list
+        sudo rm -f /usr/share/keyrings/1password-archive-keyring.gpg
+        
+        print_success "Removed problematic 1Password repository."
+    else
+        print_debug "No 1Password repository issues detected."
+    fi
+}
+
 # Install 1Password CLI
 install_1password_cli() {
     if command -v op >/dev/null; then
@@ -397,6 +415,10 @@ install_1password_cli() {
     fi
 
     print_message "Installing 1Password CLI..."
+    
+    # Fix any existing repository issues first
+    fix_1password_repository
+    
     ensure_brew_available
     if ! brew install --cask 1password-cli; then
         print_error "Failed to install 1Password CLI via Homebrew."
