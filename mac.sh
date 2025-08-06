@@ -23,7 +23,7 @@ install_core_packages() {
 
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
-    local packages=("git" "curl" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "infisical" "git-town" "act" "terminal-notifier" "pyenv")
+    local packages=("git" "curl" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "infisical" "git-town" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx")
     local to_install=()
     
     # Get all installed packages at once (much faster than checking individually)
@@ -329,7 +329,7 @@ update_brew() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 21 | Last changed: Add Visual Studio Code installation${NC}"
+echo -e "${GRAY}Version 22 | Last changed: Add Hammerspoon, switchaudio-osx, and Visual Studio Code${NC}"
 
 print_section "Package Manager Setup"
 install_homebrew
