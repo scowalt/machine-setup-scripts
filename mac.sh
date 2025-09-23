@@ -29,22 +29,26 @@ install_core_packages() {
     # Get all installed packages at once (much faster than checking individually)
     print_message "Getting list of installed packages..."
     local installed_formulae
-    installed_formulae=$(brew list --formula -1 2>/dev/null | tr '\n' ' ')
+    local brew_formulae_list
+    brew_formulae_list=$(brew list --formula -1 2>/dev/null)
+    installed_formulae=$(echo "${brew_formulae_list}" | tr '\n' ' ')
     local installed_casks
-    installed_casks=$(brew list --cask -1 2>/dev/null | tr '\n' ' ')
-    local all_installed=" $installed_formulae $installed_casks "
+    local brew_casks_list
+    brew_casks_list=$(brew list --cask -1 2>/dev/null)
+    installed_casks=$(echo "${brew_casks_list}" | tr '\n' ' ')
+    local all_installed=" ${installed_formulae} ${installed_casks} "
     
     # Check each required package against the installed list
     for package in "${packages[@]}"; do
-        if [[ ! "$all_installed" =~ \ $package\  ]]; then
-            to_install+=("$package")
+        if [[ ! "${all_installed}" =~ \ ${package}\  ]]; then
+            to_install+=("${package}")
         else
-            print_debug "$package is already installed."
+            print_debug "${package} is already installed."
         fi
     done
 
     # Install any packages that are not yet installed
-    if [ "${#to_install[@]}" -gt 0 ]; then
+    if [[ "${#to_install[@]}" -gt 0 ]]; then
         print_message "Installing missing packages: ${to_install[*]}"
         brew install "${to_install[@]}" > /dev/null
         print_success "Missing core packages installed."
@@ -61,11 +65,11 @@ setup_ssh_key() {
     local existing_keys
     existing_keys=$(curl -s https://github.com/scowalt.keys)
 
-    if [ -f ~/.ssh/id_rsa.pub ]; then
+    if [[ -f ~/.ssh/id_rsa.pub ]]; then
         local local_key
         local_key=$(awk '{print $2}' ~/.ssh/id_rsa.pub)
 
-        if echo "$existing_keys" | grep -q "$local_key"; then
+        if echo "${existing_keys}" | grep -q "${local_key}"; then
             print_success "Existing SSH key recognized by GitHub."
         else
             print_error "SSH key not recognized by GitHub. Please add it manually."
@@ -85,18 +89,24 @@ setup_ssh_key() {
 install_homebrew() {
     if ! command -v brew &> /dev/null; then
         print_message "Installing Homebrew..."
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" > /dev/null
-        eval "$(/opt/homebrew/bin/brew shellenv)"
+        local install_script
+        install_script=$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)
+        /bin/bash -c "${install_script}" > /dev/null
+        local brew_env
+        brew_env=$(/opt/homebrew/bin/brew shellenv)
+        eval "${brew_env}"
         print_success "Homebrew installed."
     else
         print_debug "Homebrew is already installed."
-        eval "$(/opt/homebrew/bin/brew shellenv)"
+        local brew_env
+        brew_env=$(/opt/homebrew/bin/brew shellenv)
+        eval "${brew_env}"
     fi
 }
 
 # Initialize chezmoi if not already initialized
 initialize_chezmoi() {
-    if [ ! -d ~/.local/share/chezmoi ]; then
+    if [[ ! -d ~/.local/share/chezmoi ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
         chezmoi init --apply scowalt/dotfiles --ssh > /dev/null
         print_success "chezmoi initialized with scowalt/dotfiles."
@@ -108,10 +118,10 @@ initialize_chezmoi() {
 # Configure chezmoi for auto commit, push, and pull
 configure_chezmoi_git() {
     local chezmoi_config=~/.config/chezmoi/chezmoi.toml
-    if [ ! -f "$chezmoi_config" ]; then
+    if [[ ! -f "${chezmoi_config}" ]]; then
         print_message "Configuring chezmoi with auto-commit, auto-push, and auto-pull..."
         mkdir -p ~/.config/chezmoi
-        cat <<EOF > "$chezmoi_config"
+        cat <<EOF > "${chezmoi_config}"
 [git]
 autoCommit = true
 autoPush = true
@@ -125,7 +135,7 @@ EOF
 
 # Set Fish as the default shell if it isn't already
 set_fish_as_default_shell() {
-    if [ "$SHELL" != "/opt/homebrew/bin/fish" ]; then
+    if [[ "${SHELL}" != "/opt/homebrew/bin/fish" ]]; then
         print_message "Setting Fish as the default shell..."
         if ! grep -Fxq "/opt/homebrew/bin/fish" /etc/shells; then
             echo "/opt/homebrew/bin/fish" | sudo tee -a /etc/shells > /dev/null
@@ -143,12 +153,12 @@ add_github_to_known_hosts() {
     local known_hosts_file=~/.ssh/known_hosts
     mkdir -p ~/.ssh
     chmod 700 ~/.ssh
-    touch "$known_hosts_file"
-    chmod 600 "$known_hosts_file"
+    touch "${known_hosts_file}"
+    chmod 600 "${known_hosts_file}"
 
     if ! ssh-keygen -F github.com &>/dev/null; then
         print_message "Adding GitHub's SSH key to known_hosts..."
-        if ! ssh-keyscan github.com >> "$known_hosts_file" 2>/dev/null; then
+        if ! ssh-keyscan github.com >> "${known_hosts_file}" 2>/dev/null; then
             print_error "Failed to add GitHub's SSH key to known_hosts."
             exit 1
         fi
@@ -164,8 +174,8 @@ configure_git_town() {
         print_message "Configuring git-town completions..."
         
         # Set up Fish shell completions for git-town
-        if [ -d ~/.config/fish/completions ]; then
-            if ! [ -f ~/.config/fish/completions/git-town.fish ]; then
+        if [[ -d ~/.config/fish/completions ]]; then
+            if ! [[ -f ~/.config/fish/completions/git-town.fish ]]; then
                 git town completion fish > ~/.config/fish/completions/git-town.fish
                 print_success "git-town Fish completions configured."
             else
@@ -175,10 +185,12 @@ configure_git_town() {
         
         # Set up Bash completions for git-town
         local bash_completion_dir
-        bash_completion_dir="$(brew --prefix)/etc/bash_completion.d"
-        if [ -d "$bash_completion_dir" ]; then
-            if ! [ -f "$bash_completion_dir/git-town" ]; then
-                git town completion bash > "$bash_completion_dir/git-town"
+        local brew_prefix
+        brew_prefix=$(brew --prefix)
+        bash_completion_dir="${brew_prefix}/etc/bash_completion.d"
+        if [[ -d "${bash_completion_dir}" ]]; then
+            if ! [[ -f "${bash_completion_dir}/git-town" ]]; then
+                git town completion bash > "${bash_completion_dir}/git-town"
                 print_success "git-town Bash completions configured."
             else
                 print_debug "git-town Bash completions already configured."
@@ -187,10 +199,10 @@ configure_git_town() {
         
         # Set up Zsh completions for git-town
         local zsh_completion_dir
-        zsh_completion_dir="$(brew --prefix)/share/zsh/site-functions"
-        if [ -d "$zsh_completion_dir" ]; then
-            if ! [ -f "$zsh_completion_dir/_git-town" ]; then
-                git town completion zsh > "$zsh_completion_dir/_git-town"
+        zsh_completion_dir="${brew_prefix}/share/zsh/site-functions"
+        if [[ -d "${zsh_completion_dir}" ]]; then
+            if ! [[ -f "${zsh_completion_dir}/_git-town" ]]; then
+                git town completion zsh > "${zsh_completion_dir}/_git-town"
                 print_success "git-town Zsh completions configured."
             else
                 print_debug "git-town Zsh completions already configured."
@@ -207,28 +219,38 @@ setup_nodejs() {
     
     # Initialize fnm for current session
     if command -v fnm &> /dev/null; then
-        eval "$(fnm env --use-on-cd)"
+        local fnm_env
+        fnm_env=$(fnm env --use-on-cd)
+        eval "${fnm_env}"
     else
         print_warning "fnm command not available. Skipping Node.js setup."
         return
     fi
     
     # Check if any Node.js version is installed
-    if fnm list | grep -q .; then
+    local fnm_output
+    fnm_output=$(fnm list)
+    if echo "${fnm_output}" | grep -q .; then
         print_debug "Node.js version already installed."
         
         # Check if a default/global version is set
         local current_version
         current_version=$(fnm current 2>/dev/null || echo "none")
-        if [ "$current_version" != "none" ] && [ -n "$current_version" ]; then
-            print_debug "Global Node.js version already set: $current_version"
+        if [[ "${current_version}" != "none" ]] && [[ -n "${current_version}" ]]; then
+            print_debug "Global Node.js version already set: ${current_version}"
         else
             print_message "No global Node.js version set. Setting the first installed version as default..."
             local first_version
-            first_version=$(fnm list | grep -v "system" | head -n1 | awk '{print $2}')
-            if [ -n "$first_version" ]; then
-                fnm default "$first_version"
-                print_success "Set $first_version as default Node.js version."
+            local fnm_list
+            fnm_list=$(fnm list)
+            local filtered_list
+            filtered_list=$(echo "${fnm_list}" | grep -v "system")
+            local first_line
+            first_line=$(echo "${filtered_list}" | head -n1)
+            first_version=$(echo "${first_line}" | awk '{print $2}')
+            if [[ -n "${first_version}" ]]; then
+                fnm default "${first_version}"
+                print_success "Set ${first_version} as default Node.js version."
             fi
         fi
     else
@@ -236,8 +258,12 @@ setup_nodejs() {
         if fnm install --lts; then
             print_success "Installed latest LTS Node.js."
             # Set it as default
-            fnm default "$(fnm current)"
-            print_success "Set $(fnm current) as default Node.js version."
+            local current_node
+            current_node=$(fnm current)
+            fnm default "${current_node}"
+            local current_version_display
+            current_version_display=$(fnm current)
+            print_success "Set ${current_version_display} as default Node.js version."
         else
             print_error "Failed to install Node.js."
             return 1
@@ -255,9 +281,11 @@ install_claude_code() {
     print_message "Installing Claude Code..."
     
     # Source fnm initialization from fish config to make npm available
-    if [ -f ~/.config/fish/config.fish ]; then
+    if [[ -f ~/.config/fish/config.fish ]]; then
         # Extract and run fnm initialization commands for the current shell
-        eval "$(fnm env --use-on-cd)"
+        local claude_fnm_env
+        claude_fnm_env=$(fnm env --use-on-cd)
+        eval "${claude_fnm_env}"
     fi
     
     # Make sure npm is available
@@ -296,21 +324,21 @@ install_vscode() {
 # Install tmux plugins for session persistence
 install_tmux_plugins() {
     local plugin_dir=~/.tmux/plugins
-    if [ ! -d "$plugin_dir/tpm" ]; then
+    if [[ ! -d "${plugin_dir}/tpm" ]]; then
         print_message "Installing tmux plugin manager..."
-        git clone -q https://github.com/tmux-plugins/tpm "$plugin_dir/tpm"
+        git clone -q https://github.com/tmux-plugins/tpm "${plugin_dir}/tpm"
         print_success "tmux plugin manager installed."
     else
         print_debug "tmux plugin manager already installed."
     fi
 
     for plugin in tmux-resurrect tmux-continuum; do
-        if [ ! -d "$plugin_dir/$plugin" ]; then
-            print_message "Installing $plugin..."
-            git clone -q https://github.com/tmux-plugins/$plugin "$plugin_dir/$plugin"
-            print_success "$plugin installed."
+        if [[ ! -d "${plugin_dir}/${plugin}" ]]; then
+            print_message "Installing ${plugin}..."
+            git clone -q "https://github.com/tmux-plugins/${plugin}" "${plugin_dir}/${plugin}"
+            print_success "${plugin} installed."
         else
-            print_debug "$plugin already installed."
+            print_debug "${plugin} already installed."
         fi
     done
 
