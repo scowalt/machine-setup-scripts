@@ -29,7 +29,9 @@ fix_dpkg_and_broken_dependencies() {
 
 # Enforce that the script is run as the 'scowalt' user
 enforce_scowalt_user() {
-    if [ "$(whoami)" != "scowalt" ]; then
+    local current_user
+    current_user=$(whoami)
+    if [[ "${current_user}" != "scowalt" ]]; then
         print_error "This script must be run as the 'scowalt' user for security reasons."
 
         # Check if the 'scowalt' user exists
@@ -73,15 +75,15 @@ update_and_install_core() {
 
     # Check each package and add missing ones to the to_install array
     for package in "${packages[@]}"; do
-        if ! dpkg -s "$package" &> /dev/null; then
-            to_install+=("$package")
+        if ! dpkg -s "${package}" &> /dev/null; then
+            to_install+=("${package}")
         else
-            print_debug "$package is already installed."
+            print_debug "${package} is already installed."
         fi
     done
 
     # Install any packages that are not yet installed
-    if [ "${#to_install[@]}" -gt 0 ]; then
+    if [[ "${#to_install[@]}" -gt 0 ]]; then
         print_message "Installing missing packages: ${to_install[*]}"
         if ! sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" install -qq -y "${to_install[@]}"; then
             print_error "Failed to install some core packages. Please review the output above."
@@ -137,13 +139,13 @@ setup_ssh_key() {
     # Remember - chezmoi will set up authorized_keys for you
 
     # Check if a local SSH key exists
-    if [ -f ~/.ssh/id_rsa.pub ]; then
+    if [[ -f ~/.ssh/id_rsa.pub ]]; then
         # Extract only the actual key part from id_rsa.pub and log for debugging
         local local_key
         local_key=$(awk '{print $2}' ~/.ssh/id_rsa.pub)
 
         # Verify if the extracted key part matches any of the GitHub keys
-        if echo "$existing_keys" | grep -q "$local_key"; then
+        if echo "${existing_keys}" | grep -q "${local_key}"; then
             print_success "Existing SSH key recognized by GitHub."
         else
             print_error "SSH key not recognized by GitHub. Please add it manually."
@@ -152,7 +154,9 @@ setup_ssh_key() {
     else
         # Generate a new SSH key and log details
         print_warning "No SSH key found. Generating a new SSH key..."
-        ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N "" -C "scowalt@$(hostname)"
+        local hostname_value
+        hostname_value=$(hostname)
+        ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N "" -C "scowalt@${hostname_value}"
         print_success "SSH key generated."
         print_message "Please add the following SSH key to GitHub:"
         cat ~/.ssh/id_rsa.pub
@@ -166,12 +170,12 @@ add_github_to_known_hosts() {
     local known_hosts_file=~/.ssh/known_hosts
     mkdir -p ~/.ssh
     chmod 700 ~/.ssh
-    touch "$known_hosts_file"
-    chmod 600 "$known_hosts_file"
+    touch "${known_hosts_file}"
+    chmod 600 "${known_hosts_file}"
 
     if ! ssh-keygen -F github.com &>/dev/null; then
         print_message "Adding GitHub's SSH key to known_hosts..."
-        if ! ssh-keyscan github.com >> "$known_hosts_file" 2>/dev/null; then
+        if ! ssh-keyscan github.com >> "${known_hosts_file}" 2>/dev/null; then
             print_error "Failed to add GitHub's SSH key to known_hosts."
             exit 1
         fi
@@ -187,7 +191,9 @@ add_github_to_known_hosts() {
 install_starship() {
     if ! command -v starship &> /dev/null; then
         print_message "Installing Starship prompt..."
-        sh -c "$(curl -fsSL https://starship.rs/install.sh)" -- -y
+        local starship_install
+        starship_install=$(curl -fsSL https://starship.rs/install.sh)
+        sh -c "${starship_install}" -- -y
         print_success "Starship installed."
     else
         print_debug "Starship is already installed."
@@ -198,7 +204,9 @@ install_starship() {
 install_infisical() {
     if ! command -v infisical &> /dev/null; then
         print_message "Installing Infisical CLI..."
-        if ! (curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash); then
+        local infisical_setup
+        infisical_setup=$(curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh')
+        if ! echo "${infisical_setup}" | sudo -E bash; then
             print_error "Failed to add Infisical repository."
             exit 1
         fi
@@ -217,11 +225,13 @@ install_infisical() {
 install_chezmoi() {
     if ! command -v chezmoi &> /dev/null; then
         print_message "Installing chezmoi..."
-        local bin_dir="$HOME/.local/bin"
-        mkdir -p "$bin_dir"
-        if (sh -c "$(curl -fsLS get.chezmoi.io)" -- -b "$bin_dir"); then
+        local bin_dir="${HOME}/.local/bin"
+        mkdir -p "${bin_dir}"
+        local chezmoi_install
+        chezmoi_install=$(curl -fsLS get.chezmoi.io)
+        if sh -c "${chezmoi_install}" -- -b "${bin_dir}"; then
             # Add bin_dir to PATH for the current script session
-            export PATH="$bin_dir:$PATH"
+            export PATH="${bin_dir}:${PATH}"
             print_success "chezmoi installed."
         else
             print_error "Failed to install chezmoi. Please review the output above."
@@ -234,7 +244,7 @@ install_chezmoi() {
 
 # Initialize chezmoi if not already initialized
 initialize_chezmoi() {
-    if [ ! -d ~/.local/share/chezmoi ]; then
+    if [[ ! -d ~/.local/share/chezmoi ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
         if ! chezmoi init --apply scowalt/dotfiles --ssh; then
             print_error "Failed to initialize chezmoi. Please review the output above."
@@ -249,10 +259,10 @@ initialize_chezmoi() {
 # Configure chezmoi for auto commit, push, and pull
 configure_chezmoi_git() {
     local chezmoi_config=~/.config/chezmoi/chezmoi.toml
-    if [ ! -f "$chezmoi_config" ]; then
+    if [[ ! -f "${chezmoi_config}" ]]; then
         print_message "Configuring chezmoi with auto-commit, auto-push, and auto-pull..."
         mkdir -p ~/.config/chezmoi
-        cat <<EOF > "$chezmoi_config"
+        cat <<EOF > "${chezmoi_config}"
 [git]
 autoCommit = true
 autoPush = true
@@ -266,12 +276,16 @@ EOF
 
 # Set Fish as the default shell if it isn't already
 set_fish_as_default_shell() {
-    if [ "$(getent passwd "$USER" | cut -d: -f7)" != "/usr/bin/fish" ]; then
+    local user_shell
+    local passwd_entry
+    passwd_entry=$(getent passwd "${USER}")
+    user_shell=$(echo "${passwd_entry}" | cut -d: -f7)
+    if [[ "${user_shell}" != "/usr/bin/fish" ]]; then
         print_message "Setting Fish as the default shell..."
         if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
             echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
         fi
-        sudo chsh -s /usr/bin/fish "$USER"
+        sudo chsh -s /usr/bin/fish "${USER}"
         print_success "Fish shell set as default."
     else
         print_debug "Fish shell is already the default shell."
@@ -292,7 +306,7 @@ install_git_town() {
     arch=$(dpkg --print-architecture)
     local git_town_arch
     
-    case "$arch" in
+    case "${arch}" in
         amd64)
             git_town_arch="linux_intel_64"
             ;;
@@ -303,45 +317,47 @@ install_git_town() {
             git_town_arch="linux_arm_32"
             ;;
         *)
-            print_error "Unsupported architecture: $arch"
+            print_error "Unsupported architecture: ${arch}"
             return 1
             ;;
     esac
     
     # Create local bin directory if it doesn't exist
-    local bin_dir="$HOME/.local/bin"
-    mkdir -p "$bin_dir"
+    local bin_dir="${HOME}/.local/bin"
+    mkdir -p "${bin_dir}"
     
     # Download the latest binary
     local download_url="https://github.com/git-town/git-town/releases/latest/download/git-town_${git_town_arch}.tar.gz"
     local temp_dir
     temp_dir=$(mktemp -d)
     
-    print_message "Downloading git-town binary for $arch architecture..."
-    if curl -sL "$download_url" | tar -xz -C "$temp_dir"; then
+    print_message "Downloading git-town binary for ${arch} architecture..."
+    local download_result
+    download_result=$(curl -sL "${download_url}")
+    if echo "${download_result}" | tar -xz -C "${temp_dir}"; then
         # Move binary to local bin
-        if mv "$temp_dir/git-town" "$bin_dir/git-town"; then
-            chmod +x "$bin_dir/git-town"
-            print_success "git-town installed to $bin_dir/git-town"
+        if mv "${temp_dir}/git-town" "${bin_dir}/git-town"; then
+            chmod +x "${bin_dir}/git-town"
+            print_success "git-town installed to ${bin_dir}/git-town"
             
             # Add to PATH if not already present
-            if ! echo "$PATH" | grep -q "$bin_dir"; then
-                print_message "Adding $bin_dir to PATH in ~/.bashrc"
-                echo "export PATH=\$HOME/.local/bin:\$PATH" >> ~/.bashrc
-                export PATH="$bin_dir:$PATH"
+            if ! echo "${PATH}" | grep -q "${bin_dir}"; then
+                print_message "Adding ${bin_dir} to PATH in ~/.bashrc"
+                echo "export PATH=\${HOME}/.local/bin:\${PATH}" >> ~/.bashrc
+                export PATH="${bin_dir}:${PATH}"
             fi
         else
             print_error "Failed to move git-town binary."
-            rm -rf "$temp_dir"
+            rm -rf "${temp_dir}"
             return 1
         fi
     else
         print_error "Failed to download git-town."
-        rm -rf "$temp_dir"
+        rm -rf "${temp_dir}"
         return 1
     fi
     
-    rm -rf "$temp_dir"
+    rm -rf "${temp_dir}"
 }
 
 # Configure git-town completions
@@ -350,8 +366,8 @@ configure_git_town() {
         print_message "Configuring git-town completions..."
         
         # Set up Fish shell completions for git-town
-        if [ -d ~/.config/fish/completions ]; then
-            if ! [ -f ~/.config/fish/completions/git-town.fish ]; then
+        if [[ -d ~/.config/fish/completions ]]; then
+            if ! [[ -f ~/.config/fish/completions/git-town.fish ]]; then
                 git town completion fish > ~/.config/fish/completions/git-town.fish
                 print_success "git-town Fish completions configured."
             else
@@ -361,9 +377,11 @@ configure_git_town() {
         
         # Set up Bash completions for git-town
         local bash_completion_dir="/etc/bash_completion.d"
-        if [ -d "$bash_completion_dir" ]; then
-            if ! [ -f "$bash_completion_dir/git-town" ]; then
-                git town completion bash | sudo tee "$bash_completion_dir/git-town" > /dev/null
+        if [[ -d "${bash_completion_dir}" ]]; then
+            if ! [[ -f "${bash_completion_dir}/git-town" ]]; then
+                local bash_completion
+                bash_completion=$(git town completion bash)
+                echo "${bash_completion}" | sudo tee "${bash_completion_dir}/git-town" > /dev/null
                 print_success "git-town Bash completions configured."
             else
                 print_debug "git-town Bash completions already configured."
@@ -384,9 +402,11 @@ install_claude_code() {
     print_message "Installing Claude Code..."
     
     # Source fnm initialization to make npm available
-    if [ -s "$HOME/.local/share/fnm/fnm" ]; then
-        export PATH="$HOME/.local/share/fnm:$PATH"
-        eval "$(fnm env --use-on-cd)"
+    if [[ -s "${HOME}/.local/share/fnm/fnm" ]]; then
+        export PATH="${HOME}/.local/share/fnm:${PATH}"
+        local fnm_env
+        fnm_env=$(fnm env --use-on-cd)
+        eval "${fnm_env}"
     fi
     
     # Make sure npm is available
@@ -413,7 +433,9 @@ install_fnm() {
     fi
 
     print_message "Installing fnm (Fast Node Manager)..."
-    if curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell; then
+    local fnm_install_script
+    fnm_install_script=$(curl -fsSL https://fnm.vercel.app/install)
+    if bash -s -- --skip-shell <<< "${fnm_install_script}"; then
         print_success "fnm installed. Shell configuration will be managed by chezmoi."
     else
         print_error "Failed to install fnm."
@@ -426,9 +448,11 @@ setup_nodejs() {
     print_message "Setting up Node.js with fnm..."
     
     # Initialize fnm for current session
-    if [ -s "$HOME/.local/share/fnm/fnm" ]; then
-        export PATH="$HOME/.local/share/fnm:$PATH"
-        eval "$("$HOME"/.local/share/fnm/fnm env --use-on-cd)"
+    if [[ -s "${HOME}/.local/share/fnm/fnm" ]]; then
+        export PATH="${HOME}/.local/share/fnm:${PATH}"
+        local fnm_env
+        fnm_env=$("${HOME}"/.local/share/fnm/fnm env --use-on-cd)
+        eval "${fnm_env}"
     else
         print_warning "fnm not found in expected location. Skipping Node.js setup."
         return
@@ -443,37 +467,52 @@ setup_nodejs() {
     # Check if any Node.js version is installed
     local fnm_list_output
     fnm_list_output=$(fnm list 2>&1)
-    if echo "$fnm_list_output" | grep -q "error\|Error"; then
-        print_error "fnm list returned an error: $fnm_list_output"
+    if echo "${fnm_list_output}" | grep -q "error\|Error"; then
+        print_error "fnm list returned an error: ${fnm_list_output}"
         return 1
     fi
     
     # Check if only system version is available
-    if echo "$fnm_list_output" | grep -v "system" | grep -q "v[0-9]"; then
+    local filtered_fnm_output
+    filtered_fnm_output=$(echo "${fnm_list_output}" | grep -v "system")
+    if echo "${filtered_fnm_output}" | grep -q "v[0-9]"; then
         print_debug "Node.js version already installed."
         
         # Check if a default/global version is set
         local current_version
         current_version=$(fnm current 2>/dev/null || echo "none")
-        if [ "$current_version" != "none" ] && [ -n "$current_version" ]; then
-            print_debug "Global Node.js version already set: $current_version"
+        if [[ "${current_version}" != "none" ]] && [[ -n "${current_version}" ]]; then
+            print_debug "Global Node.js version already set: ${current_version}"
         else
             print_message "No global Node.js version set. Setting the first installed version as default..."
             
             local first_version
             # Extract the first non-system version
-            first_version=$(fnm list | grep -E "^[[:space:]]*\*?[[:space:]]*v[0-9]" | head -n1 | sed 's/^[[:space:]]*\*\?[[:space:]]*//' | awk '{print $1}')
+            local fnm_versions
+            fnm_versions=$(fnm list)
+            local version_lines
+            version_lines=$(echo "${fnm_versions}" | grep -E "^[[:space:]]*\*?[[:space:]]*v[0-9]")
+            local first_line
+            first_line=$(echo "${version_lines}" | head -n1)
+            local cleaned_line
+            # Remove leading whitespace and optional asterisk
+            cleaned_line="${first_line#"${first_line%%[![:space:]]*}"}"
+            cleaned_line="${cleaned_line#\*}"
+            cleaned_line="${cleaned_line#"${cleaned_line%%[![:space:]]*}"}"
+            first_version=$(echo "${cleaned_line}" | awk '{print $1}')
             
-            print_debug "Found version to set as default: '$first_version'"
+            print_debug "Found version to set as default: '${first_version}'"
             
-            if [ -n "$first_version" ]; then
-                print_debug "Attempting to set default version to: $first_version"
-                if fnm default "$first_version"; then
-                    print_success "Set $first_version as default Node.js version."
+            if [[ -n "${first_version}" ]]; then
+                print_debug "Attempting to set default version to: ${first_version}"
+                if fnm default "${first_version}"; then
+                    print_success "Set ${first_version} as default Node.js version."
                     # Re-initialize fnm to pick up the new default
-                    eval "$("$HOME"/.local/share/fnm/fnm env --use-on-cd)"
+                    local fnm_env
+                    fnm_env=$("${HOME}"/.local/share/fnm/fnm env --use-on-cd)
+                    eval "${fnm_env}"
                 else
-                    print_error "Failed to set default Node.js version. You may need to run: fnm default $first_version"
+                    print_error "Failed to set default Node.js version. You may need to run: fnm default ${first_version}"
                 fi
             else
                 print_warning "No Node.js versions found (only system version available)."
@@ -482,11 +521,24 @@ setup_nodejs() {
                     print_success "Installed latest LTS Node.js."
                     # Get the version that was just installed
                     local installed_version
-                    installed_version=$(fnm list | grep -E "^[[:space:]]*\*?[[:space:]]*v[0-9]" | head -n1 | sed 's/^[[:space:]]*\*\?[[:space:]]*//' | awk '{print $1}')
-                    if [ -n "$installed_version" ]; then
-                        fnm default "$installed_version"
-                        print_success "Set $installed_version as default Node.js version."
-                        eval "$("$HOME"/.local/share/fnm/fnm env --use-on-cd)"
+                    local installed_fnm_versions
+                    installed_fnm_versions=$(fnm list)
+                    local installed_version_lines
+                    installed_version_lines=$(echo "${installed_fnm_versions}" | grep -E "^[[:space:]]*\*?[[:space:]]*v[0-9]")
+                    local installed_first_line
+                    installed_first_line=$(echo "${installed_version_lines}" | head -n1)
+                    local installed_cleaned_line
+                    # Remove leading whitespace and optional asterisk
+                    installed_cleaned_line="${installed_first_line#"${installed_first_line%%[![:space:]]*}"}"
+                    installed_cleaned_line="${installed_cleaned_line#\*}"
+                    installed_cleaned_line="${installed_cleaned_line#"${installed_cleaned_line%%[![:space:]]*}"}"
+                    installed_version=$(echo "${installed_cleaned_line}" | awk '{print $1}')
+                    if [[ -n "${installed_version}" ]]; then
+                        fnm default "${installed_version}"
+                        print_success "Set ${installed_version} as default Node.js version."
+                        local installed_fnm_env
+                        installed_fnm_env=$("${HOME}"/.local/share/fnm/fnm env --use-on-cd)
+                        eval "${installed_fnm_env}"
                     fi
                 else
                     print_error "Failed to install Node.js LTS version."
@@ -500,8 +552,12 @@ setup_nodejs() {
         if fnm install --lts; then
             print_success "Installed latest LTS Node.js."
             # Set it as default
-            fnm default "$(fnm current)"
-            print_success "Set $(fnm current) as default Node.js version."
+            local current_node
+            current_node=$(fnm current)
+            fnm default "${current_node}"
+            local current_display
+            current_display=$(fnm current)
+            print_success "Set ${current_display} as default Node.js version."
         else
             print_error "Failed to install Node.js."
             return 1
@@ -522,27 +578,30 @@ install_1password_cli() {
     sudo apt install -y gnupg >/dev/null
 
     # Import signing key
-    curl -sS https://downloads.1password.com/linux/keys/1password.asc \
-      | sudo gpg --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg
+    local signing_key
+    signing_key=$(curl -sS https://downloads.1password.com/linux/keys/1password.asc)
+    echo "${signing_key}" | sudo gpg --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg
 
     # Figure out repo path for the current CPU architecture
     local dpkg_arch
-    dpkg_arch="$(dpkg --print-architecture)"       # arm64, armhf, amd64…
-    local repo_arch="$dpkg_arch"
-    [[ "$dpkg_arch" == "armhf" ]] && repo_arch="arm"   # 32-bit Pi
+    dpkg_arch=$(dpkg --print-architecture)       # arm64, armhf, amd64…
+    local repo_arch="${dpkg_arch}"
+    [[ "${dpkg_arch}" == "armhf" ]] && repo_arch="arm"   # 32-bit Pi
 
     # Add repo
     echo \
-"deb [arch=$dpkg_arch signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] \
+"deb [arch=${dpkg_arch} signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] \
 https://downloads.1password.com/linux/debian/${repo_arch} stable main" \
         | sudo tee /etc/apt/sources.list.d/1password-cli.list >/dev/null
 
     # Add debsig-verify policy (required for future updates)
     sudo mkdir -p /etc/debsig/policies/AC2D62742012EA22/
-    curl -sS https://downloads.1password.com/linux/debsig/1password.pol \
-      | sudo tee /etc/debsig/policies/AC2D62742012EA22/1password.pol >/dev/null
-    curl -sS https://downloads.1password.com/linux/keys/1password.asc \
-      | sudo tee /etc/debsig/keys/AC2D62742012EA22.asc >/dev/null
+    local policy_content
+    policy_content=$(curl -sS https://downloads.1password.com/linux/debsig/1password.pol)
+    echo "${policy_content}" | sudo tee /etc/debsig/policies/AC2D62742012EA22/1password.pol >/dev/null
+    local debsig_key
+    debsig_key=$(curl -sS https://downloads.1password.com/linux/keys/1password.asc)
+    echo "${debsig_key}" | sudo tee /etc/debsig/keys/AC2D62742012EA22.asc >/dev/null
 
     # Install package
     sudo apt update -qq
@@ -556,13 +615,15 @@ install_tailscale() {
     if ! command -v tailscale &>/dev/null; then
         print_message "Installing Tailscale..."
         # Official install script (adds repo + installs package)
-        curl -fsSL https://tailscale.com/install.sh | sudo sh
+        local tailscale_install
+        tailscale_install=$(curl -fsSL https://tailscale.com/install.sh)
+        echo "${tailscale_install}" | sudo sh
         sudo systemctl enable --now tailscaled
         print_success "Tailscale installed and service started."
 
         # Optional immediate login
         read -rp "Run 'tailscale up' now to authenticate? (y/n): " ts_up
-        if [[ "$ts_up" =~ ^[Yy]$ ]]; then
+        if [[ "${ts_up}" =~ ^[Yy]$ ]]; then
             print_message "Bringing interface up..."
             sudo tailscale up       # add --authkey=... if you prefer key-based auth
         else
@@ -578,7 +639,9 @@ install_act() {
     if ! command -v act &> /dev/null; then
         print_message "Installing act (GitHub Actions runner)..."
         # Use the official install script
-        if ! (curl -s https://raw.githubusercontent.com/nektos/act/master/install.sh | sudo bash); then
+        local act_install
+        act_install=$(curl -s https://raw.githubusercontent.com/nektos/act/master/install.sh)
+        if ! echo "${act_install}" | sudo bash; then
             print_error "Failed to install act."
             exit 1
         fi
@@ -592,10 +655,10 @@ install_act() {
 install_pyenv() {
     if ! command -v pyenv &> /dev/null; then
         # Check if ~/.pyenv exists but pyenv command is not available
-        if [ -d "$HOME/.pyenv" ]; then
+        if [[ -d "${HOME}/.pyenv" ]]; then
             print_warning "pyenv directory exists but command not found. Trying to fix PATH..."
-            export PYENV_ROOT="$HOME/.pyenv"
-            export PATH="$PYENV_ROOT/bin:$PATH"
+            export PYENV_ROOT="${HOME}/.pyenv"
+            export PATH="${PYENV_ROOT}/bin:${PATH}"
             if command -v pyenv &> /dev/null; then
                 print_success "pyenv found after fixing PATH."
                 return
@@ -607,7 +670,9 @@ install_pyenv() {
         
         print_message "Installing pyenv..."
         # Use the official install script
-        if curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer | bash; then
+        local pyenv_installer
+        pyenv_installer=$(curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer)
+        if bash <<< "${pyenv_installer}"; then
             print_success "pyenv installed. Shell configuration will be managed by chezmoi."
         else
             print_error "Failed to install pyenv."
@@ -621,9 +686,9 @@ install_pyenv() {
 # Install tmux plugins for session persistence
 install_tmux_plugins() {
     local plugin_dir=~/.tmux/plugins
-    if [ ! -d "$plugin_dir/tpm" ]; then
+    if [[ ! -d "${plugin_dir}/tpm" ]]; then
         print_message "Installing tmux plugin manager..."
-        git clone -q https://github.com/tmux-plugins/tpm "$plugin_dir/tpm"
+        git clone -q https://github.com/tmux-plugins/tpm "${plugin_dir}/tpm"
         print_success "tmux plugin manager installed."
     else
         print_debug "tmux plugin manager already installed."
@@ -635,20 +700,20 @@ install_tmux_plugins() {
     # Let tpm script install plugins. It handles finding tmux.conf and starting a server.
     # Capture output to show only on failure.
     local output
-    if ! output=$($tpm_installer 2>&1); then
+    if ! output=$(${tpm_installer} 2>&1); then
         print_error "Failed to install tmux plugins. tpm output was:"
-        echo "$output"
+        echo "${output}"
         # Not exiting, to maintain original script's behavior.
         return
     fi
 
     # Try to source the config to make plugins available in a running session.
     # This might fail if tmux server is not running, which is fine.
-    local tmux_conf="$HOME/.config/tmux/tmux.conf"
-    if [ -f "$tmux_conf" ]; then
-        tmux source-file "$tmux_conf" >/dev/null 2>&1
-    elif [ -f "$HOME/.tmux.conf" ]; then # fallback to old location
-        tmux source-file "$HOME/.tmux.conf" >/dev/null 2>&1
+    local tmux_conf="${HOME}/.config/tmux/tmux.conf"
+    if [[ -f "${tmux_conf}" ]]; then
+        tmux source-file "${tmux_conf}" >/dev/null 2>&1
+    elif [[ -f "${HOME}/.tmux.conf" ]]; then # fallback to old location
+        tmux source-file "${HOME}/.tmux.conf" >/dev/null 2>&1
     fi
     print_success "tmux plugins installed and updated."
 }
