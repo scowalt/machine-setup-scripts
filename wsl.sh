@@ -34,15 +34,15 @@ update_and_install_core() {
 
     # Check each package and add missing ones to the to_install array
     for package in "${packages[@]}"; do
-        if ! dpkg -s "$package" &> /dev/null; then
-            to_install+=("$package")
+        if ! dpkg -s "${package}" &> /dev/null; then
+            to_install+=("${package}")
         else
-            print_debug "$package is already installed."
+            print_debug "${package} is already installed."
         fi
     done
 
     # Install any packages that are not yet installed
-    if [ "${#to_install[@]}" -gt 0 ]; then
+    if [[ "${#to_install[@]}" -gt 0 ]]; then
         print_message "Installing missing packages: ${to_install[*]}"
         sudo apt update -qq
         if ! sudo apt install -qq -y "${to_install[@]}"; then
@@ -70,13 +70,13 @@ setup_ssh_key() {
     existing_keys=$(curl -s https://github.com/scowalt.keys)
 
     # Check if a local SSH key exists
-    if [ -f ~/.ssh/id_rsa.pub ]; then
+    if [[ -f ~/.ssh/id_rsa.pub ]]; then
         # Extract only the actual key part from id_rsa.pub and log for debugging
         local local_key
         local_key=$(awk '{print $2}' ~/.ssh/id_rsa.pub)
 
         # Verify if the extracted key part matches any of the GitHub keys
-        if echo "$existing_keys" | grep -q "$local_key"; then
+        if echo "${existing_keys}" | grep -q "${local_key}"; then
             print_success "Existing SSH key recognized by GitHub."
         else
             print_error "SSH key not recognized by GitHub. Please add it manually."
@@ -99,12 +99,12 @@ add_github_to_known_hosts() {
     local known_hosts_file=~/.ssh/known_hosts
     mkdir -p ~/.ssh
     chmod 700 ~/.ssh
-    touch "$known_hosts_file"
-    chmod 600 "$known_hosts_file"
+    touch "${known_hosts_file}"
+    chmod 600 "${known_hosts_file}"
 
     if ! ssh-keygen -F github.com &>/dev/null; then
         print_message "Adding GitHub's SSH key to known_hosts..."
-        if ! ssh-keyscan github.com >> "$known_hosts_file" 2>/dev/null; then
+        if ! ssh-keyscan github.com >> "${known_hosts_file}" 2>/dev/null; then
             print_error "Failed to add GitHub's SSH key to known_hosts."
             exit 1
         fi
@@ -118,15 +118,21 @@ add_github_to_known_hosts() {
 install_homebrew() {
     if ! command -v brew &> /dev/null; then
         print_message "Installing Homebrew..."
-        if ! /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
+        local install_script
+        install_script=$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)
+        if ! /bin/bash -c "${install_script}"; then
             print_error "Failed to install Homebrew. Please check your internet connection."
             exit 1
         fi
-        eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+        local brew_env
+        brew_env=$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)
+        eval "${brew_env}"
         print_success "Homebrew installed."
     else
         print_debug "Homebrew is already installed."
-        eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+        local brew_env
+        brew_env=$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)
+        eval "${brew_env}"
     fi
 }
 
@@ -172,7 +178,7 @@ install_chezmoi() {
 
 # Initialize chezmoi if not already initialized
 initialize_chezmoi() {
-    if [ ! -d ~/.local/share/chezmoi ]; then
+    if [[ ! -d ~/.local/share/chezmoi ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
         if ! chezmoi init --apply scowalt/dotfiles --ssh; then
             print_error "Failed to initialize chezmoi. Check SSH key and network connectivity."
@@ -187,10 +193,10 @@ initialize_chezmoi() {
 # Configure chezmoi for auto commit, push, and pull
 configure_chezmoi_git() {
     local chezmoi_config=~/.config/chezmoi/chezmoi.toml
-    if [ ! -f "$chezmoi_config" ]; then
+    if [[ ! -f "${chezmoi_config}" ]]; then
         print_message "Configuring chezmoi with auto-commit, auto-push, and auto-pull..."
         mkdir -p ~/.config/chezmoi
-        cat <<EOF > "$chezmoi_config"
+        cat <<EOF > "${chezmoi_config}"
 [git]
 autoCommit = true
 autoPush = true
@@ -204,12 +210,16 @@ EOF
 
 # Set Fish as the default shell if it isn't already
 set_fish_as_default_shell() {
-    if [ "$(getent passwd "$USER" | cut -d: -f7)" != "/usr/bin/fish" ]; then
+    local user_shell
+    local passwd_entry
+    passwd_entry=$(getent passwd "${USER}")
+    user_shell=$(echo "${passwd_entry}" | cut -d: -f7)
+    if [[ "${user_shell}" != "/usr/bin/fish" ]]; then
         print_message "Setting Fish as the default shell..."
         if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
             echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
         fi
-        sudo chsh -s /usr/bin/fish "$USER"
+        sudo chsh -s /usr/bin/fish "${USER}"
         print_success "Fish shell set as default."
     else
         print_debug "Fish shell is already the default shell."
@@ -229,8 +239,8 @@ install_git_town() {
     local git_town_arch="linux_intel_64"
     
     # Create local bin directory if it doesn't exist
-    local bin_dir="$HOME/.local/bin"
-    mkdir -p "$bin_dir"
+    local bin_dir="${HOME}/.local/bin"
+    mkdir -p "${bin_dir}"
     
     # Download the latest binary
     local download_url="https://github.com/git-town/git-town/releases/latest/download/git-town_${git_town_arch}.tar.gz"
@@ -238,30 +248,32 @@ install_git_town() {
     temp_dir=$(mktemp -d)
     
     print_message "Downloading git-town binary..."
-    if curl -sL "$download_url" | tar -xz -C "$temp_dir"; then
+    local download_result
+    download_result=$(curl -sL "${download_url}")
+    if echo "${download_result}" | tar -xz -C "${temp_dir}"; then
         # Move binary to local bin
-        if mv "$temp_dir/git-town" "$bin_dir/git-town"; then
-            chmod +x "$bin_dir/git-town"
-            print_success "git-town installed to $bin_dir/git-town"
+        if mv "${temp_dir}/git-town" "${bin_dir}/git-town"; then
+            chmod +x "${bin_dir}/git-town"
+            print_success "git-town installed to ${bin_dir}/git-town"
             
             # Add to PATH if not already present
-            if ! echo "$PATH" | grep -q "$bin_dir"; then
-                print_message "Adding $bin_dir to PATH in ~/.bashrc"
-                echo "export PATH=\$HOME/.local/bin:\$PATH" >> ~/.bashrc
-                export PATH="$bin_dir:$PATH"
+            if ! echo "${PATH}" | grep -q "${bin_dir}"; then
+                print_message "Adding ${bin_dir} to PATH in ~/.bashrc"
+                echo "export PATH=\${HOME}/.local/bin:\$PATH" >> ~/.bashrc
+                export PATH="${bin_dir}:${PATH}"
             fi
         else
             print_error "Failed to move git-town binary."
-            rm -rf "$temp_dir"
+            rm -rf "${temp_dir}"
             return 1
         fi
     else
         print_error "Failed to download git-town."
-        rm -rf "$temp_dir"
+        rm -rf "${temp_dir}"
         return 1
     fi
     
-    rm -rf "$temp_dir"
+    rm -rf "${temp_dir}"
 }
 
 # Configure git-town completions
@@ -270,8 +282,8 @@ configure_git_town() {
         print_message "Configuring git-town completions..."
         
         # Set up Fish shell completions for git-town
-        if [ -d ~/.config/fish/completions ]; then
-            if ! [ -f ~/.config/fish/completions/git-town.fish ]; then
+        if [[ -d ~/.config/fish/completions ]]; then
+            if ! [[ -f ~/.config/fish/completions/git-town.fish ]]; then
                 git town completion fish > ~/.config/fish/completions/git-town.fish
                 print_success "git-town Fish completions configured."
             else
@@ -283,9 +295,9 @@ configure_git_town() {
         ensure_brew_available
         local bash_completion_dir
         bash_completion_dir="$(brew --prefix)/etc/bash_completion.d"
-        if [ -d "$bash_completion_dir" ]; then
-            if ! [ -f "$bash_completion_dir/git-town" ]; then
-                git town completion bash > "$bash_completion_dir/git-town"
+        if [[ -d "${bash_completion_dir}" ]]; then
+            if ! [[ -f "${bash_completion_dir}/git-town" ]]; then
+                git town completion bash > "${bash_completion_dir}/git-town"
                 print_success "git-town Bash completions configured."
             else
                 print_debug "git-town Bash completions already configured."
@@ -309,7 +321,9 @@ install_claude_code() {
     # WSL uses Homebrew's fnm installation
     ensure_brew_available
     if command -v fnm &> /dev/null; then
-        eval "$(fnm env --use-on-cd)"
+        local fnm_env
+        fnm_env=$(fnm env --use-on-cd)
+        eval "${fnm_env}"
     fi
     
     # Make sure npm is available
@@ -351,28 +365,38 @@ setup_nodejs() {
     
     # Initialize fnm for current session (Homebrew installation)
     if command -v fnm &> /dev/null; then
-        eval "$(fnm env --use-on-cd)"
+        local fnm_env
+        fnm_env=$(fnm env --use-on-cd)
+        eval "${fnm_env}"
     else
         print_warning "fnm command not available. Skipping Node.js setup."
         return
     fi
     
     # Check if any Node.js version is installed
-    if fnm list | grep -q .; then
+    local fnm_list_output
+    fnm_list_output=$(fnm list)
+    if echo "${fnm_list_output}" | grep -q .; then
         print_debug "Node.js version already installed."
         
         # Check if a default/global version is set
         local current_version
         current_version=$(fnm current 2>/dev/null || echo "none")
-        if [ "$current_version" != "none" ] && [ -n "$current_version" ]; then
-            print_debug "Global Node.js version already set: $current_version"
+        if [[ "${current_version}" != "none" ]] && [[ -n "${current_version}" ]]; then
+            print_debug "Global Node.js version already set: ${current_version}"
         else
             print_message "No global Node.js version set. Setting the first installed version as default..."
             local first_version
-            first_version=$(fnm list | grep -v "system" | head -n1 | awk '{print $2}')
-            if [ -n "$first_version" ]; then
-                fnm default "$first_version"
-                print_success "Set $first_version as default Node.js version."
+            local fnm_versions
+            fnm_versions=$(fnm list)
+            local filtered_versions
+            filtered_versions=$(echo "${fnm_versions}" | grep -v "system")
+            local first_line
+            first_line=$(echo "${filtered_versions}" | head -n1)
+            first_version=$(echo "${first_line}" | awk '{print $2}')
+            if [[ -n "${first_version}" ]]; then
+                fnm default "${first_version}"
+                print_success "Set ${first_version} as default Node.js version."
             fi
         fi
     else
@@ -380,8 +404,12 @@ setup_nodejs() {
         if fnm install --lts; then
             print_success "Installed latest LTS Node.js."
             # Set it as default
-            fnm default "$(fnm current)"
-            print_success "Set $(fnm current) as default Node.js version."
+            local current_node
+            current_node=$(fnm current)
+            fnm default "${current_node}"
+            local current_version_display
+            current_version_display=$(fnm current)
+            print_success "Set ${current_version_display} as default Node.js version."
         else
             print_error "Failed to install Node.js."
             return 1
@@ -394,7 +422,11 @@ fix_1password_repository() {
     print_message "Checking for 1Password repository issues..."
     
     # Check if 1Password repository exists and has key issues
-    if apt-cache policy 2>/dev/null | grep -q "1password.com" && apt update 2>&1 | grep -q "EXPKEYSIG.*1Password"; then
+    local apt_policy
+    apt_policy=$(apt-cache policy 2>/dev/null || true)
+    local apt_update_output
+    apt_update_output=$(apt update 2>&1 || true)
+    if echo "${apt_policy}" | grep -q "1password.com" && echo "${apt_update_output}" | grep -q "EXPKEYSIG.*1Password"; then
         print_message "Fixing expired 1Password repository key..."
         
         # Remove the problematic repository
@@ -486,13 +518,15 @@ install_bun() {
     fi
 
     print_message "Installing Bun..."
-    if ! curl -fsSL https://bun.sh/install | bash; then
+    local bun_install_script
+    bun_install_script=$(curl -fsSL https://bun.sh/install)
+    if ! bash <<< "${bun_install_script}"; then
         print_error "Failed to install Bun."
         exit 1
     fi
     
     # Add bun to PATH for current session
-    export PATH="$HOME/.bun/bin:$PATH"
+    export PATH="${HOME}/.bun/bin:${PATH}"
     
     print_success "Bun installed."
 }
@@ -500,21 +534,21 @@ install_bun() {
 # Install tmux plugins for session persistence
 install_tmux_plugins() {
     local plugin_dir=~/.tmux/plugins
-    if [ ! -d "$plugin_dir/tpm" ]; then
+    if [[ ! -d "${plugin_dir}/tpm" ]]; then
         print_message "Installing tmux plugin manager..."
-        git clone -q https://github.com/tmux-plugins/tpm "$plugin_dir/tpm"
+        git clone -q https://github.com/tmux-plugins/tpm "${plugin_dir}/tpm"
         print_success "tmux plugin manager installed."
     else
         print_debug "tmux plugin manager already installed."
     fi
 
     for plugin in tmux-resurrect tmux-continuum; do
-        if [ ! -d "$plugin_dir/$plugin" ]; then
-            print_message "Installing $plugin..."
-            git clone -q https://github.com/tmux-plugins/$plugin "$plugin_dir/$plugin"
-            print_success "$plugin installed."
+        if [[ ! -d "${plugin_dir}/${plugin}" ]]; then
+            print_message "Installing ${plugin}..."
+            git clone -q "https://github.com/tmux-plugins/${plugin}" "${plugin_dir}/${plugin}"
+            print_success "${plugin} installed."
         else
-            print_debug "$plugin already installed."
+            print_debug "${plugin} already installed."
         fi
     done
 
