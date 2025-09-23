@@ -1,0 +1,20 @@
+# ShellCheck configuration for machine-setup-scripts
+# This file configures shellcheck to catch the maximum number of issues
+
+# Set minimum severity to 'style' to catch all possible issues
+severity=style
+
+# Enable all optional checks
+enable=all
+
+# Disable specific checks that are not relevant for this project
+# (none currently - we want maximum detection)
+
+# External source checking
+external-sources=true
+
+# Follow sourced files
+check-sourced=true
+
+# Use bash dialect by default (all our scripts are bash)
+shell=bash

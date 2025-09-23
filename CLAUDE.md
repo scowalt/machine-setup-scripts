@@ -310,6 +310,32 @@ This repository uses automated tools to maintain code quality:
 - **Lefthook**: Manages git hooks for pre-commit and pre-push validation
   - Runs via `bunx` (preferred over `npx`)
 
+#### ShellCheck Configuration
+
+This repository is configured for maximum error detection with shellcheck:
+
+**Configuration File**: `.shellcheckrc`
+
+- `severity=style` - Catches all issues including style suggestions
+- `enable=all` - Enables all optional checks
+- `external-sources=true` - Follows external source files
+- `check-sourced=true` - Validates sourced scripts
+- `shell=bash` - Uses bash dialect by default
+
+**Automated Validation**:
+
+- **Pre-commit hook**: Validates staged shell scripts before commit
+- **Pre-push hook**: Validates all shell scripts before push
+- **Manual validation**: Simply run `shellcheck script.sh` - the `.shellcheckrc` handles all settings automatically
+
+**Shell Script Standards**:
+
+- Use `[[ ]]` for test conditions instead of `[ ]`
+- Always brace variable references: `"${variable}"` not `"$variable"`
+- Use `read -r` to prevent backslash mangling
+- Separate command substitution for complex pipelines to avoid masking return values
+- Quote all variable expansions to prevent word splitting
+
 ### Commit Guidelines
 
 - Always run shellcheck on modified shell scripts before committing
