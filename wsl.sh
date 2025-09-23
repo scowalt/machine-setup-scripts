@@ -569,7 +569,7 @@ update_packages() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 17 | Last changed: Add Bun JavaScript runtime and package manager${NC}"
+echo -e "${GRAY}Version 18 | Last changed: Complete shellcheck validation with maximum error detection${NC}"
 
 print_section "System Setup"
 update_and_install_core

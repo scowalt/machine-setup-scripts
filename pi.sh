@@ -827,7 +827,7 @@ install_pyenv() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 20 | Last changed: Fix fnm version parsing with awk${NC}"
+echo -e "${GRAY}Version 21 | Last changed: Complete shellcheck validation with maximum error detection${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi

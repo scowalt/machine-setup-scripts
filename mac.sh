@@ -357,7 +357,7 @@ update_brew() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 22 | Last changed: Add Hammerspoon, switchaudio-osx, and Visual Studio Code${NC}"
+echo -e "${GRAY}Version 23 | Last changed: Complete shellcheck validation with maximum error detection${NC}"
 
 print_section "Package Manager Setup"
 install_homebrew

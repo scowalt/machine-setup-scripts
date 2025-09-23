@@ -720,7 +720,7 @@ install_tmux_plugins() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 25 | Last changed: Auto-install Node.js LTS when only system version exists${NC}"
+echo -e "${GRAY}Version 26 | Last changed: Complete shellcheck validation with maximum error detection${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user

@@ -556,7 +556,7 @@ update_all_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 1 | Last changed: Initial implementation for Omarchy Linux${NC}"
+echo -e "${GRAY}Version 2 | Last changed: Complete shellcheck validation with maximum error detection${NC}"
 
 print_section "System Verification"
 verify_arch_system
