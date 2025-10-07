@@ -554,9 +554,32 @@ update_all_packages() {
     print_success "All packages updated."
 }
 
+# Upgrade global npm packages
+upgrade_npm_global_packages() {
+    # Initialize fnm for current session
+    if command -v fnm &> /dev/null; then
+        local fnm_env
+        fnm_env=$(fnm env --use-on-cd)
+        eval "${fnm_env}"
+    fi
+
+    # Make sure npm is available
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Skipping global package upgrade."
+        return
+    fi
+
+    print_message "Upgrading global npm packages..."
+    if npm update -g &> /dev/null; then
+        print_success "Global npm packages upgraded."
+    else
+        print_warning "Failed to upgrade some global npm packages."
+    fi
+}
+
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 2 | Last changed: Complete shellcheck validation with maximum error detection${NC}"
+echo -e "${GRAY}Version 3 | Last changed: Add npm global package upgrade${NC}"
 
 print_section "System Verification"
 verify_arch_system
@@ -596,5 +619,6 @@ install_tmux_plugins
 
 print_section "Final Updates"
 update_all_packages
+upgrade_npm_global_packages
 
 echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"

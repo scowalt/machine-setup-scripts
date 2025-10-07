@@ -10,9 +10,10 @@ This repository contains idempotent machine setup scripts for automating the con
 
 - **mac.sh** - macOS setup using Homebrew
 - **ubuntu.sh** - Ubuntu Linux setup with user management
-- **windows.ps1** - Windows setup using WinGet and PowerShell
+- **win.ps1** - Windows setup using WinGet and PowerShell
 - **wsl.sh** - Windows Subsystem for Linux setup
 - **pi.sh** - Raspberry Pi specific setup with ARM optimizations
+- **omarchy.sh** - Arch Linux / Omarchy setup using pacman and yay
 
 ## Common Development Tasks
 
@@ -22,11 +23,11 @@ This repository contains idempotent machine setup scripts for automating the con
 # macOS
 ./mac.sh
 
-# Ubuntu/WSL/Pi
-sudo ./ubuntu.sh  # or ./wsl.sh, ./pi.sh
+# Ubuntu/WSL/Pi/Arch
+sudo ./ubuntu.sh  # or ./wsl.sh, ./pi.sh, ./omarchy.sh
 
 # Windows (PowerShell as Administrator)
-./windows.ps1
+./win.ps1
 ```
 
 ### Remote Execution
@@ -79,6 +80,7 @@ All scripts follow a consistent pattern:
 - **git-town**:
   - macOS: Installed via Homebrew
   - Linux (Ubuntu/WSL/Pi): Downloaded directly from GitHub releases (not available in apt repositories)
+  - Arch/Omarchy: Installed via AUR using yay
   - Windows: Downloaded directly from GitHub releases
 
 ### Important Notes
@@ -339,6 +341,28 @@ This repository is configured for maximum error detection with shellcheck:
 ### Commit Guidelines
 
 - Always run shellcheck on modified shell scripts before committing
-- Include version updates in scripts when making changes
+- **IMPORTANT**: Update script version numbers whenever making changes to any script
 - Use descriptive commit messages that explain the "why" not just the "what"
 - Include the robot emoji and Claude Code attribution for AI-assisted commits
+
+### Version Number Management
+
+**Critical Rule**: Whenever you modify any setup script, you MUST update its version number.
+
+Each script has a version number in its header that follows this pattern:
+
+```bash
+# Bash scripts (mac.sh, ubuntu.sh, wsl.sh, pi.sh, omarchy.sh)
+echo -e "${GRAY}Version XX | Last changed: Description of change${NC}"
+```
+
+```powershell
+# PowerShell scripts (win.ps1)
+Write-Host "Version XX | Last changed: Description of change" -ForegroundColor DarkGray
+```
+
+**Steps for updating versions:**
+
+1. Increment the version number by 1
+2. Update the "Last changed" description to match your commit message
+3. Keep it concise (one line describing the change)

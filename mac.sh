@@ -355,9 +355,25 @@ update_brew() {
     print_success "Homebrew updated."
 }
 
+# Upgrade global npm packages
+upgrade_npm_global_packages() {
+    # Make sure npm is available
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Skipping global package upgrade."
+        return
+    fi
+
+    print_message "Upgrading global npm packages..."
+    if npm update -g &> /dev/null; then
+        print_success "Global npm packages upgraded."
+    else
+        print_warning "Failed to upgrade some global npm packages."
+    fi
+}
+
 # Run the setup tasks
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 23 | Last changed: Complete shellcheck validation with maximum error detection${NC}"
+echo -e "${GRAY}Version 24 | Last changed: Add npm global package upgrade${NC}"
 
 print_section "Package Manager Setup"
 install_homebrew
@@ -388,5 +404,6 @@ install_vscode
 
 print_section "Final Updates"
 update_brew
+upgrade_npm_global_packages
 
 echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"

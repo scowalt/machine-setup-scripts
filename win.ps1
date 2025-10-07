@@ -476,7 +476,35 @@ function Install-WindowsUpdates {
         Import-Module PSWindowsUpdate;
         Get-WindowsUpdate;
         Install-WindowsUpdate -AcceptAll
-    }   
+    }
+}
+
+# Function to upgrade global npm packages
+function Update-NpmGlobalPackages {
+    # Try to initialize fnm if available
+    if (Get-Command fnm -ErrorAction SilentlyContinue) {
+        fnm env --use-on-cd | Out-String | Invoke-Expression
+    }
+
+    # Make sure npm is available
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Host "$warnIcon npm not found. Skipping global package upgrade." -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "$arrow Upgrading global npm packages..." -ForegroundColor Cyan
+    try {
+        npm update -g
+        if ($?) {
+            Write-Host "$success Global npm packages upgraded." -ForegroundColor Green
+        }
+        else {
+            Write-Host "$warnIcon Failed to upgrade some global npm packages." -ForegroundColor Yellow
+        }
+    }
+    catch {
+        Write-Host "$warnIcon Failed to upgrade global npm packages: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
 }
 
 function Set-WindowsTerminalConfiguration {
@@ -505,7 +533,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 31 | Last changed: Remove Cursor editor (keep VSCode only)" -ForegroundColor DarkGray
+    Write-Host "Version 32 | Last changed: Add npm global package upgrade" -ForegroundColor DarkGray
     
     Write-Section "Package Installation"
     Install-WingetPackages
@@ -532,8 +560,9 @@ function Initialize-WindowsEnvironment {
     
     Write-Section "System Updates"
     Install-WingetUpdates
+    Update-NpmGlobalPackages
     Install-WindowsUpdates # this should always be LAST since it may prompt a system reboot
-    
+
     Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen
 }
 

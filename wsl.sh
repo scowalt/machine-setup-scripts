@@ -559,7 +559,7 @@ install_tmux_plugins() {
 
 update_packages() {
     print_message "Updating all packages..."
-    brew update 
+    brew update
     brew upgrade
     sudo apt update
     sudo apt upgrade -y
@@ -567,9 +567,33 @@ update_packages() {
     print_success "All packages updated."
 }
 
+# Upgrade global npm packages
+upgrade_npm_global_packages() {
+    # Make sure fnm is initialized
+    ensure_brew_available
+    if command -v fnm &> /dev/null; then
+        local fnm_env
+        fnm_env=$(fnm env --use-on-cd)
+        eval "${fnm_env}"
+    fi
+
+    # Make sure npm is available
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Skipping global package upgrade."
+        return
+    fi
+
+    print_message "Upgrading global npm packages..."
+    if npm update -g &> /dev/null; then
+        print_success "Global npm packages upgraded."
+    else
+        print_warning "Failed to upgrade some global npm packages."
+    fi
+}
+
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 18 | Last changed: Complete shellcheck validation with maximum error detection${NC}"
+echo -e "${GRAY}Version 19 | Last changed: Add npm global package upgrade${NC}"
 
 print_section "System Setup"
 update_and_install_core
@@ -611,5 +635,6 @@ install_claude_code
 
 print_section "Final Updates"
 update_packages
+upgrade_npm_global_packages
 
 echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"

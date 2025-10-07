@@ -825,9 +825,33 @@ install_pyenv() {
     fi
 }
 
+# Upgrade global npm packages
+upgrade_npm_global_packages() {
+    # Initialize fnm for current session
+    if [[ -s "${HOME}/.local/share/fnm/fnm" ]]; then
+        export PATH="${HOME}/.local/share/fnm:${PATH}"
+        local fnm_env
+        fnm_env=$(fnm env --use-on-cd)
+        eval "${fnm_env}"
+    fi
+
+    # Make sure npm is available
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Skipping global package upgrade."
+        return
+    fi
+
+    print_message "Upgrading global npm packages..."
+    if npm update -g &> /dev/null; then
+        print_success "Global npm packages upgraded."
+    else
+        print_warning "Failed to upgrade some global npm packages."
+    fi
+}
+
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 21 | Last changed: Complete shellcheck validation with maximum error detection${NC}"
+echo -e "${GRAY}Version 22 | Last changed: Add npm global package upgrade${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
@@ -867,5 +891,8 @@ print_section "Shell Configuration"
 set_fish_as_default_shell
 install_act
 install_tmux_plugins
+
+print_section "Final Updates"
+upgrade_npm_global_packages
 
 echo -e "\n${GREEN}${BOLD}✨ Setup complete! Please log out and log back in for all changes to take effect.${NC}\n"
