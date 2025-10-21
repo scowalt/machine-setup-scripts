@@ -4,7 +4,6 @@ $wingetPackages = (
     "tailscale.tailscale",
     "Readdle.Spark",
     "Google.Chrome",
-    "TheBrowserCompany.Arc",
     "Schniz.fnm",
     "twpayne.chezmoi",
     "Git.Git",
@@ -533,7 +532,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 32 | Last changed: Add npm global package upgrade" -ForegroundColor DarkGray
+    Write-Host "Version 33 | Last changed: Remove Arc from default installation" -ForegroundColor DarkGray
     
     Write-Section "Package Installation"
     Install-WingetPackages
