@@ -99,6 +99,24 @@ autoPull = true
     Write-Host "$success chezmoi dotfiles applied." -ForegroundColor Green
 }
 
+# Function to update chezmoi dotfiles repository to latest version
+function Update-Chezmoi {
+    $chezmoiConfigPath = "$HOME\AppData\Local\chezmoi"
+    if (Test-Path $chezmoiConfigPath) {
+        Write-Host "$arrow Updating chezmoi dotfiles repository..." -ForegroundColor Cyan
+        $updateOutput = chezmoi update 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "$success chezmoi dotfiles repository updated." -ForegroundColor Green
+        }
+        else {
+            Write-Host "$warnIcon Failed to update chezmoi dotfiles repository. Continuing anyway." -ForegroundColor Yellow
+        }
+    }
+    else {
+        Write-Debug "chezmoi not initialized yet, skipping update."
+    }
+}
+
 $githubUsername = "scowalt"
 $githubKeysUrl = "https://github.com/$githubUsername.keys"
 $localKeyPath = "$HOME\.ssh\id_rsa.pub"
@@ -532,7 +550,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 33 | Last changed: Remove Arc from default installation" -ForegroundColor DarkGray
+    Write-Host "Version 34 | Last changed: Add chezmoi update step" -ForegroundColor DarkGray
     
     Write-Section "Package Installation"
     Install-WingetPackages
@@ -542,6 +560,7 @@ function Initialize-WindowsEnvironment {
     
     Write-Section "Dotfiles Management"
     Install-Chezmoi
+    Update-Chezmoi
     
     Write-Section "Development Tools"
     Install-GitTown

@@ -133,6 +133,20 @@ EOF
     fi
 }
 
+# Update chezmoi dotfiles repository to latest version
+update_chezmoi() {
+    if [[ -d ~/.local/share/chezmoi ]]; then
+        print_message "Updating chezmoi dotfiles repository..."
+        if chezmoi update > /dev/null; then
+            print_success "chezmoi dotfiles repository updated."
+        else
+            print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
+        fi
+    else
+        print_debug "chezmoi not initialized yet, skipping update."
+    fi
+}
+
 # Set Fish as the default shell if it isn't already
 set_fish_as_default_shell() {
     if [[ "${SHELL}" != "/opt/homebrew/bin/fish" ]]; then
@@ -373,7 +387,7 @@ upgrade_npm_global_packages() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 24 | Last changed: Add npm global package upgrade${NC}"
+echo -e "${GRAY}Version 25 | Last changed: Add chezmoi update step${NC}"
 
 print_section "Package Manager Setup"
 install_homebrew
@@ -391,6 +405,7 @@ configure_git_town
 print_section "Dotfiles Management"
 initialize_chezmoi
 configure_chezmoi_git
+update_chezmoi
 chezmoi apply
 
 print_section "Shell Configuration"

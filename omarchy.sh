@@ -378,6 +378,20 @@ EOF
     fi
 }
 
+# Update chezmoi dotfiles repository to latest version
+update_chezmoi() {
+    if [[ -d ~/.local/share/chezmoi ]]; then
+        print_message "Updating chezmoi dotfiles repository..."
+        if chezmoi update > /dev/null; then
+            print_success "chezmoi dotfiles repository updated."
+        else
+            print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
+        fi
+    else
+        print_debug "chezmoi not initialized yet, skipping update."
+    fi
+}
+
 # Set Fish as the default shell if it isn't already
 set_fish_as_default_shell() {
     local current_shell
@@ -579,7 +593,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 3 | Last changed: Add npm global package upgrade${NC}"
+echo -e "${GRAY}Version 4 | Last changed: Add chezmoi update step${NC}"
 
 print_section "System Verification"
 verify_arch_system
@@ -611,6 +625,7 @@ print_section "Dotfiles Management"
 install_chezmoi
 initialize_chezmoi
 configure_chezmoi_git
+update_chezmoi
 chezmoi apply
 
 print_section "Shell Configuration"

@@ -334,8 +334,33 @@ initialize_chezmoi() {
         fi
     else
         print_debug "chezmoi already initialized."
-        ${chezmoi_cmd} update
-        print_success "chezmoi repository updated."
+    fi
+}
+
+# Update chezmoi dotfiles repository to latest version
+update_chezmoi() {
+    # If chezmoi isn't on PATH, fall back to ~/bin/chezmoi
+    if ! command -v chezmoi >/dev/null; then
+        if [[ -x "${HOME}/bin/chezmoi" ]]; then
+            local chezmoi_cmd="${HOME}/bin/chezmoi"
+        else
+            print_error "chezmoi not found. Install chezmoi first."
+            return 1
+        fi
+    else
+        local chezmoi_cmd="chezmoi"
+    fi
+
+    local chez_src="${HOME}/.local/share/chezmoi"
+    if [[ -d "${chez_src}" ]]; then
+        print_message "Updating chezmoi dotfiles repository..."
+        if ${chezmoi_cmd} update > /dev/null; then
+            print_success "chezmoi dotfiles repository updated."
+        else
+            print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
+        fi
+    else
+        print_debug "chezmoi not initialized yet, skipping update."
     fi
 }
 
@@ -851,7 +876,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 22 | Last changed: Add npm global package upgrade${NC}"
+echo -e "${GRAY}Version 23 | Last changed: Add chezmoi update step${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
@@ -885,6 +910,7 @@ print_section "Dotfiles Management"
 install_chezmoi
 initialize_chezmoi
 configure_chezmoi_git
+update_chezmoi
 apply_chezmoi_config
 
 print_section "Shell Configuration"
