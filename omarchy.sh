@@ -17,6 +17,35 @@ print_warning() { printf "${YELLOW}⚠ %s${NC}\n" "$1"; }
 print_error() { printf "${RED}✗ %s${NC}\n" "$1"; }
 print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 
+# Enforce that the script is run as the 'scowalt' user
+enforce_scowalt_user() {
+    local current_user
+    current_user=$(whoami)
+    if [[ "${current_user}" != "scowalt" ]]; then
+        print_error "This script must be run as the 'scowalt' user for security reasons."
+
+        # Check if the 'scowalt' user exists
+        if ! id "scowalt" &>/dev/null; then
+            print_message "User 'scowalt' not found. Creating user..."
+            sudo useradd --create-home --shell /bin/bash scowalt
+            sudo usermod -aG wheel scowalt
+            print_success "User 'scowalt' created and added to the wheel group."
+            print_warning "A password must be set for 'scowalt' to continue."
+            print_message "Please run 'sudo passwd scowalt' to set a password."
+            print_message "Then, switch to the 'scowalt' user and re-run this script."
+        else
+            print_warning "User 'scowalt' already exists."
+            print_message "Please switch to the 'scowalt' user and re-run this script."
+        fi
+
+        exit 1
+    else
+        print_success "Running as 'scowalt' user. Proceeding with setup."
+    fi
+
+    cd ~ || exit 1
+}
+
 # Verify we're running on Arch/Omarchy
 verify_arch_system() {
     print_message "Verifying Arch Linux or Omarchy system..."
@@ -153,18 +182,56 @@ install_omarchy() {
     fi
 }
 
+# Install and enable SSH server
+setup_ssh_server() {
+    print_message "Checking and setting up SSH server..."
+
+    # Check if openssh is installed
+    if ! pacman -Qi "openssh" &> /dev/null; then
+        print_message "Installing openssh..."
+        if ! sudo pacman -S --noconfirm openssh; then
+            print_error "Failed to install openssh."
+            exit 1
+        fi
+        print_success "openssh installed."
+    else
+        print_debug "openssh is already installed."
+    fi
+
+    # Check if sshd service is active
+    if ! systemctl is-active --quiet sshd; then
+        print_message "Starting sshd service..."
+        sudo systemctl start sshd
+        print_success "sshd service started."
+    else
+        print_debug "sshd service is already active."
+    fi
+
+    # Check if sshd service is enabled to start on boot
+    if ! systemctl is-enabled --quiet sshd; then
+        print_message "Enabling sshd service to start on boot..."
+        sudo systemctl enable sshd
+        print_success "sshd service enabled."
+    else
+        print_debug "sshd service is already enabled."
+    fi
+}
+
 # Check and set up SSH key
 setup_ssh_key() {
     print_message "Checking for existing SSH key associated with GitHub..."
-    
-    # Retrieve GitHub-associated keys
+
     local existing_keys
     existing_keys=$(curl -s https://github.com/scowalt.keys)
-    
+    # Remember - chezmoi will set up authorized_keys for you
+
+    # Check if a local SSH key exists
     if [[ -f ~/.ssh/id_rsa.pub ]]; then
+        # Extract only the actual key part from id_rsa.pub and log for debugging
         local local_key
         local_key=$(awk '{print $2}' ~/.ssh/id_rsa.pub)
-        
+
+        # Verify if the extracted key part matches any of the GitHub keys
         if echo "${existing_keys}" | grep -q "${local_key}"; then
             print_success "Existing SSH key recognized by GitHub."
         else
@@ -172,8 +239,11 @@ setup_ssh_key() {
             exit 1
         fi
     else
+        # Generate a new SSH key and log details
         print_warning "No SSH key found. Generating a new SSH key..."
-        ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N ""
+        local hostname_value
+        hostname_value=$(hostname)
+        ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N "" -C "scowalt@${hostname_value}"
         print_success "SSH key generated."
         print_message "Please add the following SSH key to GitHub:"
         cat ~/.ssh/id_rsa.pub
@@ -508,6 +578,22 @@ install_pyenv() {
     fi
 }
 
+# Install act for running GitHub Actions locally
+install_act() {
+    if command -v act &> /dev/null; then
+        print_debug "act is already installed."
+        return
+    fi
+    
+    print_message "Checking act installation..."
+    # act should be installed via AUR in install_dev_tools_aur
+    if pacman -Qi "act" &> /dev/null; then
+        print_debug "act is installed via AUR but not in PATH. This may resolve after shell restart."
+    else
+        print_warning "act not found. It should be installed via AUR. You may need to install it manually: yay -S act"
+    fi
+}
+
 # Install tmux plugins for session persistence
 install_tmux_plugins() {
     local plugin_dir=~/.tmux/plugins
@@ -518,19 +604,28 @@ install_tmux_plugins() {
     else
         print_debug "tmux plugin manager already installed."
     fi
+
+    print_message "Installing/updating tmux plugins via tpm..."
+    local tpm_installer=~/.tmux/plugins/tpm/bin/install_plugins
     
-    for plugin in tmux-resurrect tmux-continuum; do
-        if [[ ! -d "${plugin_dir}/${plugin}" ]]; then
-            print_message "Installing ${plugin}..."
-            git clone -q "https://github.com/tmux-plugins/${plugin}" "${plugin_dir}/${plugin}"
-            print_success "${plugin} installed."
-        else
-            print_debug "${plugin} already installed."
-        fi
-    done
-    
-    tmux source ~/.tmux.conf 2> /dev/null || print_warning "tmux not started; source tmux.conf manually if needed."
-    ~/.tmux/plugins/tpm/bin/install_plugins > /dev/null
+    # Let tpm script install plugins. It handles finding tmux.conf and starting a server.
+    # Capture output to show only on failure.
+    local output
+    if ! output=$(${tpm_installer} 2>&1); then
+        print_error "Failed to install tmux plugins. tpm output was:"
+        echo "${output}"
+        # Not exiting, to maintain original script's behavior.
+        return
+    fi
+
+    # Try to source the config to make plugins available in a running session.
+    # This might fail if tmux server is not running, which is fine.
+    local tmux_conf="${HOME}/.config/tmux/tmux.conf"
+    if [[ -f "${tmux_conf}" ]]; then
+        tmux source-file "${tmux_conf}" >/dev/null 2>&1
+    elif [[ -f "${HOME}/.tmux.conf" ]]; then # fallback to old location
+        tmux source-file "${HOME}/.tmux.conf" >/dev/null 2>&1
+    fi
     print_success "tmux plugins installed and updated."
 }
 
@@ -579,9 +674,10 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 3 | Last changed: Add npm global package upgrade${NC}"
+echo -e "${GRAY}Version 4 | Last changed: Add user enforcement, SSH server setup, and act installation${NC}"
 
-print_section "System Verification"
+print_section "User & System Setup"
+enforce_scowalt_user
 verify_arch_system
 check_omarchy_installation
 
@@ -593,6 +689,7 @@ install_core_packages
 install_yay
 
 print_section "SSH Configuration"
+setup_ssh_server
 setup_ssh_key
 add_github_to_known_hosts
 
@@ -604,8 +701,10 @@ configure_git_town
 
 print_section "Development Tools"
 setup_nodejs
-install_claude_code
 install_pyenv
+
+print_section "Security Tools"
+# Note: 1password-cli, tailscale, and infisical are installed via AUR in install_dev_tools_aur
 
 print_section "Dotfiles Management"
 install_chezmoi
@@ -615,7 +714,11 @@ chezmoi apply
 
 print_section "Shell Configuration"
 set_fish_as_default_shell
+install_act
 install_tmux_plugins
+
+print_section "Additional Development Tools"
+install_claude_code
 
 print_section "Final Updates"
 update_all_packages

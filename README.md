@@ -26,6 +26,12 @@ curl -sL https://scripts.scowalt.com/setup/mac.sh | bash
 curl -sL https://scripts.scowalt.com/setup/ubuntu.sh | bash
 ```
 
+## Omarchy/Arch Linux
+
+```bash
+curl -sL https://scripts.scowalt.com/setup/omarchy.sh | bash
+```
+
 ## Raspberry Pi
 
 ```bash
