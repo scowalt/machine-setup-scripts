@@ -306,19 +306,19 @@ configure_git_town() {
         # Set up Fish shell completions for git-town
         if [[ -d ~/.config/fish/completions ]]; then
             if ! [[ -f ~/.config/fish/completions/git-town.fish ]]; then
-                git town completion fish > ~/.config/fish/completions/git-town.fish
+                git-town completions fish > ~/.config/fish/completions/git-town.fish
                 print_success "git-town Fish completions configured."
             else
                 print_debug "git-town Fish completions already configured."
             fi
         fi
-        
+
         # Set up Bash completions for git-town
         local bash_completion_dir="/etc/bash_completion.d"
         if [[ -d "${bash_completion_dir}" ]]; then
             if ! [[ -f "${bash_completion_dir}/git-town" ]]; then
                 local completion_content
-                completion_content=$(git town completion bash)
+                completion_content=$(git-town completions bash)
                 echo "${completion_content}" | sudo tee "${bash_completion_dir}/git-town" > /dev/null
                 print_success "git-town Bash completions configured."
             else
@@ -597,7 +597,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 5 | Last changed: Open GitHub SSH keys page when key not registered${NC}"
+echo -e "${GRAY}Version 6 | Last changed: Fix git-town completions command (completions not completion)${NC}"
 
 print_section "System Verification"
 verify_arch_system
