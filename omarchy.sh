@@ -223,6 +223,13 @@ install_dev_tools_aur() {
             else
                 to_install+=("${package}")
             fi
+        # Special case: infisical and infisical-bin are alternatives
+        elif [[ "${package}" == "infisical" ]]; then
+            if pacman -Qi "infisical" &> /dev/null || pacman -Qi "infisical-bin" &> /dev/null; then
+                print_debug "infisical is already installed."
+            else
+                to_install+=("${package}")
+            fi
         elif ! pacman -Qi "${package}" &> /dev/null; then
             to_install+=("${package}")
         else
@@ -619,7 +626,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 8 | Last changed: Handle existing pyenv directory without PATH${NC}"
+echo -e "${GRAY}Version 9 | Last changed: Handle infisical/infisical-bin package conflict${NC}"
 
 print_section "System Verification"
 verify_arch_system
