@@ -518,11 +518,26 @@ install_claude_code() {
 # Install pyenv for Python version management
 install_pyenv() {
     if ! command -v pyenv &> /dev/null; then
+        # Check if ~/.pyenv exists but pyenv is not in PATH
+        if [[ -d "${HOME}/.pyenv" ]]; then
+            # Try to add pyenv to PATH
+            export PATH="${HOME}/.pyenv/bin:${PATH}"
+            if command -v pyenv &> /dev/null; then
+                print_debug "pyenv is already installed (added to PATH)."
+                return 0
+            else
+                print_warning "~/.pyenv directory exists but pyenv not functional."
+                print_message "Please check your pyenv installation or remove ~/.pyenv and rerun."
+                return 1
+            fi
+        fi
+
         print_message "Installing pyenv..."
         # Use the official install script
         local install_cmd
         install_cmd=$(curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer)
         if bash <<< "${install_cmd}"; then
+            export PATH="${HOME}/.pyenv/bin:${PATH}"
             print_success "pyenv installed. Shell configuration will be managed by chezmoi."
         else
             print_error "Failed to install pyenv."
@@ -604,7 +619,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 7 | Last changed: Handle fnm/fnm-bin package conflict${NC}"
+echo -e "${GRAY}Version 8 | Last changed: Handle existing pyenv directory without PATH${NC}"
 
 print_section "System Verification"
 verify_arch_system
