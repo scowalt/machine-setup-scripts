@@ -209,14 +209,21 @@ add_github_to_known_hosts() {
 # Install development tools via AUR
 install_dev_tools_aur() {
     print_message "Installing development tools from AUR..."
-    
+
     # Development tools available in AUR
     local aur_packages=("fnm-bin" "chezmoi" "1password-cli" "tailscale" "infisical" "act")
     local to_install=()
-    
+
     # Check which packages need installation
     for package in "${aur_packages[@]}"; do
-        if ! pacman -Qi "${package}" &> /dev/null; then
+        # Special case: fnm-bin and fnm are alternatives that provide the same command
+        if [[ "${package}" == "fnm-bin" ]]; then
+            if pacman -Qi "fnm-bin" &> /dev/null || pacman -Qi "fnm" &> /dev/null; then
+                print_debug "fnm is already installed."
+            else
+                to_install+=("${package}")
+            fi
+        elif ! pacman -Qi "${package}" &> /dev/null; then
             to_install+=("${package}")
         else
             print_debug "${package} is already installed."
@@ -597,7 +604,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 6 | Last changed: Fix git-town completions command (completions not completion)${NC}"
+echo -e "${GRAY}Version 7 | Last changed: Handle fnm/fnm-bin package conflict${NC}"
 
 print_section "System Verification"
 verify_arch_system
