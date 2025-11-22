@@ -80,6 +80,8 @@ setup_ssh_key() {
             print_success "Existing SSH key recognized by GitHub."
         else
             print_error "SSH key not recognized by GitHub. Please add it manually."
+            print_message "Opening GitHub SSH keys page..."
+            powershell.exe -Command "Start-Process 'https://github.com/settings/keys'" 2>/dev/null || true
             exit 1
         fi
     else
@@ -89,6 +91,8 @@ setup_ssh_key() {
         print_success "SSH key generated."
         print_message "Please add the following SSH key to GitHub:"
         cat ~/.ssh/id_rsa.pub
+        print_message "Opening GitHub SSH keys page..."
+        powershell.exe -Command "Start-Process 'https://github.com/settings/keys'" 2>/dev/null || true
         exit 1
     fi
 }
@@ -607,7 +611,7 @@ upgrade_npm_global_packages() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 20 | Last changed: Add chezmoi update step${NC}"
+echo -e "${GRAY}Version 21 | Last changed: Open GitHub SSH keys page when key not registered${NC}"
 
 print_section "System Setup"
 update_and_install_core

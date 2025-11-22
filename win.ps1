@@ -146,6 +146,8 @@ function Test-GithubSSHKeyAlreadyAdded {
         Write-Host "$failIcon SSH key not recognized by GitHub. Please add it manually." -ForegroundColor Red
         Write-Host "Public key content to add:" -ForegroundColor Yellow
         Write-Host $localKeyContent -ForegroundColor Yellow
+        Write-Host "$arrow Opening GitHub SSH keys page..." -ForegroundColor Cyan
+        Start-Process "https://github.com/settings/keys"
         return $false
     }
 }
@@ -171,6 +173,8 @@ function Test-GitHubSSHKey {
         Write-Host "$success SSH key generated." -ForegroundColor Green
         Write-Host "Please add the following SSH key to GitHub:" -ForegroundColor Cyan
         Get-Content -Path $localKeyPath
+        Write-Host "$arrow Opening GitHub SSH keys page..." -ForegroundColor Cyan
+        Start-Process "https://github.com/settings/keys"
     }
 
     $keyadded = $false
@@ -550,7 +554,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 34 | Last changed: Add chezmoi update step" -ForegroundColor DarkGray
+    Write-Host "Version 35 | Last changed: Open GitHub SSH keys page when key not registered" -ForegroundColor DarkGray
     
     Write-Section "Package Installation"
     Install-WingetPackages

@@ -149,6 +149,8 @@ setup_ssh_key() {
             print_success "Existing SSH key recognized by GitHub."
         else
             print_error "SSH key not recognized by GitHub. Please add it manually."
+            print_message "Opening GitHub SSH keys page..."
+            xdg-open "https://github.com/settings/keys" 2>/dev/null || true
             exit 1
         fi
     else
@@ -160,6 +162,8 @@ setup_ssh_key() {
         print_success "SSH key generated."
         print_message "Please add the following SSH key to GitHub:"
         cat ~/.ssh/id_rsa.pub
+        print_message "Opening GitHub SSH keys page..."
+        xdg-open "https://github.com/settings/keys" 2>/dev/null || true
         exit 1
     fi
 }
@@ -758,7 +762,7 @@ upgrade_npm_global_packages() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 28 | Last changed: Add chezmoi update step${NC}"
+echo -e "${GRAY}Version 29 | Last changed: Open GitHub SSH keys page when key not registered${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user

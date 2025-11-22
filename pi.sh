@@ -185,6 +185,8 @@ verify_github_key() {
         print_error "Your public key is NOT registered with GitHub!"
         print_message "Add this key to https://github.com/settings/keys, then rerun the script:"
         cat ~/.ssh/id_rsa.pub
+        print_message "Opening GitHub SSH keys page..."
+        xdg-open "https://github.com/settings/keys" 2>/dev/null || true
         exit 1
     fi
 }
@@ -876,7 +878,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 23 | Last changed: Add chezmoi update step${NC}"
+echo -e "${GRAY}Version 24 | Last changed: Open GitHub SSH keys page when key not registered${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
