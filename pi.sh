@@ -757,10 +757,38 @@ setup_nodejs() {
     fi
 }
 
-# NOTE: Claude Code is not installed on Raspberry Pi
-# Primary development is not expected to happen on Pi devices
-# Claude Code can be manually installed via npm if needed:
-# npm install -g @anthropic-ai/claude-code
+# Install Claude Code via npm
+install_claude_code() {
+    if command -v claude &> /dev/null; then
+        print_debug "Claude Code is already installed."
+        return
+    fi
+
+    print_message "Installing Claude Code..."
+
+    # Source fnm initialization to make npm available
+    if [[ -s "${HOME}/.local/share/fnm/fnm" ]]; then
+        export PATH="${HOME}/.local/share/fnm:${PATH}"
+        local fnm_env
+        fnm_env=$(fnm env --use-on-cd)
+        eval "${fnm_env}"
+    fi
+
+    # Make sure npm is available
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Make sure fnm is installed and Node.js is set up."
+        print_message "You may need to install Claude Code manually after setting up Node.js:"
+        print_message "  npm install -g @anthropic-ai/claude-code"
+        return
+    fi
+
+    # Install Claude Code globally via npm
+    if npm install -g @anthropic-ai/claude-code &> /dev/null; then
+        print_success "Claude Code installed."
+    else
+        print_error "Failed to install Claude Code."
+    fi
+}
 
 # Install act for running GitHub Actions locally
 install_act() {
@@ -878,7 +906,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 24 | Last changed: Open GitHub SSH keys page when key not registered${NC}"
+echo -e "${GRAY}Version 25 | Last changed: Add Claude Code installation${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
@@ -902,6 +930,9 @@ setup_ssh_key
 verify_github_key
 add_github_to_known_hosts
 ensure_ssh_agent
+
+print_section "Additional Development Tools"
+install_claude_code
 
 print_section "Terminal & Shell"
 install_starship
