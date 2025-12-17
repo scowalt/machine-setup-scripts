@@ -445,6 +445,23 @@ install_tmux_plugins() {
     print_success "tmux plugins installed and updated."
 }
 
+# Install iTerm2 shell integration for automatic profile switching
+install_iterm2_shell_integration() {
+    local shell_integration_file="${HOME}/.iterm2_shell_integration.fish"
+    if [[ -f "${shell_integration_file}" ]]; then
+        print_debug "iTerm2 shell integration already installed."
+        return
+    fi
+
+    print_message "Installing iTerm2 shell integration..."
+    if curl -fsSL https://iterm2.com/shell_integration/fish -o "${shell_integration_file}"; then
+        chmod +x "${shell_integration_file}"
+        print_success "iTerm2 shell integration installed."
+    else
+        print_warning "Failed to download iTerm2 shell integration."
+    fi
+}
+
 # Apply chezmoi configuration
 apply_chezmoi_config() {
     print_message "Applying chezmoi configuration…"
@@ -891,7 +908,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 26 | Last changed: Use official Claude Code installer${NC}"
+echo -e "${GRAY}Version 27 | Last changed: Add iTerm2 shell integration for profile switching${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
@@ -935,6 +952,7 @@ print_section "Shell Configuration"
 set_fish_as_default_shell
 install_act
 install_tmux_plugins
+install_iterm2_shell_integration
 
 print_section "Final Updates"
 upgrade_npm_global_packages

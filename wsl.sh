@@ -559,6 +559,23 @@ install_tmux_plugins() {
     print_success "tmux plugins installed and updated."
 }
 
+# Install iTerm2 shell integration for automatic profile switching
+install_iterm2_shell_integration() {
+    local shell_integration_file="${HOME}/.iterm2_shell_integration.fish"
+    if [[ -f "${shell_integration_file}" ]]; then
+        print_debug "iTerm2 shell integration already installed."
+        return
+    fi
+
+    print_message "Installing iTerm2 shell integration..."
+    if curl -fsSL https://iterm2.com/shell_integration/fish -o "${shell_integration_file}"; then
+        chmod +x "${shell_integration_file}"
+        print_success "iTerm2 shell integration installed."
+    else
+        print_warning "Failed to download iTerm2 shell integration."
+    fi
+}
+
 update_packages() {
     print_message "Updating all packages..."
     brew update
@@ -595,7 +612,7 @@ upgrade_npm_global_packages() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 22 | Last changed: Use official Claude Code installer${NC}"
+echo -e "${GRAY}Version 23 | Last changed: Add iTerm2 shell integration for profile switching${NC}"
 
 print_section "System Setup"
 update_and_install_core
@@ -632,6 +649,7 @@ print_section "Shell Configuration"
 set_fish_as_default_shell
 install_act
 install_tmux_plugins
+install_iterm2_shell_integration
 
 print_section "Additional Development Tools"
 install_claude_code
