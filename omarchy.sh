@@ -490,32 +490,18 @@ setup_nodejs() {
     fi
 }
 
-# Install Claude Code via npm
+# Install Claude Code using official installer
 install_claude_code() {
     if command -v claude &> /dev/null; then
         print_debug "Claude Code is already installed."
         return
     fi
-    
+
     print_message "Installing Claude Code..."
-    
-    # Initialize fnm for current session
-    if command -v fnm &> /dev/null; then
-        local fnm_env
-        fnm_env=$(fnm env --use-on-cd)
-        eval "${fnm_env}"
-    fi
-    
-    # Make sure npm is available
-    if ! command -v npm &> /dev/null; then
-        print_warning "npm not found. Make sure fnm is installed and Node.js is set up."
-        print_message "You may need to install Claude Code manually after setting up Node.js:"
-        print_message "  npm install -g @anthropic-ai/claude-code"
-        return
-    fi
-    
-    # Install Claude Code globally via npm
-    if npm install -g @anthropic-ai/claude-code &> /dev/null; then
+
+    local install_script
+    install_script=$(curl -fsSL https://claude.ai/install.sh)
+    if echo "${install_script}" | bash; then
         print_success "Claude Code installed."
     else
         print_error "Failed to install Claude Code."
@@ -533,8 +519,8 @@ install_pyenv() {
                 print_debug "pyenv is already installed (added to PATH)."
                 return 0
             else
-                print_warning "~/.pyenv directory exists but pyenv not functional."
-                print_message "Please check your pyenv installation or remove ~/.pyenv and rerun."
+                print_warning "\$HOME/.pyenv directory exists but pyenv not functional."
+                print_message "Please check your pyenv installation or remove \$HOME/.pyenv and rerun."
                 return 1
             fi
         fi
@@ -626,7 +612,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 9 | Last changed: Handle infisical/infisical-bin package conflict${NC}"
+echo -e "${GRAY}Version 10 | Last changed: Use official Claude Code installer${NC}"
 
 print_section "System Verification"
 verify_arch_system

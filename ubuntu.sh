@@ -410,33 +410,18 @@ configure_git_town() {
     fi
 }
 
-# Install Claude Code via npm
+# Install Claude Code using official installer
 install_claude_code() {
     if command -v claude &> /dev/null; then
         print_debug "Claude Code is already installed."
         return
     fi
-    
+
     print_message "Installing Claude Code..."
-    
-    # Source fnm initialization to make npm available
-    if [[ -s "${HOME}/.local/share/fnm/fnm" ]]; then
-        export PATH="${HOME}/.local/share/fnm:${PATH}"
-        local fnm_env
-        fnm_env=$(fnm env --use-on-cd)
-        eval "${fnm_env}"
-    fi
-    
-    # Make sure npm is available
-    if ! command -v npm &> /dev/null; then
-        print_warning "npm not found. Make sure fnm is installed and Node.js is set up."
-        print_message "You may need to install Claude Code manually after setting up Node.js:"
-        print_message "  npm install -g @anthropic-ai/claude-code"
-        return
-    fi
-    
-    # Install Claude Code globally via npm
-    if npm install -g @anthropic-ai/claude-code &> /dev/null; then
+
+    local install_script
+    install_script=$(curl -fsSL https://claude.ai/install.sh)
+    if echo "${install_script}" | bash; then
         print_success "Claude Code installed."
     else
         print_error "Failed to install Claude Code."
@@ -762,7 +747,7 @@ upgrade_npm_global_packages() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 29 | Last changed: Open GitHub SSH keys page when key not registered${NC}"
+echo -e "${GRAY}Version 30 | Last changed: Use official Claude Code installer${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user
