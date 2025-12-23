@@ -721,6 +721,28 @@ install_tmux_plugins() {
     print_success "tmux plugins installed and updated."
 }
 
+# Enable tmux systemd user service for session persistence
+enable_tmux_service() {
+    local service_file="${HOME}/.config/systemd/user/tmux.service"
+    if [[ ! -f "${service_file}" ]]; then
+        print_debug "tmux.service not found - will be created by chezmoi apply"
+        return
+    fi
+
+    print_message "Enabling tmux systemd user service..."
+    systemctl --user daemon-reload
+    if systemctl --user enable --now tmux.service 2>/dev/null; then
+        print_success "tmux service enabled and started."
+    else
+        # Service might already be running or have issues
+        if systemctl --user is-enabled tmux.service &>/dev/null; then
+            print_debug "tmux service already enabled."
+        else
+            print_warning "Could not enable tmux service."
+        fi
+    fi
+}
+
 # Install iTerm2 shell integration for automatic profile switching
 install_iterm2_shell_integration() {
     local shell_integration_file="${HOME}/.iterm2_shell_integration.fish"
@@ -764,7 +786,7 @@ upgrade_npm_global_packages() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 31 | Last changed: Add iTerm2 shell integration for profile switching${NC}"
+echo -e "${GRAY}Version 32 | Last changed: Add tmux systemd user service enablement${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user
@@ -803,6 +825,7 @@ print_section "Shell Configuration"
 set_fish_as_default_shell
 install_act
 install_tmux_plugins
+enable_tmux_service
 install_iterm2_shell_integration
 
 print_section "Additional Development Tools"
