@@ -482,6 +482,48 @@ install_tailscale() {
     print_message "Skipping Tailscale installation as it is not needed on WSL."
 }
 
+# Install and configure unattended-upgrades for automatic security updates
+setup_unattended_upgrades() {
+    if dpkg -s unattended-upgrades &> /dev/null; then
+        print_debug "unattended-upgrades is already installed."
+    else
+        print_message "Installing unattended-upgrades..."
+        if ! sudo apt install -qq -y unattended-upgrades; then
+            print_error "Failed to install unattended-upgrades."
+            return 1
+        fi
+        print_success "unattended-upgrades installed."
+    fi
+
+    # Configure automatic updates
+    local auto_upgrades_conf="/etc/apt/apt.conf.d/20auto-upgrades"
+    if [[ ! -f "${auto_upgrades_conf}" ]] || ! grep -q "Unattended-Upgrade" "${auto_upgrades_conf}"; then
+        print_message "Configuring automatic security updates..."
+        local auto_upgrades_content
+        auto_upgrades_content='APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";'
+        echo "${auto_upgrades_content}" | sudo tee "${auto_upgrades_conf}" > /dev/null
+        print_success "Automatic security updates configured."
+    else
+        print_debug "Automatic updates already configured."
+    fi
+
+    # Note: WSL doesn't use systemd by default, so we check if it's available
+    if command -v systemctl &>/dev/null && systemctl is-system-running &>/dev/null; then
+        if systemctl is-enabled unattended-upgrades &>/dev/null; then
+            print_debug "unattended-upgrades service already enabled."
+        else
+            print_message "Enabling unattended-upgrades service..."
+            sudo systemctl enable unattended-upgrades
+            sudo systemctl start unattended-upgrades
+            print_success "unattended-upgrades service enabled."
+        fi
+    else
+        print_debug "Systemd not available (typical for WSL1). Unattended-upgrades will run via cron."
+    fi
+}
+
 # Install act for running GitHub Actions locally
 install_act() {
     if ! command -v act &> /dev/null; then
@@ -612,7 +654,7 @@ upgrade_npm_global_packages() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 23 | Last changed: Add iTerm2 shell integration for profile switching${NC}"
+echo -e "${GRAY}Version 24 | Last changed: Add unattended-upgrades for automatic security updates${NC}"
 
 print_section "System Setup"
 update_and_install_core
@@ -637,6 +679,7 @@ print_section "Security Tools"
 install_1password_cli
 install_infisical
 install_tailscale
+setup_unattended_upgrades
 
 print_section "Dotfiles Management"
 install_chezmoi

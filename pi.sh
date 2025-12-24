@@ -291,6 +291,44 @@ install_fail2ban() {
     fi
 }
 
+# Install and configure unattended-upgrades for automatic security updates
+setup_unattended_upgrades() {
+    if dpkg -s unattended-upgrades &> /dev/null; then
+        print_debug "unattended-upgrades is already installed."
+    else
+        print_message "Installing unattended-upgrades..."
+        if ! sudo apt install -y unattended-upgrades; then
+            print_error "Failed to install unattended-upgrades."
+            return 1
+        fi
+        print_success "unattended-upgrades installed."
+    fi
+
+    # Configure automatic updates
+    local auto_upgrades_conf="/etc/apt/apt.conf.d/20auto-upgrades"
+    if [[ ! -f "${auto_upgrades_conf}" ]] || ! grep -q "Unattended-Upgrade" "${auto_upgrades_conf}"; then
+        print_message "Configuring automatic security updates..."
+        local auto_upgrades_content
+        auto_upgrades_content='APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";'
+        echo "${auto_upgrades_content}" | sudo tee "${auto_upgrades_conf}" > /dev/null
+        print_success "Automatic security updates configured."
+    else
+        print_debug "Automatic updates already configured."
+    fi
+
+    # Enable the unattended-upgrades service
+    if systemctl is-enabled unattended-upgrades &>/dev/null; then
+        print_debug "unattended-upgrades service already enabled."
+    else
+        print_message "Enabling unattended-upgrades service..."
+        sudo systemctl enable unattended-upgrades
+        sudo systemctl start unattended-upgrades
+        print_success "unattended-upgrades service enabled."
+    fi
+}
+
 # Install chezmoi with Raspberry Pi considerations
 install_chezmoi() {
     if ! command -v chezmoi &> /dev/null; then
@@ -926,7 +964,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 28 | Last changed: Add fail2ban for brute-force protection${NC}"
+echo -e "${GRAY}Version 29 | Last changed: Add unattended-upgrades for automatic security updates${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
@@ -947,6 +985,7 @@ print_section "Network & SSH"
 enable_ssh_server
 install_tailscale
 install_fail2ban
+setup_unattended_upgrades
 setup_ssh_key
 verify_github_key
 add_github_to_known_hosts
