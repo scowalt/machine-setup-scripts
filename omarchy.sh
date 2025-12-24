@@ -60,10 +60,34 @@ update_system() {
     print_success "System packages updated."
 }
 
+# Install and configure fail2ban for brute-force protection
+install_fail2ban() {
+    if pacman -Qi fail2ban &> /dev/null; then
+        print_debug "fail2ban is already installed."
+        # Ensure service is enabled
+        if ! systemctl is-enabled fail2ban &> /dev/null; then
+            sudo systemctl enable fail2ban
+            sudo systemctl start fail2ban
+            print_success "fail2ban service enabled."
+        fi
+        return
+    fi
+
+    print_message "Installing fail2ban..."
+    if sudo pacman -S --noconfirm fail2ban; then
+        # Enable and start fail2ban service
+        sudo systemctl enable fail2ban
+        sudo systemctl start fail2ban
+        print_success "fail2ban installed and enabled."
+    else
+        print_error "Failed to install fail2ban."
+    fi
+}
+
 # Install core packages using pacman
 install_core_packages() {
     print_message "Installing core packages..."
-    
+
     # Define core packages
     local packages=("git" "curl" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh")
     local to_install=()
@@ -629,7 +653,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 11 | Last changed: Add iTerm2 shell integration for profile switching${NC}"
+echo -e "${GRAY}Version 12 | Last changed: Add fail2ban for brute-force protection${NC}"
 
 print_section "System Verification"
 verify_arch_system
@@ -645,6 +669,9 @@ install_yay
 print_section "SSH Configuration"
 setup_ssh_key
 add_github_to_known_hosts
+
+print_section "Security Tools"
+install_fail2ban
 
 print_section "Development Environment"
 install_omarchy

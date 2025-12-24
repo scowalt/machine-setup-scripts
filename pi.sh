@@ -273,6 +273,24 @@ install_tailscale() {
     fi
 }
 
+# Install and configure fail2ban for brute-force protection
+install_fail2ban() {
+    if dpkg -s fail2ban &> /dev/null; then
+        print_debug "fail2ban is already installed."
+        return
+    fi
+
+    print_message "Installing fail2ban..."
+    if sudo apt install -y fail2ban; then
+        # Enable and start fail2ban service
+        sudo systemctl enable fail2ban
+        sudo systemctl start fail2ban
+        print_success "fail2ban installed and enabled."
+    else
+        print_error "Failed to install fail2ban."
+    fi
+}
+
 # Install chezmoi with Raspberry Pi considerations
 install_chezmoi() {
     if ! command -v chezmoi &> /dev/null; then
@@ -908,7 +926,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 27 | Last changed: Add iTerm2 shell integration for profile switching${NC}"
+echo -e "${GRAY}Version 28 | Last changed: Add fail2ban for brute-force protection${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
@@ -927,7 +945,8 @@ install_infisical
 
 print_section "Network & SSH"
 enable_ssh_server
-install_tailscale         
+install_tailscale
+install_fail2ban
 setup_ssh_key
 verify_github_key
 add_github_to_known_hosts

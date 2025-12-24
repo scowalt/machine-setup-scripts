@@ -637,6 +637,24 @@ install_tailscale() {
     fi
 }
 
+# Install and configure fail2ban for brute-force protection
+install_fail2ban() {
+    if dpkg -s fail2ban &> /dev/null; then
+        print_debug "fail2ban is already installed."
+        return
+    fi
+
+    print_message "Installing fail2ban..."
+    if sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" install -y fail2ban; then
+        # Enable and start fail2ban service
+        sudo systemctl enable fail2ban
+        sudo systemctl start fail2ban
+        print_success "fail2ban installed and enabled."
+    else
+        print_error "Failed to install fail2ban."
+    fi
+}
+
 # Install act for running GitHub Actions locally
 install_act() {
     if ! command -v act &> /dev/null; then
@@ -786,7 +804,7 @@ upgrade_npm_global_packages() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 32 | Last changed: Add tmux systemd user service enablement${NC}"
+echo -e "${GRAY}Version 33 | Last changed: Add fail2ban for brute-force protection${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user
@@ -813,6 +831,7 @@ print_section "Security Tools"
 install_1password_cli
 install_tailscale
 install_infisical
+install_fail2ban
 
 print_section "Dotfiles Management"
 install_chezmoi
