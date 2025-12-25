@@ -129,7 +129,7 @@ install_core_packages() {
     print_message "Installing core packages..."
 
     # Define core packages
-    local packages=("git" "curl" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu")
+    local packages=("git" "curl" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "direnv")
     local to_install=()
     
     # Check which packages need installation
@@ -775,7 +775,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 17 | Last changed: Add gh auth login step to setup scripts${NC}"
+echo -e "${GRAY}Version 18 | Last changed: Add direnv to installed packages${NC}"
 
 print_section "System Verification"
 verify_arch_system
