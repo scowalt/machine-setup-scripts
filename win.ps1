@@ -524,10 +524,24 @@ function Setup-CodeDirectory {
         Write-Debug "~/Code directory already exists."
     }
 
+    # Check if gh is authenticated, fall back to git clone if not
+    $useGh = $false
+    if (Get-Command gh -ErrorAction SilentlyContinue) {
+        $authStatus = gh auth status 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $useGh = $true
+        }
+    }
+
     # Clone machine-setup-scripts if not present
     if (-not (Test-Path "$codeDir\machine-setup-scripts")) {
         Write-Host "$arrow Cloning scowalt/machine-setup-scripts..." -ForegroundColor Cyan
-        gh repo clone scowalt/machine-setup-scripts "$codeDir\machine-setup-scripts"
+        if ($useGh) {
+            gh repo clone scowalt/machine-setup-scripts "$codeDir\machine-setup-scripts"
+        }
+        else {
+            git clone git@github.com:scowalt/machine-setup-scripts.git "$codeDir\machine-setup-scripts"
+        }
         if ($?) {
             Write-Host "$success machine-setup-scripts cloned." -ForegroundColor Green
         }
@@ -542,7 +556,12 @@ function Setup-CodeDirectory {
     # Clone dotfiles if not present
     if (-not (Test-Path "$codeDir\dotfiles")) {
         Write-Host "$arrow Cloning scowalt/dotfiles..." -ForegroundColor Cyan
-        gh repo clone scowalt/dotfiles "$codeDir\dotfiles"
+        if ($useGh) {
+            gh repo clone scowalt/dotfiles "$codeDir\dotfiles"
+        }
+        else {
+            git clone git@github.com:scowalt/dotfiles.git "$codeDir\dotfiles"
+        }
         if ($?) {
             Write-Host "$success dotfiles cloned." -ForegroundColor Green
         }
@@ -581,7 +600,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 38 | Last changed: Add ~/Code directory setup with repo clones" -ForegroundColor DarkGray
+    Write-Host "Version 39 | Last changed: Fall back to git clone if gh not authenticated" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages

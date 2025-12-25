@@ -936,13 +936,27 @@ setup_code_directory() {
         print_debug "\$HOME/Code directory already exists."
     fi
 
+    # Check if gh is authenticated, fall back to git clone if not
+    local use_gh=false
+    if command -v gh &> /dev/null && gh auth status &> /dev/null; then
+        use_gh=true
+    fi
+
     # Clone machine-setup-scripts if not present
     if [[ ! -d "${code_dir}/machine-setup-scripts" ]]; then
         print_message "Cloning scowalt/machine-setup-scripts..."
-        if gh repo clone scowalt/machine-setup-scripts "${code_dir}/machine-setup-scripts"; then
-            print_success "machine-setup-scripts cloned."
+        if [[ "${use_gh}" == "true" ]]; then
+            if gh repo clone scowalt/machine-setup-scripts "${code_dir}/machine-setup-scripts"; then
+                print_success "machine-setup-scripts cloned."
+            else
+                print_error "Failed to clone machine-setup-scripts."
+            fi
         else
-            print_error "Failed to clone machine-setup-scripts."
+            if git clone git@github.com:scowalt/machine-setup-scripts.git "${code_dir}/machine-setup-scripts"; then
+                print_success "machine-setup-scripts cloned."
+            else
+                print_error "Failed to clone machine-setup-scripts."
+            fi
         fi
     else
         print_debug "machine-setup-scripts already exists."
@@ -951,10 +965,18 @@ setup_code_directory() {
     # Clone dotfiles if not present
     if [[ ! -d "${code_dir}/dotfiles" ]]; then
         print_message "Cloning scowalt/dotfiles..."
-        if gh repo clone scowalt/dotfiles "${code_dir}/dotfiles"; then
-            print_success "dotfiles cloned."
+        if [[ "${use_gh}" == "true" ]]; then
+            if gh repo clone scowalt/dotfiles "${code_dir}/dotfiles"; then
+                print_success "dotfiles cloned."
+            else
+                print_error "Failed to clone dotfiles."
+            fi
         else
-            print_error "Failed to clone dotfiles."
+            if git clone git@github.com:scowalt/dotfiles.git "${code_dir}/dotfiles"; then
+                print_success "dotfiles cloned."
+            else
+                print_error "Failed to clone dotfiles."
+            fi
         fi
     else
         print_debug "dotfiles already exists."
@@ -963,7 +985,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 37 | Last changed: Add ~/Code directory setup with repo clones${NC}"
+echo -e "${GRAY}Version 38 | Last changed: Fall back to git clone if gh not authenticated${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user
