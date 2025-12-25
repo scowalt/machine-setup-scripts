@@ -374,9 +374,48 @@ upgrade_npm_global_packages() {
     fi
 }
 
+# Setup ~/Code directory with essential repositories
+setup_code_directory() {
+    local code_dir="${HOME}/Code"
+
+    print_message "Setting up \$HOME/Code directory..."
+
+    # Create ~/Code directory if it doesn't exist
+    if [[ ! -d "${code_dir}" ]]; then
+        mkdir -p "${code_dir}"
+        print_success "Created \$HOME/Code directory."
+    else
+        print_debug "\$HOME/Code directory already exists."
+    fi
+
+    # Clone machine-setup-scripts if not present
+    if [[ ! -d "${code_dir}/machine-setup-scripts" ]]; then
+        print_message "Cloning scowalt/machine-setup-scripts..."
+        if gh repo clone scowalt/machine-setup-scripts "${code_dir}/machine-setup-scripts"; then
+            print_success "machine-setup-scripts cloned."
+        else
+            print_error "Failed to clone machine-setup-scripts."
+        fi
+    else
+        print_debug "machine-setup-scripts already exists."
+    fi
+
+    # Clone dotfiles if not present
+    if [[ ! -d "${code_dir}/dotfiles" ]]; then
+        print_message "Cloning scowalt/dotfiles..."
+        if gh repo clone scowalt/dotfiles "${code_dir}/dotfiles"; then
+            print_success "dotfiles cloned."
+        else
+            print_error "Failed to clone dotfiles."
+        fi
+    else
+        print_debug "dotfiles already exists."
+    fi
+}
+
 # Run the setup tasks
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 29 | Last changed: Reload tmux config after chezmoi apply${NC}"
+echo -e "${GRAY}Version 30 | Last changed: Add ~/Code directory setup with repo clones${NC}"
 
 print_section "Package Manager Setup"
 install_homebrew
@@ -387,6 +426,9 @@ install_core_packages
 print_section "SSH Configuration"
 setup_ssh_key
 add_github_to_known_hosts
+
+print_section "Code Directory Setup"
+setup_code_directory
 
 print_section "Development Tools"
 configure_git_town

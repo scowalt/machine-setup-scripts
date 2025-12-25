@@ -509,6 +509,52 @@ function Update-NpmGlobalPackages {
     }
 }
 
+# Function to setup ~/Code directory with essential repositories
+function Setup-CodeDirectory {
+    $codeDir = "$env:USERPROFILE\Code"
+
+    Write-Host "$arrow Setting up ~/Code directory..." -ForegroundColor Cyan
+
+    # Create ~/Code directory if it doesn't exist
+    if (-not (Test-Path $codeDir)) {
+        New-Item -ItemType Directory -Force -Path $codeDir | Out-Null
+        Write-Host "$success Created ~/Code directory." -ForegroundColor Green
+    }
+    else {
+        Write-Debug "~/Code directory already exists."
+    }
+
+    # Clone machine-setup-scripts if not present
+    if (-not (Test-Path "$codeDir\machine-setup-scripts")) {
+        Write-Host "$arrow Cloning scowalt/machine-setup-scripts..." -ForegroundColor Cyan
+        gh repo clone scowalt/machine-setup-scripts "$codeDir\machine-setup-scripts"
+        if ($?) {
+            Write-Host "$success machine-setup-scripts cloned." -ForegroundColor Green
+        }
+        else {
+            Write-Host "$failIcon Failed to clone machine-setup-scripts." -ForegroundColor Red
+        }
+    }
+    else {
+        Write-Debug "machine-setup-scripts already exists."
+    }
+
+    # Clone dotfiles if not present
+    if (-not (Test-Path "$codeDir\dotfiles")) {
+        Write-Host "$arrow Cloning scowalt/dotfiles..." -ForegroundColor Cyan
+        gh repo clone scowalt/dotfiles "$codeDir\dotfiles"
+        if ($?) {
+            Write-Host "$success dotfiles cloned." -ForegroundColor Green
+        }
+        else {
+            Write-Host "$failIcon Failed to clone dotfiles." -ForegroundColor Red
+        }
+    }
+    else {
+        Write-Debug "dotfiles already exists."
+    }
+}
+
 function Set-WindowsTerminalConfiguration {
     Write-Host "$arrow Configuring Windows Terminal settings..." -ForegroundColor Cyan
     $settingsPath = "$env:LocalAppData\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
@@ -535,18 +581,21 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 37 | Last changed: Add OpenTofu installation" -ForegroundColor DarkGray
-    
+    Write-Host "Version 38 | Last changed: Add ~/Code directory setup with repo clones" -ForegroundColor DarkGray
+
     Write-Section "Package Installation"
     Install-WingetPackages
-    
+
     Write-Section "SSH Configuration"
     Test-GitHubSSHKey # this needs to be run before chezmoi to get access to dotfiles
-    
+
+    Write-Section "Code Directory Setup"
+    Setup-CodeDirectory
+
     Write-Section "Dotfiles Management"
     Install-Chezmoi
     Update-Chezmoi
-    
+
     Write-Section "Development Tools"
     Install-GitTown
     Set-GitTownCompletions
