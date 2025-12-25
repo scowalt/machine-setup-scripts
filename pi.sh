@@ -538,6 +538,7 @@ apply_chezmoi_config() {
     fi
 
     print_success "chezmoi configuration applied."
+    tmux source ~/.tmux.conf 2>/dev/null || true
 }
 
 
@@ -983,7 +984,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 30 | Last changed: Add OpenTofu installation${NC}"
+echo -e "${GRAY}Version 31 | Last changed: Reload tmux config after chezmoi apply${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi

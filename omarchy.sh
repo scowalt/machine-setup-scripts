@@ -653,7 +653,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 13 | Last changed: Add OpenTofu installation${NC}"
+echo -e "${GRAY}Version 14 | Last changed: Reload tmux config after chezmoi apply${NC}"
 
 print_section "System Verification"
 verify_arch_system
@@ -690,6 +690,7 @@ initialize_chezmoi
 configure_chezmoi_git
 update_chezmoi
 chezmoi apply
+tmux source ~/.tmux.conf 2>/dev/null || true
 
 print_section "Shell Configuration"
 set_fish_as_default_shell

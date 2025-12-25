@@ -376,7 +376,7 @@ upgrade_npm_global_packages() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 28 | Last changed: Add OpenTofu installation${NC}"
+echo -e "${GRAY}Version 29 | Last changed: Reload tmux config after chezmoi apply${NC}"
 
 print_section "Package Manager Setup"
 install_homebrew
@@ -396,6 +396,7 @@ initialize_chezmoi
 configure_chezmoi_git
 update_chezmoi
 chezmoi apply
+tmux source ~/.tmux.conf 2>/dev/null || true
 
 print_section "Shell Configuration"
 set_fish_as_default_shell

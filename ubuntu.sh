@@ -861,7 +861,7 @@ upgrade_npm_global_packages() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 35 | Last changed: Add OpenTofu installation${NC}"
+echo -e "${GRAY}Version 36 | Last changed: Reload tmux config after chezmoi apply${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user
@@ -898,6 +898,7 @@ initialize_chezmoi
 configure_chezmoi_git
 update_chezmoi
 chezmoi apply
+tmux source ~/.tmux.conf 2>/dev/null || true
 
 print_section "Shell Configuration"
 set_fish_as_default_shell
