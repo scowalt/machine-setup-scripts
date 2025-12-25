@@ -750,9 +750,13 @@ install_git_town() {
     temp_dir=$(mktemp -d)
     
     print_message "Downloading git-town binary for ${arch} architecture..."
-    local download_result
-    download_result=$(curl -sL "${download_url}")
-    if echo "${download_result}" | tar -xz -C "${temp_dir}"; then
+    local tarball="${temp_dir}/git-town.tar.gz"
+    if ! curl -sL "${download_url}" -o "${tarball}"; then
+        print_error "Failed to download git-town."
+        rm -rf "${temp_dir}"
+        return 1
+    fi
+    if tar -xzf "${tarball}" -C "${temp_dir}"; then
         # Move binary to local bin
         if mv "${temp_dir}/git-town" "${bin_dir}/git-town"; then
             chmod +x "${bin_dir}/git-town"
@@ -1129,7 +1133,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 34 | Last changed: Add gh auth login step to setup scripts${NC}"
+echo -e "${GRAY}Version 35 | Last changed: Fix git-town binary download corruption${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
