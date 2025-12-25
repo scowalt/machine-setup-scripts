@@ -524,6 +524,22 @@ APT::Periodic::AutocleanInterval "7";'
     fi
 }
 
+# Install OpenTofu (open-source Terraform fork)
+install_opentofu() {
+    if command -v tofu &> /dev/null; then
+        print_debug "OpenTofu is already installed."
+        return
+    fi
+
+    print_message "Installing OpenTofu..."
+    ensure_brew_available
+    if brew install opentofu; then
+        print_success "OpenTofu installed."
+    else
+        print_error "Failed to install OpenTofu."
+    fi
+}
+
 # Install act for running GitHub Actions locally
 install_act() {
     if ! command -v act &> /dev/null; then
@@ -654,7 +670,7 @@ upgrade_npm_global_packages() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 24 | Last changed: Add unattended-upgrades for automatic security updates${NC}"
+echo -e "${GRAY}Version 25 | Last changed: Add OpenTofu installation${NC}"
 
 print_section "System Setup"
 update_and_install_core
@@ -674,6 +690,7 @@ install_fnm
 setup_nodejs
 install_pyenv
 install_bun
+install_opentofu
 
 print_section "Security Tools"
 install_1password_cli

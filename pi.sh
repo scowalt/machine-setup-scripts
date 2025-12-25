@@ -848,6 +848,25 @@ install_claude_code() {
     fi
 }
 
+# Install OpenTofu (open-source Terraform fork)
+install_opentofu() {
+    if command -v tofu &> /dev/null; then
+        print_debug "OpenTofu is already installed."
+        return
+    fi
+
+    print_message "Installing OpenTofu..."
+    curl --proto '=https' --tlsv1.2 -fsSL https://get.opentofu.org/install-opentofu.sh -o /tmp/install-opentofu.sh
+    chmod +x /tmp/install-opentofu.sh
+    if /tmp/install-opentofu.sh --install-method deb; then
+        rm -f /tmp/install-opentofu.sh
+        print_success "OpenTofu installed."
+    else
+        rm -f /tmp/install-opentofu.sh
+        print_error "Failed to install OpenTofu."
+    fi
+}
+
 # Install act for running GitHub Actions locally
 install_act() {
     if ! command -v act &> /dev/null; then
@@ -964,7 +983,7 @@ upgrade_npm_global_packages() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 29 | Last changed: Add unattended-upgrades for automatic security updates${NC}"
+echo -e "${GRAY}Version 30 | Last changed: Add OpenTofu installation${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
@@ -980,6 +999,7 @@ install_fnm
 setup_nodejs
 install_pyenv
 install_infisical
+install_opentofu
 
 print_section "Network & SSH"
 enable_ssh_server

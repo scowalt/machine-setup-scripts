@@ -21,7 +21,8 @@ $wingetPackages = (
     "gerardog.gsudo",
     "strayge.tray-monitor",
     "DEVCOM.JetBrainsMonoNerdFont",
-    "nektos.act"
+    "nektos.act",
+    "OpenTofu.Tofu"
 )
 
 # Define Nerd Font symbols using Unicode code points
@@ -534,7 +535,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 36 | Last changed: Use official Claude Code installer" -ForegroundColor DarkGray
+    Write-Host "Version 37 | Last changed: Add OpenTofu installation" -ForegroundColor DarkGray
     
     Write-Section "Package Installation"
     Install-WingetPackages

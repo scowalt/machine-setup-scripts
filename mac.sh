@@ -23,7 +23,7 @@ install_core_packages() {
 
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
-    local packages=("git" "curl" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "infisical" "git-town" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx")
+    local packages=("git" "curl" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "infisical" "git-town" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx" "opentofu")
     local to_install=()
     
     # Get all installed packages at once (much faster than checking individually)
@@ -376,7 +376,7 @@ upgrade_npm_global_packages() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 27 | Last changed: Use official Claude Code installer${NC}"
+echo -e "${GRAY}Version 28 | Last changed: Add OpenTofu installation${NC}"
 
 print_section "Package Manager Setup"
 install_homebrew
