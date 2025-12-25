@@ -17,6 +17,69 @@ print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
 print_error() { printf "${RED} %s${NC}\n" "$1"; }
 print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 
+# Configure DNS64 for IPv6-only networks
+# This allows reaching IPv4-only hosts (like github.com) via NAT64
+setup_dns64_for_ipv6_only() {
+    # Check if we have IPv4 connectivity
+    if ping -c 1 -W 3 8.8.8.8 &>/dev/null; then
+        print_debug "IPv4 connectivity available, DNS64 not needed."
+        return 0
+    fi
+
+    # Check if we have IPv6 connectivity
+    if ! ping -6 -c 1 -W 3 2001:4860:4860::8888 &>/dev/null; then
+        print_debug "No IPv6 connectivity, skipping DNS64 setup."
+        return 0
+    fi
+
+    print_message "IPv6-only network detected. Configuring DNS64..."
+
+    # Check if already configured
+    if [[ -f /etc/netplan/60-dns64.yaml ]]; then
+        print_debug "DNS64 already configured."
+        return 0
+    fi
+
+    # Find the primary network interface
+    local interface
+    local route_output
+    local awk_output
+    route_output=$(ip -6 route show default) || true
+    awk_output=$(echo "${route_output}" | awk '{print $5}') || true
+    interface=$(echo "${awk_output}" | head -1)
+
+    if [[ -z "${interface}" ]]; then
+        print_warning "Could not detect primary network interface for DNS64."
+        return 1
+    fi
+
+    print_debug "Detected interface: ${interface}"
+
+    # Create netplan config for DNS64 (using nat64.net public servers)
+    sudo tee /etc/netplan/60-dns64.yaml > /dev/null <<EOF
+network:
+  version: 2
+  ethernets:
+    ${interface}:
+      nameservers:
+        addresses:
+        - 2a00:1098:2c::1
+        - 2a00:1098:2b::1
+        - 2a01:4f8:c2c:123f::1
+EOF
+
+    sudo chmod 600 /etc/netplan/60-dns64.yaml
+
+    if sudo netplan apply; then
+        # Wait for DNS to settle
+        sleep 2
+        print_success "DNS64 configured for IPv6-only network."
+    else
+        print_error "Failed to apply DNS64 netplan configuration."
+        return 1
+    fi
+}
+
 # Fix dpkg interruptions if they exist
 fix_dpkg_and_broken_dependencies() {
     print_message "Checking for and fixing dpkg interruptions or broken dependencies..."
@@ -865,6 +928,7 @@ echo -e "${GRAY}Version 36 | Last changed: Reload tmux config after chezmoi appl
 
 print_section "User & System Setup"
 enforce_scowalt_user
+setup_dns64_for_ipv6_only
 fix_dpkg_and_broken_dependencies
 
 print_section "System Updates"

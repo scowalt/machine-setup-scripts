@@ -17,6 +17,46 @@ print_warning() { printf "${YELLOW}⚠ %s${NC}\n" "$1"; }
 print_error() { printf "${RED}✗ %s${NC}\n" "$1"; }
 print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 
+# Configure DNS64 for IPv6-only networks
+# This allows reaching IPv4-only hosts (like github.com) via NAT64
+setup_dns64_for_ipv6_only() {
+    # Check if we have IPv4 connectivity
+    if ping -c 1 -W 3 8.8.8.8 &>/dev/null; then
+        print_debug "IPv4 connectivity available, DNS64 not needed."
+        return 0
+    fi
+
+    # Check if we have IPv6 connectivity
+    if ! ping -6 -c 1 -W 3 2001:4860:4860::8888 &>/dev/null; then
+        print_debug "No IPv6 connectivity, skipping DNS64 setup."
+        return 0
+    fi
+
+    print_message "IPv6-only network detected. Configuring DNS64..."
+
+    # Check if already configured
+    if [[ -f /etc/systemd/resolved.conf.d/dns64.conf ]]; then
+        print_debug "DNS64 already configured."
+        return 0
+    fi
+
+    # Create systemd-resolved drop-in for DNS64 (using nat64.net public servers)
+    sudo mkdir -p /etc/systemd/resolved.conf.d
+    sudo tee /etc/systemd/resolved.conf.d/dns64.conf > /dev/null <<EOF
+[Resolve]
+DNS=2a00:1098:2c::1 2a00:1098:2b::1 2a01:4f8:c2c:123f::1
+EOF
+
+    if sudo systemctl restart systemd-resolved; then
+        # Wait for DNS to settle
+        sleep 2
+        print_success "DNS64 configured for IPv6-only network."
+    else
+        print_error "Failed to restart systemd-resolved."
+        return 1
+    fi
+}
+
 # Verify we're running on Arch/Omarchy
 verify_arch_system() {
     print_message "Verifying Arch Linux or Omarchy system..."
@@ -658,6 +698,7 @@ echo -e "${GRAY}Version 14 | Last changed: Reload tmux config after chezmoi appl
 print_section "System Verification"
 verify_arch_system
 check_omarchy_installation
+setup_dns64_for_ipv6_only
 
 print_section "System Updates"
 update_system

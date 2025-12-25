@@ -31,13 +31,3 @@ curl -sL https://scripts.scowalt.com/setup/ubuntu.sh | bash
 ```bash
 curl -sL https://scripts.scowalt.com/setup/pi.sh | bash
 ```
-
-## IPv6-only Servers (DNS64/NAT64)
-
-For IPv6-only servers (e.g., Hetzner Cloud without IPv4), run this to enable connectivity to IPv4-only hosts like GitHub:
-
-```bash
-curl -sL https://scripts.scowalt.com/setup/ipv6-dns64.sh | bash
-```
-
-This configures [nat64.net](https://nat64.net) DNS servers which provide DNS64/NAT64 translation.
