@@ -374,27 +374,6 @@ upgrade_npm_global_packages() {
     fi
 }
 
-# Authenticate GitHub CLI if not already authenticated
-authenticate_gh_cli() {
-    if ! command -v gh &> /dev/null; then
-        print_debug "gh CLI not installed, skipping authentication."
-        return
-    fi
-
-    if gh auth status &> /dev/null; then
-        print_debug "gh CLI already authenticated."
-        return
-    fi
-
-    print_message "Authenticating GitHub CLI..."
-    print_message "This will open a browser or provide a code to enter at github.com/login/device"
-    if gh auth login --git-protocol ssh --web; then
-        print_success "gh CLI authenticated."
-    else
-        print_warning "gh CLI authentication skipped or failed. Run 'gh auth login' later to authenticate."
-    fi
-}
-
 # Setup ~/Code directory with essential repositories
 setup_code_directory() {
     local code_dir="${HOME}/Code"
@@ -458,7 +437,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 34 | Last changed: Add --force to chezmoi commands${NC}"
+echo -e "${GRAY}Version 35 | Last changed: Remove GitHub CLI auth step${NC}"
 
 print_section "Package Manager Setup"
 install_homebrew
@@ -469,9 +448,6 @@ install_core_packages
 print_section "SSH Configuration"
 setup_ssh_key
 add_github_to_known_hosts
-
-print_section "GitHub CLI Authentication"
-authenticate_gh_cli
 
 print_section "Code Directory Setup"
 setup_code_directory

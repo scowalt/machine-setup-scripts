@@ -510,30 +510,6 @@ function Update-NpmGlobalPackages {
     }
 }
 
-# Function to authenticate GitHub CLI
-function Authenticate-GhCli {
-    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        Write-Debug "gh CLI not installed, skipping authentication."
-        return
-    }
-
-    $authStatus = gh auth status 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Debug "gh CLI already authenticated."
-        return
-    }
-
-    Write-Host "$arrow Authenticating GitHub CLI..." -ForegroundColor Cyan
-    Write-Host "$arrow This will open a browser or provide a code to enter at github.com/login/device" -ForegroundColor Cyan
-    gh auth login --git-protocol ssh --web
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "$success gh CLI authenticated." -ForegroundColor Green
-    }
-    else {
-        Write-Host "$warnIcon gh CLI authentication skipped or failed. Run 'gh auth login' later to authenticate." -ForegroundColor Yellow
-    }
-}
-
 # Function to setup ~/Code directory with essential repositories
 function Setup-CodeDirectory {
     $codeDir = "$env:USERPROFILE\Code"
@@ -625,16 +601,13 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 42 | Last changed: Add --force to chezmoi commands" -ForegroundColor DarkGray
+    Write-Host "Version 43 | Last changed: Remove GitHub CLI auth step" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
 
     Write-Section "SSH Configuration"
     Test-GitHubSSHKey # this needs to be run before chezmoi to get access to dotfiles
-
-    Write-Section "GitHub CLI Authentication"
-    Authenticate-GhCli
 
     Write-Section "Code Directory Setup"
     Setup-CodeDirectory
