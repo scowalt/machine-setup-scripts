@@ -12,6 +12,7 @@ $wingetPackages = (
     "Microsoft.PowerToys",
     "File-New-Project.EarTrumpet",
     "AgileBits.1Password",
+    "AgileBits.1Password.CLI",
     "Starship.Starship",
     "mulaRahul.Keyviz",
     "GitHub.cli",
@@ -624,7 +625,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 40 | Last changed: Add gh auth login step to setup scripts" -ForegroundColor DarkGray
+    Write-Host "Version 41 | Last changed: Add 1Password CLI to installed packages" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
