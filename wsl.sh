@@ -184,7 +184,7 @@ install_chezmoi() {
 initialize_chezmoi() {
     if [[ ! -d ~/.local/share/chezmoi ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
-        if ! chezmoi init --apply scowalt/dotfiles --ssh; then
+        if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
             print_error "Failed to initialize chezmoi. Check SSH key and network connectivity."
             exit 1
         fi
@@ -756,7 +756,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 31 | Last changed: Add direnv to installed packages${NC}"
+echo -e "${GRAY}Version 32 | Last changed: Add --force to chezmoi commands${NC}"
 
 print_section "System Setup"
 update_and_install_core
@@ -795,7 +795,7 @@ install_chezmoi
 initialize_chezmoi
 configure_chezmoi_git
 update_chezmoi
-chezmoi apply
+chezmoi apply --force
 tmux source ~/.tmux.conf 2>/dev/null || true
 
 print_section "Shell Configuration"

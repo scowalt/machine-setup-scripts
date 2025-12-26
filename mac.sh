@@ -112,7 +112,7 @@ install_homebrew() {
 initialize_chezmoi() {
     if [[ ! -d ~/.local/share/chezmoi ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
-        chezmoi init --apply scowalt/dotfiles --ssh > /dev/null
+        chezmoi init --apply --force scowalt/dotfiles --ssh > /dev/null
         print_success "chezmoi initialized with scowalt/dotfiles."
     else
         print_debug "chezmoi is already initialized."
@@ -458,7 +458,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 33 | Last changed: Add direnv to installed packages${NC}"
+echo -e "${GRAY}Version 34 | Last changed: Add --force to chezmoi commands${NC}"
 
 print_section "Package Manager Setup"
 install_homebrew
@@ -483,7 +483,7 @@ print_section "Dotfiles Management"
 initialize_chezmoi
 configure_chezmoi_git
 update_chezmoi
-chezmoi apply
+chezmoi apply --force
 tmux source ~/.tmux.conf 2>/dev/null || true
 
 print_section "Shell Configuration"

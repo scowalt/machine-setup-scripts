@@ -442,11 +442,11 @@ initialize_chezmoi() {
 
     if [[ ! -d "${chez_src}" ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles…"
-        if ${chezmoi_cmd} init --apply scowalt/dotfiles --ssh; then
+        if ${chezmoi_cmd} init --apply --force scowalt/dotfiles --ssh; then
             print_success "chezmoi initialized via SSH."
         else
             print_error "SSH clone failed. Retrying with HTTPS…"
-            if ${chezmoi_cmd} init --apply https://github.com/scowalt/dotfiles.git; then
+            if ${chezmoi_cmd} init --apply --force https://github.com/scowalt/dotfiles.git; then
                 print_success "chezmoi initialized via HTTPS."
             else
                 print_error "chezmoi initialization still failed. Check your git credentials."
@@ -595,7 +595,7 @@ apply_chezmoi_config() {
     fi
 
     # Run verbosely; bail if anything returns non‑zero
-    if ! ${chezmoi_cmd} apply --verbose; then
+    if ! ${chezmoi_cmd} apply --force --verbose; then
         print_error "chezmoi apply failed – fix the dotfiles, then rerun the script."
         exit 1
     fi
@@ -1133,7 +1133,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 36 | Last changed: Add direnv to installed packages${NC}"
+echo -e "${GRAY}Version 37 | Last changed: Add --force to chezmoi commands${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi

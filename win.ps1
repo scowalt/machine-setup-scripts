@@ -72,7 +72,7 @@ function Install-Chezmoi {
     $chezmoiConfigPath = "$HOME\AppData\Local\chezmoi"
     if (-not (Test-Path $chezmoiConfigPath)) {
         Write-Host "$arrow Initializing chezmoi with scowalt/dotfiles..." -ForegroundColor Cyan
-        chezmoi init --apply scowalt/dotfiles --ssh
+        chezmoi init --apply --force scowalt/dotfiles --ssh
         Write-Host "$success chezmoi initialized with scowalt/dotfiles." -ForegroundColor Green
     }
     else {
@@ -97,7 +97,7 @@ autoPull = true
     }
 
     Write-Host "$arrow Applying chezmoi dotfiles..." -ForegroundColor Cyan
-    chezmoi apply
+    chezmoi apply --force
     Write-Host "$success chezmoi dotfiles applied." -ForegroundColor Green
 }
 
@@ -625,7 +625,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 41 | Last changed: Add 1Password CLI to installed packages" -ForegroundColor DarkGray
+    Write-Host "Version 42 | Last changed: Add --force to chezmoi commands" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages

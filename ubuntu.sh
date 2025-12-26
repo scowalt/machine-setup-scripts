@@ -313,7 +313,7 @@ install_chezmoi() {
 initialize_chezmoi() {
     if [[ ! -d ~/.local/share/chezmoi ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
-        if ! chezmoi init --apply scowalt/dotfiles --ssh; then
+        if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
             print_error "Failed to initialize chezmoi. Please review the output above."
             exit 1
         fi
@@ -1010,7 +1010,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 41 | Last changed: Add direnv to installed packages${NC}"
+echo -e "${GRAY}Version 42 | Last changed: Add --force to chezmoi commands${NC}"
 
 print_section "User & System Setup"
 enforce_scowalt_user
@@ -1053,7 +1053,7 @@ install_chezmoi
 initialize_chezmoi
 configure_chezmoi_git
 update_chezmoi
-chezmoi apply
+chezmoi apply --force
 tmux source ~/.tmux.conf 2>/dev/null || true
 
 print_section "Shell Configuration"
