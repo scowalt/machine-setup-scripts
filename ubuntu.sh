@@ -90,32 +90,17 @@ fix_dpkg_and_broken_dependencies() {
     print_success "dpkg and dependencies check/fix complete."
 }
 
-# Enforce that the script is run as the 'scowalt' user
-enforce_scowalt_user() {
-    local current_user
-    current_user=$(whoami)
-    if [[ "${current_user}" != "scowalt" ]]; then
-        print_error "This script must be run as the 'scowalt' user for security reasons."
-
-        # Check if the 'scowalt' user exists
-        if ! id "scowalt" &>/dev/null; then
-            print_message "User 'scowalt' not found. Creating user..."
-            sudo useradd --create-home --shell /bin/bash scowalt
-            sudo usermod -aG sudo scowalt
-            print_success "User 'scowalt' created and added to the sudo group."
-            print_warning "A password must be set for 'scowalt' to continue."
-            print_message "Please run 'sudo passwd scowalt' to set a password."
-            print_message "Then, switch to the 'scowalt' user and re-run this script."
-        else
-            print_warning "User 'scowalt' already exists."
-            print_message "Please switch to the 'scowalt' user and re-run this script."
-        fi
-
+# Ensure the script is not run as root
+ensure_not_root() {
+    if [[ "${EUID}" -eq 0 ]]; then
+        print_error "This script should not be run as root."
+        print_message "Please run as a regular user with sudo privileges."
         exit 1
-    else
-        print_success "Running as 'scowalt' user. Proceeding with setup."
     fi
 
+    local current_user
+    current_user=$(whoami)
+    print_success "Running as user '${current_user}'. Proceeding with setup."
     cd ~ || exit 1
 }
 
@@ -989,10 +974,10 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 44 | Last changed: Remove direnv${NC}"
+echo -e "${GRAY}Version 45 | Last changed: Allow any non-root user to run script${NC}"
 
 print_section "User & System Setup"
-enforce_scowalt_user
+ensure_not_root
 setup_dns64_for_ipv6_only
 fix_dpkg_and_broken_dependencies
 
