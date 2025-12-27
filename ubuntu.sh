@@ -974,7 +974,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 45 | Last changed: Allow any non-root user to run script${NC}"
+echo -e "${GRAY}Version 46 | Last changed: Skip dotfiles for non-scowalt users${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -990,8 +990,11 @@ setup_ssh_server
 setup_ssh_key
 add_github_to_known_hosts
 
-print_section "Code Directory Setup"
-setup_code_directory
+current_user=$(whoami)
+if [[ "${current_user}" == "scowalt" ]]; then
+    print_section "Code Directory Setup"
+    setup_code_directory
+fi
 
 print_section "Development Tools"
 install_starship
@@ -1009,13 +1012,15 @@ install_infisical
 install_fail2ban
 setup_unattended_upgrades
 
-print_section "Dotfiles Management"
-install_chezmoi
-initialize_chezmoi
-configure_chezmoi_git
-update_chezmoi
-chezmoi apply --force
-tmux source ~/.tmux.conf 2>/dev/null || true
+if [[ "${current_user}" == "scowalt" ]]; then
+    print_section "Dotfiles Management"
+    install_chezmoi
+    initialize_chezmoi
+    configure_chezmoi_git
+    update_chezmoi
+    chezmoi apply --force
+    tmux source ~/.tmux.conf 2>/dev/null || true
+fi
 
 print_section "Shell Configuration"
 set_fish_as_default_shell

@@ -735,7 +735,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 34 | Last changed: Remove direnv${NC}"
+echo -e "${GRAY}Version 35 | Last changed: Skip dotfiles for non-scowalt users${NC}"
 
 print_section "System Setup"
 update_and_install_core
@@ -744,8 +744,11 @@ print_section "SSH Configuration"
 setup_ssh_key
 add_github_to_known_hosts
 
-print_section "Code Directory Setup"
-setup_code_directory
+current_user=$(whoami)
+if [[ "${current_user}" == "scowalt" ]]; then
+    print_section "Code Directory Setup"
+    setup_code_directory
+fi
 
 print_section "Package Manager"
 install_homebrew
@@ -766,13 +769,15 @@ install_infisical
 install_tailscale
 setup_unattended_upgrades
 
-print_section "Dotfiles Management"
-install_chezmoi
-initialize_chezmoi
-configure_chezmoi_git
-update_chezmoi
-chezmoi apply --force
-tmux source ~/.tmux.conf 2>/dev/null || true
+if [[ "${current_user}" == "scowalt" ]]; then
+    print_section "Dotfiles Management"
+    install_chezmoi
+    initialize_chezmoi
+    configure_chezmoi_git
+    update_chezmoi
+    chezmoi apply --force
+    tmux source ~/.tmux.conf 2>/dev/null || true
+fi
 
 print_section "Shell Configuration"
 set_fish_as_default_shell

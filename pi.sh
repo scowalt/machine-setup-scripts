@@ -1112,7 +1112,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 39 | Last changed: Remove direnv${NC}"
+echo -e "${GRAY}Version 40 | Last changed: Skip dotfiles for non-scowalt users${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
@@ -1141,8 +1141,11 @@ verify_github_key
 add_github_to_known_hosts
 ensure_ssh_agent
 
-print_section "Code Directory Setup"
-setup_code_directory
+current_user=$(whoami)
+if [[ "${current_user}" == "scowalt" ]]; then
+    print_section "Code Directory Setup"
+    setup_code_directory
+fi
 
 print_section "Additional Development Tools"
 install_claude_code
@@ -1152,12 +1155,14 @@ install_starship
 install_git_town
 configure_git_town
 
-print_section "Dotfiles Management"
-install_chezmoi
-initialize_chezmoi
-configure_chezmoi_git
-update_chezmoi
-apply_chezmoi_config
+if [[ "${current_user}" == "scowalt" ]]; then
+    print_section "Dotfiles Management"
+    install_chezmoi
+    initialize_chezmoi
+    configure_chezmoi_git
+    update_chezmoi
+    apply_chezmoi_config
+fi
 
 print_section "Shell Configuration"
 set_fish_as_default_shell

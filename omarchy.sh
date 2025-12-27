@@ -754,7 +754,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 21 | Last changed: Remove direnv${NC}"
+echo -e "${GRAY}Version 22 | Last changed: Skip dotfiles for non-scowalt users${NC}"
 
 print_section "System Verification"
 verify_arch_system
@@ -772,8 +772,11 @@ print_section "SSH Configuration"
 setup_ssh_key
 add_github_to_known_hosts
 
-print_section "Code Directory Setup"
-setup_code_directory
+current_user=$(whoami)
+if [[ "${current_user}" == "scowalt" ]]; then
+    print_section "Code Directory Setup"
+    setup_code_directory
+fi
 
 print_section "Security Tools"
 install_fail2ban
@@ -789,13 +792,15 @@ setup_nodejs
 install_claude_code
 install_pyenv
 
-print_section "Dotfiles Management"
-install_chezmoi
-initialize_chezmoi
-configure_chezmoi_git
-update_chezmoi
-chezmoi apply --force
-tmux source ~/.tmux.conf 2>/dev/null || true
+if [[ "${current_user}" == "scowalt" ]]; then
+    print_section "Dotfiles Management"
+    install_chezmoi
+    initialize_chezmoi
+    configure_chezmoi_git
+    update_chezmoi
+    chezmoi apply --force
+    tmux source ~/.tmux.conf 2>/dev/null || true
+fi
 
 print_section "Shell Configuration"
 set_fish_as_default_shell

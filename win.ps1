@@ -601,7 +601,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 43 | Last changed: Remove GitHub CLI auth step" -ForegroundColor DarkGray
+    Write-Host "Version 44 | Last changed: Skip dotfiles for non-scowalt users" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
@@ -609,12 +609,14 @@ function Initialize-WindowsEnvironment {
     Write-Section "SSH Configuration"
     Test-GitHubSSHKey # this needs to be run before chezmoi to get access to dotfiles
 
-    Write-Section "Code Directory Setup"
-    Setup-CodeDirectory
+    if ($env:USERNAME -eq "scowalt") {
+        Write-Section "Code Directory Setup"
+        Setup-CodeDirectory
 
-    Write-Section "Dotfiles Management"
-    Install-Chezmoi
-    Update-Chezmoi
+        Write-Section "Dotfiles Management"
+        Install-Chezmoi
+        Update-Chezmoi
+    }
 
     Write-Section "Development Tools"
     Install-GitTown
