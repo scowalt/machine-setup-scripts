@@ -17,6 +17,11 @@ print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
 print_error() { printf "${RED} %s${NC}\n" "$1"; }
 print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 
+# Check if running as main user (scowalt)
+is_main_user() {
+    [[ "${HOME}" == "/Users/scowalt" ]]
+}
+
 # Install core packages with Homebrew if missing
 install_core_packages() {
     print_message "Checking and installing core packages as needed..."
@@ -322,7 +327,22 @@ install_vscode() {
     print_success "Visual Studio Code installed."
 }
 
+# Install Bun JavaScript runtime
+install_bun() {
+    if [[ -d "${HOME}/.bun" ]]; then
+        print_debug "Bun is already installed."
+        return
+    fi
 
+    print_message "Installing Bun..."
+    local bun_install
+    bun_install=$(curl -fsSL https://bun.sh/install)
+    if bash <<< "${bun_install}"; then
+        print_success "Bun installed."
+    else
+        print_error "Failed to install Bun."
+    fi
+}
 
 # Install tmux plugins for session persistence
 install_tmux_plugins() {
@@ -436,48 +456,62 @@ setup_code_directory() {
 }
 
 # Run the setup tasks
-echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 37 | Last changed: Skip dotfiles for non-scowalt users${NC}"
-
-print_section "Package Manager Setup"
-install_homebrew
-
-print_section "Core Packages"
-install_core_packages
-
-print_section "SSH Configuration"
-setup_ssh_key
-add_github_to_known_hosts
-
 current_user=$(whoami)
-if [[ "${current_user}" == "scowalt" ]]; then
+echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
+echo -e "${GRAY}Version 37 | Last changed: Add secondary user support${NC}"
+
+if is_main_user; then
+    echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
+
+    print_section "Package Manager Setup"
+    install_homebrew
+
+    print_section "Core Packages"
+    install_core_packages
+
+    print_section "SSH Configuration"
+    setup_ssh_key
+    add_github_to_known_hosts
+
     print_section "Code Directory Setup"
     setup_code_directory
+
+    print_section "Development Tools"
+    configure_git_town
+else
+    echo -e "${CYAN}Running secondary user setup for ${current_user}${NC}"
+
+    # Ensure Homebrew is in PATH (already installed by main user)
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+
+    print_section "SSH Configuration"
+    add_github_to_known_hosts
 fi
 
-print_section "Development Tools"
-configure_git_town
-
-if [[ "${current_user}" == "scowalt" ]]; then
-    print_section "Dotfiles Management"
-    initialize_chezmoi
-    configure_chezmoi_git
-    update_chezmoi
-    chezmoi apply --force
-    tmux source ~/.tmux.conf 2>/dev/null || true
-fi
+# Common setup for all users
+print_section "Dotfiles Management"
+initialize_chezmoi
+configure_chezmoi_git
+update_chezmoi
+chezmoi apply --force
+tmux source ~/.tmux.conf 2>/dev/null || true
 
 print_section "Shell Configuration"
 set_fish_as_default_shell
 install_tmux_plugins
 
-print_section "Additional Development Tools"
+print_section "Development Tools"
 setup_nodejs
+install_bun
 install_claude_code
-install_vscode
 
-print_section "Final Updates"
-update_brew
+if is_main_user; then
+    install_vscode
+
+    print_section "Final Updates"
+    update_brew
+fi
+
 upgrade_npm_global_packages
 
 echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
