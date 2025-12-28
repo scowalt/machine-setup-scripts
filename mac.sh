@@ -24,16 +24,14 @@ is_main_user() {
 
 # Fix zsh compaudit insecure directories warning
 fix_zsh_compaudit() {
-    if [[ -d /opt/homebrew/share/zsh ]]; then
-        # Check if there are insecure directories
-        if compaudit 2>/dev/null | grep -q .; then
-            print_message "Fixing zsh compaudit insecure directories..."
-            chmod -R go-w /opt/homebrew/share/zsh 2>/dev/null || true
-            print_success "zsh directory permissions fixed."
-        else
-            print_debug "zsh directories already secure."
-        fi
-    fi
+    print_message "Fixing zsh compaudit insecure directories..."
+    # Fix all common zsh directories unconditionally
+    chmod -R go-w /opt/homebrew/share/zsh 2>/dev/null || true
+    chmod -R go-w /opt/homebrew/share/zsh-completions 2>/dev/null || true
+    chmod -R go-w /usr/local/share/zsh 2>/dev/null || true
+    # Also fix any directories compaudit finds
+    zsh -c 'compaudit 2>/dev/null | xargs -I {} chmod go-w {} 2>/dev/null' || true
+    print_success "zsh directory permissions fixed."
 }
 
 # Install core packages with Homebrew if missing
@@ -521,7 +519,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 43 | Last changed: Run zsh fix before Claude Code install${NC}"
+echo -e "${GRAY}Version 44 | Last changed: More aggressive zsh compaudit fix${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
