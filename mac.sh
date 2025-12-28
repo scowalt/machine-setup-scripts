@@ -117,7 +117,13 @@ install_homebrew() {
 initialize_chezmoi() {
     if [[ ! -d ~/.local/share/chezmoi ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
-        chezmoi init --apply --force scowalt/dotfiles --ssh > /dev/null
+        if is_main_user; then
+            # Main user uses SSH for push access
+            chezmoi init --apply --force scowalt/dotfiles --ssh > /dev/null
+        else
+            # Secondary users use HTTPS (read-only, no auth needed for public repo)
+            chezmoi init --apply --force scowalt/dotfiles > /dev/null
+        fi
         print_success "chezmoi initialized with scowalt/dotfiles."
     else
         print_debug "chezmoi is already initialized."
@@ -126,6 +132,12 @@ initialize_chezmoi() {
 
 # Configure chezmoi for auto commit, push, and pull
 configure_chezmoi_git() {
+    # Only configure auto-push for main user (secondary users are read-only)
+    if ! is_main_user; then
+        print_debug "Skipping chezmoi git config for secondary user (read-only)."
+        return
+    fi
+
     local chezmoi_config=~/.config/chezmoi/chezmoi.toml
     if [[ ! -f "${chezmoi_config}" ]]; then
         print_message "Configuring chezmoi with auto-commit, auto-push, and auto-pull..."
@@ -458,7 +470,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 38 | Last changed: Skip chsh for secondary users${NC}"
+echo -e "${GRAY}Version 39 | Last changed: Use HTTPS for secondary user dotfiles${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
