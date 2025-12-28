@@ -113,6 +113,31 @@ install_homebrew() {
     fi
 }
 
+# Bootstrap SSH config for secondary users (needed before chezmoi can run)
+bootstrap_ssh_config() {
+    if is_main_user; then
+        return
+    fi
+
+    # Ensure github-dotfiles host alias exists for deploy key access
+    if ! grep -q "Host github-dotfiles" ~/.ssh/config 2>/dev/null; then
+        print_message "Bootstrapping SSH config for dotfiles access..."
+        mkdir -p ~/.ssh
+        chmod 700 ~/.ssh
+        cat >> ~/.ssh/config << 'EOF'
+
+# Deploy key for read-only access to scowalt/dotfiles (secondary users only)
+Host github-dotfiles
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/dotfiles-deploy-key
+    IdentitiesOnly yes
+EOF
+        chmod 600 ~/.ssh/config
+        print_success "SSH config bootstrapped."
+    fi
+}
+
 # Initialize chezmoi if not already initialized
 initialize_chezmoi() {
     if [[ ! -d ~/.local/share/chezmoi ]]; then
@@ -121,8 +146,15 @@ initialize_chezmoi() {
             # Main user uses SSH for push access
             chezmoi init --apply --force scowalt/dotfiles --ssh > /dev/null
         else
-            # Secondary users use HTTPS (read-only, no auth needed for public repo)
-            chezmoi init --apply --force scowalt/dotfiles > /dev/null
+            # Secondary users use deploy key via github-dotfiles host alias
+            # Requires ~/.ssh/dotfiles-deploy-key to be set up first
+            if [[ ! -f ~/.ssh/dotfiles-deploy-key ]]; then
+                print_error "Missing ~/.ssh/dotfiles-deploy-key - cannot clone private dotfiles repo"
+                print_message "Main user must copy the deploy key first"
+                return 1
+            fi
+            bootstrap_ssh_config
+            chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git" > /dev/null
         fi
         print_success "chezmoi initialized with scowalt/dotfiles."
     else
@@ -470,7 +502,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 39 | Last changed: Use HTTPS for secondary user dotfiles${NC}"
+echo -e "${GRAY}Version 40 | Last changed: Use deploy key for secondary user dotfiles${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
