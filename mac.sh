@@ -140,7 +140,7 @@ EOF
 
 # Initialize chezmoi if not already initialized
 initialize_chezmoi() {
-    if [[ ! -d ~/.local/share/chezmoi ]]; then
+    if [[ ! -d ~/.local/share/chezmoi/.git ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
         if is_main_user; then
             # Main user uses SSH for push access
@@ -188,13 +188,18 @@ EOF
 
 # Update chezmoi dotfiles repository to latest version
 update_chezmoi() {
-    if [[ -d ~/.local/share/chezmoi ]]; then
+    if [[ -d ~/.local/share/chezmoi/.git ]]; then
         print_message "Updating chezmoi dotfiles repository..."
         if chezmoi update > /dev/null; then
             print_success "chezmoi dotfiles repository updated."
         else
             print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
         fi
+    elif [[ -d ~/.local/share/chezmoi ]]; then
+        # Directory exists but no .git - broken state, clean up
+        print_warning "Broken chezmoi directory detected, reinitializing..."
+        rm -rf ~/.local/share/chezmoi
+        initialize_chezmoi
     else
         print_debug "chezmoi not initialized yet, skipping update."
     fi
@@ -502,7 +507,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 40 | Last changed: Use deploy key for secondary user dotfiles${NC}"
+echo -e "${GRAY}Version 41 | Last changed: Fix broken chezmoi directory detection${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
