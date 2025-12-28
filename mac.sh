@@ -22,6 +22,20 @@ is_main_user() {
     [[ "${HOME}" == "/Users/scowalt" ]]
 }
 
+# Fix zsh compaudit insecure directories warning
+fix_zsh_compaudit() {
+    if [[ -d /opt/homebrew/share/zsh ]]; then
+        # Check if there are insecure directories
+        if compaudit 2>/dev/null | grep -q .; then
+            print_message "Fixing zsh compaudit insecure directories..."
+            chmod -R go-w /opt/homebrew/share/zsh 2>/dev/null || true
+            print_success "zsh directory permissions fixed."
+        else
+            print_debug "zsh directories already secure."
+        fi
+    fi
+}
+
 # Install core packages with Homebrew if missing
 install_core_packages() {
     print_message "Checking and installing core packages as needed..."
@@ -507,7 +521,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 41 | Last changed: Fix broken chezmoi directory detection${NC}"
+echo -e "${GRAY}Version 42 | Last changed: Fix zsh compaudit permissions${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
@@ -536,6 +550,9 @@ else
     print_section "SSH Configuration"
     add_github_to_known_hosts
 fi
+
+# Fix zsh permissions early (before any tool might invoke zsh)
+fix_zsh_compaudit
 
 # Common setup for all users
 print_section "Dotfiles Management"
