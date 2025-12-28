@@ -458,7 +458,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 37 | Last changed: Add secondary user support${NC}"
+echo -e "${GRAY}Version 38 | Last changed: Skip chsh for secondary users${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
@@ -497,7 +497,17 @@ chezmoi apply --force
 tmux source ~/.tmux.conf 2>/dev/null || true
 
 print_section "Shell Configuration"
-set_fish_as_default_shell
+if is_main_user; then
+    set_fish_as_default_shell
+else
+    # Secondary users have locked passwords, can't use chsh
+    # Their shell must be set by main user with: sudo chsh -s /opt/homebrew/bin/fish <username>
+    if [[ "${SHELL}" != "/opt/homebrew/bin/fish" ]]; then
+        print_warning "Shell is not fish. Main user must run: sudo chsh -s /opt/homebrew/bin/fish ${current_user}"
+    else
+        print_debug "Fish shell is already the default shell."
+    fi
+fi
 install_tmux_plugins
 
 print_section "Development Tools"
