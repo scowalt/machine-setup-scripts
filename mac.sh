@@ -521,7 +521,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 42 | Last changed: Fix zsh compaudit permissions${NC}"
+echo -e "${GRAY}Version 43 | Last changed: Run zsh fix before Claude Code install${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
@@ -531,6 +531,9 @@ if is_main_user; then
 
     print_section "Core Packages"
     install_core_packages
+
+    # Fix zsh permissions early (before any tool might invoke zsh)
+    fix_zsh_compaudit
 
     print_section "SSH Configuration"
     setup_ssh_key
@@ -547,12 +550,12 @@ else
     # Ensure Homebrew is in PATH (already installed by main user)
     eval "$(/opt/homebrew/bin/brew shellenv)"
 
+    # Fix zsh permissions early (before any tool might invoke zsh)
+    fix_zsh_compaudit
+
     print_section "SSH Configuration"
     add_github_to_known_hosts
 fi
-
-# Fix zsh permissions early (before any tool might invoke zsh)
-fix_zsh_compaudit
 
 # Common setup for all users
 print_section "Dotfiles Management"
