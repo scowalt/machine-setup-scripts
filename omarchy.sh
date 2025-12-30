@@ -541,7 +541,7 @@ EOF
 update_chezmoi() {
     if [[ -d ~/.local/share/chezmoi ]]; then
         print_message "Updating chezmoi dotfiles repository..."
-        if chezmoi update > /dev/null; then
+        if chezmoi update --force > /dev/null; then
             print_success "chezmoi dotfiles repository updated."
         else
             print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
@@ -785,7 +785,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 24 | Last changed: Remove automatic checkout of machine-setup-scripts and dotfiles${NC}"
+echo -e "${GRAY}Version 25 | Last changed: Add --force to chezmoi update to prevent hanging${NC}"
 
 print_section "System Verification"
 verify_arch_system

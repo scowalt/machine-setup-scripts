@@ -216,7 +216,7 @@ EOF
 update_chezmoi() {
     if [[ -d ~/.local/share/chezmoi ]]; then
         print_message "Updating chezmoi dotfiles repository..."
-        if chezmoi update > /dev/null; then
+        if chezmoi update --force > /dev/null; then
             print_success "chezmoi dotfiles repository updated."
         else
             print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
@@ -689,7 +689,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 36 | Last changed: Remove automatic checkout of machine-setup-scripts and dotfiles${NC}"
+echo -e "${GRAY}Version 37 | Last changed: Add --force to chezmoi update to prevent hanging${NC}"
 
 print_section "System Setup"
 update_and_install_core

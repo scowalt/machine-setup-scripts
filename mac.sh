@@ -257,7 +257,7 @@ EOF
 update_chezmoi() {
     if [[ -d ~/.local/share/chezmoi/.git ]]; then
         print_message "Updating chezmoi dotfiles repository..."
-        if chezmoi update > /dev/null; then
+        if chezmoi update --force > /dev/null; then
             print_success "chezmoi dotfiles repository updated."
         else
             print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
@@ -528,7 +528,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 46 | Last changed: Remove automatic checkout of machine-setup-scripts and dotfiles${NC}"
+echo -e "${GRAY}Version 47 | Last changed: Add --force to chezmoi update to prevent hanging${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"

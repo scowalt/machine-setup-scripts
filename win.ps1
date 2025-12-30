@@ -106,7 +106,7 @@ function Update-Chezmoi {
     $chezmoiConfigPath = "$HOME\AppData\Local\chezmoi"
     if (Test-Path $chezmoiConfigPath) {
         Write-Host "$arrow Updating chezmoi dotfiles repository..." -ForegroundColor Cyan
-        $updateOutput = chezmoi update 2>&1
+        $updateOutput = chezmoi update --force 2>&1
         if ($LASTEXITCODE -eq 0) {
             Write-Host "$success chezmoi dotfiles repository updated." -ForegroundColor Green
         }
@@ -552,7 +552,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 45 | Last changed: Remove automatic checkout of machine-setup-scripts and dotfiles" -ForegroundColor DarkGray
+    Write-Host "Version 46 | Last changed: Add --force to chezmoi update to prevent hanging" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
