@@ -22,6 +22,55 @@ is_main_user() {
     [[ "${HOME}" == "/Users/scowalt" ]]
 }
 
+# Source GitHub tokens from ~/.gh_token if it exists
+# File format:
+#   export GH_TOKEN=github_pat_xxx           # work/primary org token
+#   export GH_TOKEN_SCOWALT=github_pat_yyy   # scowalt org token (for dotfiles)
+source_gh_tokens() {
+    if [[ -f "${HOME}/.gh_token" ]]; then
+        # shellcheck source=/dev/null
+        source "${HOME}/.gh_token"
+        if [[ -n "${GH_TOKEN}" ]]; then
+            print_debug "GH_TOKEN loaded from ~/.gh_token"
+        fi
+        if [[ -n "${GH_TOKEN_SCOWALT}" ]]; then
+            print_debug "GH_TOKEN_SCOWALT loaded from ~/.gh_token"
+        fi
+        [[ -n "${GH_TOKEN}" ]] || [[ -n "${GH_TOKEN_SCOWALT}" ]]
+        return $?
+    fi
+    return 1
+}
+
+# Configure git to use multi-token credential helper for GitHub HTTPS operations
+# This helper routes to GH_TOKEN_SCOWALT for scowalt/* repos, GH_TOKEN for others
+setup_github_credential_helper() {
+    # Source tokens if not already set
+    if [[ -z "${GH_TOKEN}" ]] && [[ -z "${GH_TOKEN_SCOWALT}" ]]; then
+        source_gh_tokens
+    fi
+
+    # Need at least one token to proceed
+    if [[ -z "${GH_TOKEN}" ]] && [[ -z "${GH_TOKEN_SCOWALT}" ]]; then
+        print_debug "No GitHub tokens available, skipping credential helper setup."
+        return 1
+    fi
+
+    # Check if the multi-token credential helper exists
+    local helper_path="${HOME}/.local/bin/git-credential-github-multi"
+    if [[ ! -x "${helper_path}" ]]; then
+        print_debug "Multi-token credential helper not yet installed, will be set up by chezmoi."
+    fi
+
+    # Configure git to use our multi-token credential helper for github.com
+    # Clear any existing helper first to avoid duplicates
+    git config --global --unset-all credential.https://github.com.helper 2>/dev/null || true
+    git config --global --add credential.https://github.com.helper ''
+    git config --global --add credential.https://github.com.helper '!git-credential-github-multi'
+    print_debug "Git configured to use multi-token credential helper for GitHub."
+    return 0
+}
+
 # Fix zsh compaudit insecure directories warning
 fix_zsh_compaudit() {
     print_message "Fixing zsh compaudit insecure directories..."
@@ -158,15 +207,21 @@ initialize_chezmoi() {
             # Main user uses SSH for push access
             chezmoi init --apply --force scowalt/dotfiles --ssh > /dev/null
         else
-            # Secondary users use deploy key via github-dotfiles host alias
-            # Requires ~/.ssh/dotfiles-deploy-key to be set up first
-            if [[ ! -f ~/.ssh/dotfiles-deploy-key ]]; then
-                print_error "Missing ~/.ssh/dotfiles-deploy-key - cannot clone private dotfiles repo"
-                print_message "Main user must copy the deploy key first"
+            # Secondary users use HTTPS with GH_TOKEN_SCOWALT
+            # Ensure token is loaded
+            source_gh_tokens
+            if [[ -n "${GH_TOKEN_SCOWALT}" ]]; then
+                # Use HTTPS - the credential helper will provide the token
+                chezmoi init --apply --force "https://github.com/scowalt/dotfiles.git" > /dev/null
+            elif [[ -f ~/.ssh/dotfiles-deploy-key ]]; then
+                # Fallback to deploy key if no token available
+                bootstrap_ssh_config
+                chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git" > /dev/null
+            else
+                print_error "Missing GH_TOKEN_SCOWALT in ~/.gh_token and no deploy key found"
+                print_message "Add 'export GH_TOKEN_SCOWALT=github_pat_xxx' to ~/.gh_token"
                 return 1
             fi
-            bootstrap_ssh_config
-            chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git" > /dev/null
         fi
         print_success "chezmoi initialized with scowalt/dotfiles."
     else
@@ -519,7 +574,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 44 | Last changed: More aggressive zsh compaudit fix${NC}"
+echo -e "${GRAY}Version 45 | Last changed: Multi-token GitHub credential helper (GH_TOKEN + GH_TOKEN_SCOWALT)${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
@@ -557,6 +612,48 @@ fi
 
 # Common setup for all users
 print_section "Dotfiles Management"
+
+# Bootstrap the credential helper before chezmoi (chicken-and-egg problem)
+# The helper script is part of dotfiles but we need it to pull dotfiles
+if [[ ! -x "${HOME}/.local/bin/git-credential-github-multi" ]]; then
+    source_gh_tokens
+    if [[ -n "${GH_TOKEN_SCOWALT}" ]] || [[ -n "${GH_TOKEN}" ]]; then
+        print_message "Bootstrapping git credential helper..."
+        mkdir -p "${HOME}/.local/bin"
+        cat > "${HOME}/.local/bin/git-credential-github-multi" << 'HELPER_EOF'
+#!/bin/bash
+# Git credential helper that routes to different GitHub tokens based on repo owner
+declare -A input
+while IFS='=' read -r key value; do
+    [[ -z "${key}" ]] && break
+    input["${key}"]="${value}"
+done
+[[ "${input[host]}" != "github.com" ]] && exit 1
+owner=""
+[[ -n "${input[path]}" ]] && owner=$(echo "${input[path]}" | cut -d'/' -f1)
+token=""
+if [[ "${owner}" == "scowalt" ]] && [[ -n "${GH_TOKEN_SCOWALT}" ]]; then
+    token="${GH_TOKEN_SCOWALT}"
+elif [[ -n "${GH_TOKEN}" ]]; then
+    token="${GH_TOKEN}"
+fi
+[[ -z "${token}" ]] && exit 1
+echo "protocol=https"
+echo "host=github.com"
+echo "username=x-access-token"
+echo "password=${token}"
+HELPER_EOF
+        chmod +x "${HOME}/.local/bin/git-credential-github-multi"
+        print_success "Git credential helper bootstrapped."
+    fi
+fi
+
+# Ensure ~/.local/bin is in PATH for the credential helper
+export PATH="${HOME}/.local/bin:${PATH}"
+
+# Set up the credential helper for GitHub
+setup_github_credential_helper
+
 initialize_chezmoi
 configure_chezmoi_git
 update_chezmoi
