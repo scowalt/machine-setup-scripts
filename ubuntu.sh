@@ -927,6 +927,12 @@ install_tmux_plugins() {
 
 # Enable tmux systemd user service for session persistence
 enable_tmux_service() {
+    # Skip if running inside tmux - daemon-reload/enable can kill the session
+    if [[ -n "${TMUX}" ]]; then
+        print_debug "Running inside tmux, skipping service reload to avoid killing session."
+        return
+    fi
+
     local service_file="${HOME}/.config/systemd/user/tmux.service"
     if [[ ! -f "${service_file}" ]]; then
         print_debug "tmux.service not found - will be created by chezmoi apply"
@@ -1051,7 +1057,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 47 | Last changed: Multi-token GitHub credential helper for secondary users${NC}"
+echo -e "${GRAY}Version 48 | Last changed: Skip tmux service reload when running inside tmux${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
