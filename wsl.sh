@@ -672,7 +672,7 @@ upgrade_npm_global_packages() {
     fi
 }
 
-# Setup ~/Code directory with essential repositories
+# Setup ~/Code directory
 setup_code_directory() {
     local code_dir="${HOME}/Code"
 
@@ -685,57 +685,11 @@ setup_code_directory() {
     else
         print_debug "\$HOME/Code directory already exists."
     fi
-
-    # Check if gh is authenticated, fall back to git clone if not
-    local use_gh=false
-    if command -v gh &> /dev/null && gh auth status &> /dev/null; then
-        use_gh=true
-    fi
-
-    # Clone machine-setup-scripts if not present
-    if [[ ! -d "${code_dir}/machine-setup-scripts" ]]; then
-        print_message "Cloning scowalt/machine-setup-scripts..."
-        if [[ "${use_gh}" == "true" ]]; then
-            if gh repo clone scowalt/machine-setup-scripts "${code_dir}/machine-setup-scripts"; then
-                print_success "machine-setup-scripts cloned."
-            else
-                print_error "Failed to clone machine-setup-scripts."
-            fi
-        else
-            if git clone git@github.com:scowalt/machine-setup-scripts.git "${code_dir}/machine-setup-scripts"; then
-                print_success "machine-setup-scripts cloned."
-            else
-                print_error "Failed to clone machine-setup-scripts."
-            fi
-        fi
-    else
-        print_debug "machine-setup-scripts already exists."
-    fi
-
-    # Clone dotfiles if not present
-    if [[ ! -d "${code_dir}/dotfiles" ]]; then
-        print_message "Cloning scowalt/dotfiles..."
-        if [[ "${use_gh}" == "true" ]]; then
-            if gh repo clone scowalt/dotfiles "${code_dir}/dotfiles"; then
-                print_success "dotfiles cloned."
-            else
-                print_error "Failed to clone dotfiles."
-            fi
-        else
-            if git clone git@github.com:scowalt/dotfiles.git "${code_dir}/dotfiles"; then
-                print_success "dotfiles cloned."
-            else
-                print_error "Failed to clone dotfiles."
-            fi
-        fi
-    else
-        print_debug "dotfiles already exists."
-    fi
 }
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 35 | Last changed: Skip dotfiles for non-scowalt users${NC}"
+echo -e "${GRAY}Version 36 | Last changed: Remove automatic checkout of machine-setup-scripts and dotfiles${NC}"
 
 print_section "System Setup"
 update_and_install_core

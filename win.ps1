@@ -510,7 +510,7 @@ function Update-NpmGlobalPackages {
     }
 }
 
-# Function to setup ~/Code directory with essential repositories
+# Function to setup ~/Code directory
 function Setup-CodeDirectory {
     $codeDir = "$env:USERPROFILE\Code"
 
@@ -523,55 +523,6 @@ function Setup-CodeDirectory {
     }
     else {
         Write-Debug "~/Code directory already exists."
-    }
-
-    # Check if gh is authenticated, fall back to git clone if not
-    $useGh = $false
-    if (Get-Command gh -ErrorAction SilentlyContinue) {
-        $authStatus = gh auth status 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            $useGh = $true
-        }
-    }
-
-    # Clone machine-setup-scripts if not present
-    if (-not (Test-Path "$codeDir\machine-setup-scripts")) {
-        Write-Host "$arrow Cloning scowalt/machine-setup-scripts..." -ForegroundColor Cyan
-        if ($useGh) {
-            gh repo clone scowalt/machine-setup-scripts "$codeDir\machine-setup-scripts"
-        }
-        else {
-            git clone git@github.com:scowalt/machine-setup-scripts.git "$codeDir\machine-setup-scripts"
-        }
-        if ($?) {
-            Write-Host "$success machine-setup-scripts cloned." -ForegroundColor Green
-        }
-        else {
-            Write-Host "$failIcon Failed to clone machine-setup-scripts." -ForegroundColor Red
-        }
-    }
-    else {
-        Write-Debug "machine-setup-scripts already exists."
-    }
-
-    # Clone dotfiles if not present
-    if (-not (Test-Path "$codeDir\dotfiles")) {
-        Write-Host "$arrow Cloning scowalt/dotfiles..." -ForegroundColor Cyan
-        if ($useGh) {
-            gh repo clone scowalt/dotfiles "$codeDir\dotfiles"
-        }
-        else {
-            git clone git@github.com:scowalt/dotfiles.git "$codeDir\dotfiles"
-        }
-        if ($?) {
-            Write-Host "$success dotfiles cloned." -ForegroundColor Green
-        }
-        else {
-            Write-Host "$failIcon Failed to clone dotfiles." -ForegroundColor Red
-        }
-    }
-    else {
-        Write-Debug "dotfiles already exists."
     }
 }
 
@@ -601,7 +552,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 44 | Last changed: Skip dotfiles for non-scowalt users" -ForegroundColor DarkGray
+    Write-Host "Version 45 | Last changed: Remove automatic checkout of machine-setup-scripts and dotfiles" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
