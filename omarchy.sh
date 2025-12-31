@@ -98,13 +98,11 @@ setup_dotfiles_deploy_key() {
     echo -e "${GRAY}────────────────────────────────────────────────────────────────${NC}"
     echo ""
 
-    # Copy to clipboard if xclip or wl-copy is available
-    if command -v wl-copy &>/dev/null; then
-        cat "${key_file}.pub" | wl-copy
-        print_success "Public key copied to clipboard!"
-    elif command -v xclip &>/dev/null; then
-        cat "${key_file}.pub" | xclip -selection clipboard
-        print_success "Public key copied to clipboard!"
+    # Copy to clipboard if display is available
+    if command -v wl-copy &>/dev/null && [[ -n "${WAYLAND_DISPLAY:-}" || -S "${XDG_RUNTIME_DIR:-}/wayland-0" ]]; then
+        wl-copy < "${key_file}.pub" 2>/dev/null && print_success "Public key copied to clipboard!"
+    elif command -v xclip &>/dev/null && [[ -n "${DISPLAY:-}" ]]; then
+        xclip -selection clipboard < "${key_file}.pub" 2>/dev/null && print_success "Public key copied to clipboard!"
     fi
     echo ""
 
@@ -126,10 +124,8 @@ setup_dotfiles_deploy_key() {
         echo -e "  1. The key was added to https://github.com/scowalt/dotfiles/settings/keys"
         echo -e "  2. You have the correct permissions on the repository"
         echo ""
-        echo -e "${YELLOW}Press Enter to retry, or Ctrl+C to abort...${NC}"
-        read -r
-        # Recursive retry
-        setup_dotfiles_deploy_key
+        echo -e "${YELLOW}Skipping dotfiles setup. Re-run the script after adding the key.${NC}"
+        return 1
     fi
 }
 
@@ -974,7 +970,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 30 | Last changed: Run dotfiles management for all users${NC}"
+echo -e "${GRAY}Version 31 | Last changed: Fix clipboard errors and infinite retry loop in deploy key setup${NC}"
 
 print_section "System Verification"
 verify_arch_system
@@ -1014,9 +1010,14 @@ install_pyenv
 print_section "Dotfiles Management"
 
 # Early check: ensure we have access to dotfiles repo before proceeding
+_dotfiles_access=true
 if ! check_dotfiles_access; then
-    setup_dotfiles_deploy_key
+    if ! setup_dotfiles_deploy_key; then
+        _dotfiles_access=false
+    fi
 fi
+
+if [[ "${_dotfiles_access}" == "true" ]]; then
 
 # Bootstrap the credential helper before chezmoi (chicken-and-egg problem)
 if [[ ! -x "${HOME}/.local/bin/git-credential-github-multi" ]]; then
@@ -1064,6 +1065,8 @@ configure_chezmoi_git
 update_chezmoi
 chezmoi apply --force
 tmux source ~/.tmux.conf 2>/dev/null || true
+
+fi  # end of _dotfiles_access check
 
 print_section "Shell Configuration"
 set_fish_as_default_shell

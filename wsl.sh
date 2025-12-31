@@ -89,8 +89,7 @@ setup_dotfiles_deploy_key() {
 
     # Copy to clipboard via Windows clip.exe if available
     if command -v clip.exe &>/dev/null; then
-        cat "${key_file}.pub" | clip.exe
-        print_success "Public key copied to clipboard!"
+        clip.exe < "${key_file}.pub" 2>/dev/null && print_success "Public key copied to clipboard!"
     fi
     echo ""
 
@@ -115,10 +114,8 @@ setup_dotfiles_deploy_key() {
         echo -e "  1. The key was added to https://github.com/scowalt/dotfiles/settings/keys"
         echo -e "  2. You have the correct permissions on the repository"
         echo ""
-        echo -e "${YELLOW}Press Enter to retry, or Ctrl+C to abort...${NC}"
-        read -r
-        # Recursive retry
-        setup_dotfiles_deploy_key
+        echo -e "${YELLOW}Skipping dotfiles setup. Re-run the script after adding the key.${NC}"
+        return 1
     fi
 }
 
@@ -852,7 +849,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 40 | Last changed: Run dotfiles management for all users${NC}"
+echo -e "${GRAY}Version 41 | Last changed: Fix infinite retry loop in deploy key setup${NC}"
 
 print_section "System Setup"
 update_and_install_core
@@ -889,9 +886,14 @@ setup_unattended_upgrades
 print_section "Dotfiles Management"
 
 # Early check: ensure we have access to dotfiles repo before proceeding
+_dotfiles_access=true
 if ! check_dotfiles_access; then
-    setup_dotfiles_deploy_key
+    if ! setup_dotfiles_deploy_key; then
+        _dotfiles_access=false
+    fi
 fi
+
+if [[ "${_dotfiles_access}" == "true" ]]; then
 
 install_chezmoi
 initialize_chezmoi
@@ -899,6 +901,8 @@ configure_chezmoi_git
 update_chezmoi
 chezmoi apply --force
 tmux source ~/.tmux.conf 2>/dev/null || true
+
+fi  # end of _dotfiles_access check
 
 print_section "Shell Configuration"
 set_fish_as_default_shell

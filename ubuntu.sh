@@ -98,10 +98,9 @@ setup_dotfiles_deploy_key() {
     echo -e "${GRAY}────────────────────────────────────────────────────────────────${NC}"
     echo ""
 
-    # Copy to clipboard if xclip is available
-    if command -v xclip &>/dev/null; then
-        cat "${key_file}.pub" | xclip -selection clipboard
-        print_success "Public key copied to clipboard!"
+    # Copy to clipboard if display is available
+    if command -v xclip &>/dev/null && [[ -n "${DISPLAY:-}" ]]; then
+        xclip -selection clipboard < "${key_file}.pub" 2>/dev/null && print_success "Public key copied to clipboard!"
     fi
     echo ""
 
@@ -123,10 +122,8 @@ setup_dotfiles_deploy_key() {
         echo -e "  1. The key was added to https://github.com/scowalt/dotfiles/settings/keys"
         echo -e "  2. You have the correct permissions on the repository"
         echo ""
-        echo -e "${YELLOW}Press Enter to retry, or Ctrl+C to abort...${NC}"
-        read -r
-        # Recursive retry
-        setup_dotfiles_deploy_key
+        echo -e "${YELLOW}Skipping dotfiles setup. Re-run the script after adding the key.${NC}"
+        return 1
     fi
 }
 
@@ -1227,7 +1224,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 53 | Last changed: Run dotfiles management for all users${NC}"
+echo -e "${GRAY}Version 54 | Last changed: Fix clipboard errors and infinite retry loop in deploy key setup${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1267,9 +1264,14 @@ setup_unattended_upgrades
 print_section "Dotfiles Management"
 
 # Early check: ensure we have access to dotfiles repo before proceeding
+_dotfiles_access=true
 if ! check_dotfiles_access; then
-    setup_dotfiles_deploy_key
+    if ! setup_dotfiles_deploy_key; then
+        _dotfiles_access=false
+    fi
 fi
+
+if [[ "${_dotfiles_access}" == "true" ]]; then
 
 # Bootstrap the credential helper before chezmoi (chicken-and-egg problem)
 if [[ ! -x "${HOME}/.local/bin/git-credential-github-multi" ]]; then
@@ -1317,6 +1319,8 @@ configure_chezmoi_git
 update_chezmoi
 chezmoi apply --force
 tmux source ~/.tmux.conf 2>/dev/null || true
+
+fi  # end of _dotfiles_access check
 
 print_section "Shell Configuration"
 set_fish_as_default_shell
