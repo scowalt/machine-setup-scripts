@@ -865,7 +865,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 42 | Last changed: Interactive retry loop for deploy key setup${NC}"
+echo -e "${GRAY}Version 43 | Last changed: Fix dotfiles section conditional structure${NC}"
 
 print_section "System Setup"
 update_and_install_core
@@ -901,24 +901,19 @@ setup_unattended_upgrades
 
 print_section "Dotfiles Management"
 
-# Early check: ensure we have access to dotfiles repo before proceeding
-_dotfiles_access=true
-if ! check_dotfiles_access; then
-    if ! setup_dotfiles_deploy_key; then
-        _dotfiles_access=false
-    fi
+# Check if we have access (via SSH or deploy key)
+# If not, try interactive deploy key setup
+if check_dotfiles_access || setup_dotfiles_deploy_key; then
+    # We have access, proceed with chezmoi setup
+    install_chezmoi
+    initialize_chezmoi
+    configure_chezmoi_git
+    update_chezmoi
+    chezmoi apply --force
+    tmux source ~/.tmux.conf 2>/dev/null || true
+else
+    print_warning "Skipping dotfiles management - no access to repository."
 fi
-
-if [[ "${_dotfiles_access}" == "true" ]]; then
-
-install_chezmoi
-initialize_chezmoi
-configure_chezmoi_git
-update_chezmoi
-chezmoi apply --force
-tmux source ~/.tmux.conf 2>/dev/null || true
-
-fi  # end of _dotfiles_access check
 
 print_section "Shell Configuration"
 set_fish_as_default_shell
