@@ -17,6 +17,21 @@ print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
 print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 print_error() { printf "${RED} %s${NC}\n" "$1"; }
 
+# Check if user has sudo access (cached result)
+_sudo_checked=""
+_has_sudo=""
+can_sudo() {
+    if [[ -z "${_sudo_checked}" ]]; then
+        _sudo_checked=1
+        if sudo -n true 2>/dev/null; then
+            _has_sudo=1
+        else
+            _has_sudo=0
+        fi
+    fi
+    [[ "${_has_sudo}" == "1" ]]
+}
+
 # Bootstrap SSH config for deploy key access to dotfiles
 bootstrap_ssh_config() {
     # Ensure github-dotfiles host alias exists for deploy key access
@@ -136,6 +151,10 @@ check_dotfiles_access() {
 
 # Fix apt issues if they exist
 fix_apt_issues() {
+    if ! can_sudo; then
+        print_debug "No sudo access - skipping apt fix."
+        return
+    fi
     print_message "Checking for package manager issues..."
     sudo apt-get update -qq
     sudo apt-get install -f -y -qq
@@ -160,6 +179,11 @@ update_and_install_core() {
 
     # Install any packages that are not yet installed
     if [[ "${#to_install[@]}" -gt 0 ]]; then
+        if ! can_sudo; then
+            print_warning "No sudo access - cannot install missing packages: ${to_install[*]}"
+            print_debug "Ask an admin to run: sudo apt install ${to_install[*]}"
+            return
+        fi
         print_message "Installing missing packages: ${to_install[*]}"
         sudo apt update -qq
         if ! sudo apt install -qq -y "${to_install[@]}"; then
@@ -180,6 +204,12 @@ update_and_install_core() {
 
 # Check and set up SSH key
 setup_ssh_key() {
+    # Skip SSH key setup for non-sudo users (they won't be making outbound SSH requests)
+    if ! can_sudo; then
+        print_debug "No sudo access - skipping SSH key setup."
+        return
+    fi
+
     print_message "Checking for existing SSH key associated with GitHub..."
 
     # Retrieve GitHub-associated keys and log for debug purposes
@@ -349,16 +379,23 @@ set_fish_as_default_shell() {
     local passwd_entry
     passwd_entry=$(getent passwd "${USER}")
     user_shell=$(echo "${passwd_entry}" | cut -d: -f7)
-    if [[ "${user_shell}" != "/usr/bin/fish" ]]; then
-        print_message "Setting Fish as the default shell..."
-        if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
-            echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
-        fi
-        sudo chsh -s /usr/bin/fish "${USER}"
-        print_success "Fish shell set as default."
-    else
+    if [[ "${user_shell}" == "/usr/bin/fish" ]]; then
         print_debug "Fish shell is already the default shell."
+        return
     fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access - cannot change default shell to fish."
+        print_debug "Ask an admin to run: sudo chsh -s /usr/bin/fish ${USER}"
+        return
+    fi
+
+    print_message "Setting Fish as the default shell..."
+    if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
+        echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
+    fi
+    sudo chsh -s /usr/bin/fish "${USER}"
+    print_success "Fish shell set as default."
 }
 
 # Install git-town by downloading binary directly
@@ -605,6 +642,11 @@ install_tailscale() {
 
 # Install and configure unattended-upgrades for automatic security updates
 setup_unattended_upgrades() {
+    if ! can_sudo; then
+        print_debug "No sudo access - skipping unattended-upgrades setup."
+        return
+    fi
+
     if dpkg -s unattended-upgrades &> /dev/null; then
         print_debug "unattended-upgrades is already installed."
     else
@@ -759,10 +801,14 @@ update_packages() {
     print_message "Updating all packages..."
     brew update
     brew upgrade
-    sudo apt update
-    sudo apt upgrade -y
-    sudo apt autoremove -y
-    print_success "All packages updated."
+    if can_sudo; then
+        sudo apt update
+        sudo apt upgrade -y
+        sudo apt autoremove -y
+    else
+        print_warning "No sudo access - skipping apt system updates."
+    fi
+    print_success "Package updates completed."
 }
 
 # Upgrade global npm packages
@@ -806,7 +852,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 38 | Last changed: Interactive deploy key setup if no dotfiles access${NC}"
+echo -e "${GRAY}Version 39 | Last changed: Skip sudo operations for non-privileged users${NC}"
 
 print_section "System Setup"
 update_and_install_core
@@ -840,7 +886,7 @@ install_infisical
 install_tailscale
 setup_unattended_upgrades
 
-if [[ "${current_user}" == "scowalt" ]]; then
+if [[ "${current_user}" == "scowalt" ]] && can_sudo; then
     print_section "Dotfiles Management"
 
     # Early check: ensure we have access to dotfiles repo before proceeding

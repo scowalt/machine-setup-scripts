@@ -914,21 +914,21 @@ install_iterm2_shell_integration() {
 update_all_packages() {
     print_message "Updating all packages..."
 
-    # Update Arch packages (requires sudo)
     if can_sudo; then
+        # Update Arch packages (requires sudo)
         sudo pacman -Syu --noconfirm
+
+        # Update AUR packages if yay is available (yay internally uses sudo)
+        if command -v yay &> /dev/null; then
+            yay -Syu --noconfirm
+        fi
+
+        # Update Omarchy if installed
+        if [[ "${IS_OMARCHY}" = true ]] && command -v omarchy-update-system-pkgs &> /dev/null; then
+            omarchy-update-system-pkgs
+        fi
     else
-        print_warning "No sudo access - skipping pacman system update."
-    fi
-
-    # Update AUR packages if yay is available (doesn't require sudo)
-    if command -v yay &> /dev/null; then
-        yay -Syu --noconfirm
-    fi
-
-    # Update Omarchy if installed
-    if [[ "${IS_OMARCHY}" = true ]] && command -v omarchy-update-system-pkgs &> /dev/null; then
-        omarchy-update-system-pkgs
+        print_warning "No sudo access - skipping system package updates."
     fi
 
     print_success "Package updates completed."
@@ -974,7 +974,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 28 | Last changed: Skip SSH key and dotfiles setup for non-sudo users${NC}"
+echo -e "${GRAY}Version 29 | Last changed: Fix yay prompting for sudo on non-privileged users${NC}"
 
 print_section "System Verification"
 verify_arch_system

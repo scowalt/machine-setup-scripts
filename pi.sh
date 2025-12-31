@@ -17,6 +17,21 @@ print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
 print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 print_error() { printf "${RED} %s${NC}\n" "$1"; }
 
+# Check if user has sudo access (cached result)
+_sudo_checked=""
+_has_sudo=""
+can_sudo() {
+    if [[ -z "${_sudo_checked}" ]]; then
+        _sudo_checked=1
+        if sudo -n true 2>/dev/null; then
+            _has_sudo=1
+        else
+            _has_sudo=0
+        fi
+    fi
+    [[ "${_has_sudo}" == "1" ]]
+}
+
 # Bootstrap SSH config for deploy key access to dotfiles
 bootstrap_ssh_config() {
     # Ensure github-dotfiles host alias exists for deploy key access
@@ -232,15 +247,20 @@ check_raspberry_pi() {
 
 # Update dependencies with Raspberry Pi specific optimizations
 update_dependencies() {
+    if ! can_sudo; then
+        print_warning "No sudo access - skipping system updates."
+        return
+    fi
+
     print_message "Updating package lists (this may take a while on Raspberry Pi)..."
     sudo apt update
-    
+
     print_message "Upgrading packages (this may take a while)..."
     sudo apt upgrade -y
-    
+
     print_message "Removing unnecessary packages..."
     sudo apt autoremove -y
-    
+
     print_success "Package lists updated."
 }
 
@@ -263,6 +283,11 @@ update_and_install_core() {
 
     # Install any packages that are not yet installed
     if [[ "${#to_install[@]}" -gt 0 ]]; then
+        if ! can_sudo; then
+            print_warning "No sudo access - cannot install missing packages: ${to_install[*]}"
+            print_debug "Ask an admin to run: sudo apt install ${to_install[*]}"
+            return
+        fi
         print_message "Installing missing packages: ${to_install[*]}"
         sudo apt update -qq > /dev/null
         sudo apt install -qq -y "${to_install[@]}"
@@ -318,6 +343,12 @@ https://downloads.1password.com/linux/debian/${repo_arch} stable main" \
 }
 
 setup_ssh_key() {
+    # Skip SSH key setup for non-sudo users (they won't be making outbound SSH requests)
+    if ! can_sudo; then
+        print_debug "No sudo access - skipping SSH key setup."
+        return
+    fi
+
     print_message "Checking for existing SSH key…"
 
     mkdir -p ~/.ssh && chmod 700 ~/.ssh
@@ -457,6 +488,11 @@ install_fail2ban() {
         return
     fi
 
+    if ! can_sudo; then
+        print_warning "No sudo access - cannot install fail2ban."
+        return
+    fi
+
     print_message "Installing fail2ban..."
     if sudo apt install -y fail2ban; then
         # Enable and start fail2ban service
@@ -470,6 +506,11 @@ install_fail2ban() {
 
 # Install and configure unattended-upgrades for automatic security updates
 setup_unattended_upgrades() {
+    if ! can_sudo; then
+        print_debug "No sudo access - skipping unattended-upgrades setup."
+        return
+    fi
+
     if dpkg -s unattended-upgrades &> /dev/null; then
         print_debug "unattended-upgrades is already installed."
     else
@@ -623,16 +664,23 @@ set_fish_as_default_shell() {
     local passwd_entry
     passwd_entry=$(getent passwd "${USER}")
     user_shell=$(echo "${passwd_entry}" | cut -d: -f7)
-    if [[ "${user_shell}" != "/usr/bin/fish" ]]; then
-        print_message "Setting Fish as the default shell..."
-        if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
-            echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
-        fi
-        sudo chsh -s /usr/bin/fish "${USER}"
-        print_success "Fish shell set as default. Please log out and back in for changes to take effect."
-    else
+    if [[ "${user_shell}" == "/usr/bin/fish" ]]; then
         print_debug "Fish shell is already the default shell."
+        return
     fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access - cannot change default shell to fish."
+        print_debug "Ask an admin to run: sudo chsh -s /usr/bin/fish ${USER}"
+        return
+    fi
+
+    print_message "Setting Fish as the default shell..."
+    if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
+        echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
+    fi
+    sudo chsh -s /usr/bin/fish "${USER}"
+    print_success "Fish shell set as default. Please log out and back in for changes to take effect."
 }
 
 # Install tmux plugins with Raspberry Pi optimizations
@@ -1180,7 +1228,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 42 | Last changed: Interactive deploy key setup if no dotfiles access${NC}"
+echo -e "${GRAY}Version 43 | Last changed: Skip sudo operations for non-privileged users${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
@@ -1223,7 +1271,7 @@ install_starship
 install_git_town
 configure_git_town
 
-if [[ "${current_user}" == "scowalt" ]]; then
+if [[ "${current_user}" == "scowalt" ]] && can_sudo; then
     print_section "Dotfiles Management"
 
     # Early check: ensure we have access to dotfiles repo before proceeding
