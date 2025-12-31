@@ -852,7 +852,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 39 | Last changed: Skip sudo operations for non-privileged users${NC}"
+echo -e "${GRAY}Version 40 | Last changed: Run dotfiles management for all users${NC}"
 
 print_section "System Setup"
 update_and_install_core
@@ -886,21 +886,19 @@ install_infisical
 install_tailscale
 setup_unattended_upgrades
 
-if [[ "${current_user}" == "scowalt" ]] && can_sudo; then
-    print_section "Dotfiles Management"
+print_section "Dotfiles Management"
 
-    # Early check: ensure we have access to dotfiles repo before proceeding
-    if ! check_dotfiles_access; then
-        setup_dotfiles_deploy_key
-    fi
-
-    install_chezmoi
-    initialize_chezmoi
-    configure_chezmoi_git
-    update_chezmoi
-    chezmoi apply --force
-    tmux source ~/.tmux.conf 2>/dev/null || true
+# Early check: ensure we have access to dotfiles repo before proceeding
+if ! check_dotfiles_access; then
+    setup_dotfiles_deploy_key
 fi
+
+install_chezmoi
+initialize_chezmoi
+configure_chezmoi_git
+update_chezmoi
+chezmoi apply --force
+tmux source ~/.tmux.conf 2>/dev/null || true
 
 print_section "Shell Configuration"
 set_fish_as_default_shell

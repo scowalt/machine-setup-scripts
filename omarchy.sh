@@ -974,7 +974,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 29 | Last changed: Fix yay prompting for sudo on non-privileged users${NC}"
+echo -e "${GRAY}Version 30 | Last changed: Run dotfiles management for all users${NC}"
 
 print_section "System Verification"
 verify_arch_system
@@ -1011,21 +1011,20 @@ setup_nodejs
 install_claude_code
 install_pyenv
 
-if is_scowalt_user && can_sudo; then
-    print_section "Dotfiles Management"
+print_section "Dotfiles Management"
 
-    # Early check: ensure we have access to dotfiles repo before proceeding
-    if ! check_dotfiles_access; then
-        setup_dotfiles_deploy_key
-    fi
+# Early check: ensure we have access to dotfiles repo before proceeding
+if ! check_dotfiles_access; then
+    setup_dotfiles_deploy_key
+fi
 
-    # Bootstrap the credential helper before chezmoi (chicken-and-egg problem)
-    if [[ ! -x "${HOME}/.local/bin/git-credential-github-multi" ]]; then
-        source_gh_tokens
-        if [[ -n "${GH_TOKEN_SCOWALT}" ]] || [[ -n "${GH_TOKEN}" ]]; then
-            print_message "Bootstrapping git credential helper..."
-            mkdir -p "${HOME}/.local/bin"
-            cat > "${HOME}/.local/bin/git-credential-github-multi" << 'HELPER_EOF'
+# Bootstrap the credential helper before chezmoi (chicken-and-egg problem)
+if [[ ! -x "${HOME}/.local/bin/git-credential-github-multi" ]]; then
+    source_gh_tokens
+    if [[ -n "${GH_TOKEN_SCOWALT}" ]] || [[ -n "${GH_TOKEN}" ]]; then
+        print_message "Bootstrapping git credential helper..."
+        mkdir -p "${HOME}/.local/bin"
+        cat > "${HOME}/.local/bin/git-credential-github-multi" << 'HELPER_EOF'
 #!/bin/bash
 # Git credential helper that routes to different GitHub tokens based on repo owner
 declare -A input
@@ -1048,24 +1047,23 @@ echo "host=github.com"
 echo "username=x-access-token"
 echo "password=${token}"
 HELPER_EOF
-            chmod +x "${HOME}/.local/bin/git-credential-github-multi"
-            print_success "Git credential helper bootstrapped."
-        fi
+        chmod +x "${HOME}/.local/bin/git-credential-github-multi"
+        print_success "Git credential helper bootstrapped."
     fi
-
-    # Ensure ~/.local/bin is in PATH for the credential helper
-    export PATH="${HOME}/.local/bin:${PATH}"
-
-    # Set up the credential helper for GitHub
-    setup_github_credential_helper
-
-    install_chezmoi
-    initialize_chezmoi
-    configure_chezmoi_git
-    update_chezmoi
-    chezmoi apply --force
-    tmux source ~/.tmux.conf 2>/dev/null || true
 fi
+
+# Ensure ~/.local/bin is in PATH for the credential helper
+export PATH="${HOME}/.local/bin:${PATH}"
+
+# Set up the credential helper for GitHub
+setup_github_credential_helper
+
+install_chezmoi
+initialize_chezmoi
+configure_chezmoi_git
+update_chezmoi
+chezmoi apply --force
+tmux source ~/.tmux.conf 2>/dev/null || true
 
 print_section "Shell Configuration"
 set_fish_as_default_shell

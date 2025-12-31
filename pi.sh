@@ -1228,7 +1228,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 43 | Last changed: Skip sudo operations for non-privileged users${NC}"
+echo -e "${GRAY}Version 44 | Last changed: Run dotfiles management for all users${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
@@ -1271,20 +1271,18 @@ install_starship
 install_git_town
 configure_git_town
 
-if [[ "${current_user}" == "scowalt" ]] && can_sudo; then
-    print_section "Dotfiles Management"
+print_section "Dotfiles Management"
 
-    # Early check: ensure we have access to dotfiles repo before proceeding
-    if ! check_dotfiles_access; then
-        setup_dotfiles_deploy_key
-    fi
-
-    install_chezmoi
-    initialize_chezmoi
-    configure_chezmoi_git
-    update_chezmoi
-    apply_chezmoi_config
+# Early check: ensure we have access to dotfiles repo before proceeding
+if ! check_dotfiles_access; then
+    setup_dotfiles_deploy_key
 fi
+
+install_chezmoi
+initialize_chezmoi
+configure_chezmoi_git
+update_chezmoi
+apply_chezmoi_config
 
 print_section "Shell Configuration"
 set_fish_as_default_shell
