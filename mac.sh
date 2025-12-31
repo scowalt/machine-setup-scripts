@@ -78,29 +78,43 @@ setup_dotfiles_deploy_key() {
     fi
     echo ""
 
-    # Step 3: Wait for user confirmation
+    # Step 3: Wait for user confirmation (read from /dev/tty for curl|bash compatibility)
     echo -e "${YELLOW}Press Enter after you've added the key to GitHub...${NC}"
-    read -r
+    read -r < /dev/tty
 
     # Set up SSH config for the deploy key
     bootstrap_ssh_config
 
-    # Test the key
-    echo -e "${CYAN}Step 3: Testing deploy key access...${NC}"
-    if ssh -i "${key_file}" -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
-        print_success "Deploy key works! Continuing setup..."
-        return 0
-    else
+    # Test the key with retry loop
+    local max_retries=5
+    local attempt=1
+    while [[ ${attempt} -le ${max_retries} ]]; do
+        echo -e "${CYAN}Step 3: Testing deploy key access (attempt ${attempt}/${max_retries})...${NC}"
+        if ssh -i "${key_file}" -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+            print_success "Deploy key works! Continuing setup..."
+            return 0
+        fi
+
         print_error "Deploy key authentication failed."
         echo -e "Please verify:"
         echo -e "  1. The key was added to https://github.com/scowalt/dotfiles/settings/keys"
         echo -e "  2. You have the correct permissions on the repository"
         echo ""
-        echo -e "${YELLOW}Press Enter to retry, or Ctrl+C to abort...${NC}"
-        read -r
-        # Recursive retry
-        setup_dotfiles_deploy_key
-    fi
+
+        if [[ ${attempt} -lt ${max_retries} ]]; then
+            echo -e "${YELLOW}Press Enter to retry, or type 'skip' to continue without dotfiles:${NC}"
+            local response
+            read -r response < /dev/tty
+            if [[ "${response}" == "skip" ]]; then
+                print_warning "Skipping dotfiles setup."
+                return 1
+            fi
+        else
+            echo -e "${YELLOW}Max retries reached. Skipping dotfiles setup.${NC}"
+            return 1
+        fi
+        ((attempt++))
+    done
 }
 
 # Check if we have access to scowalt/dotfiles via any available method
@@ -337,25 +351,26 @@ EOF
 
 # Initialize chezmoi if not already initialized
 initialize_chezmoi() {
-    if [[ ! -d ~/.local/share/chezmoi/.git ]]; then
+    local chez_src="${HOME}/.local/share/chezmoi"
+
+    # Check if directory exists but is not a valid git repo
+    if [[ -d "${chez_src}" ]] && [[ ! -d "${chez_src}/.git" ]]; then
+        print_warning "chezmoi directory exists but is not a git repository. Reinitializing..."
+        rm -rf "${chez_src}"
+    fi
+
+    if [[ ! -d "${chez_src}" ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
         if is_main_user; then
-            # Main user uses SSH for push access
-            chezmoi init --apply --force scowalt/dotfiles --ssh > /dev/null
+            # Main user uses SSH with default key for push access
+            if ! chezmoi init --apply --force scowalt/dotfiles --ssh > /dev/null; then
+                print_error "Failed to initialize chezmoi."
+                return 1
+            fi
         else
-            # Secondary users use HTTPS with GH_TOKEN_SCOWALT
-            # Ensure token is loaded
-            source_gh_tokens
-            if [[ -n "${GH_TOKEN_SCOWALT}" ]]; then
-                # Use HTTPS - the credential helper will provide the token
-                chezmoi init --apply --force "https://github.com/scowalt/dotfiles.git" > /dev/null
-            elif [[ -f ~/.ssh/dotfiles-deploy-key ]]; then
-                # Fallback to deploy key if no token available
-                bootstrap_ssh_config
-                chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git" > /dev/null
-            else
-                print_error "Missing GH_TOKEN_SCOWALT in ~/.gh_token and no deploy key found"
-                print_message "Add 'export GH_TOKEN_SCOWALT=github_pat_xxx' to ~/.gh_token"
+            # Secondary users use SSH via deploy key (github-dotfiles alias)
+            if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git" > /dev/null; then
+                print_error "Failed to initialize chezmoi. Check deploy key setup."
                 return 1
             fi
         fi
@@ -673,7 +688,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 52 | Last changed: Skip sudo operations for non-privileged users${NC}"
+echo -e "${GRAY}Version 53 | Last changed: Fix curl|bash prompts, use deploy key for non-main users${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
@@ -712,19 +727,19 @@ fi
 # Common setup for all users
 print_section "Dotfiles Management"
 
-# Early check: ensure we have access to dotfiles repo before proceeding
-if ! check_dotfiles_access; then
-    setup_dotfiles_deploy_key
-fi
+# Check if we have access (via SSH, token, or deploy key)
+# If not, try interactive deploy key setup
+if check_dotfiles_access || setup_dotfiles_deploy_key; then
+    # We have access, proceed with chezmoi setup
 
-# Bootstrap the credential helper before chezmoi (chicken-and-egg problem)
-# The helper script is part of dotfiles but we need it to pull dotfiles
-if [[ ! -x "${HOME}/.local/bin/git-credential-github-multi" ]]; then
-    source_gh_tokens
-    if [[ -n "${GH_TOKEN_SCOWALT}" ]] || [[ -n "${GH_TOKEN}" ]]; then
-        print_message "Bootstrapping git credential helper..."
-        mkdir -p "${HOME}/.local/bin"
-        cat > "${HOME}/.local/bin/git-credential-github-multi" << 'HELPER_EOF'
+    # Bootstrap the credential helper before chezmoi (chicken-and-egg problem)
+    # The helper script is part of dotfiles but we need it to pull dotfiles
+    if [[ ! -x "${HOME}/.local/bin/git-credential-github-multi" ]]; then
+        source_gh_tokens
+        if [[ -n "${GH_TOKEN_SCOWALT}" ]] || [[ -n "${GH_TOKEN}" ]]; then
+            print_message "Bootstrapping git credential helper..."
+            mkdir -p "${HOME}/.local/bin"
+            cat > "${HOME}/.local/bin/git-credential-github-multi" << 'HELPER_EOF'
 #!/bin/bash
 # Git credential helper that routes to different GitHub tokens based on repo owner
 # Note: Uses simple variables instead of associative arrays for bash 3.2 compatibility (macOS default)
@@ -752,22 +767,25 @@ echo "host=github.com"
 echo "username=x-access-token"
 echo "password=${token}"
 HELPER_EOF
-        chmod +x "${HOME}/.local/bin/git-credential-github-multi"
-        print_success "Git credential helper bootstrapped."
+            chmod +x "${HOME}/.local/bin/git-credential-github-multi"
+            print_success "Git credential helper bootstrapped."
+        fi
     fi
+
+    # Ensure ~/.local/bin is in PATH for the credential helper
+    export PATH="${HOME}/.local/bin:${PATH}"
+
+    # Set up the credential helper for GitHub
+    setup_github_credential_helper
+
+    initialize_chezmoi
+    configure_chezmoi_git
+    update_chezmoi
+    chezmoi apply --force
+    tmux source ~/.tmux.conf 2>/dev/null || true
+else
+    print_warning "Skipping dotfiles management - no access to repository."
 fi
-
-# Ensure ~/.local/bin is in PATH for the credential helper
-export PATH="${HOME}/.local/bin:${PATH}"
-
-# Set up the credential helper for GitHub
-setup_github_credential_helper
-
-initialize_chezmoi
-configure_chezmoi_git
-update_chezmoi
-chezmoi apply --force
-tmux source ~/.tmux.conf 2>/dev/null || true
 
 print_section "Shell Configuration"
 if is_main_user; then
