@@ -63,10 +63,18 @@ setup_github_credential_helper() {
     fi
 
     # Configure git to use our multi-token credential helper for github.com
-    # Clear any existing helper first to avoid duplicates
+    # Note: We write directly to the file because git config escapes ! to \\!
+    # which breaks the shell command execution that ! is supposed to trigger
     git config --global --unset-all credential.https://github.com.helper 2>/dev/null || true
-    git config --global --add credential.https://github.com.helper ''
-    git config --global --add credential.https://github.com.helper '!git-credential-github-multi'
+
+    # Remove any existing [credential "https://github.com"] section
+    if [[ -f "${HOME}/.gitconfig" ]]; then
+        # Use sed to remove the section (macOS sed syntax)
+        sed -i '' '/^\[credential "https:\/\/github.com"\]/,/^\[/{ /^\[credential "https:\/\/github.com"\]/d; /^\[/!d; }' "${HOME}/.gitconfig" 2>/dev/null || true
+    fi
+
+    # Append the credential helper config directly to avoid git config escaping the !
+    printf '\n[credential "https://github.com"]\n\thelper = !git-credential-github-multi\n' >> "${HOME}/.gitconfig"
     print_debug "Git configured to use multi-token credential helper for GitHub."
     return 0
 }
@@ -528,7 +536,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 48 | Last changed: Fix credential helper for bash 3.2 compatibility${NC}"
+echo -e "${GRAY}Version 49 | Last changed: Fix git config escaping of ! in credential helper${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
