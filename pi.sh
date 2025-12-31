@@ -100,20 +100,36 @@ setup_dotfiles_deploy_key() {
     # Set up SSH config for the deploy key
     bootstrap_ssh_config
 
-    # Test the key
-    echo -e "${CYAN}Step 3: Testing deploy key access...${NC}"
-    if ssh -i "${key_file}" -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
-        print_success "Deploy key works! Continuing setup..."
-        return 0
-    else
+    # Test the key with retry loop
+    local max_retries=5
+    local attempt=1
+    while [[ ${attempt} -le ${max_retries} ]]; do
+        echo -e "${CYAN}Step 3: Testing deploy key access (attempt ${attempt}/${max_retries})...${NC}"
+        if ssh -i "${key_file}" -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+            print_success "Deploy key works! Continuing setup..."
+            return 0
+        fi
+
         print_error "Deploy key authentication failed."
         echo -e "Please verify:"
         echo -e "  1. The key was added to https://github.com/scowalt/dotfiles/settings/keys"
         echo -e "  2. You have the correct permissions on the repository"
         echo ""
-        echo -e "${YELLOW}Skipping dotfiles setup. Re-run the script after adding the key.${NC}"
-        return 1
-    fi
+
+        if [[ ${attempt} -lt ${max_retries} ]]; then
+            echo -e "${YELLOW}Press Enter to retry, or type 'skip' to continue without dotfiles:${NC}"
+            local response
+            read -r response
+            if [[ "${response}" == "skip" ]]; then
+                print_warning "Skipping dotfiles setup."
+                return 1
+            fi
+        else
+            echo -e "${YELLOW}Max retries reached. Skipping dotfiles setup.${NC}"
+            return 1
+        fi
+        ((attempt++))
+    done
 }
 
 # Check if we have access to scowalt/dotfiles via any available method
@@ -1225,7 +1241,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 45 | Last changed: Fix clipboard errors and infinite retry loop in deploy key setup${NC}"
+echo -e "${GRAY}Version 46 | Last changed: Interactive retry loop for deploy key setup${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
