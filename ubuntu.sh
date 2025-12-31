@@ -28,6 +28,21 @@ is_main_user() {
     [[ "$(whoami)" == "scowalt" ]]
 }
 
+# Check if user has sudo access (cached result)
+_sudo_checked=""
+_has_sudo=""
+can_sudo() {
+    if [[ -z "${_sudo_checked}" ]]; then
+        _sudo_checked=1
+        if sudo -n true 2>/dev/null; then
+            _has_sudo=1
+        else
+            _has_sudo=0
+        fi
+    fi
+    [[ "${_has_sudo}" == "1" ]]
+}
+
 # Bootstrap SSH config for deploy key access to dotfiles
 bootstrap_ssh_config() {
     # Ensure github-dotfiles host alias exists for deploy key access
@@ -221,13 +236,19 @@ setup_dns64_for_ipv6_only() {
         return 0
     fi
 
-    print_message "IPv6-only network detected. Configuring DNS64..."
-
     # Check if already configured
     if [[ -f /etc/netplan/60-dns64.yaml ]]; then
         print_debug "DNS64 already configured."
         return 0
     fi
+
+    # Requires sudo to configure
+    if ! can_sudo; then
+        print_warning "IPv6-only network detected but no sudo access - cannot configure DNS64."
+        return 0
+    fi
+
+    print_message "IPv6-only network detected. Configuring DNS64..."
 
     # Find the primary network interface
     local interface
@@ -271,6 +292,10 @@ EOF
 
 # Fix dpkg interruptions if they exist
 fix_dpkg_and_broken_dependencies() {
+    if ! can_sudo; then
+        print_debug "No sudo access - skipping dpkg fix."
+        return
+    fi
     print_message "Checking for and fixing dpkg interruptions or broken dependencies..."
     # The following commands will fix most common dpkg/apt issues.
     # They are safe to run even if there are no issues.
@@ -295,6 +320,10 @@ ensure_not_root() {
 
 # Update dependencies non-silently
 update_dependencies() {
+    if ! can_sudo; then
+        print_warning "No sudo access - skipping system updates."
+        return
+    fi
     print_message "Updating package lists..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get update
     sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" upgrade -y
@@ -304,7 +333,7 @@ update_dependencies() {
 
 # Update and install core dependencies silently
 update_and_install_core() {
-    print_message "Checking and installing core packages as needed..."
+    print_message "Checking core packages..."
 
     # Define an array of required packages
     local packages=("git" "curl" "fish" "tmux" "fonts-firacode" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "unzip" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev")
@@ -321,6 +350,11 @@ update_and_install_core() {
 
     # Install any packages that are not yet installed
     if [[ "${#to_install[@]}" -gt 0 ]]; then
+        if ! can_sudo; then
+            print_warning "No sudo access - cannot install missing packages: ${to_install[*]}"
+            print_debug "Ask an admin to run: sudo apt install ${to_install[*]}"
+            return
+        fi
         print_message "Installing missing packages: ${to_install[*]}"
         if ! sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" install -qq -y "${to_install[@]}"; then
             print_error "Failed to install some core packages. Please review the output above."
@@ -334,6 +368,11 @@ update_and_install_core() {
 
 # Install and enable SSH server
 setup_ssh_server() {
+    if ! can_sudo; then
+        print_debug "No sudo access - skipping SSH server setup."
+        return
+    fi
+
     print_message "Checking and setting up SSH server..."
 
     # Check if openssh-server is installed
@@ -369,6 +408,12 @@ setup_ssh_server() {
 
 # Check and set up SSH key
 setup_ssh_key() {
+    # Skip SSH key setup for non-sudo users (they won't be making outbound SSH requests)
+    if ! can_sudo; then
+        print_debug "No sudo access - skipping SSH key setup."
+        return
+    fi
+
     print_message "Checking for existing SSH key associated with GitHub..."
 
     local existing_keys
@@ -443,23 +488,29 @@ install_starship() {
 
 # Install Infisical if not installed
 install_infisical() {
-    if ! command -v infisical &> /dev/null; then
-        print_message "Installing Infisical CLI..."
-        local infisical_setup
-        infisical_setup=$(curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh')
-        if ! echo "${infisical_setup}" | sudo -E bash; then
-            print_error "Failed to add Infisical repository."
-            exit 1
-        fi
-        sudo DEBIAN_FRONTEND=noninteractive apt-get update
-        if ! sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" install -y infisical; then
-            print_error "Failed to install Infisical CLI. Please review the output above."
-            exit 1
-        fi
-        print_success "Infisical CLI installed."
-    else
+    if command -v infisical &> /dev/null; then
         print_debug "Infisical CLI is already installed."
+        return
     fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access - cannot install Infisical CLI."
+        return
+    fi
+
+    print_message "Installing Infisical CLI..."
+    local infisical_setup
+    infisical_setup=$(curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh')
+    if ! echo "${infisical_setup}" | sudo -E bash; then
+        print_error "Failed to add Infisical repository."
+        exit 1
+    fi
+    sudo DEBIAN_FRONTEND=noninteractive apt-get update
+    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" install -y infisical; then
+        print_error "Failed to install Infisical CLI. Please review the output above."
+        exit 1
+    fi
+    print_success "Infisical CLI installed."
 }
 
 # Install chezmoi if not installed
@@ -553,6 +604,11 @@ set_fish_as_default_shell() {
     passwd_entry=$(getent passwd "${USER}")
     user_shell=$(echo "${passwd_entry}" | cut -d: -f7)
     if [[ "${user_shell}" != "/usr/bin/fish" ]]; then
+        if ! can_sudo; then
+            print_warning "No sudo access - cannot change default shell to fish."
+            print_debug "Ask an admin to run: sudo chsh -s /usr/bin/fish ${USER}"
+            return
+        fi
         print_message "Setting Fish as the default shell..."
         if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
             echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
@@ -640,7 +696,7 @@ install_git_town() {
 configure_git_town() {
     if command -v git-town &> /dev/null; then
         print_message "Configuring git-town completions..."
-        
+
         # Set up Fish shell completions for git-town
         if [[ -d ~/.config/fish/completions ]]; then
             if ! [[ -f ~/.config/fish/completions/git-town.fish ]]; then
@@ -650,15 +706,19 @@ configure_git_town() {
                 print_debug "git-town Fish completions already configured."
             fi
         fi
-        
-        # Set up Bash completions for git-town
+
+        # Set up Bash completions for git-town (requires sudo for system-wide install)
         local bash_completion_dir="/etc/bash_completion.d"
         if [[ -d "${bash_completion_dir}" ]]; then
             if ! [[ -f "${bash_completion_dir}/git-town" ]]; then
-                local bash_completion
-                bash_completion=$(git town completion bash)
-                echo "${bash_completion}" | sudo tee "${bash_completion_dir}/git-town" > /dev/null
-                print_success "git-town Bash completions configured."
+                if can_sudo; then
+                    local bash_completion
+                    bash_completion=$(git town completion bash)
+                    echo "${bash_completion}" | sudo tee "${bash_completion_dir}/git-town" > /dev/null
+                    print_success "git-town Bash completions configured."
+                else
+                    print_debug "No sudo access - skipping system-wide Bash completions."
+                fi
             else
                 print_debug "git-town Bash completions already configured."
             fi
@@ -833,6 +893,11 @@ install_1password_cli() {
         return
     fi
 
+    if ! can_sudo; then
+        print_warning "No sudo access - cannot install 1Password CLI."
+        return
+    fi
+
     print_message "Installing 1Password CLI..."
 
     # Make sure gnupg is available for key import
@@ -873,25 +938,31 @@ https://downloads.1password.com/linux/debian/${repo_arch} stable main" \
 
 # Install Tailscale
 install_tailscale() {
-    if ! command -v tailscale &>/dev/null; then
-        print_message "Installing Tailscale..."
-        # Official install script (adds repo + installs package)
-        local tailscale_install
-        tailscale_install=$(curl -fsSL https://tailscale.com/install.sh)
-        echo "${tailscale_install}" | sudo sh
-        sudo systemctl enable --now tailscaled
-        print_success "Tailscale installed and service started."
-
-        # Optional immediate login
-        read -rp "Run 'tailscale up' now to authenticate? (y/n): " ts_up
-        if [[ "${ts_up}" =~ ^[Yy]$ ]]; then
-            print_message "Bringing interface up..."
-            sudo tailscale up       # add --authkey=... if you prefer key-based auth
-        else
-            print_warning "Skip for now; run 'sudo tailscale up' later to log in."
-        fi
-    else
+    if command -v tailscale &>/dev/null; then
         print_debug "Tailscale already installed."
+        return
+    fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access - cannot install Tailscale."
+        return
+    fi
+
+    print_message "Installing Tailscale..."
+    # Official install script (adds repo + installs package)
+    local tailscale_install
+    tailscale_install=$(curl -fsSL https://tailscale.com/install.sh)
+    echo "${tailscale_install}" | sudo sh
+    sudo systemctl enable --now tailscaled
+    print_success "Tailscale installed and service started."
+
+    # Optional immediate login
+    read -rp "Run 'tailscale up' now to authenticate? (y/n): " ts_up
+    if [[ "${ts_up}" =~ ^[Yy]$ ]]; then
+        print_message "Bringing interface up..."
+        sudo tailscale up       # add --authkey=... if you prefer key-based auth
+    else
+        print_warning "Skip for now; run 'sudo tailscale up' later to log in."
     fi
 }
 
@@ -899,6 +970,11 @@ install_tailscale() {
 install_fail2ban() {
     if dpkg -s fail2ban &> /dev/null; then
         print_debug "fail2ban is already installed."
+        return
+    fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access - cannot install fail2ban."
         return
     fi
 
@@ -915,6 +991,11 @@ install_fail2ban() {
 
 # Install and configure unattended-upgrades for automatic security updates
 setup_unattended_upgrades() {
+    if ! can_sudo; then
+        print_debug "No sudo access - skipping unattended-upgrades setup."
+        return
+    fi
+
     if dpkg -s unattended-upgrades &> /dev/null; then
         print_debug "unattended-upgrades is already installed."
     else
@@ -972,19 +1053,25 @@ install_opentofu() {
 
 # Install act for running GitHub Actions locally
 install_act() {
-    if ! command -v act &> /dev/null; then
-        print_message "Installing act (GitHub Actions runner)..."
-        # Use the official install script
-        local act_install
-        act_install=$(curl -s https://raw.githubusercontent.com/nektos/act/master/install.sh)
-        if ! echo "${act_install}" | sudo bash; then
-            print_error "Failed to install act."
-            exit 1
-        fi
-        print_success "act installed."
-    else
+    if command -v act &> /dev/null; then
         print_debug "act is already installed."
+        return
     fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access - cannot install act."
+        return
+    fi
+
+    print_message "Installing act (GitHub Actions runner)..."
+    # Use the official install script
+    local act_install
+    act_install=$(curl -s https://raw.githubusercontent.com/nektos/act/master/install.sh)
+    if ! echo "${act_install}" | sudo bash; then
+        print_error "Failed to install act."
+        exit 1
+    fi
+    print_success "act installed."
 }
 
 # Install pyenv for Python version management
@@ -1140,7 +1227,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 51 | Last changed: Interactive deploy key setup if no dotfiles access${NC}"
+echo -e "${GRAY}Version 52 | Last changed: Skip sudo operations for non-privileged users${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1177,7 +1264,7 @@ install_infisical
 install_fail2ban
 setup_unattended_upgrades
 
-if is_scowalt_user; then
+if is_scowalt_user && can_sudo; then
     print_section "Dotfiles Management"
 
     # Early check: ensure we have access to dotfiles repo before proceeding

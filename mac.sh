@@ -22,6 +22,21 @@ is_main_user() {
     [[ "${HOME}" == "/Users/scowalt" ]]
 }
 
+# Check if user has sudo access (cached result)
+_sudo_checked=""
+_has_sudo=""
+can_sudo() {
+    if [[ -z "${_sudo_checked}" ]]; then
+        _sudo_checked=1
+        if sudo -n true 2>/dev/null; then
+            _has_sudo=1
+        else
+            _has_sudo=0
+        fi
+    fi
+    [[ "${_has_sudo}" == "1" ]]
+}
+
 # Interactive setup for dotfiles deploy key
 setup_dotfiles_deploy_key() {
     local key_file="${HOME}/.ssh/dotfiles-deploy-key"
@@ -395,16 +410,25 @@ update_chezmoi() {
 
 # Set Fish as the default shell if it isn't already
 set_fish_as_default_shell() {
-    if [[ "${SHELL}" != "/opt/homebrew/bin/fish" ]]; then
-        print_message "Setting Fish as the default shell..."
-        if ! grep -Fxq "/opt/homebrew/bin/fish" /etc/shells; then
-            echo "/opt/homebrew/bin/fish" | sudo tee -a /etc/shells > /dev/null
-        fi
-        chsh -s /opt/homebrew/bin/fish
-        print_success "Fish shell set as default."
-    else
+    if [[ "${SHELL}" == "/opt/homebrew/bin/fish" ]]; then
         print_debug "Fish shell is already the default shell."
+        return
     fi
+
+    # Check if fish is in /etc/shells - requires sudo to add if missing
+    if ! grep -Fxq "/opt/homebrew/bin/fish" /etc/shells; then
+        if ! can_sudo; then
+            print_warning "No sudo access - cannot add fish to /etc/shells."
+            print_debug "Ask an admin to run: echo '/opt/homebrew/bin/fish' | sudo tee -a /etc/shells"
+            return
+        fi
+        print_message "Adding fish to /etc/shells..."
+        echo "/opt/homebrew/bin/fish" | sudo tee -a /etc/shells > /dev/null
+    fi
+
+    print_message "Setting Fish as the default shell..."
+    chsh -s /opt/homebrew/bin/fish
+    print_success "Fish shell set as default."
 }
 
 # Add GitHub to known hosts to avoid prompts
@@ -649,7 +673,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 51 | Last changed: Interactive deploy key setup if no dotfiles access${NC}"
+echo -e "${GRAY}Version 52 | Last changed: Skip sudo operations for non-privileged users${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
