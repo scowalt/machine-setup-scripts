@@ -28,6 +28,21 @@ is_main_user() {
     [[ "$(whoami)" == "scowalt" ]]
 }
 
+# Check if user has sudo access (cached result)
+_sudo_checked=""
+_has_sudo=""
+can_sudo() {
+    if [[ -z "${_sudo_checked}" ]]; then
+        _sudo_checked=1
+        if sudo -n true 2>/dev/null; then
+            _has_sudo=1
+        else
+            _has_sudo=0
+        fi
+    fi
+    [[ "${_has_sudo}" == "1" ]]
+}
+
 # Bootstrap SSH config for deploy key access to dotfiles
 bootstrap_ssh_config() {
     # Ensure github-dotfiles host alias exists for deploy key access
@@ -224,13 +239,20 @@ setup_dns64_for_ipv6_only() {
         return 0
     fi
 
-    print_message "IPv6-only network detected. Configuring DNS64..."
-
     # Check if already configured
     if [[ -f /etc/systemd/resolved.conf.d/dns64.conf ]]; then
         print_debug "DNS64 already configured."
         return 0
     fi
+
+    # Requires sudo to configure
+    if ! can_sudo; then
+        print_warning "IPv6-only network detected but no sudo access - cannot configure DNS64."
+        print_debug "Ask an admin to configure DNS64 for NAT64 connectivity."
+        return 0
+    fi
+
+    print_message "IPv6-only network detected. Configuring DNS64..."
 
     # Create systemd-resolved drop-in for DNS64 (using nat64.net public servers)
     sudo mkdir -p /etc/systemd/resolved.conf.d
@@ -278,22 +300,33 @@ check_omarchy_installation() {
 
 # Update system packages
 update_system() {
+    if ! can_sudo; then
+        print_warning "No sudo access - skipping system updates."
+        print_debug "Run 'sudo pacman -Syu' manually when you have admin access."
+        return
+    fi
+
     print_message "Updating system packages..."
-    
+
     # Update pacman database
     sudo pacman -Sy --noconfirm
-    
+
     # Update all packages
     if ! sudo pacman -Syu --noconfirm; then
         print_error "Failed to update system packages."
         exit 1
     fi
-    
+
     print_success "System packages updated."
 }
 
 # Install and configure fail2ban for brute-force protection
 install_fail2ban() {
+    if ! can_sudo; then
+        print_warning "No sudo access - skipping fail2ban installation."
+        return
+    fi
+
     if pacman -Qi fail2ban &> /dev/null; then
         print_debug "fail2ban is already installed."
         # Ensure service is enabled
@@ -318,12 +351,12 @@ install_fail2ban() {
 
 # Install core packages using pacman
 install_core_packages() {
-    print_message "Installing core packages..."
+    print_message "Checking core packages..."
 
     # Define core packages
     local packages=("git" "curl" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu")
     local to_install=()
-    
+
     # Check which packages need installation
     for package in "${packages[@]}"; do
         if ! pacman -Qi "${package}" &> /dev/null; then
@@ -332,9 +365,14 @@ install_core_packages() {
             print_debug "${package} is already installed."
         fi
     done
-    
+
     # Install missing packages
     if [[ "${#to_install[@]}" -gt 0 ]]; then
+        if ! can_sudo; then
+            print_warning "No sudo access - cannot install missing packages: ${to_install[*]}"
+            print_debug "Ask an admin to run: sudo pacman -S ${to_install[*]}"
+            return
+        fi
         print_message "Installing missing packages: ${to_install[*]}"
         if ! sudo pacman -S --noconfirm "${to_install[@]}"; then
             print_error "Failed to install core packages."
@@ -583,14 +621,18 @@ configure_git_town() {
             fi
         fi
 
-        # Set up Bash completions for git-town
+        # Set up Bash completions for git-town (requires sudo for system-wide install)
         local bash_completion_dir="/etc/bash_completion.d"
         if [[ -d "${bash_completion_dir}" ]]; then
             if ! [[ -f "${bash_completion_dir}/git-town" ]]; then
-                local completion_content
-                completion_content=$(git-town completions bash)
-                echo "${completion_content}" | sudo tee "${bash_completion_dir}/git-town" > /dev/null
-                print_success "git-town Bash completions configured."
+                if can_sudo; then
+                    local completion_content
+                    completion_content=$(git-town completions bash)
+                    echo "${completion_content}" | sudo tee "${bash_completion_dir}/git-town" > /dev/null
+                    print_success "git-town Bash completions configured."
+                else
+                    print_debug "No sudo access - skipping system-wide Bash completions."
+                fi
             else
                 print_debug "git-town Bash completions already configured."
             fi
@@ -690,6 +732,11 @@ set_fish_as_default_shell() {
     passwd_entry=$(getent passwd "${USER}")
     current_shell=$(echo "${passwd_entry}" | cut -d: -f7)
     if [[ "${current_shell}" != "/usr/bin/fish" ]]; then
+        if ! can_sudo; then
+            print_warning "No sudo access - cannot change default shell to fish."
+            print_debug "Ask an admin to run: sudo chsh -s /usr/bin/fish ${USER}"
+            return
+        fi
         print_message "Setting Fish as the default shell..."
         if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
             echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
@@ -860,21 +907,25 @@ install_iterm2_shell_integration() {
 # Update all packages
 update_all_packages() {
     print_message "Updating all packages..."
-    
-    # Update Arch packages
-    sudo pacman -Syu --noconfirm
-    
-    # Update AUR packages if yay is available
+
+    # Update Arch packages (requires sudo)
+    if can_sudo; then
+        sudo pacman -Syu --noconfirm
+    else
+        print_warning "No sudo access - skipping pacman system update."
+    fi
+
+    # Update AUR packages if yay is available (doesn't require sudo)
     if command -v yay &> /dev/null; then
         yay -Syu --noconfirm
     fi
-    
+
     # Update Omarchy if installed
     if [[ "${IS_OMARCHY}" = true ]] && command -v omarchy-update-system-pkgs &> /dev/null; then
         omarchy-update-system-pkgs
     fi
-    
-    print_success "All packages updated."
+
+    print_success "Package updates completed."
 }
 
 # Upgrade global npm packages
@@ -917,7 +968,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 26 | Last changed: Interactive deploy key setup if no dotfiles access${NC}"
+echo -e "${GRAY}Version 27 | Last changed: Skip sudo operations gracefully for non-privileged users${NC}"
 
 print_section "System Verification"
 verify_arch_system
