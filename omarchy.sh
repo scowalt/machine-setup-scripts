@@ -366,7 +366,7 @@ install_core_packages() {
     print_message "Checking core packages..."
 
     # Define core packages
-    local packages=("git" "curl" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu")
+    local packages=("git" "curl" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "jujutsu")
     local to_install=()
 
     # Check which packages need installation
@@ -986,7 +986,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 36 | Last changed: Use deploy key for non-main user chezmoi init${NC}"
+echo -e "${GRAY}Version 37 | Last changed: Add jj (Jujutsu) version control${NC}"
 
 print_section "System Verification"
 verify_arch_system

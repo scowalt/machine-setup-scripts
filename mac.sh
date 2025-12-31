@@ -239,7 +239,7 @@ install_core_packages() {
 
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
-    local packages=("git" "curl" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "infisical" "git-town" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx" "opentofu")
+    local packages=("git" "curl" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "infisical" "git-town" "jj" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx" "opentofu")
     local to_install=()
     
     # Get all installed packages at once (much faster than checking individually)
@@ -688,7 +688,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 53 | Last changed: Fix curl|bash prompts, use deploy key for non-main users${NC}"
+echo -e "${GRAY}Version 54 | Last changed: Add jj (Jujutsu) version control${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"

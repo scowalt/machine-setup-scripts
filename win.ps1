@@ -23,7 +23,8 @@ $wingetPackages = (
     "strayge.tray-monitor",
     "DEVCOM.JetBrainsMonoNerdFont",
     "nektos.act",
-    "OpenTofu.Tofu"
+    "OpenTofu.Tofu",
+    "jj-vcs.jj"
 )
 
 # Define Nerd Font symbols using Unicode code points
@@ -552,7 +553,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 46 | Last changed: Add --force to chezmoi update to prevent hanging" -ForegroundColor DarkGray
+    Write-Host "Version 47 | Last changed: Add jj (Jujutsu) version control" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
