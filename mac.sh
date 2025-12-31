@@ -74,7 +74,12 @@ setup_github_credential_helper() {
     fi
 
     # Append the credential helper config directly to avoid git config escaping the !
-    printf '\n[credential "https://github.com"]\n\thelper = !git-credential-github-multi\n' >> "${HOME}/.gitconfig"
+    # Use heredoc with quoted delimiter to prevent any shell interpretation
+    cat >> "${HOME}/.gitconfig" << 'CREDENTIAL_EOF'
+
+[credential "https://github.com"]
+	helper = !git-credential-github-multi
+CREDENTIAL_EOF
     print_debug "Git configured to use multi-token credential helper for GitHub."
     return 0
 }
@@ -536,7 +541,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 49 | Last changed: Fix git config escaping of ! in credential helper${NC}"
+echo -e "${GRAY}Version 50 | Last changed: Use heredoc to avoid shell escaping of ! in credential helper${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
