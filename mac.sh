@@ -22,6 +22,114 @@ is_main_user() {
     [[ "${HOME}" == "/Users/scowalt" ]]
 }
 
+# Interactive setup for dotfiles deploy key
+setup_dotfiles_deploy_key() {
+    local key_file="${HOME}/.ssh/dotfiles-deploy-key"
+
+    echo ""
+    print_warning "Cannot access scowalt/dotfiles repository"
+    echo ""
+    echo -e "${BOLD}Let's set up a deploy key for read-only access to dotfiles.${NC}"
+    echo ""
+
+    # Step 1: Generate deploy key if it doesn't exist
+    if [[ ! -f "${key_file}" ]]; then
+        echo -e "${CYAN}Step 1: Generating deploy key...${NC}"
+        mkdir -p ~/.ssh
+        chmod 700 ~/.ssh
+        ssh-keygen -t ed25519 -f "${key_file}" -N '' -C "dotfiles-deploy-key-$(hostname)"
+        print_success "Deploy key generated at ${key_file}"
+        echo ""
+    else
+        echo -e "${CYAN}Step 1: Deploy key already exists at ${key_file}${NC}"
+        echo ""
+    fi
+
+    # Step 2: Display public key and instructions
+    echo -e "${CYAN}Step 2: Add this public key to GitHub${NC}"
+    echo ""
+    echo -e "  Go to: ${BOLD}https://github.com/scowalt/dotfiles/settings/keys${NC}"
+    echo -e "  Click 'Add deploy key', give it a name, and paste this key:"
+    echo ""
+    echo -e "${GRAY}────────────────────────────────────────────────────────────────${NC}"
+    cat "${key_file}.pub"
+    echo -e "${GRAY}────────────────────────────────────────────────────────────────${NC}"
+    echo ""
+
+    # Copy to clipboard if pbcopy is available
+    if command -v pbcopy &>/dev/null; then
+        cat "${key_file}.pub" | pbcopy
+        print_success "Public key copied to clipboard!"
+    fi
+    echo ""
+
+    # Step 3: Wait for user confirmation
+    echo -e "${YELLOW}Press Enter after you've added the key to GitHub...${NC}"
+    read -r
+
+    # Set up SSH config for the deploy key
+    bootstrap_ssh_config
+
+    # Test the key
+    echo -e "${CYAN}Step 3: Testing deploy key access...${NC}"
+    if ssh -i "${key_file}" -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+        print_success "Deploy key works! Continuing setup..."
+        return 0
+    else
+        print_error "Deploy key authentication failed."
+        echo -e "Please verify:"
+        echo -e "  1. The key was added to https://github.com/scowalt/dotfiles/settings/keys"
+        echo -e "  2. You have the correct permissions on the repository"
+        echo ""
+        echo -e "${YELLOW}Press Enter to retry, or Ctrl+C to abort...${NC}"
+        read -r
+        # Recursive retry
+        setup_dotfiles_deploy_key
+    fi
+}
+
+# Check if we have access to scowalt/dotfiles via any available method
+check_dotfiles_access() {
+    print_message "Checking access to scowalt/dotfiles..."
+
+    # Method 1: Main user with SSH key
+    if is_main_user; then
+        if ssh -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+            print_debug "Access via SSH (main user)"
+            return 0
+        fi
+    fi
+
+    # Method 2: GH_TOKEN_SCOWALT for HTTPS access
+    source_gh_tokens
+    if [[ -n "${GH_TOKEN_SCOWALT}" ]]; then
+        # Test if the token actually works
+        if curl -sf -H "Authorization: token ${GH_TOKEN_SCOWALT}" \
+            "https://api.github.com/repos/scowalt/dotfiles" > /dev/null 2>&1; then
+            print_debug "Access via GH_TOKEN_SCOWALT"
+            return 0
+        else
+            print_warning "GH_TOKEN_SCOWALT is set but cannot access scowalt/dotfiles"
+        fi
+    fi
+
+    # Method 3: Deploy key at ~/.ssh/dotfiles-deploy-key
+    if [[ -f ~/.ssh/dotfiles-deploy-key ]]; then
+        # Set up SSH config for github-dotfiles if not present
+        bootstrap_ssh_config
+        # Test if the deploy key works
+        if ssh -i ~/.ssh/dotfiles-deploy-key -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+            print_debug "Access via deploy key"
+            return 0
+        else
+            print_warning "Deploy key exists but cannot authenticate with GitHub"
+        fi
+    fi
+
+    # No access method worked
+    return 1
+}
+
 # Source GitHub tokens from ~/.gh_token if it exists
 # File format:
 #   export GH_TOKEN=github_pat_xxx           # work/primary org token
@@ -541,7 +649,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 50 | Last changed: Use heredoc to avoid shell escaping of ! in credential helper${NC}"
+echo -e "${GRAY}Version 51 | Last changed: Interactive deploy key setup if no dotfiles access${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
@@ -579,6 +687,11 @@ fi
 
 # Common setup for all users
 print_section "Dotfiles Management"
+
+# Early check: ensure we have access to dotfiles repo before proceeding
+if ! check_dotfiles_access; then
+    setup_dotfiles_deploy_key
+fi
 
 # Bootstrap the credential helper before chezmoi (chicken-and-egg problem)
 # The helper script is part of dotfiles but we need it to pull dotfiles
