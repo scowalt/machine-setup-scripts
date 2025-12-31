@@ -599,14 +599,11 @@ initialize_chezmoi() {
 
     local chez_src="${HOME}/.local/share/chezmoi"
 
-    # ---------- NEW: re‑try if the repo directory exists but is empty ----------
-    local chez_contents
-    chez_contents=$(ls -A "${chez_src}" 2>/dev/null || true)
-    if [[ -d "${chez_src}" ]] && [[ -z "${chez_contents}" ]]; then
-        print_warning "chezmoi directory exists but is empty – retrying initialization…"
+    # Check if directory exists but is not a valid git repo (empty or missing .git)
+    if [[ -d "${chez_src}" ]] && [[ ! -d "${chez_src}/.git" ]]; then
+        print_warning "chezmoi directory exists but is not a git repository. Reinitializing..."
         rm -rf "${chez_src}"
     fi
-    # --------------------------------------------------------------------------
 
     if [[ ! -d "${chez_src}" ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles…"
@@ -1241,7 +1238,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 48 | Last changed: Fix interactive prompts for curl|bash execution${NC}"
+echo -e "${GRAY}Version 49 | Last changed: Reinitialize chezmoi if not a valid git repo${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi

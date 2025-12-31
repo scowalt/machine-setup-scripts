@@ -549,7 +549,15 @@ install_chezmoi() {
 
 # Initialize chezmoi if not already initialized
 initialize_chezmoi() {
-    if [[ ! -d ~/.local/share/chezmoi ]]; then
+    local chez_src="${HOME}/.local/share/chezmoi"
+
+    # Check if directory exists but is not a valid git repo
+    if [[ -d "${chez_src}" ]] && [[ ! -d "${chez_src}/.git" ]]; then
+        print_warning "chezmoi directory exists but is not a git repository. Reinitializing..."
+        rm -rf "${chez_src}"
+    fi
+
+    if [[ ! -d "${chez_src}" ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
         if is_main_user; then
             # Main user uses SSH for push access
@@ -1240,7 +1248,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 57 | Last changed: Fix interactive prompts for curl|bash execution${NC}"
+echo -e "${GRAY}Version 58 | Last changed: Reinitialize chezmoi if not a valid git repo${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
