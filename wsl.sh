@@ -352,9 +352,18 @@ initialize_chezmoi() {
 
     if [[ ! -d "${chez_src}" ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
-        if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
-            print_error "Failed to initialize chezmoi. Check SSH key and network connectivity."
-            exit 1
+        if [[ "$(whoami)" == "scowalt" ]]; then
+            # Main user uses SSH with default key for push access
+            if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
+                print_error "Failed to initialize chezmoi. Check SSH key and network connectivity."
+                exit 1
+            fi
+        else
+            # Secondary users use SSH via deploy key (github-dotfiles alias)
+            if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
+                print_error "Failed to initialize chezmoi. Check deploy key setup."
+                exit 1
+            fi
         fi
         print_success "chezmoi initialized with scowalt/dotfiles."
     else
@@ -873,7 +882,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 45 | Last changed: Reinitialize chezmoi if not a valid git repo${NC}"
+echo -e "${GRAY}Version 46 | Last changed: Use deploy key for non-main user chezmoi init${NC}"
 
 print_section "System Setup"
 update_and_install_core

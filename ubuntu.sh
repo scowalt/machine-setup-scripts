@@ -566,17 +566,9 @@ initialize_chezmoi() {
                 exit 1
             fi
         else
-            # Secondary users use HTTPS with GH_TOKEN_SCOWALT
-            source_gh_tokens
-            if [[ -n "${GH_TOKEN_SCOWALT}" ]]; then
-                # Use HTTPS - the credential helper will provide the token
-                if ! chezmoi init --apply --force "https://github.com/scowalt/dotfiles.git"; then
-                    print_error "Failed to initialize chezmoi. Please review the output above."
-                    exit 1
-                fi
-            else
-                print_error "Missing GH_TOKEN_SCOWALT in ~/.gh_token"
-                print_message "Add 'export GH_TOKEN_SCOWALT=github_pat_xxx' to ~/.gh_token"
+            # Secondary users use SSH via deploy key (github-dotfiles alias)
+            if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
+                print_error "Failed to initialize chezmoi. Please review the output above."
                 exit 1
             fi
         fi
@@ -1248,7 +1240,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 58 | Last changed: Reinitialize chezmoi if not a valid git repo${NC}"
+echo -e "${GRAY}Version 59 | Last changed: Use deploy key for non-main user chezmoi init${NC}"
 
 print_section "User & System Setup"
 ensure_not_root

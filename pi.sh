@@ -607,17 +607,20 @@ initialize_chezmoi() {
 
     if [[ ! -d "${chez_src}" ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles…"
-        if ${chezmoi_cmd} init --apply --force scowalt/dotfiles --ssh; then
-            print_success "chezmoi initialized via SSH."
+        if [[ "$(whoami)" == "scowalt" ]]; then
+            # Main user uses SSH with default key for push access
+            if ! ${chezmoi_cmd} init --apply --force scowalt/dotfiles --ssh; then
+                print_error "Failed to initialize chezmoi. Check SSH key and network connectivity."
+                return 1
+            fi
         else
-            print_error "SSH clone failed. Retrying with HTTPS…"
-            if ${chezmoi_cmd} init --apply --force https://github.com/scowalt/dotfiles.git; then
-                print_success "chezmoi initialized via HTTPS."
-            else
-                print_error "chezmoi initialization still failed. Check your git credentials."
+            # Secondary users use SSH via deploy key (github-dotfiles alias)
+            if ! ${chezmoi_cmd} init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
+                print_error "Failed to initialize chezmoi. Check deploy key setup."
                 return 1
             fi
         fi
+        print_success "chezmoi initialized with scowalt/dotfiles."
     else
         print_debug "chezmoi already initialized."
     fi
@@ -1238,7 +1241,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 49 | Last changed: Reinitialize chezmoi if not a valid git repo${NC}"
+echo -e "${GRAY}Version 50 | Last changed: Use deploy key for non-main user chezmoi init${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi

@@ -693,23 +693,15 @@ initialize_chezmoi() {
     if [[ ! -d "${chez_src}" ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
         if is_main_user; then
-            # Main user uses SSH for push access
+            # Main user uses SSH with default key for push access
             if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
                 print_error "Failed to initialize chezmoi."
                 exit 1
             fi
         else
-            # Secondary users use HTTPS with GH_TOKEN_SCOWALT
-            source_gh_tokens
-            if [[ -n "${GH_TOKEN_SCOWALT}" ]]; then
-                # Use HTTPS - the credential helper will provide the token
-                if ! chezmoi init --apply --force "https://github.com/scowalt/dotfiles.git"; then
-                    print_error "Failed to initialize chezmoi."
-                    exit 1
-                fi
-            else
-                print_error "Missing GH_TOKEN_SCOWALT in ~/.gh_token"
-                print_message "Add 'export GH_TOKEN_SCOWALT=github_pat_xxx' to ~/.gh_token"
+            # Secondary users use SSH via deploy key (github-dotfiles alias)
+            if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
+                print_error "Failed to initialize chezmoi."
                 exit 1
             fi
         fi
@@ -994,7 +986,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 35 | Last changed: Reinitialize chezmoi if not a valid git repo${NC}"
+echo -e "${GRAY}Version 36 | Last changed: Use deploy key for non-main user chezmoi init${NC}"
 
 print_section "System Verification"
 verify_arch_system
