@@ -528,7 +528,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 47 | Last changed: Add --force to chezmoi update to prevent hanging${NC}"
+echo -e "${GRAY}Version 48 | Last changed: Fix credential helper for bash 3.2 compatibility${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
@@ -577,14 +577,19 @@ if [[ ! -x "${HOME}/.local/bin/git-credential-github-multi" ]]; then
         cat > "${HOME}/.local/bin/git-credential-github-multi" << 'HELPER_EOF'
 #!/bin/bash
 # Git credential helper that routes to different GitHub tokens based on repo owner
-declare -A input
+# Note: Uses simple variables instead of associative arrays for bash 3.2 compatibility (macOS default)
+host=""
+path=""
 while IFS='=' read -r key value; do
     [[ -z "${key}" ]] && break
-    input["${key}"]="${value}"
+    case "${key}" in
+        host) host="${value}" ;;
+        path) path="${value}" ;;
+    esac
 done
-[[ "${input[host]}" != "github.com" ]] && exit 1
+[[ "${host}" != "github.com" ]] && exit 1
 owner=""
-[[ -n "${input[path]}" ]] && owner=$(echo "${input[path]}" | cut -d'/' -f1)
+[[ -n "${path}" ]] && owner=$(echo "${path}" | cut -d'/' -f1)
 token=""
 if [[ "${owner}" == "scowalt" ]] && [[ -n "${GH_TOKEN_SCOWALT}" ]]; then
     token="${GH_TOKEN_SCOWALT}"
