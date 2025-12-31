@@ -96,9 +96,9 @@ setup_dotfiles_deploy_key() {
     # Open GitHub in browser via Windows
     powershell.exe -Command "Start-Process 'https://github.com/scowalt/dotfiles/settings/keys'" 2>/dev/null || true
 
-    # Step 3: Wait for user confirmation
+    # Step 3: Wait for user confirmation (read from /dev/tty for curl|bash compatibility)
     echo -e "${YELLOW}Press Enter after you've added the key to GitHub...${NC}"
-    read -r
+    read -r < /dev/tty
 
     # Set up SSH config for the deploy key
     bootstrap_ssh_config
@@ -122,7 +122,7 @@ setup_dotfiles_deploy_key() {
         if [[ ${attempt} -lt ${max_retries} ]]; then
             echo -e "${YELLOW}Press Enter to retry, or type 'skip' to continue without dotfiles:${NC}"
             local response
-            read -r response
+            read -r response < /dev/tty
             if [[ "${response}" == "skip" ]]; then
                 print_warning "Skipping dotfiles setup."
                 return 1
@@ -865,7 +865,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 43 | Last changed: Fix dotfiles section conditional structure${NC}"
+echo -e "${GRAY}Version 44 | Last changed: Fix interactive prompts for curl|bash execution${NC}"
 
 print_section "System Setup"
 update_and_install_core

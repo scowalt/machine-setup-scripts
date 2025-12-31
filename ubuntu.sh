@@ -104,9 +104,9 @@ setup_dotfiles_deploy_key() {
     fi
     echo ""
 
-    # Step 3: Wait for user confirmation
+    # Step 3: Wait for user confirmation (read from /dev/tty for curl|bash compatibility)
     echo -e "${YELLOW}Press Enter after you've added the key to GitHub...${NC}"
-    read -r
+    read -r < /dev/tty
 
     # Set up SSH config for the deploy key
     bootstrap_ssh_config
@@ -130,7 +130,7 @@ setup_dotfiles_deploy_key() {
         if [[ ${attempt} -lt ${max_retries} ]]; then
             echo -e "${YELLOW}Press Enter to retry, or type 'skip' to continue without dotfiles:${NC}"
             local response
-            read -r response
+            read -r response < /dev/tty
             if [[ "${response}" == "skip" ]]; then
                 print_warning "Skipping dotfiles setup."
                 return 1
@@ -1240,7 +1240,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 56 | Last changed: Fix dotfiles section conditional structure${NC}"
+echo -e "${GRAY}Version 57 | Last changed: Fix interactive prompts for curl|bash execution${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
