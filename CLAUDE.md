@@ -299,6 +299,75 @@ The pyenv installer will fail if `~/.pyenv` directory already exists. The script
 
 This prevents the confusing situation where pyenv is partially installed but not functional.
 
+### Interactive Prompts with curl|bash
+
+When scripts are executed via `curl | bash`, stdin is the script content itself, not the terminal. This means `read` commands will get EOF immediately instead of waiting for user input.
+
+**Solution**: Read from `/dev/tty` explicitly:
+
+```bash
+# Won't work with curl|bash - gets EOF immediately
+read -r
+
+# Works correctly - reads from terminal
+read -r < /dev/tty
+
+# For reading into a variable
+read -r response < /dev/tty
+```
+
+This applies to any interactive prompt in the scripts (e.g., deploy key setup confirmation).
+
+### Chezmoi Initialization Validation
+
+Simply checking if `~/.local/share/chezmoi` exists is not sufficient to determine if chezmoi is properly initialized. The directory might exist but be empty or corrupted (missing `.git`).
+
+**Solution**: Check for the `.git` subdirectory:
+
+```bash
+local chez_src="${HOME}/.local/share/chezmoi"
+
+# Check if directory exists but is not a valid git repo
+if [[ -d "${chez_src}" ]] && [[ ! -d "${chez_src}/.git" ]]; then
+    print_warning "chezmoi directory exists but is not a git repository. Reinitializing..."
+    rm -rf "${chez_src}"
+fi
+```
+
+This prevents the "fatal: not a git repository" error during `chezmoi update`.
+
+### Deploy Key Setup for Non-Main Users
+
+The scripts support running dotfiles setup for users other than the main user (scowalt) via SSH deploy keys. This is more reliable than requiring personal access tokens.
+
+**Architecture**:
+
+1. **Deploy key generation**: `~/.ssh/dotfiles-deploy-key` (ed25519)
+2. **SSH config alias**: `github-dotfiles` host that uses the deploy key
+3. **Chezmoi initialization**: Uses `git@github-dotfiles:scowalt/dotfiles.git` instead of the default SSH URL
+
+**How it works**:
+
+```bash
+# SSH config (~/.ssh/config) set up by bootstrap_ssh_config()
+Host github-dotfiles
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/dotfiles-deploy-key
+    IdentitiesOnly yes
+
+# Chezmoi init for non-main users
+chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"
+```
+
+**User flow**:
+
+1. Script detects no SSH/token access to dotfiles repo
+2. Generates deploy key and displays public key
+3. User adds deploy key to GitHub repo settings (read-only)
+4. Script tests the key with retry loop
+5. Chezmoi initializes using the `github-dotfiles` alias
+
 ## Development Practices
 
 ### Code Quality Tools
