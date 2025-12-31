@@ -449,8 +449,14 @@ install_omarchy() {
 
 # Check and set up SSH key
 setup_ssh_key() {
+    # Skip SSH key setup for non-sudo users (they won't be making outbound SSH requests)
+    if ! can_sudo; then
+        print_debug "No sudo access - skipping SSH key setup."
+        return
+    fi
+
     print_message "Checking for existing SSH key associated with GitHub..."
-    
+
     # Retrieve GitHub-associated keys
     local existing_keys
     existing_keys=$(curl -s https://github.com/scowalt.keys)
@@ -968,7 +974,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 27 | Last changed: Skip sudo operations gracefully for non-privileged users${NC}"
+echo -e "${GRAY}Version 28 | Last changed: Skip SSH key and dotfiles setup for non-sudo users${NC}"
 
 print_section "System Verification"
 verify_arch_system
@@ -1005,7 +1011,7 @@ setup_nodejs
 install_claude_code
 install_pyenv
 
-if is_scowalt_user; then
+if is_scowalt_user && can_sudo; then
     print_section "Dotfiles Management"
 
     # Early check: ensure we have access to dotfiles repo before proceeding
