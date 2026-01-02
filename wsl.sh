@@ -600,12 +600,20 @@ install_claude_code() {
 
     print_message "Installing Claude Code..."
 
-    local install_script
-    install_script=$(curl -fsSL https://claude.ai/install.sh)
-    if echo "${install_script}" | bash; then
-        print_success "Claude Code installed."
+    # Download to temp file and execute (more reliable than piping when run via curl|bash)
+    local temp_script
+    temp_script=$(mktemp)
+    if curl -fsSL https://claude.ai/install.sh -o "${temp_script}"; then
+        chmod +x "${temp_script}"
+        if bash "${temp_script}"; then
+            print_success "Claude Code installed."
+        else
+            print_error "Failed to install Claude Code."
+        fi
+        rm -f "${temp_script}"
     else
-        print_error "Failed to install Claude Code."
+        print_error "Failed to download Claude Code installer."
+        rm -f "${temp_script}"
     fi
 }
 
@@ -959,7 +967,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 47 | Last changed: Add jj (Jujutsu) version control${NC}"
+echo -e "${GRAY}Version 48 | Last changed: Fix Claude Code install to use temp file instead of pipe${NC}"
 
 print_section "System Setup"
 update_and_install_core

@@ -402,7 +402,11 @@ function Install-ClaudeCode {
     Write-Host "$arrow Installing Claude Code..." -ForegroundColor Cyan
 
     try {
-        Invoke-RestMethod https://claude.ai/install.ps1 | Invoke-Expression
+        # Download to temp file and execute (more reliable than piping)
+        $tempScript = [System.IO.Path]::GetTempFileName() + ".ps1"
+        Invoke-RestMethod https://claude.ai/install.ps1 -OutFile $tempScript
+        & $tempScript
+        Remove-Item $tempScript -ErrorAction SilentlyContinue
         Write-Host "$success Claude Code installed." -ForegroundColor Green
     }
     catch {
@@ -553,7 +557,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 47 | Last changed: Add jj (Jujutsu) version control" -ForegroundColor DarkGray
+    Write-Host "Version 48 | Last changed: Fix Claude Code install to use temp file instead of pipe" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
