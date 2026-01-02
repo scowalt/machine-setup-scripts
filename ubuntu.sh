@@ -835,8 +835,9 @@ install_claude_code() {
         chmod +x "${temp_script}"
         if bash "${temp_script}"; then
             # Add claude bin directory to PATH for current session
-            if [[ -d "${HOME}/.claude/bin" ]]; then
-                export PATH="${HOME}/.claude/bin:${PATH}"
+            # The native installer puts claude in ~/.local/bin
+            if [[ -d "${HOME}/.local/bin" ]]; then
+                export PATH="${HOME}/.local/bin:${PATH}"
             fi
             print_success "Claude Code installed."
         else
@@ -1347,7 +1348,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 63 | Last changed: Fix Claude Code install by adding ~/.claude/bin to PATH${NC}"
+echo -e "${GRAY}Version 64 | Last changed: Fix Claude Code PATH (uses ~/.local/bin not ~/.claude/bin)${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
