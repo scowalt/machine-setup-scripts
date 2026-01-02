@@ -1159,12 +1159,17 @@ install_claude_code() {
 
     print_message "Installing Claude Code..."
 
+    # Use the native installer (doesn't require Node.js)
     # Download to temp file and execute (more reliable than piping when run via curl|bash)
     local temp_script
     temp_script=$(mktemp)
     if curl -fsSL https://claude.ai/install.sh -o "${temp_script}"; then
         chmod +x "${temp_script}"
         if bash "${temp_script}"; then
+            # Add claude bin directory to PATH for current session
+            if [[ -d "${HOME}/.claude/bin" ]]; then
+                export PATH="${HOME}/.claude/bin:${PATH}"
+            fi
             print_success "Claude Code installed."
         else
             print_error "Failed to install Claude Code."
@@ -1343,7 +1348,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 53 | Last changed: Add uv installation${NC}"
+echo -e "${GRAY}Version 54 | Last changed: Fix Claude Code install by adding ~/.claude/bin to PATH${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
