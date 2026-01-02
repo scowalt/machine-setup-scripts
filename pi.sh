@@ -1234,6 +1234,23 @@ install_infisical() {
     print_success "Infisical CLI installed."
 }
 
+# Install uv (fast Python package manager)
+install_uv() {
+    if command -v uv &> /dev/null; then
+        print_debug "uv is already installed."
+        return
+    fi
+
+    print_message "Installing uv..."
+    local uv_install
+    uv_install=$(curl -LsSf https://astral.sh/uv/install.sh)
+    if sh <<< "${uv_install}"; then
+        print_success "uv installed."
+    else
+        print_error "Failed to install uv."
+    fi
+}
+
 # Install pyenv for Python version management with Raspberry Pi optimizations
 install_pyenv() {
     if ! command -v pyenv &> /dev/null; then
@@ -1326,7 +1343,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 52 | Last changed: Fix Claude Code install to use temp file instead of pipe${NC}"
+echo -e "${GRAY}Version 53 | Last changed: Add uv installation${NC}"
 
 print_section "System Detection & Setup"
 check_raspberry_pi
@@ -1342,6 +1359,7 @@ install_1password_cli
 install_fnm
 setup_nodejs
 install_pyenv
+install_uv
 install_infisical
 install_opentofu
 

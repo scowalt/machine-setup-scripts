@@ -1172,6 +1172,23 @@ install_act() {
     print_success "act installed."
 }
 
+# Install uv (fast Python package manager)
+install_uv() {
+    if command -v uv &> /dev/null; then
+        print_debug "uv is already installed."
+        return
+    fi
+
+    print_message "Installing uv..."
+    local uv_install
+    uv_install=$(curl -LsSf https://astral.sh/uv/install.sh)
+    if sh <<< "${uv_install}"; then
+        print_success "uv installed."
+    else
+        print_error "Failed to install uv."
+    fi
+}
+
 # Install pyenv for Python version management
 install_pyenv() {
     if ! command -v pyenv &> /dev/null; then
@@ -1325,7 +1342,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 61 | Last changed: Fix Claude Code install to use temp file instead of pipe${NC}"
+echo -e "${GRAY}Version 62 | Last changed: Add uv installation${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1354,6 +1371,7 @@ install_jj
 install_fnm
 setup_nodejs
 install_pyenv
+install_uv
 install_opentofu
 
 print_section "Security Tools"

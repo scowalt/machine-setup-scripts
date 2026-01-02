@@ -24,7 +24,8 @@ $wingetPackages = (
     "DEVCOM.JetBrainsMonoNerdFont",
     "nektos.act",
     "OpenTofu.Tofu",
-    "jj-vcs.jj"
+    "jj-vcs.jj",
+    "astral-sh.uv"
 )
 
 # Define Nerd Font symbols using Unicode code points
@@ -557,7 +558,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 48 | Last changed: Fix Claude Code install to use temp file instead of pipe" -ForegroundColor DarkGray
+    Write-Host "Version 49 | Last changed: Add uv installation" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
