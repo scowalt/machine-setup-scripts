@@ -28,8 +28,17 @@ _has_sudo=""
 can_sudo() {
     if [[ -z "${_sudo_checked}" ]]; then
         _sudo_checked=1
+        # Method 1: Check if credentials are already cached
         if sudo -n true 2>/dev/null; then
             _has_sudo=1
+        # Method 2: Check if user is in a sudo-capable group, then prompt
+        elif groups 2>/dev/null | grep -qE '\b(sudo|wheel|admin)\b'; then
+            # User is in sudo group but credentials aren't cached - prompt once
+            if sudo -v 2>/dev/null; then
+                _has_sudo=1
+            else
+                _has_sudo=0
+            fi
         else
             _has_sudo=0
         fi
@@ -702,7 +711,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 58 | Last changed: Fix Claude Code PATH (uses ~/.local/bin not ~/.claude/bin)${NC}"
+echo -e "${GRAY}Version 59 | Last changed: Fix can_sudo to check group membership and prompt if needed${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
