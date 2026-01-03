@@ -298,6 +298,8 @@ setup_ssh_key() {
             print_success "Existing SSH key recognized by GitHub."
         else
             print_error "SSH key not recognized by GitHub. Please add it manually."
+            print_message "Please add the following SSH key to GitHub:"
+            cat ~/.ssh/id_rsa.pub
             print_message "Opening GitHub SSH keys page..."
             open "https://github.com/settings/keys"
             exit 1
@@ -711,7 +713,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 59 | Last changed: Fix can_sudo to check group membership and prompt if needed${NC}"
+echo -e "${GRAY}Version 60 | Last changed: Print SSH key when not recognized by GitHub${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"

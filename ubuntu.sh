@@ -453,6 +453,8 @@ setup_ssh_key() {
             print_success "Existing SSH key recognized by GitHub."
         else
             print_error "SSH key not recognized by GitHub. Please add it manually."
+            print_message "Please add the following SSH key to GitHub:"
+            cat ~/.ssh/id_rsa.pub
             print_message "Opening GitHub SSH keys page..."
             xdg-open "https://github.com/settings/keys" 2>/dev/null || true
             exit 1
@@ -1357,7 +1359,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 65 | Last changed: Fix can_sudo to check group membership and prompt if needed${NC}"
+echo -e "${GRAY}Version 66 | Last changed: Print SSH key when not recognized by GitHub${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
