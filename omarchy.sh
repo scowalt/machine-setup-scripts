@@ -1011,7 +1011,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 43 | Last changed: Print SSH key when not recognized by GitHub${NC}"
+echo -e "${GRAY}Version 44 | Last changed: Remove redundant tmux source before TPM installed${NC}"
 
 print_section "System Verification"
 verify_arch_system
@@ -1100,7 +1100,6 @@ HELPER_EOF
     configure_chezmoi_git
     update_chezmoi
     chezmoi apply --force
-    tmux source ~/.tmux.conf 2>/dev/null || true
 else
     print_warning "Skipping dotfiles management - no access to repository."
 fi
