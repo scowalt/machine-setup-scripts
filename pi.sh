@@ -1247,28 +1247,6 @@ install_act() {
     fi
 }
 
-# Install Infisical CLI
-install_infisical() {
-    if command -v infisical &> /dev/null; then
-        print_debug "Infisical CLI is already installed."
-        return
-    fi
-
-    print_message "Installing Infisical CLI..."
-    local infisical_setup
-    infisical_setup=$(curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh')
-    if ! echo "${infisical_setup}" | sudo -E bash; then
-        print_error "Failed to add Infisical repository."
-        exit 1
-    fi
-    sudo apt update -qq
-    if ! sudo apt install -y infisical; then
-        print_error "Failed to install Infisical CLI. Please review the output above."
-        exit 1
-    fi
-    print_success "Infisical CLI installed."
-}
-
 # Install uv (fast Python package manager)
 install_uv() {
     if command -v uv &> /dev/null; then
@@ -1396,7 +1374,6 @@ install_fnm
 setup_nodejs
 install_pyenv
 install_uv
-install_infisical
 install_opentofu
 
 print_section "Network & SSH"

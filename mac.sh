@@ -248,7 +248,7 @@ install_core_packages() {
 
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
-    local packages=("git" "curl" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "infisical" "git-town" "jj" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx" "opentofu" "uv")
+    local packages=("git" "curl" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "git-town" "jj" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx" "opentofu" "uv")
     local to_install=()
     
     # Get all installed packages at once (much faster than checking individually)

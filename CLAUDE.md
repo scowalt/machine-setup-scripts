@@ -70,7 +70,7 @@ All scripts follow a consistent pattern:
 - Shell: fish (with completions), tmux
 - Node.js: fnm (Fast Node Manager)
 - Python: pyenv (Python version management)
-- Security: 1Password CLI, Tailscale, Infisical
+- Security: 1Password CLI, Tailscale
 - Dotfiles: Chezmoi (with auto-sync)
 - Terminal: Starship prompt
 - CI/CD: act (local GitHub Actions)

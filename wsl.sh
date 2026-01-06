@@ -771,22 +771,6 @@ install_1password_cli() {
     print_success "1Password CLI installed."
 }
 
-# Install Infisical CLI
-install_infisical() {
-    if command -v infisical &> /dev/null; then
-        print_debug "Infisical CLI is already installed."
-        return
-    fi
-
-    print_message "Installing Infisical CLI..."
-    ensure_brew_available
-    if ! brew install infisical; then
-        print_error "Failed to install Infisical CLI via Homebrew."
-        exit 1
-    fi
-    print_success "Infisical CLI installed."
-}
-
 # Install Tailscale
 install_tailscale() {
     print_message "Skipping Tailscale installation as it is not needed on WSL."
@@ -1053,7 +1037,6 @@ install_opentofu
 
 print_section "Security Tools"
 install_1password_cli
-install_infisical
 install_tailscale
 setup_unattended_upgrades
 

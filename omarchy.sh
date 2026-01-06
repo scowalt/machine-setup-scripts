@@ -554,7 +554,7 @@ install_dev_tools_aur() {
     print_message "Installing development tools from AUR..."
 
     # Development tools available in AUR
-    local aur_packages=("fnm-bin" "chezmoi" "1password-cli" "tailscale" "infisical" "act")
+    local aur_packages=("fnm-bin" "chezmoi" "1password-cli" "tailscale" "act")
     local to_install=()
 
     # Check which packages need installation
@@ -563,13 +563,6 @@ install_dev_tools_aur() {
         if [[ "${package}" == "fnm-bin" ]]; then
             if pacman -Qi "fnm-bin" &> /dev/null || pacman -Qi "fnm" &> /dev/null; then
                 print_debug "fnm is already installed."
-            else
-                to_install+=("${package}")
-            fi
-        # Special case: infisical and infisical-bin are alternatives
-        elif [[ "${package}" == "infisical" ]]; then
-            if pacman -Qi "infisical" &> /dev/null || pacman -Qi "infisical-bin" &> /dev/null; then
-                print_debug "infisical is already installed."
             else
                 to_install+=("${package}")
             fi

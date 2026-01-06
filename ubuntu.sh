@@ -521,33 +521,6 @@ install_starship() {
     fi
 }
 
-# Install Infisical if not installed
-install_infisical() {
-    if command -v infisical &> /dev/null; then
-        print_debug "Infisical CLI is already installed."
-        return
-    fi
-
-    if ! can_sudo; then
-        print_warning "No sudo access - cannot install Infisical CLI."
-        return
-    fi
-
-    print_message "Installing Infisical CLI..."
-    local infisical_setup
-    infisical_setup=$(curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh')
-    if ! echo "${infisical_setup}" | sudo -E bash; then
-        print_error "Failed to add Infisical repository."
-        exit 1
-    fi
-    sudo DEBIAN_FRONTEND=noninteractive apt-get update
-    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" install -y infisical; then
-        print_error "Failed to install Infisical CLI. Please review the output above."
-        exit 1
-    fi
-    print_success "Infisical CLI installed."
-}
-
 # Install chezmoi if not installed
 install_chezmoi() {
     if ! command -v chezmoi &> /dev/null; then
@@ -1405,7 +1378,6 @@ install_opentofu
 print_section "Security Tools"
 install_1password_cli
 install_tailscale
-install_infisical
 install_fail2ban
 setup_unattended_upgrades
 
