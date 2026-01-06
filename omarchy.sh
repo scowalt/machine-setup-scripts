@@ -60,7 +60,7 @@ ensure_not_root() {
         print_message "Run the following commands to create the 'scowalt' user:"
         echo ""
         echo "  # Create user with home directory"
-        echo "  useradd -m -s /bin/bash -G wheel,docker scowalt"
+        echo "  useradd -m -s /bin/bash -G wheel scowalt"
         echo ""
         echo "  # Set password for the new user"
         echo "  passwd scowalt"
@@ -1031,7 +1031,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 45 | Last changed: Print user creation commands when running as root${NC}"
+echo -e "${GRAY}Version 46 | Last changed: Remove docker group from user creation (group doesn't exist yet)${NC}"
 
 print_section "User & System Setup"
 ensure_not_root

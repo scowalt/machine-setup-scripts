@@ -334,7 +334,7 @@ ensure_not_root() {
         print_message "Run the following commands to create the 'scowalt' user:"
         echo ""
         echo "  # Create user with home directory"
-        echo "  useradd -m -s /bin/bash -G sudo,docker scowalt"
+        echo "  useradd -m -s /bin/bash -G sudo scowalt"
         echo ""
         echo "  # Set password for the new user"
         echo "  passwd scowalt"
@@ -1370,7 +1370,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 67 | Last changed: Print user creation commands when running as root${NC}"
+echo -e "${GRAY}Version 68 | Last changed: Remove docker group from user creation (group doesn't exist yet)${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
