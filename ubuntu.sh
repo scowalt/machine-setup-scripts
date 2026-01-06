@@ -1345,7 +1345,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 69 | Last changed: Add debugging to identify early exit issue${NC}"
+echo -e "${GRAY}Version 70 | Last changed: Add debug after fi block${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1443,6 +1443,7 @@ HELPER_EOF
 else
     print_warning "Skipping dotfiles management - no access to repository."
 fi
+print_debug "After dotfiles fi block"
 
 print_section "Shell Configuration"
 set_fish_as_default_shell
