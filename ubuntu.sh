@@ -1,8 +1,5 @@
 #!/bin/bash
 
-# Debug trap to catch unexpected exits
-trap 'echo "DEBUG: Script exiting at line $LINENO with code $?"' EXIT
-
 # Define colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -601,13 +598,11 @@ EOF
 update_chezmoi() {
     if [[ -d ~/.local/share/chezmoi ]]; then
         print_message "Updating chezmoi dotfiles repository..."
-        # Run in subshell to isolate any potential exit behavior from chezmoi hooks/scripts
-        if (chezmoi update --force > /dev/null); then
+        if chezmoi update --force > /dev/null; then
             print_success "chezmoi dotfiles repository updated."
         else
             print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
         fi
-        print_debug "update_chezmoi function completing..."
     else
         print_debug "chezmoi not initialized yet, skipping update."
     fi
@@ -1351,7 +1346,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 78 | Last changed: Fix ssh consuming stdin (curl|bash fix)${NC}"
+echo -e "${GRAY}Version 79 | Last changed: Fix ssh consuming stdin, clean up debug${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1391,18 +1386,18 @@ setup_unattended_upgrades
 
 print_section "Dotfiles Management"
 
-# Simplified: removed if/else to debug early exit issue
-echo "DEBUG: About to call check_dotfiles_access"
-check_dotfiles_access
-echo "DEBUG: check_dotfiles_access returned $?"
+# Check if we have access (via SSH, token, or deploy key)
+# If not, try interactive deploy key setup
+if check_dotfiles_access || setup_dotfiles_deploy_key; then
+    # We have access, proceed with chezmoi setup
 
-# Bootstrap credential helper
-if [[ ! -x "${HOME}/.local/bin/git-credential-github-multi" ]]; then
-    source_gh_tokens
-    if [[ -n "${GH_TOKEN_SCOWALT}" ]] || [[ -n "${GH_TOKEN}" ]]; then
-        print_message "Bootstrapping git credential helper..."
-        mkdir -p "${HOME}/.local/bin"
-        cat > "${HOME}/.local/bin/git-credential-github-multi" << 'HELPER_EOF'
+    # Bootstrap the credential helper before chezmoi (chicken-and-egg problem)
+    if [[ ! -x "${HOME}/.local/bin/git-credential-github-multi" ]]; then
+        source_gh_tokens
+        if [[ -n "${GH_TOKEN_SCOWALT}" ]] || [[ -n "${GH_TOKEN}" ]]; then
+            print_message "Bootstrapping git credential helper..."
+            mkdir -p "${HOME}/.local/bin"
+            cat > "${HOME}/.local/bin/git-credential-github-multi" << 'HELPER_EOF'
 #!/bin/bash
 # Git credential helper that routes to different GitHub tokens based on repo owner
 declare -A input
@@ -1425,20 +1420,26 @@ echo "host=github.com"
 echo "username=x-access-token"
 echo "password=${token}"
 HELPER_EOF
-        chmod +x "${HOME}/.local/bin/git-credential-github-multi"
-        print_success "Git credential helper bootstrapped."
+            chmod +x "${HOME}/.local/bin/git-credential-github-multi"
+            print_success "Git credential helper bootstrapped."
+        fi
     fi
+
+    # Ensure ~/.local/bin is in PATH for the credential helper
+    export PATH="${HOME}/.local/bin:${PATH}"
+
+    # Set up the credential helper for GitHub
+    setup_github_credential_helper
+
+    install_chezmoi
+    initialize_chezmoi
+    configure_chezmoi_git
+    update_chezmoi
+    (chezmoi apply --force) || true
+    tmux source ~/.tmux.conf 2>/dev/null || true
+else
+    print_warning "Skipping dotfiles management - no access to repository."
 fi
-
-export PATH="${HOME}/.local/bin:${PATH}"
-setup_github_credential_helper
-install_chezmoi
-initialize_chezmoi
-configure_chezmoi_git
-update_chezmoi
-(chezmoi apply --force) || true
-
-echo "DEBUG: After chezmoi apply"
 
 print_section "Shell Configuration"
 set_fish_as_default_shell

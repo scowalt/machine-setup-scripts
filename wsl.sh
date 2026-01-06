@@ -137,7 +137,8 @@ setup_dotfiles_deploy_key() {
     local attempt=1
     while [[ ${attempt} -le ${max_retries} ]]; do
         echo -e "${CYAN}Step 3: Testing deploy key access (attempt ${attempt}/${max_retries})...${NC}"
-        if ssh -i "${key_file}" -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+        # < /dev/null prevents ssh from consuming stdin (important for curl|bash)
+        if ssh -i "${key_file}" -o StrictHostKeyChecking=accept-new -T git@github.com < /dev/null 2>&1 | grep -q "successfully authenticated"; then
             print_success "Deploy key works! Continuing setup..."
             return 0
         fi
@@ -169,7 +170,8 @@ check_dotfiles_access() {
     print_message "Checking access to scowalt/dotfiles..."
 
     # Method 1: SSH key (main user)
-    if ssh -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+    # < /dev/null prevents ssh from consuming stdin (important for curl|bash)
+    if ssh -T git@github.com < /dev/null 2>&1 | grep -q "successfully authenticated"; then
         print_debug "Access via SSH"
         return 0
     fi
@@ -179,7 +181,8 @@ check_dotfiles_access() {
         # Set up SSH config for github-dotfiles if not present
         bootstrap_ssh_config
         # Test if the deploy key works
-        if ssh -i ~/.ssh/dotfiles-deploy-key -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+        # < /dev/null prevents ssh from consuming stdin (important for curl|bash)
+        if ssh -i ~/.ssh/dotfiles-deploy-key -T git@github.com < /dev/null 2>&1 | grep -q "successfully authenticated"; then
             print_debug "Access via deploy key"
             return 0
         else
@@ -1004,7 +1007,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 55 | Last changed: Remove docker group from user creation (group doesn't exist yet)${NC}"
+echo -e "${GRAY}Version 56 | Last changed: Fix ssh consuming stdin (curl|bash fix)${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
