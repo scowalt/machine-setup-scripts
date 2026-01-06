@@ -1348,7 +1348,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 74 | Last changed: Disable tmux source to debug${NC}"
+echo -e "${GRAY}Version 75 | Last changed: Replace set -x with bare echo${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1445,11 +1445,11 @@ HELPER_EOF
     # tmux source ~/.tmux.conf 2>/dev/null || true
     print_debug "Dotfiles Management section completed."
     print_debug "About to close if block..."
-    set -x  # Enable trace mode
+    echo "BARE ECHO BEFORE ELSE"
 else
     print_warning "Skipping dotfiles management - no access to repository."
 fi
-set +x  # Disable trace mode
+echo "BARE ECHO AFTER FI"
 print_debug "After dotfiles fi block"
 
 print_section "Shell Configuration"
