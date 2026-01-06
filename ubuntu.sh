@@ -1348,7 +1348,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 76 | Last changed: Remove if/else structure to debug${NC}"
+echo -e "${GRAY}Version 77 | Last changed: Debug check_dotfiles_access${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1389,9 +1389,9 @@ setup_unattended_upgrades
 print_section "Dotfiles Management"
 
 # Simplified: removed if/else to debug early exit issue
-check_dotfiles_access || setup_dotfiles_deploy_key || {
-    print_warning "Skipping dotfiles management - no access to repository."
-}
+echo "DEBUG: About to call check_dotfiles_access"
+check_dotfiles_access
+echo "DEBUG: check_dotfiles_access returned $?"
 
 # Bootstrap credential helper
 if [[ ! -x "${HOME}/.local/bin/git-credential-github-multi" ]]; then
