@@ -1348,7 +1348,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 73 | Last changed: Add set -x trace around fi${NC}"
+echo -e "${GRAY}Version 74 | Last changed: Disable tmux source to debug${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1441,7 +1441,8 @@ HELPER_EOF
     # Run in subshell to isolate any exit behavior from chezmoi scripts
     (chezmoi apply --force) || print_warning "chezmoi apply had issues, continuing..."
     print_debug "chezmoi apply completed."
-    tmux source ~/.tmux.conf 2>/dev/null || true
+    # Temporarily disabled to debug early exit
+    # tmux source ~/.tmux.conf 2>/dev/null || true
     print_debug "Dotfiles Management section completed."
     print_debug "About to close if block..."
     set -x  # Enable trace mode
