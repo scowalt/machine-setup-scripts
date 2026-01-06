@@ -329,9 +329,20 @@ fix_dpkg_and_broken_dependencies() {
 # Ensure the script is not run as root
 ensure_not_root() {
     if [[ "${EUID}" -eq 0 ]]; then
-        print_error "This script should not be run as root."
-        print_message "Please run as a regular user with sudo privileges."
-        exit 1
+        print_section "Root User Detected"
+        print_message "This script should be run as a regular user, not root."
+        print_message "Run the following commands to create the 'scowalt' user:"
+        echo ""
+        echo "  # Create user with home directory"
+        echo "  useradd -m -s /bin/bash -G sudo,docker scowalt"
+        echo ""
+        echo "  # Set password for the new user"
+        echo "  passwd scowalt"
+        echo ""
+        echo "  # Switch to the new user and re-run this script"
+        echo "  su - scowalt"
+        echo ""
+        exit 0
     fi
 
     local current_user
@@ -1359,7 +1370,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 66 | Last changed: Print SSH key when not recognized by GitHub${NC}"
+echo -e "${GRAY}Version 67 | Last changed: Print user creation commands when running as root${NC}"
 
 print_section "User & System Setup"
 ensure_not_root

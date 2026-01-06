@@ -41,6 +41,26 @@ can_sudo() {
     [[ "${_has_sudo}" == "1" ]]
 }
 
+# Ensure the script is not run as root
+ensure_not_root() {
+    if [[ "${EUID}" -eq 0 ]]; then
+        print_section "Root User Detected"
+        print_message "This script should be run as a regular user, not root."
+        print_message "Run the following commands to create the 'scowalt' user:"
+        echo ""
+        echo "  # Create user with home directory"
+        echo "  useradd -m -s /bin/bash -G sudo,docker scowalt"
+        echo ""
+        echo "  # Set password for the new user"
+        echo "  passwd scowalt"
+        echo ""
+        echo "  # Switch to the new user and re-run this script"
+        echo "  su - scowalt"
+        echo ""
+        exit 0
+    fi
+}
+
 # Bootstrap SSH config for deploy key access to dotfiles
 bootstrap_ssh_config() {
     # Ensure github-dotfiles host alias exists for deploy key access
@@ -1358,9 +1378,10 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 56 | Last changed: Fix can_sudo to check group membership and prompt if needed${NC}"
+echo -e "${GRAY}Version 57 | Last changed: Print user creation commands when running as root${NC}"
 
-print_section "System Detection & Setup"
+print_section "User & System Setup"
+ensure_not_root
 check_raspberry_pi
 setup_swap
 setup_dns64_for_ipv6_only

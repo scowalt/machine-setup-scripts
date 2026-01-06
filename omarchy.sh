@@ -52,6 +52,26 @@ can_sudo() {
     [[ "${_has_sudo}" == "1" ]]
 }
 
+# Ensure the script is not run as root
+ensure_not_root() {
+    if [[ "${EUID}" -eq 0 ]]; then
+        print_section "Root User Detected"
+        print_message "This script should be run as a regular user, not root."
+        print_message "Run the following commands to create the 'scowalt' user:"
+        echo ""
+        echo "  # Create user with home directory"
+        echo "  useradd -m -s /bin/bash -G wheel,docker scowalt"
+        echo ""
+        echo "  # Set password for the new user"
+        echo "  passwd scowalt"
+        echo ""
+        echo "  # Switch to the new user and re-run this script"
+        echo "  su - scowalt"
+        echo ""
+        exit 0
+    fi
+}
+
 # Bootstrap SSH config for deploy key access to dotfiles
 bootstrap_ssh_config() {
     # Ensure github-dotfiles host alias exists for deploy key access
@@ -1011,9 +1031,10 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 44 | Last changed: Remove redundant tmux source before TPM installed${NC}"
+echo -e "${GRAY}Version 45 | Last changed: Print user creation commands when running as root${NC}"
 
-print_section "System Verification"
+print_section "User & System Setup"
+ensure_not_root
 verify_arch_system
 check_omarchy_installation
 setup_dns64_for_ipv6_only
