@@ -595,11 +595,13 @@ EOF
 update_chezmoi() {
     if [[ -d ~/.local/share/chezmoi ]]; then
         print_message "Updating chezmoi dotfiles repository..."
-        if chezmoi update --force > /dev/null; then
+        # Run in subshell to isolate any potential exit behavior from chezmoi hooks/scripts
+        if (chezmoi update --force > /dev/null); then
             print_success "chezmoi dotfiles repository updated."
         else
             print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
         fi
+        print_debug "update_chezmoi function completing..."
     else
         print_debug "chezmoi not initialized yet, skipping update."
     fi
@@ -1343,7 +1345,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 68 | Last changed: Remove docker group from user creation (group doesn't exist yet)${NC}"
+echo -e "${GRAY}Version 69 | Last changed: Add debugging to identify early exit issue${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1432,8 +1434,12 @@ HELPER_EOF
     initialize_chezmoi
     configure_chezmoi_git
     update_chezmoi
-    chezmoi apply --force
+    print_debug "Running chezmoi apply --force..."
+    # Run in subshell to isolate any exit behavior from chezmoi scripts
+    (chezmoi apply --force) || print_warning "chezmoi apply had issues, continuing..."
+    print_debug "chezmoi apply completed."
     tmux source ~/.tmux.conf 2>/dev/null || true
+    print_debug "Dotfiles Management section completed."
 else
     print_warning "Skipping dotfiles management - no access to repository."
 fi
