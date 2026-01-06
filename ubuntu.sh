@@ -1345,7 +1345,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 70 | Last changed: Add debug after fi block${NC}"
+echo -e "${GRAY}Version 71 | Last changed: Add more granular debugging${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1440,6 +1440,7 @@ HELPER_EOF
     print_debug "chezmoi apply completed."
     tmux source ~/.tmux.conf 2>/dev/null || true
     print_debug "Dotfiles Management section completed."
+    print_debug "About to close if block..."
 else
     print_warning "Skipping dotfiles management - no access to repository."
 fi
