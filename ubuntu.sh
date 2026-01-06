@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Debug trap to catch unexpected exits
+trap 'echo "DEBUG: Script exiting at line $LINENO with code $?"' EXIT
+
 # Define colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -1345,7 +1348,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 71 | Last changed: Add more granular debugging${NC}"
+echo -e "${GRAY}Version 72 | Last changed: Add EXIT trap to catch line number${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
