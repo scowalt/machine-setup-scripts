@@ -318,6 +318,29 @@ read -r response < /dev/tty
 
 This applies to any interactive prompt in the scripts (e.g., deploy key setup confirmation).
 
+### SSH Commands Consuming stdin with curl|bash
+
+When running scripts via `curl | bash`, SSH commands can consume the remaining script content from stdin, causing the script to exit prematurely with code 0.
+
+**Problem**: `ssh -T git@github.com` reads from stdin by default. When stdin is the script content (via curl pipe), SSH consumes it, leaving nothing for bash to execute.
+
+**Solution**: Redirect stdin from `/dev/null`:
+
+```bash
+# Will consume script content and cause early exit
+ssh -T git@github.com 2>&1 | grep -q "successfully authenticated"
+
+# Fixed - prevents ssh from reading stdin
+ssh -T git@github.com < /dev/null 2>&1 | grep -q "successfully authenticated"
+```
+
+**Symptoms of this bug**:
+- Script exits with code 0 (success) but doesn't complete
+- EXIT trap shows `$LINENO` as 1 (context reset)
+- Happens consistently at the same point (first SSH command)
+
+This fix has been applied to all SSH authentication checks in all setup scripts.
+
 ### Chezmoi Initialization Validation
 
 Simply checking if `~/.local/share/chezmoi` exists is not sufficient to determine if chezmoi is properly initialized. The directory might exist but be empty or corrupted (missing `.git`).
