@@ -1348,7 +1348,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 72 | Last changed: Add EXIT trap to catch line number${NC}"
+echo -e "${GRAY}Version 73 | Last changed: Add set -x trace around fi${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1444,9 +1444,11 @@ HELPER_EOF
     tmux source ~/.tmux.conf 2>/dev/null || true
     print_debug "Dotfiles Management section completed."
     print_debug "About to close if block..."
+    set -x  # Enable trace mode
 else
     print_warning "Skipping dotfiles management - no access to repository."
 fi
+set +x  # Disable trace mode
 print_debug "After dotfiles fi block"
 
 print_section "Shell Configuration"
