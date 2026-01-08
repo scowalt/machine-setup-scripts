@@ -593,13 +593,17 @@ install_claude_code() {
 
     print_message "Installing Claude Code..."
 
+    # Clean up stale lock files from previous interrupted installs
+    rm -rf "${HOME}/.local/state/claude/locks" 2>/dev/null
+
     # Use the native installer (doesn't require Node.js)
     # Download to temp file and execute (more reliable than piping when run via curl|bash)
     local temp_script
     temp_script=$(mktemp)
     if curl -fsSL https://claude.ai/install.sh -o "${temp_script}"; then
         chmod +x "${temp_script}"
-        if bash "${temp_script}"; then
+        # Redirect stdin from /dev/null to prevent installer from consuming script input
+        if bash "${temp_script}" < /dev/null; then
             # Add claude bin directory to PATH for current session
             # The native installer puts claude in ~/.local/bin
             if [[ -d "${HOME}/.local/bin" ]]; then
@@ -716,7 +720,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 61 | Last changed: Fix ssh consuming stdin (curl|bash fix)${NC}"
+echo -e "${GRAY}Version 62 | Last changed: Fix stdin consumption in Claude Code install${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"

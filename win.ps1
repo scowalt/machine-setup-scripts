@@ -375,6 +375,12 @@ function Install-ClaudeCode {
 
     Write-Host "$arrow Installing Claude Code..." -ForegroundColor Cyan
 
+    # Clean up stale lock files from previous interrupted installs
+    $lockPath = Join-Path $env:LOCALAPPDATA "claude\locks"
+    if (Test-Path $lockPath) {
+        Remove-Item $lockPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     try {
         # Download to temp file and execute (more reliable than piping)
         $tempScript = [System.IO.Path]::GetTempFileName() + ".ps1"
@@ -531,7 +537,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 49 | Last changed: Add uv installation" -ForegroundColor DarkGray
+    Write-Host "Version 50 | Last changed: Clean up stale locks before Claude Code install" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
