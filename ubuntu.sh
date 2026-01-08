@@ -614,6 +614,31 @@ EOF
     fi
 }
 
+# Fix chezmoi remote URL when switching from personal SSH to deploy key
+fix_chezmoi_remote_for_deploy_key() {
+    local chez_src="${HOME}/.local/share/chezmoi"
+    [[ ! -d "${chez_src}/.git" ]] && return 0
+
+    # Only fix if we're NOT using a verified personal SSH key
+    if has_verified_ssh_key; then
+        return 0
+    fi
+
+    # Check current remote URL
+    local current_remote
+    current_remote=$(git -C "${chez_src}" remote get-url origin 2>/dev/null) || return 0
+
+    # If using github.com directly, switch to github-dotfiles alias for deploy key
+    if [[ "${current_remote}" == "git@github.com:scowalt/dotfiles.git" ]]; then
+        print_message "Updating chezmoi remote URL for deploy key access..."
+        if git -C "${chez_src}" remote set-url origin "git@github-dotfiles:scowalt/dotfiles.git"; then
+            print_success "Chezmoi remote URL updated to use deploy key."
+        else
+            print_warning "Failed to update chezmoi remote URL."
+        fi
+    fi
+}
+
 # Update chezmoi dotfiles repository to latest version
 update_chezmoi() {
     if [[ -d ~/.local/share/chezmoi ]]; then
@@ -1398,7 +1423,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 85 | Last changed: Remove personal SSH key requirement for security${NC}"
+echo -e "${GRAY}Version 86 | Last changed: Fix chezmoi remote URL when switching to deploy key${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1485,6 +1510,7 @@ HELPER_EOF
     install_chezmoi
     initialize_chezmoi
     configure_chezmoi_git
+    fix_chezmoi_remote_for_deploy_key
     update_chezmoi
     (chezmoi apply --force) || true
     tmux source ~/.tmux.conf 2>/dev/null || true
