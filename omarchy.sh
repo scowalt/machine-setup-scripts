@@ -28,6 +28,26 @@ is_main_user() {
     [[ "$(whoami)" == "scowalt" ]]
 }
 
+# Check if user has a personal SSH key registered with GitHub
+has_verified_ssh_key() {
+    local local_key=""
+
+    # Check for RSA key
+    if [[ -f ~/.ssh/id_rsa.pub ]]; then
+        local_key=$(awk '{print $2}' ~/.ssh/id_rsa.pub)
+    # Check for ed25519 key
+    elif [[ -f ~/.ssh/id_ed25519.pub ]]; then
+        local_key=$(awk '{print $2}' ~/.ssh/id_ed25519.pub)
+    else
+        return 1
+    fi
+
+    # Verify key is registered with GitHub
+    local existing_keys
+    existing_keys=$(curl -s https://github.com/scowalt.keys 2>/dev/null) || return 1
+    [[ -n "${local_key}" ]] && echo "${existing_keys}" | grep -q "${local_key}"
+}
+
 # Check if user has sudo access (cached result)
 _sudo_checked=""
 _has_sudo=""
@@ -179,11 +199,11 @@ setup_dotfiles_deploy_key() {
 check_dotfiles_access() {
     print_message "Checking access to scowalt/dotfiles..."
 
-    # Method 1: Main user with SSH key
-    if is_main_user; then
+    # Method 1: User with verified SSH key on GitHub
+    if has_verified_ssh_key; then
         # < /dev/null prevents ssh from consuming stdin (important for curl|bash)
         if ssh -T git@github.com < /dev/null 2>&1 | grep -q "successfully authenticated"; then
-            print_debug "Access via SSH (main user)"
+            print_debug "Access via SSH (verified key)"
             return 0
         fi
     fi
@@ -720,14 +740,14 @@ initialize_chezmoi() {
 
     if [[ ! -d "${chez_src}" ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
-        if is_main_user; then
-            # Main user uses SSH with default key for push access
+        if has_verified_ssh_key; then
+            # User with verified SSH key uses default SSH for push access
             if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
                 print_error "Failed to initialize chezmoi."
                 exit 1
             fi
         else
-            # Secondary users use SSH via deploy key (github-dotfiles alias)
+            # Other users use SSH via deploy key (github-dotfiles alias)
             if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
                 print_error "Failed to initialize chezmoi."
                 exit 1
@@ -1032,7 +1052,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 49 | Last changed: Fix omarchy prompt to use /dev/tty${NC}"
+echo -e "${GRAY}Version 50 | Last changed: Remove personal SSH key requirement for security${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1048,7 +1068,6 @@ install_core_packages
 install_yay
 
 print_section "SSH Configuration"
-setup_ssh_key
 add_github_to_known_hosts
 
 if is_main_user; then

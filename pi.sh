@@ -41,6 +41,26 @@ can_sudo() {
     [[ "${_has_sudo}" == "1" ]]
 }
 
+# Check if user has a personal SSH key registered with GitHub
+has_verified_ssh_key() {
+    local local_key=""
+
+    # Check for RSA key
+    if [[ -f ~/.ssh/id_rsa.pub ]]; then
+        local_key=$(awk '{print $2}' ~/.ssh/id_rsa.pub)
+    # Check for ed25519 key
+    elif [[ -f ~/.ssh/id_ed25519.pub ]]; then
+        local_key=$(awk '{print $2}' ~/.ssh/id_ed25519.pub)
+    else
+        return 1
+    fi
+
+    # Verify key is registered with GitHub
+    local existing_keys
+    existing_keys=$(curl -s https://github.com/scowalt.keys 2>/dev/null) || return 1
+    [[ -n "${local_key}" ]] && echo "${existing_keys}" | grep -q "${local_key}"
+}
+
 # Ensure the script is not run as root
 ensure_not_root() {
     if [[ "${EUID}" -eq 0 ]]; then
@@ -166,11 +186,13 @@ setup_dotfiles_deploy_key() {
 check_dotfiles_access() {
     print_message "Checking access to scowalt/dotfiles..."
 
-    # Method 1: SSH key
-    # < /dev/null prevents ssh from consuming stdin (important for curl|bash)
-    if ssh -T git@github.com < /dev/null 2>&1 | grep -q "successfully authenticated"; then
-        print_debug "Access via SSH"
-        return 0
+    # Method 1: User with verified SSH key on GitHub
+    if has_verified_ssh_key; then
+        # < /dev/null prevents ssh from consuming stdin (important for curl|bash)
+        if ssh -T git@github.com < /dev/null 2>&1 | grep -q "successfully authenticated"; then
+            print_debug "Access via SSH (verified key)"
+            return 0
+        fi
     fi
 
     # Method 2: Deploy key at ~/.ssh/dotfiles-deploy-key
@@ -640,14 +662,14 @@ initialize_chezmoi() {
 
     if [[ ! -d "${chez_src}" ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles…"
-        if [[ "$(whoami)" == "scowalt" ]]; then
-            # Main user uses SSH with default key for push access
+        if has_verified_ssh_key; then
+            # User with verified SSH key uses default SSH for push access
             if ! ${chezmoi_cmd} init --apply --force scowalt/dotfiles --ssh; then
                 print_error "Failed to initialize chezmoi. Check SSH key and network connectivity."
                 return 1
             fi
         else
-            # Secondary users use SSH via deploy key (github-dotfiles alias)
+            # Other users use SSH via deploy key (github-dotfiles alias)
             if ! ${chezmoi_cmd} init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
                 print_error "Failed to initialize chezmoi. Check deploy key setup."
                 return 1
@@ -1364,7 +1386,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 61 | Last changed: Fix tailscale prompt to use /dev/tty${NC}"
+echo -e "${GRAY}Version 62 | Last changed: Remove personal SSH key requirement for security${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1389,8 +1411,6 @@ enable_ssh_server
 install_tailscale
 install_fail2ban
 setup_unattended_upgrades
-setup_ssh_key
-verify_github_key
 add_github_to_known_hosts
 ensure_ssh_agent
 
