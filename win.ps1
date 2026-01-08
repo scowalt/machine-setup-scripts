@@ -25,7 +25,8 @@ $wingetPackages = (
     "nektos.act",
     "OpenTofu.Tofu",
     "jj-vcs.jj",
-    "astral-sh.uv"
+    "astral-sh.uv",
+    "jqlang.jq"
 )
 
 # Define Nerd Font symbols using Unicode code points
@@ -537,7 +538,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 50 | Last changed: Clean up stale locks before Claude Code install" -ForegroundColor DarkGray
+    Write-Host "Version 51 | Last changed: Add jq to core packages" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
