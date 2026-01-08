@@ -836,7 +836,7 @@ install_claude_code() {
     if curl -fsSL https://claude.ai/install.sh -o "${temp_script}" 2>/dev/null; then
         chmod +x "${temp_script}"
         print_debug "Trying native installer (2 minute timeout)..."
-        if timeout 120 bash "${temp_script}" 2>/dev/null; then
+        if timeout 120 bash "${temp_script}" --force 2>/dev/null; then
             # Add claude bin directory to PATH for current session
             # The native installer puts claude in ~/.local/bin
             if [[ -d "${HOME}/.local/bin" ]]; then
@@ -1376,7 +1376,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 81 | Last changed: Clean up stale lock files before Claude Code install${NC}"
+echo -e "${GRAY}Version 82 | Last changed: Use --force flag for Claude Code installer${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
