@@ -1090,7 +1090,8 @@ install_tailscale() {
     print_success "Tailscale installed and service started."
 
     # Optional immediate login
-    read -rp "Run 'tailscale up' now to authenticate? (y/n): " ts_up
+    echo -n "Run 'tailscale up' now to authenticate? (y/n): "
+    read -r ts_up < /dev/tty
     if [[ "${ts_up}" =~ ^[Yy]$ ]]; then
         print_message "Bringing interface up..."
         sudo tailscale up       # add --authkey=... if you prefer key-based auth
@@ -1377,7 +1378,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 83 | Last changed: Fix stdin consumption in Claude Code install${NC}"
+echo -e "${GRAY}Version 84 | Last changed: Fix tailscale prompt to use /dev/tty${NC}"
 
 print_section "User & System Setup"
 ensure_not_root

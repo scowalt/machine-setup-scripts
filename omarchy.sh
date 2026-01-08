@@ -473,7 +473,8 @@ install_omarchy() {
     print_warning "This will install the complete Omarchy Hyprland desktop environment."
     
     # Confirm installation
-    read -rp "Do you want to proceed with Omarchy installation? (y/N): " confirm
+    echo -n "Do you want to proceed with Omarchy installation? (y/N): "
+    read -r confirm < /dev/tty
     if [[ ! "${confirm}" =~ ^[Yy]$ ]]; then
         print_message "Skipping Omarchy installation."
         return
@@ -1031,7 +1032,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 48 | Last changed: Fix stdin consumption in Claude Code install${NC}"
+echo -e "${GRAY}Version 49 | Last changed: Fix omarchy prompt to use /dev/tty${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
