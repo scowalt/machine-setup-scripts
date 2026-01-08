@@ -816,7 +816,7 @@ install_jj() {
     rm -rf "${temp_dir}"
 }
 
-# Install Claude Code using native installer
+# Install Claude Code using native installer with npm fallback
 install_claude_code() {
     if command -v claude &> /dev/null; then
         print_debug "Claude Code is already installed."
@@ -825,26 +825,53 @@ install_claude_code() {
 
     print_message "Installing Claude Code..."
 
-    # Use the native installer (doesn't require Node.js)
-    # Download to temp file and execute (more reliable than piping when run via curl|bash)
+    # Try native installer first with a timeout (can hang on some systems)
     local temp_script
     temp_script=$(mktemp)
-    if curl -fsSL https://claude.ai/install.sh -o "${temp_script}"; then
+    local native_success=false
+
+    if curl -fsSL https://claude.ai/install.sh -o "${temp_script}" 2>/dev/null; then
         chmod +x "${temp_script}"
-        if bash "${temp_script}"; then
+        print_debug "Trying native installer (2 minute timeout)..."
+        if timeout 120 bash "${temp_script}" 2>/dev/null; then
             # Add claude bin directory to PATH for current session
             # The native installer puts claude in ~/.local/bin
             if [[ -d "${HOME}/.local/bin" ]]; then
                 export PATH="${HOME}/.local/bin:${PATH}"
             fi
-            print_success "Claude Code installed."
+            if command -v claude &> /dev/null; then
+                native_success=true
+                print_success "Claude Code installed via native installer."
+            fi
         else
-            print_error "Failed to install Claude Code."
+            print_warning "Native installer failed or timed out."
         fi
         rm -f "${temp_script}"
     else
-        print_error "Failed to download Claude Code installer."
         rm -f "${temp_script}"
+    fi
+
+    # Fall back to npm if native installer failed
+    if [[ "${native_success}" == "false" ]]; then
+        print_message "Falling back to npm installation..."
+
+        # Initialize fnm for current session if available
+        if [[ -s "${HOME}/.local/share/fnm/fnm" ]]; then
+            export PATH="${HOME}/.local/share/fnm:${PATH}"
+            local fnm_env
+            fnm_env=$("${HOME}"/.local/share/fnm/fnm env --use-on-cd)
+            eval "${fnm_env}"
+        fi
+
+        if command -v npm &> /dev/null; then
+            if npm install -g @anthropic-ai/claude-code; then
+                print_success "Claude Code installed via npm."
+            else
+                print_error "Failed to install Claude Code via npm."
+            fi
+        else
+            print_error "npm not available. Install Claude Code manually with: npm install -g @anthropic-ai/claude-code"
+        fi
     fi
 }
 
@@ -1346,7 +1373,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 79 | Last changed: Fix ssh consuming stdin, clean up debug${NC}"
+echo -e "${GRAY}Version 80 | Last changed: Add timeout + npm fallback for Claude Code install${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
