@@ -825,6 +825,9 @@ install_claude_code() {
 
     print_message "Installing Claude Code..."
 
+    # Clean up stale lock files from previous interrupted installs
+    rm -f /tmp/claude-install.lock "${HOME}/.claude/.installing" 2>/dev/null
+
     # Try native installer first with a timeout (can hang on some systems)
     local temp_script
     temp_script=$(mktemp)
@@ -1373,7 +1376,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 80 | Last changed: Add timeout + npm fallback for Claude Code install${NC}"
+echo -e "${GRAY}Version 81 | Last changed: Clean up stale lock files before Claude Code install${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
