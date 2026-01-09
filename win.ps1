@@ -26,7 +26,8 @@ $wingetPackages = (
     "OpenTofu.Tofu",
     "jj-vcs.jj",
     "astral-sh.uv",
-    "jqlang.jq"
+    "jqlang.jq",
+    "GoLang.Go"
 )
 
 # Define Nerd Font symbols using Unicode code points
@@ -538,7 +539,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 51 | Last changed: Add jq to core packages" -ForegroundColor DarkGray
+    Write-Host "Version 52 | Last changed: Add Go installation" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages

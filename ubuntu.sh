@@ -392,7 +392,7 @@ update_and_install_core() {
     print_message "Checking core packages..."
 
     # Define an array of required packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "fonts-firacode" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "unzip" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev")
+    local packages=("git" "curl" "jq" "fish" "tmux" "fonts-firacode" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "unzip" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
@@ -1423,7 +1423,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 87 | Last changed: Add jq to core packages${NC}"
+echo -e "${GRAY}Version 88 | Last changed: Add Go installation${NC}"
 
 print_section "User & System Setup"
 ensure_not_root

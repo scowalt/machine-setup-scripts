@@ -418,7 +418,7 @@ install_core_packages() {
     print_message "Checking core packages..."
 
     # Define core packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "jujutsu" "uv")
+    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "jujutsu" "uv" "go")
     local to_install=()
 
     # Check which packages need installation
@@ -1077,7 +1077,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 52 | Last changed: Add jq to core packages${NC}"
+echo -e "${GRAY}Version 53 | Last changed: Add Go installation${NC}"
 
 print_section "User & System Setup"
 ensure_not_root

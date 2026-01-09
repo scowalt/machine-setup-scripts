@@ -251,7 +251,7 @@ install_core_packages() {
 
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
-    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "git-town" "jj" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx" "opentofu" "uv")
+    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "git-town" "jj" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go")
     local to_install=()
     
     # Get all installed packages at once (much faster than checking individually)
@@ -720,7 +720,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 63 | Last changed: Add jq to core packages${NC}"
+echo -e "${GRAY}Version 64 | Last changed: Add Go installation${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
