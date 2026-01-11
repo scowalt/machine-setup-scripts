@@ -72,6 +72,48 @@ can_sudo() {
     [[ "${_has_sudo}" == "1" ]]
 }
 
+# Request sudo upfront and keep credentials fresh throughout script execution
+# This avoids multiple password prompts during long-running scripts
+request_sudo_upfront() {
+    # Skip if user doesn't have sudo capability
+    if ! groups 2>/dev/null | grep -qE '\b(sudo|wheel|admin)\b'; then
+        print_debug "User not in sudo group, skipping sudo request."
+        return 0
+    fi
+
+    # Check if credentials are already cached
+    if sudo -n true 2>/dev/null; then
+        print_debug "Sudo credentials already cached."
+    else
+        print_message "This script requires sudo access for system operations."
+        print_message "Please enter your password once to authorize all operations."
+        if ! sudo -v; then
+            print_warning "Sudo authentication failed. Some operations will be skipped."
+            return 1
+        fi
+    fi
+
+    # Mark that we have sudo
+    _sudo_checked=1
+    _has_sudo=1
+
+    # Start background process to keep credentials fresh
+    # Refresh every 50 seconds (sudo timeout is typically 5-15 minutes)
+    (
+        while true; do
+            sleep 50
+            sudo -n true 2>/dev/null || exit 0
+        done
+    ) &
+    SUDO_KEEPALIVE_PID=$!
+
+    # Set up trap to kill the background process on exit
+    trap 'kill "${SUDO_KEEPALIVE_PID}" 2>/dev/null' EXIT
+
+    print_success "Sudo credentials cached for this session."
+    return 0
+}
+
 # Ensure the script is not run as root
 ensure_not_root() {
     if [[ "${EUID}" -eq 0 ]]; then
@@ -1077,11 +1119,12 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 53 | Last changed: Add Go installation${NC}"
+echo -e "${GRAY}Version 54 | Last changed: Request sudo upfront and keep credentials fresh${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
 verify_arch_system
+request_sudo_upfront
 check_omarchy_installation
 setup_dns64_for_ipv6_only
 
