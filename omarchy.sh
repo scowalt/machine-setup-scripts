@@ -554,7 +554,13 @@ install_omarchy() {
         print_debug "Omarchy is already installed."
         return
     fi
-    
+
+    # Omarchy installation requires sudo - skip for non-admin users
+    if ! can_sudo; then
+        print_debug "No sudo access - skipping Omarchy installation."
+        return
+    fi
+
     print_message "Installing Omarchy environment..."
     print_warning "This will install the complete Omarchy Hyprland desktop environment."
     
@@ -1201,7 +1207,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 57 | Last changed: Add Codex CLI installation${NC}"
+echo -e "${GRAY}Version 58 | Last changed: Skip Omarchy install prompt for non-sudo users${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
