@@ -344,6 +344,41 @@ function Install-GeminiCli {
     }
 }
 
+# Function to install Codex CLI (OpenAI's AI coding agent)
+function Install-CodexCli {
+    if (Get-Command codex -ErrorAction SilentlyContinue) {
+        Write-Debug "Codex CLI is already installed."
+        return
+    }
+
+    Write-Host "$arrow Installing Codex CLI..." -ForegroundColor Cyan
+
+    # Try to initialize fnm if available
+    if (Get-Command fnm -ErrorAction SilentlyContinue) {
+        fnm env --use-on-cd | Out-String | Invoke-Expression
+    }
+
+    # Make sure npm is available
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Host "$warnIcon npm not found. Cannot install Codex CLI." -ForegroundColor Yellow
+        Write-Host "  Install Node.js first, then run: npm install -g @openai/codex" -ForegroundColor DarkGray
+        return
+    }
+
+    try {
+        npm install -g @openai/codex
+        if ($?) {
+            Write-Host "$success Codex CLI installed." -ForegroundColor Green
+        }
+        else {
+            Write-Host "$failIcon Failed to install Codex CLI." -ForegroundColor Red
+        }
+    }
+    catch {
+        Write-Host "$failIcon Failed to install Codex CLI: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
 # Function to setup Node.js using fnm
 function Setup-Nodejs {
     Write-Host "$arrow Setting up Node.js with fnm..." -ForegroundColor Cyan
@@ -574,7 +609,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 53 | Last changed: Add Gemini CLI installation" -ForegroundColor DarkGray
+    Write-Host "Version 54 | Last changed: Add Codex CLI installation" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
@@ -604,7 +639,8 @@ function Initialize-WindowsEnvironment {
     Setup-Nodejs
     Install-ClaudeCode
     Install-GeminiCli
-    
+    Install-CodexCli
+
     Write-Section "System Updates"
     Install-WingetUpdates
     Update-NpmGlobalPackages

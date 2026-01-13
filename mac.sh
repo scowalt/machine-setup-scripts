@@ -643,6 +643,29 @@ install_gemini_cli() {
     fi
 }
 
+# Install Codex CLI (OpenAI's AI coding agent)
+install_codex_cli() {
+    if command -v codex &> /dev/null; then
+        print_debug "Codex CLI is already installed."
+        return
+    fi
+
+    print_message "Installing Codex CLI..."
+
+    # Make sure npm is available
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Cannot install Codex CLI."
+        print_debug "Install Node.js first, then run: npm install -g @openai/codex"
+        return
+    fi
+
+    if npm install -g @openai/codex; then
+        print_success "Codex CLI installed."
+    else
+        print_error "Failed to install Codex CLI."
+    fi
+}
+
 # Install Visual Studio Code
 install_vscode() {
     if brew list --cask visual-studio-code &> /dev/null; then
@@ -743,7 +766,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 65 | Last changed: Add Gemini CLI installation${NC}"
+echo -e "${GRAY}Version 66 | Last changed: Add Codex CLI installation${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
@@ -861,6 +884,7 @@ setup_nodejs
 install_bun
 install_claude_code
 install_gemini_cli
+install_codex_cli
 
 if is_main_user; then
     install_vscode

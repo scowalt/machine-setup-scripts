@@ -997,6 +997,36 @@ install_gemini_cli() {
     fi
 }
 
+# Install Codex CLI (OpenAI's AI coding agent)
+install_codex_cli() {
+    if command -v codex &> /dev/null; then
+        print_debug "Codex CLI is already installed."
+        return
+    fi
+
+    print_message "Installing Codex CLI..."
+
+    # Initialize fnm for current session if available
+    if command -v fnm &> /dev/null; then
+        local fnm_env
+        fnm_env=$(fnm env --use-on-cd)
+        eval "${fnm_env}"
+    fi
+
+    # Make sure npm is available
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Cannot install Codex CLI."
+        print_debug "Install Node.js first, then run: npm install -g @openai/codex"
+        return
+    fi
+
+    if npm install -g @openai/codex; then
+        print_success "Codex CLI installed."
+    else
+        print_error "Failed to install Codex CLI."
+    fi
+}
+
 # Install Claude Code using official installer
 install_claude_code() {
     if command -v claude &> /dev/null; then
@@ -1171,7 +1201,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 56 | Last changed: Fix Omarchy detection to prevent reinstall prompts${NC}"
+echo -e "${GRAY}Version 57 | Last changed: Add Codex CLI installation${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1208,6 +1238,7 @@ print_section "Development Tools"
 setup_nodejs
 install_claude_code
 install_gemini_cli
+install_codex_cli
 install_pyenv
 
 print_section "Dotfiles Management"
