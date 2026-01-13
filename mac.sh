@@ -620,6 +620,29 @@ install_claude_code() {
     fi
 }
 
+# Install Gemini CLI (Google's AI coding agent)
+install_gemini_cli() {
+    if command -v gemini &> /dev/null; then
+        print_debug "Gemini CLI is already installed."
+        return
+    fi
+
+    print_message "Installing Gemini CLI..."
+
+    # Make sure npm is available
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Cannot install Gemini CLI."
+        print_debug "Install Node.js first, then run: npm install -g @google/gemini-cli"
+        return
+    fi
+
+    if npm install -g @google/gemini-cli; then
+        print_success "Gemini CLI installed."
+    else
+        print_error "Failed to install Gemini CLI."
+    fi
+}
+
 # Install Visual Studio Code
 install_vscode() {
     if brew list --cask visual-studio-code &> /dev/null; then
@@ -720,7 +743,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 64 | Last changed: Add Go installation${NC}"
+echo -e "${GRAY}Version 65 | Last changed: Add Gemini CLI installation${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
@@ -837,6 +860,7 @@ print_section "Development Tools"
 setup_nodejs
 install_bun
 install_claude_code
+install_gemini_cli
 
 if is_main_user; then
     install_vscode

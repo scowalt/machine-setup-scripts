@@ -309,6 +309,41 @@ function Install-PyenvWin {
     }
 }
 
+# Function to install Gemini CLI (Google's AI coding agent)
+function Install-GeminiCli {
+    if (Get-Command gemini -ErrorAction SilentlyContinue) {
+        Write-Debug "Gemini CLI is already installed."
+        return
+    }
+
+    Write-Host "$arrow Installing Gemini CLI..." -ForegroundColor Cyan
+
+    # Try to initialize fnm if available
+    if (Get-Command fnm -ErrorAction SilentlyContinue) {
+        fnm env --use-on-cd | Out-String | Invoke-Expression
+    }
+
+    # Make sure npm is available
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Host "$warnIcon npm not found. Cannot install Gemini CLI." -ForegroundColor Yellow
+        Write-Host "  Install Node.js first, then run: npm install -g @google/gemini-cli" -ForegroundColor DarkGray
+        return
+    }
+
+    try {
+        npm install -g @google/gemini-cli
+        if ($?) {
+            Write-Host "$success Gemini CLI installed." -ForegroundColor Green
+        }
+        else {
+            Write-Host "$failIcon Failed to install Gemini CLI." -ForegroundColor Red
+        }
+    }
+    catch {
+        Write-Host "$failIcon Failed to install Gemini CLI: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
 # Function to setup Node.js using fnm
 function Setup-Nodejs {
     Write-Host "$arrow Setting up Node.js with fnm..." -ForegroundColor Cyan
@@ -539,7 +574,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 52 | Last changed: Add Go installation" -ForegroundColor DarkGray
+    Write-Host "Version 53 | Last changed: Add Gemini CLI installation" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
@@ -568,6 +603,7 @@ function Initialize-WindowsEnvironment {
     Write-Section "Additional Development Tools"
     Setup-Nodejs
     Install-ClaudeCode
+    Install-GeminiCli
     
     Write-Section "System Updates"
     Install-WingetUpdates

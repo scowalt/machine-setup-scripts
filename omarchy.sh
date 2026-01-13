@@ -943,6 +943,36 @@ setup_nodejs() {
     fi
 }
 
+# Install Gemini CLI (Google's AI coding agent)
+install_gemini_cli() {
+    if command -v gemini &> /dev/null; then
+        print_debug "Gemini CLI is already installed."
+        return
+    fi
+
+    print_message "Installing Gemini CLI..."
+
+    # Initialize fnm for current session if available
+    if command -v fnm &> /dev/null; then
+        local fnm_env
+        fnm_env=$(fnm env --use-on-cd)
+        eval "${fnm_env}"
+    fi
+
+    # Make sure npm is available
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Cannot install Gemini CLI."
+        print_debug "Install Node.js first, then run: npm install -g @google/gemini-cli"
+        return
+    fi
+
+    if npm install -g @google/gemini-cli; then
+        print_success "Gemini CLI installed."
+    else
+        print_error "Failed to install Gemini CLI."
+    fi
+}
+
 # Install Claude Code using official installer
 install_claude_code() {
     if command -v claude &> /dev/null; then
@@ -1119,7 +1149,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 54 | Last changed: Request sudo upfront and keep credentials fresh${NC}"
+echo -e "${GRAY}Version 55 | Last changed: Add Gemini CLI installation${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1155,6 +1185,7 @@ configure_git_town
 print_section "Development Tools"
 setup_nodejs
 install_claude_code
+install_gemini_cli
 install_pyenv
 
 print_section "Dotfiles Management"
