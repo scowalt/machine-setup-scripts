@@ -17,6 +17,9 @@ print_warning() { printf "${YELLOW}⚠ %s${NC}\n" "$1"; }
 print_error() { printf "${RED}✗ %s${NC}\n" "$1"; }
 print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 
+# Track whether system updates have already been performed this session
+_system_updates_done=""
+
 # Check if user is scowalt or a secondary user (<org>-scowalt pattern)
 is_scowalt_user() {
     local user="${1:-$(whoami)}"
@@ -422,6 +425,9 @@ update_system() {
         print_error "Failed to update system packages."
         exit 1
     fi
+
+    # Mark that system updates have been performed
+    _system_updates_done=1
 
     print_success "System packages updated."
 }
@@ -1090,17 +1096,35 @@ update_all_packages() {
     print_message "Updating all packages..."
 
     if can_sudo; then
-        # Update Arch packages (requires sudo)
-        sudo pacman -Syu --noconfirm
+        # Skip pacman/yay updates if already performed earlier in this session
+        if [[ -z "${_system_updates_done}" ]]; then
+            # Update Arch packages (requires sudo)
+            sudo pacman -Syu --noconfirm
 
-        # Update AUR packages if yay is available (yay internally uses sudo)
-        if command -v yay &> /dev/null; then
-            yay -Syu --noconfirm
+            # Update AUR packages if yay is available (yay internally uses sudo)
+            if command -v yay &> /dev/null; then
+                yay -Syu --noconfirm
+            fi
+        else
+            print_debug "System packages already updated this session."
+            # Still update AUR packages if yay is available (may have new AUR packages)
+            if command -v yay &> /dev/null; then
+                # Only update AUR packages, not repo packages (already done)
+                yay -Sua --noconfirm 2>/dev/null || true
+            fi
         fi
 
-        # Update Omarchy if installed
+        # Update Omarchy if installed - only if there are pending updates
         if [[ "${IS_OMARCHY}" = true ]] && command -v omarchy-update-system-pkgs &> /dev/null; then
-            omarchy-update-system-pkgs
+            # Check if there are actually pending updates before running omarchy update
+            local pending_updates
+            pending_updates=$(checkupdates 2>/dev/null | wc -l)
+            if [[ "${pending_updates}" -gt 0 ]]; then
+                print_message "Found ${pending_updates} pending updates, running omarchy update..."
+                omarchy-update-system-pkgs
+            else
+                print_debug "No pending system updates for Omarchy."
+            fi
         fi
     else
         print_warning "No sudo access - skipping system package updates."
@@ -1149,7 +1173,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 55 | Last changed: Add Gemini CLI installation${NC}"
+echo -e "${GRAY}Version 56 | Last changed: Fix duplicate system updates${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
