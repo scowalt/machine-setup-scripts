@@ -691,6 +691,36 @@ install_gemini_cli() {
     fi
 }
 
+# Install Codex CLI (OpenAI's AI coding agent)
+install_codex_cli() {
+    if command -v codex &> /dev/null; then
+        print_debug "Codex CLI is already installed."
+        return
+    fi
+
+    print_message "Installing Codex CLI..."
+
+    # Initialize fnm for current session if available (Homebrew installation)
+    if command -v fnm &> /dev/null; then
+        local fnm_env
+        fnm_env=$(fnm env --use-on-cd)
+        eval "${fnm_env}"
+    fi
+
+    # Make sure npm is available
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Cannot install Codex CLI."
+        print_debug "Install Node.js first, then run: npm install -g @openai/codex"
+        return
+    fi
+
+    if npm install -g @openai/codex; then
+        print_success "Codex CLI installed."
+    else
+        print_error "Failed to install Codex CLI."
+    fi
+}
+
 # Install fnm (Fast Node Manager)
 install_fnm() {
     if command -v fnm &> /dev/null; then
@@ -1041,7 +1071,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 60 | Last changed: Add Gemini CLI installation${NC}"
+echo -e "${GRAY}Version 61 | Last changed: Add Codex CLI installation${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1102,6 +1132,7 @@ install_iterm2_shell_integration
 print_section "Additional Development Tools"
 install_claude_code
 install_gemini_cli
+install_codex_cli
 
 print_section "Final Updates"
 update_packages
