@@ -395,13 +395,37 @@ verify_arch_system() {
 
 # Check if system is already Omarchy
 check_omarchy_installation() {
+    # Check for omarchy-pkg-install command in PATH
     if command -v omarchy-pkg-install &> /dev/null; then
         print_success "Omarchy environment detected."
         export IS_OMARCHY=true
-    else
-        print_message "Standard Arch Linux detected."
-        export IS_OMARCHY=false
+        return
     fi
+
+    # Check common install locations directly (handles PATH not being set up yet)
+    local omarchy_paths=(
+        "/usr/bin/omarchy-pkg-install"
+        "/usr/local/bin/omarchy-pkg-install"
+        "${HOME}/.local/bin/omarchy-pkg-install"
+    )
+
+    for path in "${omarchy_paths[@]}"; do
+        if [[ -x "${path}" ]]; then
+            print_success "Omarchy environment detected (at ${path})."
+            export IS_OMARCHY=true
+            return
+        fi
+    done
+
+    # Check for omarchy-specific config directory (created during Omarchy install)
+    if [[ -d "${HOME}/.config/omarchy" ]]; then
+        print_success "Omarchy environment detected (config directory exists)."
+        export IS_OMARCHY=true
+        return
+    fi
+
+    print_message "Standard Arch Linux detected."
+    export IS_OMARCHY=false
 }
 
 # Update system packages
@@ -1090,18 +1114,16 @@ update_all_packages() {
     print_message "Updating all packages..."
 
     if can_sudo; then
-        # Update Arch packages (requires sudo)
-        sudo pacman -Syu --noconfirm
-
         # Update AUR packages if yay is available (yay internally uses sudo)
+        # This also updates regular pacman packages, so we don't need separate pacman -Syu
         if command -v yay &> /dev/null; then
             yay -Syu --noconfirm
+        else
+            # Fallback to pacman only if yay isn't available
+            sudo pacman -Syu --noconfirm
         fi
 
-        # Update Omarchy if installed
-        if [[ "${IS_OMARCHY}" = true ]] && command -v omarchy-update-system-pkgs &> /dev/null; then
-            omarchy-update-system-pkgs
-        fi
+        # Note: Omarchy packages are updated through yay/pacman, no separate command needed
     else
         print_warning "No sudo access - skipping system package updates."
     fi
@@ -1149,7 +1171,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 55 | Last changed: Add Gemini CLI installation${NC}"
+echo -e "${GRAY}Version 56 | Last changed: Fix Omarchy detection to prevent reinstall prompts${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
