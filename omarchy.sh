@@ -398,7 +398,14 @@ verify_arch_system() {
 
 # Check if system is already Omarchy
 check_omarchy_installation() {
-    if command -v omarchy-pkg-install &> /dev/null; then
+    # Check multiple indicators for Omarchy installation
+    # 1. Check for omarchy commands (may be in /usr/local/bin or elsewhere)
+    # 2. Check for omarchy package via pacman
+    # 3. Check for omarchy config directory
+    if command -v omarchy-pkg-install &> /dev/null \
+        || [[ -x /usr/local/bin/omarchy-pkg-install ]] \
+        || pacman -Qq omarchy &> /dev/null \
+        || [[ -d /usr/share/omarchy ]]; then
         print_success "Omarchy environment detected."
         export IS_OMARCHY=true
     else
@@ -1173,7 +1180,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 56 | Last changed: Fix duplicate system updates${NC}"
+echo -e "${GRAY}Version 57 | Last changed: Improve Omarchy detection${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
