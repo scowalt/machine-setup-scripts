@@ -587,17 +587,9 @@ setup_nodejs() {
 # Install Claude Code version 2.0.63 using bun
 # Pinned version to avoid breaking changes from auto-updates
 install_claude_code() {
-    if command -v claude &> /dev/null; then
-        print_debug "Claude Code is already installed."
-        return
-    fi
+    local target_version="2.0.63"
 
-    print_message "Installing Claude Code v2.0.63..."
-
-    # Clean up stale lock files from previous interrupted installs
-    rm -rf "${HOME}/.local/state/claude/locks" 2>/dev/null
-
-    # Ensure bun is available
+    # Ensure bun is available first
     if [[ -d "${HOME}/.bun" ]]; then
         export PATH="${HOME}/.bun/bin:${PATH}"
     fi
@@ -607,9 +599,41 @@ install_claude_code() {
         return 1
     fi
 
+    # Check if Claude Code is already installed
+    if command -v claude &> /dev/null; then
+        local current_version
+        current_version=$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+
+        if [[ "${current_version}" == "${target_version}" ]]; then
+            print_debug "Claude Code v${target_version} is already installed."
+            return 0
+        elif [[ -n "${current_version}" ]]; then
+            print_warning "Claude Code v${current_version} found, but v${target_version} is required."
+            print_message "Uninstalling current version..."
+
+            # Try to uninstall via bun first, then npm, then remove native binaries
+            bun remove -g @anthropic-ai/claude-code 2>/dev/null || true
+            npm uninstall -g @anthropic-ai/claude-code 2>/dev/null || true
+
+            # Remove native installer binaries if present
+            rm -f "${HOME}/.claude/bin/claude" 2>/dev/null || true
+            rm -f "${HOME}/.local/bin/claude" 2>/dev/null || true
+
+            # Clear shell hash table
+            hash -r 2>/dev/null || true
+
+            print_success "Previous version uninstalled."
+        fi
+    fi
+
+    print_message "Installing Claude Code v${target_version}..."
+
+    # Clean up stale lock files from previous interrupted installs
+    rm -rf "${HOME}/.local/state/claude/locks" 2>/dev/null
+
     # Install specific version using bun
-    if bun install -g @anthropic-ai/claude-code@2.0.63; then
-        print_success "Claude Code v2.0.63 installed."
+    if bun install -g @anthropic-ai/claude-code@${target_version}; then
+        print_success "Claude Code v${target_version} installed."
     else
         print_error "Failed to install Claude Code."
         return 1
@@ -762,7 +786,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 67 | Last changed: Pin Claude Code to v2.0.63${NC}"
+echo -e "${GRAY}Version 68 | Last changed: Add version check and downgrade logic for Claude Code${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"

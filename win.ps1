@@ -441,18 +441,7 @@ function Setup-Nodejs {
 # Function to install Claude Code version 2.0.63 using bun
 # Pinned version to avoid breaking changes from auto-updates
 function Install-ClaudeCode {
-    if (Get-Command claude -ErrorAction SilentlyContinue) {
-        Write-Debug "Claude Code is already installed."
-        return
-    }
-
-    Write-Host "$arrow Installing Claude Code v2.0.63..." -ForegroundColor Cyan
-
-    # Clean up stale lock files from previous interrupted installs
-    $lockPath = Join-Path $env:LOCALAPPDATA "claude\locks"
-    if (Test-Path $lockPath) {
-        Remove-Item $lockPath -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    $targetVersion = "2.0.63"
 
     # Ensure bun is available
     if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
@@ -460,11 +449,57 @@ function Install-ClaudeCode {
         return
     }
 
+    # Check if Claude Code is already installed
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+        try {
+            $versionOutput = claude --version 2>$null
+            $currentVersion = [regex]::Match($versionOutput, '\d+\.\d+\.\d+').Value
+
+            if ($currentVersion -eq $targetVersion) {
+                Write-Debug "Claude Code v$targetVersion is already installed."
+                return
+            }
+            elseif ($currentVersion) {
+                Write-Host "$warnIcon Claude Code v$currentVersion found, but v$targetVersion is required." -ForegroundColor Yellow
+                Write-Host "$arrow Uninstalling current version..." -ForegroundColor Cyan
+
+                # Try to uninstall via bun first, then npm
+                bun remove -g @anthropic-ai/claude-code 2>$null
+                if (Get-Command npm -ErrorAction SilentlyContinue) {
+                    npm uninstall -g @anthropic-ai/claude-code 2>$null
+                }
+
+                # Remove native installer binaries if present
+                $claudeBinPath = Join-Path $env:USERPROFILE ".claude\bin\claude.exe"
+                if (Test-Path $claudeBinPath) {
+                    Remove-Item $claudeBinPath -Force -ErrorAction SilentlyContinue
+                }
+                $localBinPath = Join-Path $env:LOCALAPPDATA "Programs\claude\claude.exe"
+                if (Test-Path $localBinPath) {
+                    Remove-Item $localBinPath -Force -ErrorAction SilentlyContinue
+                }
+
+                Write-Host "$success Previous version uninstalled." -ForegroundColor Green
+            }
+        }
+        catch {
+            Write-Debug "Could not determine Claude Code version, proceeding with install."
+        }
+    }
+
+    Write-Host "$arrow Installing Claude Code v$targetVersion..." -ForegroundColor Cyan
+
+    # Clean up stale lock files from previous interrupted installs
+    $lockPath = Join-Path $env:LOCALAPPDATA "claude\locks"
+    if (Test-Path $lockPath) {
+        Remove-Item $lockPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     try {
         # Install specific version using bun
-        bun install -g @anthropic-ai/claude-code@2.0.63
+        bun install -g @anthropic-ai/claude-code@$targetVersion
         if ($?) {
-            Write-Host "$success Claude Code v2.0.63 installed." -ForegroundColor Green
+            Write-Host "$success Claude Code v$targetVersion installed." -ForegroundColor Green
         } else {
             Write-Host "$failIcon Failed to install Claude Code." -ForegroundColor Red
         }
@@ -617,7 +652,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 55 | Last changed: Pin Claude Code to v2.0.63" -ForegroundColor DarkGray
+    Write-Host "Version 56 | Last changed: Add version check and downgrade logic for Claude Code" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
