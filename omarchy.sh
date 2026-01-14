@@ -973,6 +973,26 @@ setup_nodejs() {
     fi
 }
 
+# Install Bun JavaScript runtime and package manager
+install_bun() {
+    if command -v bun &> /dev/null; then
+        print_debug "Bun is already installed."
+        return
+    fi
+
+    print_message "Installing Bun..."
+    local bun_install_script
+    bun_install_script=$(curl -fsSL https://bun.sh/install)
+    if bash <<< "${bun_install_script}"; then
+        # Add bun to PATH for current session
+        export PATH="${HOME}/.bun/bin:${PATH}"
+        print_success "Bun installed."
+    else
+        print_error "Failed to install Bun."
+        return 1
+    fi
+}
+
 # Install Gemini CLI (Google's AI coding agent)
 install_gemini_cli() {
     if command -v gemini &> /dev/null; then
@@ -1033,39 +1053,35 @@ install_codex_cli() {
     fi
 }
 
-# Install Claude Code using official installer
+# Install Claude Code version 2.0.63 using bun
+# Pinned version to avoid breaking changes from auto-updates
 install_claude_code() {
     if command -v claude &> /dev/null; then
         print_debug "Claude Code is already installed."
         return
     fi
 
-    print_message "Installing Claude Code..."
+    print_message "Installing Claude Code v2.0.63..."
 
     # Clean up stale lock files from previous interrupted installs
     rm -rf "${HOME}/.local/state/claude/locks" 2>/dev/null
 
-    # Use the native installer (doesn't require Node.js)
-    # Download to temp file and execute (more reliable than piping when run via curl|bash)
-    local temp_script
-    temp_script=$(mktemp)
-    if curl -fsSL https://claude.ai/install.sh -o "${temp_script}"; then
-        chmod +x "${temp_script}"
-        # Redirect stdin from /dev/null to prevent installer from consuming script input
-        if bash "${temp_script}" < /dev/null; then
-            # Add claude bin directory to PATH for current session
-            # The native installer puts claude in ~/.local/bin
-            if [[ -d "${HOME}/.local/bin" ]]; then
-                export PATH="${HOME}/.local/bin:${PATH}"
-            fi
-            print_success "Claude Code installed."
-        else
-            print_error "Failed to install Claude Code."
-        fi
-        rm -f "${temp_script}"
+    # Ensure bun is available
+    if [[ -d "${HOME}/.bun" ]]; then
+        export PATH="${HOME}/.bun/bin:${PATH}"
+    fi
+
+    if ! command -v bun &> /dev/null; then
+        print_error "Bun is not installed. Cannot install Claude Code."
+        return 1
+    fi
+
+    # Install specific version using bun
+    if bun install -g @anthropic-ai/claude-code@2.0.63; then
+        print_success "Claude Code v2.0.63 installed."
     else
-        print_error "Failed to download Claude Code installer."
-        rm -f "${temp_script}"
+        print_error "Failed to install Claude Code."
+        return 1
     fi
 }
 
@@ -1207,7 +1223,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 58 | Last changed: Skip Omarchy install prompt for non-sudo users${NC}"
+echo -e "${GRAY}Version 59 | Last changed: Pin Claude Code to v2.0.63${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1242,6 +1258,7 @@ configure_git_town
 
 print_section "Development Tools"
 setup_nodejs
+install_bun
 install_claude_code
 install_gemini_cli
 install_codex_cli

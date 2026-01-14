@@ -438,14 +438,15 @@ function Setup-Nodejs {
     }
 }
 
-# Function to install Claude Code using official installer
+# Function to install Claude Code version 2.0.63 using bun
+# Pinned version to avoid breaking changes from auto-updates
 function Install-ClaudeCode {
     if (Get-Command claude -ErrorAction SilentlyContinue) {
         Write-Debug "Claude Code is already installed."
         return
     }
 
-    Write-Host "$arrow Installing Claude Code..." -ForegroundColor Cyan
+    Write-Host "$arrow Installing Claude Code v2.0.63..." -ForegroundColor Cyan
 
     # Clean up stale lock files from previous interrupted installs
     $lockPath = Join-Path $env:LOCALAPPDATA "claude\locks"
@@ -453,13 +454,20 @@ function Install-ClaudeCode {
         Remove-Item $lockPath -Recurse -Force -ErrorAction SilentlyContinue
     }
 
+    # Ensure bun is available
+    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
+        Write-Host "$failIcon Bun is not installed. Cannot install Claude Code." -ForegroundColor Red
+        return
+    }
+
     try {
-        # Download to temp file and execute (more reliable than piping)
-        $tempScript = [System.IO.Path]::GetTempFileName() + ".ps1"
-        Invoke-RestMethod https://claude.ai/install.ps1 -OutFile $tempScript
-        & $tempScript
-        Remove-Item $tempScript -ErrorAction SilentlyContinue
-        Write-Host "$success Claude Code installed." -ForegroundColor Green
+        # Install specific version using bun
+        bun install -g @anthropic-ai/claude-code@2.0.63
+        if ($?) {
+            Write-Host "$success Claude Code v2.0.63 installed." -ForegroundColor Green
+        } else {
+            Write-Host "$failIcon Failed to install Claude Code." -ForegroundColor Red
+        }
     }
     catch {
         Write-Host "$failIcon Failed to install Claude Code: $($_.Exception.Message)" -ForegroundColor Red
@@ -609,7 +617,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 54 | Last changed: Add Codex CLI installation" -ForegroundColor DarkGray
+    Write-Host "Version 55 | Last changed: Pin Claude Code to v2.0.63" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
