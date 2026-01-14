@@ -649,14 +649,18 @@ install_gemini_cli() {
 
     print_message "Installing Gemini CLI..."
 
-    # Make sure npm is available
-    if ! command -v npm &> /dev/null; then
-        print_warning "npm not found. Cannot install Gemini CLI."
-        print_debug "Install Node.js first, then run: npm install -g @google/gemini-cli"
+    # Ensure bun is available
+    if [[ -d "${HOME}/.bun" ]]; then
+        export PATH="${HOME}/.bun/bin:${PATH}"
+    fi
+
+    if ! command -v bun &> /dev/null; then
+        print_warning "Bun not found. Cannot install Gemini CLI."
+        print_debug "Install Bun first, then run: bun install -g @google/gemini-cli"
         return
     fi
 
-    if npm install -g @google/gemini-cli; then
+    if bun install -g @google/gemini-cli; then
         print_success "Gemini CLI installed."
     else
         print_error "Failed to install Gemini CLI."
@@ -672,14 +676,18 @@ install_codex_cli() {
 
     print_message "Installing Codex CLI..."
 
-    # Make sure npm is available
-    if ! command -v npm &> /dev/null; then
-        print_warning "npm not found. Cannot install Codex CLI."
-        print_debug "Install Node.js first, then run: npm install -g @openai/codex"
+    # Ensure bun is available
+    if [[ -d "${HOME}/.bun" ]]; then
+        export PATH="${HOME}/.bun/bin:${PATH}"
+    fi
+
+    if ! command -v bun &> /dev/null; then
+        print_warning "Bun not found. Cannot install Codex CLI."
+        print_debug "Install Bun first, then run: bun install -g @openai/codex"
         return
     fi
 
-    if npm install -g @openai/codex; then
+    if bun install -g @openai/codex; then
         print_success "Codex CLI installed."
     else
         print_error "Failed to install Codex CLI."
@@ -786,7 +794,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 68 | Last changed: Add version check and downgrade logic for Claude Code${NC}"
+echo -e "${GRAY}Version 69 | Last changed: Use bun instead of npm for Gemini and Codex CLI installs${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
