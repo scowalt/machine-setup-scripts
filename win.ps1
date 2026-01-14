@@ -318,20 +318,20 @@ function Install-GeminiCli {
 
     Write-Host "$arrow Installing Gemini CLI..." -ForegroundColor Cyan
 
-    # Try to initialize fnm if available
-    if (Get-Command fnm -ErrorAction SilentlyContinue) {
-        fnm env --use-on-cd | Out-String | Invoke-Expression
+    # Ensure bun is available
+    $bunPath = "$env:USERPROFILE\.bun\bin"
+    if (Test-Path $bunPath) {
+        $env:PATH = "$bunPath;$env:PATH"
     }
 
-    # Make sure npm is available
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        Write-Host "$warnIcon npm not found. Cannot install Gemini CLI." -ForegroundColor Yellow
-        Write-Host "  Install Node.js first, then run: npm install -g @google/gemini-cli" -ForegroundColor DarkGray
+    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
+        Write-Host "$warnIcon Bun not found. Cannot install Gemini CLI." -ForegroundColor Yellow
+        Write-Host "  Install Bun first, then run: bun install -g @google/gemini-cli" -ForegroundColor DarkGray
         return
     }
 
     try {
-        npm install -g @google/gemini-cli
+        bun install -g @google/gemini-cli
         if ($?) {
             Write-Host "$success Gemini CLI installed." -ForegroundColor Green
         }
@@ -353,20 +353,20 @@ function Install-CodexCli {
 
     Write-Host "$arrow Installing Codex CLI..." -ForegroundColor Cyan
 
-    # Try to initialize fnm if available
-    if (Get-Command fnm -ErrorAction SilentlyContinue) {
-        fnm env --use-on-cd | Out-String | Invoke-Expression
+    # Ensure bun is available
+    $bunPath = "$env:USERPROFILE\.bun\bin"
+    if (Test-Path $bunPath) {
+        $env:PATH = "$bunPath;$env:PATH"
     }
 
-    # Make sure npm is available
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        Write-Host "$warnIcon npm not found. Cannot install Codex CLI." -ForegroundColor Yellow
-        Write-Host "  Install Node.js first, then run: npm install -g @openai/codex" -ForegroundColor DarkGray
+    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
+        Write-Host "$warnIcon Bun not found. Cannot install Codex CLI." -ForegroundColor Yellow
+        Write-Host "  Install Bun first, then run: bun install -g @openai/codex" -ForegroundColor DarkGray
         return
     }
 
     try {
-        npm install -g @openai/codex
+        bun install -g @openai/codex
         if ($?) {
             Write-Host "$success Codex CLI installed." -ForegroundColor Green
         }
@@ -652,7 +652,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 56 | Last changed: Add version check and downgrade logic for Claude Code" -ForegroundColor DarkGray
+    Write-Host "Version 57 | Last changed: Use bun instead of npm for Gemini and Codex CLI installs" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
