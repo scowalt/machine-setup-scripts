@@ -776,6 +776,64 @@ upgrade_npm_global_packages() {
     fi
 }
 
+# Setup shared /tmp/claude directory for multi-user Claude Code access
+setup_claude_shared_directory() {
+    local claude_tmp="/tmp/claude"
+
+    print_message "Setting up shared Claude Code temp directory..."
+
+    if [[ -d "${claude_tmp}" ]]; then
+        # Check current permissions (macOS stat syntax)
+        local current_perms
+        current_perms=$(stat -f "%OLp" "${claude_tmp}" 2>/dev/null)
+
+        if [[ "${current_perms}" == "1777" ]]; then
+            print_debug "Claude temp directory already has correct permissions."
+            return 0
+        fi
+
+        # Try to fix permissions
+        print_message "Fixing permissions on ${claude_tmp}..."
+
+        local owner_uid
+        owner_uid=$(stat -f "%u" "${claude_tmp}" 2>/dev/null)
+
+        if [[ "${owner_uid}" == "$(id -u)" ]]; then
+            if chmod 1777 "${claude_tmp}"; then
+                print_success "Fixed permissions on Claude temp directory."
+                return 0
+            fi
+        fi
+
+        if can_sudo; then
+            if sudo chmod 1777 "${claude_tmp}"; then
+                print_success "Fixed permissions on Claude temp directory (with sudo)."
+                return 0
+            fi
+        fi
+
+        print_warning "Cannot fix permissions on ${claude_tmp}."
+        print_debug "Ask an admin to run: sudo chmod 1777 ${claude_tmp}"
+        return 0
+    else
+        if mkdir -p "${claude_tmp}" && chmod 1777 "${claude_tmp}"; then
+            print_success "Created shared Claude temp directory."
+            return 0
+        fi
+
+        if can_sudo; then
+            if sudo mkdir -p "${claude_tmp}" && sudo chmod 1777 "${claude_tmp}"; then
+                print_success "Created shared Claude temp directory (with sudo)."
+                return 0
+            fi
+        fi
+
+        print_warning "Cannot create ${claude_tmp}."
+        print_debug "Ask an admin to run: sudo mkdir -p ${claude_tmp} && sudo chmod 1777 ${claude_tmp}"
+        return 0
+    fi
+}
+
 # Setup ~/Code directory
 setup_code_directory() {
     local code_dir="${HOME}/Code"
@@ -794,7 +852,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 69 | Last changed: Use bun instead of npm for Gemini and Codex CLI installs${NC}"
+echo -e "${GRAY}Version 70 | Last changed: Add shared /tmp/claude directory setup${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
@@ -831,6 +889,9 @@ else
 fi
 
 # Common setup for all users
+print_section "Shared Directories"
+setup_claude_shared_directory
+
 print_section "Dotfiles Management"
 
 # Check if we have access (via SSH, token, or deploy key)
