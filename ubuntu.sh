@@ -1278,6 +1278,39 @@ APT::Periodic::AutocleanInterval "7";'
     fi
 }
 
+# Install cloudflared (Cloudflare Tunnel client)
+install_cloudflared() {
+    if command -v cloudflared &> /dev/null; then
+        print_debug "cloudflared is already installed."
+        return
+    fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access - cannot install cloudflared."
+        return
+    fi
+
+    print_message "Installing cloudflared..."
+
+    # Add Cloudflare GPG key
+    sudo mkdir -p --mode=0755 /usr/share/keyrings
+    local gpg_key
+    gpg_key=$(curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg)
+    echo "${gpg_key}" | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+
+    # Add cloudflared apt repository
+    echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
+
+    # Install cloudflared
+    sudo apt-get update -qq
+    if sudo apt-get install -y cloudflared; then
+        print_success "cloudflared installed."
+    else
+        print_error "Failed to install cloudflared."
+        return 1
+    fi
+}
+
 # Install OpenTofu (open-source Terraform fork)
 install_opentofu() {
     if command -v tofu &> /dev/null; then
@@ -1548,7 +1581,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 94 | Last changed: Add shared /tmp/claude directory setup${NC}"
+echo -e "${GRAY}Version 95 | Last changed: Add cloudflared via apt repository${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1578,6 +1611,7 @@ setup_nodejs
 install_pyenv
 install_uv
 install_opentofu
+install_cloudflared
 
 print_section "Security Tools"
 install_1password_cli

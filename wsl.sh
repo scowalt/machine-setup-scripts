@@ -920,6 +920,22 @@ install_opentofu() {
     fi
 }
 
+# Install cloudflared (Cloudflare Tunnel client)
+install_cloudflared() {
+    if command -v cloudflared &> /dev/null; then
+        print_debug "cloudflared is already installed."
+        return
+    fi
+
+    print_message "Installing cloudflared..."
+    ensure_brew_available
+    if brew install cloudflared; then
+        print_success "cloudflared installed."
+    else
+        print_error "Failed to install cloudflared."
+    fi
+}
+
 # Install act for running GitHub Actions locally
 install_act() {
     if ! command -v act &> /dev/null; then
@@ -1143,7 +1159,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 65 | Last changed: Add shared /tmp/claude directory setup${NC}"
+echo -e "${GRAY}Version 66 | Last changed: Add cloudflared via Homebrew${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1173,6 +1189,7 @@ install_pyenv
 install_uv
 install_bun
 install_opentofu
+install_cloudflared
 
 print_section "Security Tools"
 install_1password_cli

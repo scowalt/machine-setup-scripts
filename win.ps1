@@ -27,7 +27,8 @@ $wingetPackages = (
     "jj-vcs.jj",
     "astral-sh.uv",
     "jqlang.jq",
-    "GoLang.Go"
+    "GoLang.Go",
+    "Cloudflare.cloudflared"
 )
 
 # Define Nerd Font symbols using Unicode code points
@@ -652,7 +653,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 57 | Last changed: Use bun instead of npm for Gemini and Codex CLI installs" -ForegroundColor DarkGray
+    Write-Host "Version 58 | Last changed: Add cloudflared to WinGet packages" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages

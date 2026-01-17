@@ -1379,6 +1379,39 @@ install_opentofu() {
     fi
 }
 
+# Install cloudflared (Cloudflare Tunnel client)
+install_cloudflared() {
+    if command -v cloudflared &> /dev/null; then
+        print_debug "cloudflared is already installed."
+        return
+    fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access - cannot install cloudflared."
+        return
+    fi
+
+    print_message "Installing cloudflared..."
+
+    # Add Cloudflare GPG key
+    sudo mkdir -p --mode=0755 /usr/share/keyrings
+    local gpg_key
+    gpg_key=$(curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg)
+    echo "${gpg_key}" | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+
+    # Add cloudflared apt repository
+    echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
+
+    # Install cloudflared
+    sudo apt-get update -qq
+    if sudo apt-get install -y cloudflared; then
+        print_success "cloudflared installed."
+    else
+        print_error "Failed to install cloudflared."
+        return 1
+    fi
+}
+
 # Install act for running GitHub Actions locally
 install_act() {
     if ! command -v act &> /dev/null; then
@@ -1563,7 +1596,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 71 | Last changed: Add shared /tmp/claude directory setup${NC}"
+echo -e "${GRAY}Version 72 | Last changed: Add cloudflared via apt repository${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1582,6 +1615,7 @@ setup_nodejs
 install_pyenv
 install_uv
 install_opentofu
+install_cloudflared
 
 print_section "Network & SSH"
 enable_ssh_server
