@@ -650,7 +650,7 @@ install_dev_tools_aur() {
     print_message "Installing development tools from AUR..."
 
     # Development tools available in AUR
-    local aur_packages=("fnm-bin" "chezmoi" "1password-cli" "tailscale" "act" "cloudflared")
+    local aur_packages=("fnm-bin" "chezmoi" "1password-cli" "tailscale" "act" "cloudflared" "turso-cli")
     local to_install=()
 
     # Check which packages need installation
@@ -1299,7 +1299,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 63 | Last changed: Add cloudflared to AUR packages${NC}"
+echo -e "${GRAY}Version 64 | Last changed: Add Turso CLI to AUR packages${NC}"
 
 print_section "User & System Setup"
 ensure_not_root

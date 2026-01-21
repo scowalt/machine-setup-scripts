@@ -310,6 +310,43 @@ function Install-PyenvWin {
     }
 }
 
+# Function to install Turso CLI (libSQL database platform)
+function Install-TursoCli {
+    if (Get-Command turso -ErrorAction SilentlyContinue) {
+        Write-Debug "Turso CLI is already installed."
+        return
+    }
+
+    Write-Host "$arrow Installing Turso CLI..." -ForegroundColor Cyan
+
+    # Create directory for turso if it doesn't exist
+    $tursoPath = "$env:LOCALAPPDATA\turso"
+    if (-not (Test-Path $tursoPath)) {
+        New-Item -ItemType Directory -Force -Path $tursoPath | Out-Null
+    }
+
+    # Download the latest Windows binary
+    $downloadUrl = "https://github.com/tursodatabase/turso-cli/releases/latest/download/turso_cli-windows-amd64.exe"
+    $binaryPath = "$tursoPath\turso.exe"
+
+    try {
+        Write-Host "$arrow Downloading Turso CLI binary..." -ForegroundColor Cyan
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $binaryPath
+
+        # Add to PATH if not already there
+        $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+        if ($currentPath -notlike "*$tursoPath*") {
+            [Environment]::SetEnvironmentVariable("PATH", "$currentPath;$tursoPath", "User")
+            Write-Host "$success Added Turso CLI to PATH." -ForegroundColor Green
+        }
+
+        Write-Host "$success Turso CLI installed." -ForegroundColor Green
+    }
+    catch {
+        Write-Host "$failIcon Failed to download Turso CLI: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
 # Function to install Gemini CLI (Google's AI coding agent)
 function Install-GeminiCli {
     if (Get-Command gemini -ErrorAction SilentlyContinue) {
@@ -653,7 +690,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 58 | Last changed: Add cloudflared to WinGet packages" -ForegroundColor DarkGray
+    Write-Host "Version 59 | Last changed: Add Turso CLI" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
@@ -684,6 +721,7 @@ function Initialize-WindowsEnvironment {
     Install-ClaudeCode
     Install-GeminiCli
     Install-CodexCli
+    Install-TursoCli
 
     Write-Section "System Updates"
     Install-WingetUpdates

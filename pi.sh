@@ -1412,6 +1412,25 @@ install_cloudflared() {
     fi
 }
 
+# Install Turso CLI (libSQL database platform)
+install_turso() {
+    if command -v turso &> /dev/null; then
+        print_debug "Turso CLI is already installed."
+        return
+    fi
+
+    print_message "Installing Turso CLI..."
+    local turso_install
+    turso_install=$(curl -sSfL https://get.tur.so/install.sh)
+    if bash <<< "${turso_install}"; then
+        # Add turso to PATH for current session
+        export PATH="${HOME}/.turso:${PATH}"
+        print_success "Turso CLI installed."
+    else
+        print_error "Failed to install Turso CLI."
+    fi
+}
+
 # Install act for running GitHub Actions locally
 install_act() {
     if ! command -v act &> /dev/null; then
@@ -1596,7 +1615,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 72 | Last changed: Add cloudflared via apt repository${NC}"
+echo -e "${GRAY}Version 73 | Last changed: Add Turso CLI${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1616,6 +1635,7 @@ install_pyenv
 install_uv
 install_opentofu
 install_cloudflared
+install_turso
 
 print_section "Network & SSH"
 enable_ssh_server

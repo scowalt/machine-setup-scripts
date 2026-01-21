@@ -936,6 +936,22 @@ install_cloudflared() {
     fi
 }
 
+# Install Turso CLI (libSQL database platform)
+install_turso() {
+    if command -v turso &> /dev/null; then
+        print_debug "Turso CLI is already installed."
+        return
+    fi
+
+    print_message "Installing Turso CLI..."
+    ensure_brew_available
+    if brew install tursodatabase/tap/turso; then
+        print_success "Turso CLI installed."
+    else
+        print_error "Failed to install Turso CLI."
+    fi
+}
+
 # Install act for running GitHub Actions locally
 install_act() {
     if ! command -v act &> /dev/null; then
@@ -1159,7 +1175,7 @@ setup_code_directory() {
 
 # Run the setup tasks
 echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 66 | Last changed: Add cloudflared via Homebrew${NC}"
+echo -e "${GRAY}Version 67 | Last changed: Add Turso CLI via Homebrew${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1190,6 +1206,7 @@ install_uv
 install_bun
 install_opentofu
 install_cloudflared
+install_turso
 
 print_section "Security Tools"
 install_1password_cli
