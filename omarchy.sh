@@ -835,12 +835,22 @@ setup_nodejs() {
     if echo "${filtered_fnm}" | grep -q "v[0-9]"; then
         print_debug "Node.js version already installed."
         
-        # Check if a default/global version is set
+        # Always install latest LTS and set as default to keep Node.js current
+        print_message "Installing latest LTS Node.js..."
+        if fnm install --lts; then
+            fnm use lts-latest
+            local lts_version
+            lts_version=$(fnm current)
+            fnm default "${lts_version}"
+            print_success "Default Node.js set to ${lts_version}."
+        else
+            print_warning "Failed to install latest LTS. Keeping current default."
+        fi
+
+        # Check if a default/global version is set (in case LTS install above didn't set one)
         local current_version
         current_version=$(fnm current 2>/dev/null || echo "none")
-        if [[ "${current_version}" != "none" ]] && [[ -n "${current_version}" ]]; then
-            print_debug "Global Node.js version already set: ${current_version}"
-        else
+        if [[ "${current_version}" == "none" ]] || [[ -z "${current_version}" ]]; then
             print_message "Setting the first installed version as default..."
             local first_version
             local fnm_list_output
@@ -1222,7 +1232,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 66 | Last changed: Remove git-town (replaced by jj)${NC}"
+echo -e "${GRAY}Version 67 | Last changed: Always update fnm default to latest LTS${NC}"
 
 print_section "User & System Setup"
 ensure_not_root

@@ -957,14 +957,28 @@ setup_nodejs() {
     if echo "${filtered_fnm_output}" | grep -q "v[0-9]"; then
         print_debug "Node.js version already installed."
         
-        # Check if a default/global version is set
+        # Always install latest LTS and set as default to keep Node.js current
+        print_message "Installing latest LTS Node.js..."
+        if fnm install --lts; then
+            fnm use lts-latest
+            local lts_version
+            lts_version=$(fnm current)
+            fnm default "${lts_version}"
+            # Re-initialize fnm to pick up the new default
+            local fnm_env_update
+            fnm_env_update=$("${HOME}"/.local/share/fnm/fnm env --use-on-cd)
+            eval "${fnm_env_update}"
+            print_success "Default Node.js set to ${lts_version}."
+        else
+            print_warning "Failed to install latest LTS. Keeping current default."
+        fi
+
+        # Check if a default/global version is set (in case LTS install above didn't set one)
         local current_version
         current_version=$(fnm current 2>/dev/null || echo "none")
-        if [[ "${current_version}" != "none" ]] && [[ -n "${current_version}" ]]; then
-            print_debug "Global Node.js version already set: ${current_version}"
-        else
+        if [[ "${current_version}" == "none" ]] || [[ -z "${current_version}" ]]; then
             print_message "No global Node.js version set. Setting the first installed version as default..."
-            
+
             local first_version
             # Extract the first non-system version
             local fnm_versions
@@ -979,50 +993,15 @@ setup_nodejs() {
             cleaned_line="${cleaned_line#\*}"
             cleaned_line="${cleaned_line#"${cleaned_line%%[![:space:]]*}"}"
             first_version=$(echo "${cleaned_line}" | awk '{print $1}')
-            
-            print_debug "Found version to set as default: '${first_version}'"
-            
+
             if [[ -n "${first_version}" ]]; then
-                print_debug "Attempting to set default version to: ${first_version}"
                 if fnm default "${first_version}"; then
                     print_success "Set ${first_version} as default Node.js version."
-                    # Re-initialize fnm to pick up the new default
-                    local fnm_env
-                    fnm_env=$("${HOME}"/.local/share/fnm/fnm env --use-on-cd)
-                    eval "${fnm_env}"
+                    local fnm_env_default
+                    fnm_env_default=$("${HOME}"/.local/share/fnm/fnm env --use-on-cd)
+                    eval "${fnm_env_default}"
                 else
                     print_error "Failed to set default Node.js version. You may need to run: fnm default ${first_version}"
-                fi
-            else
-                print_warning "No Node.js versions found (only system version available)."
-                print_message "Installing Node.js LTS version..."
-                if fnm install --lts; then
-                    print_success "Installed latest LTS Node.js."
-                    # Get the version that was just installed
-                    local installed_version
-                    local installed_fnm_versions
-                    installed_fnm_versions=$(fnm list)
-                    local installed_version_lines
-                    installed_version_lines=$(echo "${installed_fnm_versions}" | grep -E "^[[:space:]]*\*?[[:space:]]*v[0-9]")
-                    local installed_first_line
-                    installed_first_line=$(echo "${installed_version_lines}" | head -n1)
-                    local installed_cleaned_line
-                    # Remove leading whitespace and optional asterisk
-                    installed_cleaned_line="${installed_first_line#"${installed_first_line%%[![:space:]]*}"}"
-                    installed_cleaned_line="${installed_cleaned_line#\*}"
-                    installed_cleaned_line="${installed_cleaned_line#"${installed_cleaned_line%%[![:space:]]*}"}"
-                    installed_version=$(echo "${installed_cleaned_line}" | awk '{print $1}')
-                    if [[ -n "${installed_version}" ]]; then
-                        fnm default "${installed_version}"
-                        print_success "Set ${installed_version} as default Node.js version."
-                        local installed_fnm_env
-                        installed_fnm_env=$("${HOME}"/.local/share/fnm/fnm env --use-on-cd)
-                        eval "${installed_fnm_env}"
-                    fi
-                else
-                    print_error "Failed to install Node.js LTS version."
-                    print_message "You may need to manually install Node.js with: fnm install --lts"
-                    print_message "Then set it as default with: fnm default <version>"
                 fi
             fi
         fi
@@ -1513,7 +1492,7 @@ setup_code_directory() {
 
 
 echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 98 | Last changed: Remove git-town (replaced by jj)${NC}"
+echo -e "${GRAY}Version 99 | Last changed: Always update fnm default to latest LTS${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
