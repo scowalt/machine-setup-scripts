@@ -547,6 +547,28 @@ function Install-ClaudeCode {
     }
 }
 
+function Setup-RubeMcp {
+    if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+        Write-Debug "Claude Code not found. Skipping Rube MCP setup."
+        return
+    }
+
+    $mcpList = claude mcp list 2>$null
+    if ($mcpList -match "rube") {
+        Write-Debug "Rube MCP server is already configured."
+        return
+    }
+
+    Write-Host "$arrow Configuring Rube MCP server for Claude Code..." -ForegroundColor Cyan
+    try {
+        claude mcp add rube --transport http https://rube.app/mcp 2>$null
+        Write-Host "$success Rube MCP server configured." -ForegroundColor Green
+    }
+    catch {
+        Write-Host "$warnIcon Failed to configure Rube MCP server." -ForegroundColor Yellow
+    }
+}
+
 function Install-WingetPackages {
     Write-Host "$arrow Checking for missing winget packages..." -ForegroundColor Cyan
 
@@ -690,7 +712,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 59 | Last changed: Add Turso CLI" -ForegroundColor DarkGray
+    Write-Host "Version 60 | Last changed: Add Rube MCP server configuration for Claude Code" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
@@ -719,6 +741,7 @@ function Initialize-WindowsEnvironment {
     Write-Section "Additional Development Tools"
     Setup-Nodejs
     Install-ClaudeCode
+    Setup-RubeMcp
     Install-GeminiCli
     Install-CodexCli
     Install-TursoCli

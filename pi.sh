@@ -1360,6 +1360,27 @@ install_claude_code() {
     fi
 }
 
+# Configure Rube MCP server for Claude Code
+setup_rube_mcp() {
+    if ! command -v claude &> /dev/null; then
+        print_debug "Claude Code not found. Skipping Rube MCP setup."
+        return 0
+    fi
+
+    # Check if rube MCP server is already configured
+    if claude mcp list 2>/dev/null | grep -q "rube"; then
+        print_debug "Rube MCP server is already configured."
+        return 0
+    fi
+
+    print_message "Configuring Rube MCP server for Claude Code..."
+    if claude mcp add rube --transport http https://rube.app/mcp 2>/dev/null; then
+        print_success "Rube MCP server configured."
+    else
+        print_warning "Failed to configure Rube MCP server."
+    fi
+}
+
 # Install OpenTofu (open-source Terraform fork)
 install_opentofu() {
     if command -v tofu &> /dev/null; then
@@ -1615,7 +1636,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 73 | Last changed: Add Turso CLI${NC}"
+echo -e "${GRAY}Version 74 | Last changed: Add Rube MCP server configuration for Claude Code${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1654,6 +1675,7 @@ fi
 print_section "Additional Development Tools"
 install_bun
 install_claude_code
+setup_rube_mcp
 install_gemini_cli
 install_codex_cli
 
