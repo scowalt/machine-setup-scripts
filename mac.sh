@@ -251,7 +251,7 @@ install_core_packages() {
 
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
-    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "git-town" "jj" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso")
+    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "jj" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso")
     local to_install=()
     
     # Get all installed packages at once (much faster than checking individually)
@@ -478,51 +478,6 @@ add_github_to_known_hosts() {
         print_success "GitHub's SSH key added."
     else
         print_debug "GitHub's SSH key already exists in known_hosts."
-    fi
-}
-
-# Configure git-town completions
-configure_git_town() {
-    if command -v git-town &> /dev/null; then
-        print_message "Configuring git-town completions..."
-        
-        # Set up Fish shell completions for git-town
-        if [[ -d ~/.config/fish/completions ]]; then
-            if ! [[ -f ~/.config/fish/completions/git-town.fish ]]; then
-                git town completion fish > ~/.config/fish/completions/git-town.fish
-                print_success "git-town Fish completions configured."
-            else
-                print_debug "git-town Fish completions already configured."
-            fi
-        fi
-        
-        # Set up Bash completions for git-town
-        local bash_completion_dir
-        local brew_prefix
-        brew_prefix=$(brew --prefix)
-        bash_completion_dir="${brew_prefix}/etc/bash_completion.d"
-        if [[ -d "${bash_completion_dir}" ]]; then
-            if ! [[ -f "${bash_completion_dir}/git-town" ]]; then
-                git town completion bash > "${bash_completion_dir}/git-town"
-                print_success "git-town Bash completions configured."
-            else
-                print_debug "git-town Bash completions already configured."
-            fi
-        fi
-        
-        # Set up Zsh completions for git-town
-        local zsh_completion_dir
-        zsh_completion_dir="${brew_prefix}/share/zsh/site-functions"
-        if [[ -d "${zsh_completion_dir}" ]]; then
-            if ! [[ -f "${zsh_completion_dir}/_git-town" ]]; then
-                git town completion zsh > "${zsh_completion_dir}/_git-town"
-                print_success "git-town Zsh completions configured."
-            else
-                print_debug "git-town Zsh completions already configured."
-            fi
-        fi
-    else
-        print_warning "git-town not found, skipping completion setup."
     fi
 }
 
@@ -873,7 +828,7 @@ setup_code_directory() {
 # Run the setup tasks
 current_user=$(whoami)
 echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 73 | Last changed: Add Rube MCP server configuration for Claude Code${NC}"
+echo -e "${GRAY}Version 74 | Last changed: Remove git-town (replaced by jj)${NC}"
 
 if is_main_user; then
     echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
@@ -894,8 +849,6 @@ if is_main_user; then
     print_section "Code Directory Setup"
     setup_code_directory
 
-    print_section "Development Tools"
-    configure_git_town
 else
     echo -e "${CYAN}Running secondary user setup for ${current_user}${NC}"
 

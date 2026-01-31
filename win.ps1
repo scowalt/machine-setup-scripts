@@ -195,70 +195,6 @@ function Test-GitHubSSHKey {
     } while ($keyadded -eq $false)
 }
 
-# Function to install git-town by downloading binary directly (not available via winget)
-function Install-GitTown {
-    if (-not (Get-Command git-town -ErrorAction SilentlyContinue)) {
-        Write-Host "$arrow Installing git-town via direct binary download..." -ForegroundColor Cyan
-        
-        # Create directory for git-town if it doesn't exist
-        $gitTownPath = "$env:LOCALAPPDATA\git-town"
-        if (-not (Test-Path $gitTownPath)) {
-            New-Item -ItemType Directory -Force -Path $gitTownPath
-        }
-        
-        # Download the latest Windows binary
-        $downloadUrl = "https://github.com/git-town/git-town/releases/latest/download/git-town_windows_intel_64.exe"
-        $binaryPath = "$gitTownPath\git-town.exe"
-        
-        try {
-            Write-Host "$arrow Downloading git-town binary..." -ForegroundColor Cyan
-            Invoke-WebRequest -Uri $downloadUrl -OutFile $binaryPath
-            
-            # Add to PATH if not already there
-            $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-            if ($currentPath -notlike "*$gitTownPath*") {
-                [Environment]::SetEnvironmentVariable("PATH", "$currentPath;$gitTownPath", "User")
-                Write-Host "$success Added git-town to PATH." -ForegroundColor Green
-            }
-            
-            Write-Host "$success git-town installed." -ForegroundColor Green
-        }
-        catch {
-            Write-Host "$failIcon Failed to download git-town: $($_.Exception.Message)" -ForegroundColor Red
-        }
-    }
-    else {
-        Write-Debug "git-town is already installed."
-    }
-}
-
-# Function to configure git-town completions
-function Set-GitTownCompletions {
-    if (Get-Command git-town -ErrorAction SilentlyContinue) {
-        Write-Host "$arrow Configuring git-town completions..." -ForegroundColor Cyan
-        
-        # Set up PowerShell completions for git-town
-        $profileDir = Split-Path $PROFILE
-        if (-not (Test-Path $profileDir)) {
-            New-Item -ItemType Directory -Force -Path $profileDir
-        }
-        
-        $gitTownCompletionCommand = 'git town completion powershell | Out-String | Invoke-Expression'
-        $escapedPattern = [regex]::Escape($gitTownCompletionCommand)
-        
-        if (-not (Select-String -Path $PROFILE -Pattern $escapedPattern -Quiet)) {
-            Add-Content -Path $PROFILE -Value "`n$gitTownCompletionCommand"
-            Write-Host "$success git-town PowerShell completions configured." -ForegroundColor Green
-        }
-        else {
-            Write-Debug "git-town PowerShell completions already configured."
-        }
-    }
-    else {
-        Write-Host "$warnIcon git-town not found, skipping completion setup." -ForegroundColor Yellow
-    }
-}
-
 # Function to add Starship initialization to PowerShell profile
 function Set-StarshipInit {
     $profilePath = $PROFILE
@@ -712,7 +648,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 60 | Last changed: Add Rube MCP server configuration for Claude Code" -ForegroundColor DarkGray
+    Write-Host "Version 61 | Last changed: Remove git-town (replaced by jj)" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
@@ -730,8 +666,6 @@ function Initialize-WindowsEnvironment {
     }
 
     Write-Section "Development Tools"
-    Install-GitTown
-    Set-GitTownCompletions
     Install-PyenvWin
 
     Write-Section "Terminal Configuration"

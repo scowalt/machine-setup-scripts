@@ -36,10 +36,10 @@ Scripts are hosted at `https://scripts.scowalt.com/setup/` for remote execution 
 
 ### Repository Management
 
-Use `git town` and `gh` CLI tools to manage this repository:
+Use `jj` and `gh` CLI tools to manage this repository:
 
-- `git town sync` - Keep branches in sync with main
-- `git town new-pull-request` - Create feature branches and PRs
+- `jj git fetch` - Fetch latest changes from remote
+- `jj new main` - Create a new change on top of main
 - `gh pr create` - Create pull requests via GitHub CLI
 - `gh pr merge` - Merge pull requests
 
@@ -66,7 +66,7 @@ All scripts follow a consistent pattern:
 
 ### Common Tools Installed
 
-- Version Control: git, gh (GitHub CLI), git-town
+- Version Control: git, gh (GitHub CLI), jj (jujutsu)
 - Shell: fish (with completions), tmux
 - Node.js: fnm (Fast Node Manager)
 - Python: pyenv (Python version management)
@@ -74,14 +74,6 @@ All scripts follow a consistent pattern:
 - Dotfiles: Chezmoi (with auto-sync)
 - Terminal: Starship prompt
 - CI/CD: act (local GitHub Actions)
-
-### Tool Installation Methods
-
-- **git-town**:
-  - macOS: Installed via Homebrew
-  - Linux (Ubuntu/WSL/Pi): Downloaded directly from GitHub releases (not available in apt repositories)
-  - Arch/Omarchy: Installed via AUR using yay
-  - Windows: Downloaded directly from GitHub releases
 
 ### Important Notes
 
@@ -189,18 +181,6 @@ When installing tools that depend on package managers or shell configuration:
 This is critical because tools like fnm are initialized in shell configuration files deployed by chezmoi. Installing npm packages before the shell is configured will fail.
 
 ### Platform-Specific Considerations
-
-#### Git-Town Binary Installation
-
-On Linux platforms (Ubuntu, WSL, Raspberry Pi), git-town is not available in package repositories and must be downloaded directly from GitHub releases. The scripts automatically detect the system architecture and download the appropriate binary:
-
-- `linux_intel_64` for x86_64/amd64 systems
-- `linux_arm_64` for aarch64 systems (newer Raspberry Pi)
-- `linux_arm_32` for armv7l/armhf systems (older Raspberry Pi)
-
-The binary is installed to `~/.local/bin` and the PATH is updated in `~/.bashrc` if needed.
-
-**Important**: Git-town changed their release naming convention. Old format was `git-town-linux-amd64`, new format is `git-town_linux_intel_64`.
 
 #### Raspberry Pi Color Output
 

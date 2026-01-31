@@ -682,104 +682,6 @@ install_dev_tools_aur() {
     fi
 }
 
-# Install git-town by downloading binary directly
-install_git_town() {
-    if command -v git-town &> /dev/null; then
-        print_debug "git-town is already installed."
-        return
-    fi
-    
-    print_message "Installing git-town via direct binary download..."
-    
-    # Detect architecture
-    local arch
-    arch=$(uname -m)
-    local git_town_arch
-    
-    case "${arch}" in
-        x86_64)
-            git_town_arch="linux_intel_64"
-            ;;
-        aarch64)
-            git_town_arch="linux_arm_64"
-            ;;
-        *)
-            print_error "Unsupported architecture: ${arch}"
-            return 1
-            ;;
-    esac
-    
-    # Create local bin directory if it doesn't exist
-    local bin_dir="${HOME}/.local/bin"
-    mkdir -p "${bin_dir}"
-    
-    # Download the latest binary
-    local download_url="https://github.com/git-town/git-town/releases/latest/download/git-town_${git_town_arch}.tar.gz"
-    local temp_dir
-    temp_dir=$(mktemp -d)
-    
-    print_message "Downloading git-town binary for ${arch} architecture..."
-    if curl -sL "${download_url}" > "${temp_dir}/git-town.tar.gz" && tar -xz -C "${temp_dir}" -f "${temp_dir}/git-town.tar.gz"; then
-        if mv "${temp_dir}/git-town" "${bin_dir}/git-town"; then
-            chmod +x "${bin_dir}/git-town"
-            print_success "git-town installed to ${bin_dir}/git-town"
-            
-            # Add to PATH if not already present
-            if ! echo "${PATH}" | grep -q "${bin_dir}"; then
-                print_message "Adding ${bin_dir} to PATH in ~/.bashrc"
-                echo "export PATH=\$HOME/.local/bin:\$PATH" >> ~/.bashrc
-                export PATH="${bin_dir}:${PATH}"
-            fi
-        else
-            print_error "Failed to move git-town binary."
-            rm -rf "${temp_dir}"
-            return 1
-        fi
-    else
-        print_error "Failed to download git-town."
-        rm -rf "${temp_dir}"
-        return 1
-    fi
-    
-    rm -rf "${temp_dir}"
-}
-
-# Configure git-town completions
-configure_git_town() {
-    if command -v git-town &> /dev/null; then
-        print_message "Configuring git-town completions..."
-        
-        # Set up Fish shell completions for git-town
-        if [[ -d ~/.config/fish/completions ]]; then
-            if ! [[ -f ~/.config/fish/completions/git-town.fish ]]; then
-                git-town completions fish > ~/.config/fish/completions/git-town.fish
-                print_success "git-town Fish completions configured."
-            else
-                print_debug "git-town Fish completions already configured."
-            fi
-        fi
-
-        # Set up Bash completions for git-town (requires sudo for system-wide install)
-        local bash_completion_dir="/etc/bash_completion.d"
-        if [[ -d "${bash_completion_dir}" ]]; then
-            if ! [[ -f "${bash_completion_dir}/git-town" ]]; then
-                if can_sudo; then
-                    local completion_content
-                    completion_content=$(git-town completions bash)
-                    echo "${completion_content}" | sudo tee "${bash_completion_dir}/git-town" > /dev/null
-                    print_success "git-town Bash completions configured."
-                else
-                    print_debug "No sudo access - skipping system-wide Bash completions."
-                fi
-            else
-                print_debug "git-town Bash completions already configured."
-            fi
-        fi
-    else
-        print_warning "git-town not found, skipping completion setup."
-    fi
-}
-
 # Install chezmoi if not installed
 install_chezmoi() {
     if ! command -v chezmoi &> /dev/null; then
@@ -1320,7 +1222,7 @@ setup_code_directory() {
 
 # Main execution
 echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 65 | Last changed: Add Rube MCP server configuration for Claude Code${NC}"
+echo -e "${GRAY}Version 66 | Last changed: Remove git-town (replaced by jj)${NC}"
 
 print_section "User & System Setup"
 ensure_not_root
@@ -1350,8 +1252,6 @@ install_fail2ban
 print_section "Development Environment"
 install_omarchy
 install_dev_tools_aur
-install_git_town
-configure_git_town
 
 print_section "Development Tools"
 setup_nodejs
