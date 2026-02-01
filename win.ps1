@@ -505,6 +505,37 @@ function Setup-RubeMcp {
     }
 }
 
+function Setup-CompoundPlugin {
+    if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+        Write-Debug "Claude Code not found. Skipping Compound plugin setup."
+        return
+    }
+
+    $pluginList = claude plugin list 2>$null
+    if ($pluginList -match "compound-engineering") {
+        Write-Debug "Compound Engineering plugin is already installed."
+        return
+    }
+
+    Write-Host "$arrow Adding Compound Engineering plugin marketplace..." -ForegroundColor Cyan
+    try {
+        claude plugin marketplace add EveryInc/compound-engineering-plugin 2>$null
+    }
+    catch {
+        Write-Host "$warnIcon Failed to add Compound Engineering marketplace." -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "$arrow Installing Compound Engineering plugin..." -ForegroundColor Cyan
+    try {
+        claude plugin install compound-engineering --scope user 2>$null
+        Write-Host "$success Compound Engineering plugin installed." -ForegroundColor Green
+    }
+    catch {
+        Write-Host "$warnIcon Failed to install Compound Engineering plugin." -ForegroundColor Yellow
+    }
+}
+
 function Install-WingetPackages {
     Write-Host "$arrow Checking for missing winget packages..." -ForegroundColor Cyan
 
@@ -648,7 +679,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 61 | Last changed: Remove git-town (replaced by jj)" -ForegroundColor DarkGray
+    Write-Host "Version 62 | Last changed: Add Compound Engineering plugin setup" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
@@ -676,6 +707,7 @@ function Initialize-WindowsEnvironment {
     Setup-Nodejs
     Install-ClaudeCode
     Setup-RubeMcp
+    Setup-CompoundPlugin
     Install-GeminiCli
     Install-CodexCli
     Install-TursoCli
