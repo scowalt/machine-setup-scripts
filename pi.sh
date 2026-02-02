@@ -29,7 +29,7 @@ can_sudo() {
         # Method 2: Check if user is in a sudo-capable group, then prompt
         elif groups 2>/dev/null | grep -qE '\b(sudo|wheel|admin)\b'; then
             # User is in sudo group but credentials aren't cached - prompt once
-            if sudo -v 2>/dev/null; then
+            if sudo -v 2>/dev/null < /dev/tty; then
                 _has_sudo=1
             else
                 _has_sudo=0
@@ -77,7 +77,7 @@ ensure_not_root() {
         echo "  # Switch to the new user and re-run this script"
         echo "  su - scowalt"
         echo ""
-        exit 0
+        return 0
     fi
 }
 
@@ -444,7 +444,7 @@ verify_github_key() {
     local remote_keys
     if ! remote_keys="$(curl -fsSL "${keys_url}")"; then
         print_error "Failed to download keys from ${keys_url}"
-        exit 1
+        return 1
     fi
 
     # Pick the second field (base64 blob) from the local key
@@ -462,7 +462,7 @@ verify_github_key() {
         cat ~/.ssh/id_rsa.pub
         print_message "Opening GitHub SSH keys page..."
         xdg-open "https://github.com/settings/keys" 2>/dev/null || true
-        exit 1
+        return 1
     fi
 }
 
@@ -479,7 +479,7 @@ add_github_to_known_hosts() {
         print_message "Adding GitHub's SSH key to known_hosts..."
         if ! ssh-keyscan github.com >> "${known_hosts_file}" 2>/dev/null; then
             print_error "Failed to add GitHub's SSH key to known_hosts."
-            exit 1
+            return 1
         fi
         print_success "GitHub's SSH key added."
     else
@@ -540,7 +540,7 @@ install_tailscale() {
         read -r ts_up < /dev/tty
         if [[ "${ts_up}" =~ ^[Yy]$ ]]; then
             print_message "Bringing interface up…"
-            sudo tailscale up       # add --authkey=... if you prefer key‑based auth
+            sudo tailscale up < /dev/tty       # add --authkey=... if you prefer key‑based auth
         else
             print_warning "Skip for now; run 'sudo tailscale up' later to log in."
         fi
@@ -772,7 +772,7 @@ set_fish_as_default_shell() {
     if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
         echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
     fi
-    sudo chsh -s /usr/bin/fish "${USER}"
+    sudo chsh -s /usr/bin/fish "${USER}" < /dev/tty
     print_success "Fish shell set as default. Please log out and back in for changes to take effect."
 }
 
@@ -846,13 +846,13 @@ apply_chezmoi_config() {
     elif [[ -x "${HOME}/bin/chezmoi" ]];       then chezmoi_cmd="${HOME}/bin/chezmoi"
     else
         print_error "chezmoi not found."
-        exit 1
+        return 1
     fi
 
     # Run verbosely; bail if anything returns non‑zero
     if ! ${chezmoi_cmd} apply --force --verbose; then
         print_error "chezmoi apply failed – fix the dotfiles, then rerun the script."
-        exit 1
+        return 1
     fi
 
     print_success "chezmoi configuration applied."
@@ -936,11 +936,11 @@ ensure_ssh_agent() {
     fi
 
     # Add the default key
-    if ssh-add ~/.ssh/id_rsa >/dev/null 2>&1; then
+    if ssh-add ~/.ssh/id_rsa < /dev/tty >/dev/null 2>&1; then
         print_success "SSH key added to agent."
     else
         print_error "Could not add ~/.ssh/id_rsa to ssh‑agent. Check permissions."
-        exit 1
+        return 1
     fi
 
     # Persist agent environment for future shells ----------------
@@ -1394,7 +1394,7 @@ install_act() {
         act_install=$(curl -s https://raw.githubusercontent.com/nektos/act/master/install.sh)
         if ! echo "${act_install}" | sudo bash; then
             print_error "Failed to install act."
-            exit 1
+            return 1
         fi
         print_success "act installed."
     else
@@ -1567,82 +1567,85 @@ setup_code_directory() {
     fi
 }
 
-# Main execution
-echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-echo -e "${GRAY}Version 77 | Last changed: Add Compound Engineering plugin setup${NC}"
+main() {
+    echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
+    echo -e "${GRAY}Version 78 | Last changed: Wrap in main() for curl|bash safety${NC}"
 
-print_section "User & System Setup"
-ensure_not_root
-check_raspberry_pi
-setup_swap
-setup_dns64_for_ipv6_only
+    print_section "User & System Setup"
+    ensure_not_root
+    check_raspberry_pi
+    setup_swap
+    setup_dns64_for_ipv6_only
 
-print_section "System Updates"
-update_dependencies
-update_and_install_core
+    print_section "System Updates"
+    update_dependencies
+    update_and_install_core
 
-print_section "Development Tools"
-install_1password_cli
-install_fnm
-setup_nodejs
-install_pyenv
-install_uv
-install_opentofu
-install_cloudflared
-install_turso
+    print_section "Development Tools"
+    install_1password_cli
+    install_fnm
+    setup_nodejs
+    install_pyenv
+    install_uv
+    install_opentofu
+    install_cloudflared
+    install_turso
 
-print_section "Network & SSH"
-enable_ssh_server
-install_tailscale
-install_fail2ban
-setup_unattended_upgrades
-add_github_to_known_hosts
-ensure_ssh_agent
+    print_section "Network & SSH"
+    enable_ssh_server
+    install_tailscale
+    install_fail2ban
+    setup_unattended_upgrades
+    add_github_to_known_hosts || return 1
+    ensure_ssh_agent || return 1
 
-current_user=$(whoami)
-if [[ "${current_user}" == "scowalt" ]]; then
-    print_section "Code Directory Setup"
-    setup_code_directory
-fi
+    current_user=$(whoami)
+    if [[ "${current_user}" == "scowalt" ]]; then
+        print_section "Code Directory Setup"
+        setup_code_directory
+    fi
 
-print_section "Additional Development Tools"
-install_bun
-install_claude_code
-setup_rube_mcp
-setup_compound_plugin
-install_gemini_cli
-install_codex_cli
+    print_section "Additional Development Tools"
+    install_bun
+    install_claude_code
+    setup_rube_mcp
+    setup_compound_plugin
+    install_gemini_cli
+    install_codex_cli
 
-print_section "Terminal & Shell"
-install_starship
-install_jj
+    print_section "Terminal & Shell"
+    install_starship
+    install_jj
 
-print_section "Shared Directories"
-setup_claude_shared_directory
+    print_section "Shared Directories"
+    setup_claude_shared_directory
 
-print_section "Dotfiles Management"
+    print_section "Dotfiles Management"
 
-# Check if we have access (via SSH or deploy key)
-# If not, try interactive deploy key setup
-if check_dotfiles_access || setup_dotfiles_deploy_key; then
-    # We have access, proceed with chezmoi setup
-    install_chezmoi
-    initialize_chezmoi
-    configure_chezmoi_git
-    fix_chezmoi_remote_for_deploy_key
-    update_chezmoi
-    apply_chezmoi_config
-else
-    print_warning "Skipping dotfiles management - no access to repository."
-fi
+    # Check if we have access (via SSH or deploy key)
+    # If not, try interactive deploy key setup
+    if check_dotfiles_access || setup_dotfiles_deploy_key; then
+        # We have access, proceed with chezmoi setup
+        install_chezmoi
+        initialize_chezmoi
+        configure_chezmoi_git
+        fix_chezmoi_remote_for_deploy_key
+        update_chezmoi
+        apply_chezmoi_config
+    else
+        print_warning "Skipping dotfiles management - no access to repository."
+    fi
 
-print_section "Shell Configuration"
-set_fish_as_default_shell
-install_act
-install_tmux_plugins
-install_iterm2_shell_integration
+    print_section "Shell Configuration"
+    set_fish_as_default_shell
+    install_act
+    install_tmux_plugins
+    install_iterm2_shell_integration
 
-print_section "Final Updates"
-upgrade_npm_global_packages
+    print_section "Final Updates"
+    upgrade_npm_global_packages
 
-echo -e "\n${GREEN}${BOLD}✨ Setup complete! Please log out and log back in for all changes to take effect.${NC}\n"
+    echo -e "\n${GREEN}${BOLD}✨ Setup complete! Please log out and log back in for all changes to take effect.${NC}\n"
+}
+
+main "$@"

@@ -34,7 +34,7 @@ can_sudo() {
         # Method 2: Check if user is in a sudo-capable group, then prompt
         elif groups 2>/dev/null | grep -qE '\b(sudo|wheel|admin)\b'; then
             # User is in sudo group but credentials aren't cached - prompt once
-            if sudo -v 2>/dev/null; then
+            if sudo -v 2>/dev/null < /dev/tty; then
                 _has_sudo=1
             else
                 _has_sudo=0
@@ -305,7 +305,7 @@ setup_ssh_key() {
             cat ~/.ssh/id_rsa.pub
             print_message "Opening GitHub SSH keys page..."
             open "https://github.com/settings/keys"
-            exit 1
+            return 1
         fi
     else
         print_warning "No SSH key found. Generating a new SSH key..."
@@ -315,7 +315,7 @@ setup_ssh_key() {
         cat ~/.ssh/id_rsa.pub
         print_message "Opening GitHub SSH keys page..."
         open "https://github.com/settings/keys"
-        exit 1
+        return 1
     fi
 }
 
@@ -456,7 +456,7 @@ set_fish_as_default_shell() {
     fi
 
     print_message "Setting Fish as the default shell..."
-    chsh -s /opt/homebrew/bin/fish
+    chsh -s /opt/homebrew/bin/fish < /dev/tty
     print_success "Fish shell set as default."
 }
 
@@ -473,7 +473,7 @@ add_github_to_known_hosts() {
         print_message "Adding GitHub's SSH key to known_hosts..."
         if ! ssh-keyscan github.com >> "${known_hosts_file}" 2>/dev/null; then
             print_error "Failed to add GitHub's SSH key to known_hosts."
-            exit 1
+            return 1
         fi
         print_success "GitHub's SSH key added."
     else
@@ -717,7 +717,7 @@ install_vscode() {
     print_message "Installing Visual Studio Code..."
     if ! brew install --cask visual-studio-code > /dev/null; then
         print_error "Failed to install Visual Studio Code."
-        exit 1
+        return 1
     fi
     print_success "Visual Studio Code installed."
 }
@@ -862,62 +862,63 @@ setup_code_directory() {
     fi
 }
 
-# Run the setup tasks
-current_user=$(whoami)
-echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-echo -e "${GRAY}Version 76 | Last changed: Add Compound Engineering plugin setup${NC}"
+main() {
+    # Run the setup tasks
+    current_user=$(whoami)
+    echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
+    echo -e "${GRAY}Version 77 | Last changed: Wrap in main() for curl|bash safety${NC}"
 
-if is_main_user; then
-    echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
+    if is_main_user; then
+        echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
 
-    print_section "Package Manager Setup"
-    install_homebrew
+        print_section "Package Manager Setup"
+        install_homebrew
 
-    print_section "Core Packages"
-    install_core_packages
+        print_section "Core Packages"
+        install_core_packages
 
-    # Fix zsh permissions early (before any tool might invoke zsh)
-    fix_zsh_compaudit
+        # Fix zsh permissions early (before any tool might invoke zsh)
+        fix_zsh_compaudit
 
-    print_section "SSH Configuration"
-    setup_ssh_key
-    add_github_to_known_hosts
+        print_section "SSH Configuration"
+        setup_ssh_key || return 1
+        add_github_to_known_hosts || return 1
 
-    print_section "Code Directory Setup"
-    setup_code_directory
+        print_section "Code Directory Setup"
+        setup_code_directory
 
-else
-    echo -e "${CYAN}Running secondary user setup for ${current_user}${NC}"
+    else
+        echo -e "${CYAN}Running secondary user setup for ${current_user}${NC}"
 
-    # Ensure Homebrew is in PATH (already installed by main user)
-    eval "$(/opt/homebrew/bin/brew shellenv)"
+        # Ensure Homebrew is in PATH (already installed by main user)
+        eval "$(/opt/homebrew/bin/brew shellenv)"
 
-    # Fix zsh permissions early (before any tool might invoke zsh)
-    fix_zsh_compaudit
+        # Fix zsh permissions early (before any tool might invoke zsh)
+        fix_zsh_compaudit
 
-    print_section "SSH Configuration"
-    add_github_to_known_hosts
-fi
+        print_section "SSH Configuration"
+        add_github_to_known_hosts || return 1
+    fi
 
-# Common setup for all users
-print_section "Shared Directories"
-setup_claude_shared_directory
+    # Common setup for all users
+    print_section "Shared Directories"
+    setup_claude_shared_directory
 
-print_section "Dotfiles Management"
+    print_section "Dotfiles Management"
 
-# Check if we have access (via SSH, token, or deploy key)
-# If not, try interactive deploy key setup
-if check_dotfiles_access || setup_dotfiles_deploy_key; then
-    # We have access, proceed with chezmoi setup
+    # Check if we have access (via SSH, token, or deploy key)
+    # If not, try interactive deploy key setup
+    if check_dotfiles_access || setup_dotfiles_deploy_key; then
+        # We have access, proceed with chezmoi setup
 
-    # Bootstrap the credential helper before chezmoi (chicken-and-egg problem)
-    # The helper script is part of dotfiles but we need it to pull dotfiles
-    if [[ ! -x "${HOME}/.local/bin/git-credential-github-multi" ]]; then
-        source_gh_tokens
-        if [[ -n "${GH_TOKEN_SCOWALT}" ]] || [[ -n "${GH_TOKEN}" ]]; then
-            print_message "Bootstrapping git credential helper..."
-            mkdir -p "${HOME}/.local/bin"
-            cat > "${HOME}/.local/bin/git-credential-github-multi" << 'HELPER_EOF'
+        # Bootstrap the credential helper before chezmoi (chicken-and-egg problem)
+        # The helper script is part of dotfiles but we need it to pull dotfiles
+        if [[ ! -x "${HOME}/.local/bin/git-credential-github-multi" ]]; then
+            source_gh_tokens
+            if [[ -n "${GH_TOKEN_SCOWALT}" ]] || [[ -n "${GH_TOKEN}" ]]; then
+                print_message "Bootstrapping git credential helper..."
+                mkdir -p "${HOME}/.local/bin"
+                cat > "${HOME}/.local/bin/git-credential-github-multi" << 'HELPER_EOF'
 #!/bin/bash
 # Git credential helper that routes to different GitHub tokens based on repo owner
 # Note: Uses simple variables instead of associative arrays for bash 3.2 compatibility (macOS default)
@@ -945,56 +946,59 @@ echo "host=github.com"
 echo "username=x-access-token"
 echo "password=${token}"
 HELPER_EOF
-            chmod +x "${HOME}/.local/bin/git-credential-github-multi"
-            print_success "Git credential helper bootstrapped."
+                chmod +x "${HOME}/.local/bin/git-credential-github-multi"
+                print_success "Git credential helper bootstrapped."
+            fi
+        fi
+
+        # Ensure ~/.local/bin is in PATH for the credential helper
+        export PATH="${HOME}/.local/bin:${PATH}"
+
+        # Set up the credential helper for GitHub
+        setup_github_credential_helper
+
+        initialize_chezmoi
+        configure_chezmoi_git
+        update_chezmoi
+        chezmoi apply --force
+        tmux source ~/.tmux.conf 2>/dev/null || true
+    else
+        print_warning "Skipping dotfiles management - no access to repository."
+    fi
+
+    print_section "Shell Configuration"
+    if is_main_user; then
+        set_fish_as_default_shell
+    else
+        # Secondary users have locked passwords, can't use chsh
+        # Their shell must be set by main user with: sudo chsh -s /opt/homebrew/bin/fish <username>
+        if [[ "${SHELL}" != "/opt/homebrew/bin/fish" ]]; then
+            print_warning "Shell is not fish. Main user must run: sudo chsh -s /opt/homebrew/bin/fish ${current_user}"
+        else
+            print_debug "Fish shell is already the default shell."
         fi
     fi
+    install_tmux_plugins
 
-    # Ensure ~/.local/bin is in PATH for the credential helper
-    export PATH="${HOME}/.local/bin:${PATH}"
+    print_section "Development Tools"
+    setup_nodejs
+    install_bun
+    install_claude_code
+    setup_rube_mcp
+    setup_compound_plugin
+    install_gemini_cli
+    install_codex_cli
 
-    # Set up the credential helper for GitHub
-    setup_github_credential_helper
+    if is_main_user; then
+        install_vscode || return 1
 
-    initialize_chezmoi
-    configure_chezmoi_git
-    update_chezmoi
-    chezmoi apply --force
-    tmux source ~/.tmux.conf 2>/dev/null || true
-else
-    print_warning "Skipping dotfiles management - no access to repository."
-fi
-
-print_section "Shell Configuration"
-if is_main_user; then
-    set_fish_as_default_shell
-else
-    # Secondary users have locked passwords, can't use chsh
-    # Their shell must be set by main user with: sudo chsh -s /opt/homebrew/bin/fish <username>
-    if [[ "${SHELL}" != "/opt/homebrew/bin/fish" ]]; then
-        print_warning "Shell is not fish. Main user must run: sudo chsh -s /opt/homebrew/bin/fish ${current_user}"
-    else
-        print_debug "Fish shell is already the default shell."
+        print_section "Final Updates"
+        update_brew
     fi
-fi
-install_tmux_plugins
 
-print_section "Development Tools"
-setup_nodejs
-install_bun
-install_claude_code
-setup_rube_mcp
-setup_compound_plugin
-install_gemini_cli
-install_codex_cli
+    upgrade_npm_global_packages
 
-if is_main_user; then
-    install_vscode
+    echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
+}
 
-    print_section "Final Updates"
-    update_brew
-fi
-
-upgrade_npm_global_packages
-
-echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
+main "$@"

@@ -29,7 +29,7 @@ can_sudo() {
         # Method 2: Check if user is in a sudo-capable group, then prompt
         elif groups 2>/dev/null | grep -qE '\b(sudo|wheel|admin)\b'; then
             # User is in sudo group but credentials aren't cached - prompt once
-            if sudo -v 2>/dev/null; then
+            if sudo -v 2>/dev/null < /dev/tty; then
                 _has_sudo=1
             else
                 _has_sudo=0
@@ -57,7 +57,7 @@ ensure_not_root() {
         echo "  # Switch to the new user and re-run this script"
         echo "  su - scowalt"
         echo ""
-        exit 0
+        return 0
     fi
 }
 
@@ -237,7 +237,7 @@ update_and_install_core() {
             fix_apt_issues
             if ! sudo apt install -qq -y "${to_install[@]}"; then
                 print_error "Failed to install core packages after fixing. Please check manually."
-                exit 1
+                return 1
             fi
         fi
         print_success "Missing core packages installed."
@@ -276,7 +276,7 @@ setup_ssh_key() {
             cat ~/.ssh/id_rsa.pub
             print_message "Opening GitHub SSH keys page..."
             powershell.exe -Command "Start-Process 'https://github.com/settings/keys'" 2>/dev/null || true
-            exit 1
+            return 1
         fi
     else
         # Generate a new SSH key and log details
@@ -287,7 +287,7 @@ setup_ssh_key() {
         cat ~/.ssh/id_rsa.pub
         print_message "Opening GitHub SSH keys page..."
         powershell.exe -Command "Start-Process 'https://github.com/settings/keys'" 2>/dev/null || true
-        exit 1
+        return 1
     fi
 }
 
@@ -304,7 +304,7 @@ add_github_to_known_hosts() {
         print_message "Adding GitHub's SSH key to known_hosts..."
         if ! ssh-keyscan github.com >> "${known_hosts_file}" 2>/dev/null; then
             print_error "Failed to add GitHub's SSH key to known_hosts."
-            exit 1
+            return 1
         fi
         print_success "GitHub's SSH key added."
     else
@@ -320,7 +320,7 @@ install_homebrew() {
         install_script=$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)
         if ! /bin/bash -c "${install_script}"; then
             print_error "Failed to install Homebrew. Please check your internet connection."
-            exit 1
+            return 1
         fi
         local brew_env
         brew_env=$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)
@@ -338,7 +338,7 @@ install_homebrew() {
 ensure_brew_available() {
     if ! command -v brew &> /dev/null; then
         print_error "Homebrew not available. Previous installation may have failed."
-        exit 1
+        return 1
     fi
 }
 
@@ -351,7 +351,7 @@ install_starship() {
         ensure_brew_available
         if ! brew install starship; then
             print_error "Failed to install Starship via Homebrew."
-            exit 1
+            return 1
         fi
         print_success "Starship installed."
     else
@@ -366,7 +366,7 @@ install_chezmoi() {
         ensure_brew_available
         if ! brew install chezmoi; then
             print_error "Failed to install chezmoi via Homebrew."
-            exit 1
+            return 1
         fi
         print_success "chezmoi installed."
     else
@@ -390,13 +390,13 @@ initialize_chezmoi() {
             # Main user uses SSH with default key for push access
             if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
                 print_error "Failed to initialize chezmoi. Check SSH key and network connectivity."
-                exit 1
+                return 1
             fi
         else
             # Secondary users use SSH via deploy key (github-dotfiles alias)
             if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
                 print_error "Failed to initialize chezmoi. Check deploy key setup."
-                exit 1
+                return 1
             fi
         fi
         print_success "chezmoi initialized with scowalt/dotfiles."
@@ -458,7 +458,7 @@ set_fish_as_default_shell() {
     if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
         echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
     fi
-    sudo chsh -s /usr/bin/fish "${USER}"
+    sudo chsh -s /usr/bin/fish "${USER}" < /dev/tty
     print_success "Fish shell set as default."
 }
 
@@ -708,7 +708,7 @@ install_fnm() {
     ensure_brew_available
     if ! brew install fnm; then
         print_error "Failed to install fnm via Homebrew."
-        exit 1
+        return 1
     fi
 
     print_success "fnm installed. Shell configuration will be managed by chezmoi."
@@ -819,7 +819,7 @@ install_1password_cli() {
     ensure_brew_available
     if ! brew install --cask 1password-cli; then
         print_error "Failed to install 1Password CLI via Homebrew."
-        exit 1
+        return 1
     fi
     print_success "1Password CLI installed."
 }
@@ -931,7 +931,7 @@ install_act() {
         ensure_brew_available
         if ! brew install act; then
             print_error "Failed to install act via Homebrew."
-            exit 1
+            return 1
         fi
         print_success "act installed."
     else
@@ -962,7 +962,7 @@ install_pyenv() {
         ensure_brew_available
         if ! brew install pyenv; then
             print_error "Failed to install pyenv via Homebrew."
-            exit 1
+            return 1
         fi
         print_success "pyenv installed. Shell configuration will be managed by chezmoi."
     else
@@ -982,9 +982,9 @@ install_bun() {
     bun_install_script=$(curl -fsSL https://bun.sh/install)
     if ! bash <<< "${bun_install_script}"; then
         print_error "Failed to install Bun."
-        exit 1
+        return 1
     fi
-    
+
     # Add bun to PATH for current session
     export PATH="${HOME}/.bun/bin:${PATH}"
     
@@ -1145,78 +1145,82 @@ setup_code_directory() {
     fi
 }
 
-# Run the setup tasks
-echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-echo -e "${GRAY}Version 71 | Last changed: Add Compound Engineering plugin setup${NC}"
+main() {
+    # Run the setup tasks
+    echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
+    echo -e "${GRAY}Version 72 | Last changed: Wrap in main() for curl|bash safety${NC}"
 
-print_section "User & System Setup"
-ensure_not_root
-update_and_install_core
+    print_section "User & System Setup"
+    ensure_not_root
+    update_and_install_core
 
-print_section "SSH Configuration"
-setup_ssh_key
-add_github_to_known_hosts
+    print_section "SSH Configuration"
+    setup_ssh_key || return 1
+    add_github_to_known_hosts || return 1
 
-current_user=$(whoami)
-if [[ "${current_user}" == "scowalt" ]]; then
-    print_section "Code Directory Setup"
-    setup_code_directory
-fi
+    current_user=$(whoami)
+    if [[ "${current_user}" == "scowalt" ]]; then
+        print_section "Code Directory Setup"
+        setup_code_directory
+    fi
 
-print_section "Package Manager"
-install_homebrew
+    print_section "Package Manager"
+    install_homebrew
 
-print_section "Development Tools"
-install_starship
-install_jj
-install_fnm
-setup_nodejs
-install_pyenv
-install_uv
-install_bun
-install_opentofu
-install_cloudflared
-install_turso
+    print_section "Development Tools"
+    install_starship
+    install_jj
+    install_fnm
+    setup_nodejs
+    install_pyenv
+    install_uv
+    install_bun
+    install_opentofu
+    install_cloudflared
+    install_turso
 
-print_section "Security Tools"
-install_1password_cli
-install_tailscale
-setup_unattended_upgrades
+    print_section "Security Tools"
+    install_1password_cli
+    install_tailscale
+    setup_unattended_upgrades
 
-print_section "Shared Directories"
-setup_claude_shared_directory
+    print_section "Shared Directories"
+    setup_claude_shared_directory
 
-print_section "Dotfiles Management"
+    print_section "Dotfiles Management"
 
-# Check if we have access (via SSH or deploy key)
-# If not, try interactive deploy key setup
-if check_dotfiles_access || setup_dotfiles_deploy_key; then
-    # We have access, proceed with chezmoi setup
-    install_chezmoi
-    initialize_chezmoi
-    configure_chezmoi_git
-    update_chezmoi
-    chezmoi apply --force
-    tmux source ~/.tmux.conf 2>/dev/null || true
-else
-    print_warning "Skipping dotfiles management - no access to repository."
-fi
+    # Check if we have access (via SSH or deploy key)
+    # If not, try interactive deploy key setup
+    if check_dotfiles_access || setup_dotfiles_deploy_key; then
+        # We have access, proceed with chezmoi setup
+        install_chezmoi
+        initialize_chezmoi
+        configure_chezmoi_git
+        update_chezmoi
+        chezmoi apply --force
+        tmux source ~/.tmux.conf 2>/dev/null || true
+    else
+        print_warning "Skipping dotfiles management - no access to repository."
+    fi
 
-print_section "Shell Configuration"
-set_fish_as_default_shell
-install_act
-install_tmux_plugins
-install_iterm2_shell_integration
+    print_section "Shell Configuration"
+    set_fish_as_default_shell
+    install_act
+    install_tmux_plugins
+    install_iterm2_shell_integration
 
-print_section "Additional Development Tools"
-install_claude_code
-setup_rube_mcp
-setup_compound_plugin
-install_gemini_cli
-install_codex_cli
+    print_section "Additional Development Tools"
+    install_claude_code
+    setup_rube_mcp
+    setup_compound_plugin
+    install_gemini_cli
+    install_codex_cli
 
-print_section "Final Updates"
-update_packages
-upgrade_npm_global_packages
+    print_section "Final Updates"
+    update_packages
+    upgrade_npm_global_packages
 
-echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
+    echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
+}
+
+main "$@"

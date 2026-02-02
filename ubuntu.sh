@@ -60,7 +60,7 @@ can_sudo() {
         # Method 2: Check if user is in a sudo-capable group, then prompt
         elif groups 2>/dev/null | grep -qE '\b(sudo|wheel|admin)\b'; then
             # User is in sudo group but credentials aren't cached - prompt once
-            if sudo -v 2>/dev/null; then
+            if sudo -v 2>/dev/null < /dev/tty; then
                 _has_sudo=1
             else
                 _has_sudo=0
@@ -365,7 +365,7 @@ ensure_not_root() {
         echo "  # Switch to the new user and re-run this script"
         echo "  su - scowalt"
         echo ""
-        exit 0
+        return 0
     fi
 
     local current_user
@@ -414,7 +414,7 @@ update_and_install_core() {
         print_message "Installing missing packages: ${to_install[*]}"
         if ! sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" install -qq -y "${to_install[@]}"; then
             print_error "Failed to install some core packages. Please review the output above."
-            exit 1
+            return 1
         fi
         print_success "Missing core packages installed."
     else
@@ -436,7 +436,7 @@ setup_ssh_server() {
         print_message "Installing openssh-server..."
         if ! sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" install -qq -y openssh-server; then
             print_error "Failed to install openssh-server."
-            exit 1
+            return 1
         fi
         print_success "openssh-server installed."
     else
@@ -491,7 +491,7 @@ setup_ssh_key() {
             cat ~/.ssh/id_rsa.pub
             print_message "Opening GitHub SSH keys page..."
             xdg-open "https://github.com/settings/keys" 2>/dev/null || true
-            exit 1
+            return 1
         fi
     else
         # Generate a new SSH key and log details
@@ -504,7 +504,7 @@ setup_ssh_key() {
         cat ~/.ssh/id_rsa.pub
         print_message "Opening GitHub SSH keys page..."
         xdg-open "https://github.com/settings/keys" 2>/dev/null || true
-        exit 1
+        return 1
     fi
 }
 
@@ -521,7 +521,7 @@ add_github_to_known_hosts() {
         print_message "Adding GitHub's SSH key to known_hosts..."
         if ! ssh-keyscan github.com >> "${known_hosts_file}" 2>/dev/null; then
             print_error "Failed to add GitHub's SSH key to known_hosts."
-            exit 1
+            return 1
         fi
         print_success "GitHub's SSH key added."
     else
@@ -558,7 +558,7 @@ install_chezmoi() {
             print_success "chezmoi installed."
         else
             print_error "Failed to install chezmoi. Please review the output above."
-            exit 1
+            return 1
         fi
     else
         print_debug "chezmoi is already installed."
@@ -581,13 +581,13 @@ initialize_chezmoi() {
             # User with verified SSH key uses default SSH for push access
             if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
                 print_error "Failed to initialize chezmoi. Please review the output above."
-                exit 1
+                return 1
             fi
         else
             # Other users use SSH via deploy key (github-dotfiles alias)
             if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
                 print_error "Failed to initialize chezmoi. Please review the output above."
-                exit 1
+                return 1
             fi
         fi
         print_success "chezmoi initialized with scowalt/dotfiles."
@@ -669,7 +669,7 @@ set_fish_as_default_shell() {
         if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
             echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
         fi
-        sudo chsh -s /usr/bin/fish "${USER}"
+        sudo chsh -s /usr/bin/fish "${USER}" < /dev/tty
         print_success "Fish shell set as default."
     else
         print_debug "Fish shell is already the default shell."
@@ -1125,7 +1125,7 @@ install_tailscale() {
     read -r ts_up < /dev/tty
     if [[ "${ts_up}" =~ ^[Yy]$ ]]; then
         print_message "Bringing interface up..."
-        sudo tailscale up       # add --authkey=... if you prefer key-based auth
+        sudo tailscale up < /dev/tty       # add --authkey=... if you prefer key-based auth
     else
         print_warning "Skip for now; run 'sudo tailscale up' later to log in."
     fi
@@ -1286,7 +1286,7 @@ install_act() {
     act_install=$(curl -s https://raw.githubusercontent.com/nektos/act/master/install.sh)
     if ! echo "${act_install}" | sudo bash; then
         print_error "Failed to install act."
-        exit 1
+        return 1
     fi
     print_success "act installed."
 }
@@ -1518,61 +1518,63 @@ setup_code_directory() {
 }
 
 
-echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-echo -e "${GRAY}Version 100 | Last changed: Add Compound Engineering plugin setup${NC}"
+main() {
+    echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
+    echo -e "${GRAY}Version 101 | Last changed: Wrap in main() for curl|bash safety${NC}"
 
-print_section "User & System Setup"
-ensure_not_root
-setup_dns64_for_ipv6_only
-fix_dpkg_and_broken_dependencies
+    print_section "User & System Setup"
+    ensure_not_root
+    setup_dns64_for_ipv6_only
+    fix_dpkg_and_broken_dependencies
 
-print_section "System Updates"
-update_dependencies # I do this first b/c on raspberry pi, it's slow
-update_and_install_core
+    print_section "System Updates"
+    update_dependencies # I do this first b/c on raspberry pi, it's slow
+    update_and_install_core
 
-print_section "SSH Configuration"
-setup_ssh_server
-add_github_to_known_hosts
+    print_section "SSH Configuration"
+    setup_ssh_server
+    setup_ssh_key || return 1
+    add_github_to_known_hosts || return 1
 
-if is_main_user; then
-    print_section "Code Directory Setup"
-    setup_code_directory
-fi
+    if is_main_user; then
+        print_section "Code Directory Setup"
+        setup_code_directory
+    fi
 
-print_section "Development Tools"
-install_starship
-install_jj
-install_fnm
-setup_nodejs
-install_pyenv
-install_uv
-install_opentofu
-install_cloudflared
-install_turso
+    print_section "Development Tools"
+    install_starship
+    install_jj
+    install_fnm
+    setup_nodejs
+    install_pyenv
+    install_uv
+    install_opentofu
+    install_cloudflared
+    install_turso
 
-print_section "Security Tools"
-install_1password_cli
-install_tailscale
-install_fail2ban
-setup_unattended_upgrades
+    print_section "Security Tools"
+    install_1password_cli
+    install_tailscale
+    install_fail2ban
+    setup_unattended_upgrades
 
-print_section "Shared Directories"
-setup_claude_shared_directory
+    print_section "Shared Directories"
+    setup_claude_shared_directory
 
-print_section "Dotfiles Management"
+    print_section "Dotfiles Management"
 
-# Check if we have access (via SSH, token, or deploy key)
-# If not, try interactive deploy key setup
-if check_dotfiles_access || setup_dotfiles_deploy_key; then
-    # We have access, proceed with chezmoi setup
+    # Check if we have access (via SSH, token, or deploy key)
+    # If not, try interactive deploy key setup
+    if check_dotfiles_access || setup_dotfiles_deploy_key; then
+        # We have access, proceed with chezmoi setup
 
-    # Bootstrap the credential helper before chezmoi (chicken-and-egg problem)
-    if [[ ! -x "${HOME}/.local/bin/git-credential-github-multi" ]]; then
-        source_gh_tokens
-        if [[ -n "${GH_TOKEN_SCOWALT}" ]] || [[ -n "${GH_TOKEN}" ]]; then
-            print_message "Bootstrapping git credential helper..."
-            mkdir -p "${HOME}/.local/bin"
-            cat > "${HOME}/.local/bin/git-credential-github-multi" << 'HELPER_EOF'
+        # Bootstrap the credential helper before chezmoi (chicken-and-egg problem)
+        if [[ ! -x "${HOME}/.local/bin/git-credential-github-multi" ]]; then
+            source_gh_tokens
+            if [[ -n "${GH_TOKEN_SCOWALT}" ]] || [[ -n "${GH_TOKEN}" ]]; then
+                print_message "Bootstrapping git credential helper..."
+                mkdir -p "${HOME}/.local/bin"
+                cat > "${HOME}/.local/bin/git-credential-github-multi" << 'HELPER_EOF'
 #!/bin/bash
 # Git credential helper that routes to different GitHub tokens based on repo owner
 declare -A input
@@ -1595,44 +1597,47 @@ echo "host=github.com"
 echo "username=x-access-token"
 echo "password=${token}"
 HELPER_EOF
-            chmod +x "${HOME}/.local/bin/git-credential-github-multi"
-            print_success "Git credential helper bootstrapped."
+                chmod +x "${HOME}/.local/bin/git-credential-github-multi"
+                print_success "Git credential helper bootstrapped."
+            fi
         fi
+
+        # Ensure ~/.local/bin is in PATH for the credential helper
+        export PATH="${HOME}/.local/bin:${PATH}"
+
+        # Set up the credential helper for GitHub
+        setup_github_credential_helper
+
+        install_chezmoi
+        initialize_chezmoi
+        configure_chezmoi_git
+        fix_chezmoi_remote_for_deploy_key
+        update_chezmoi
+        (chezmoi apply --force) || true
+        tmux source ~/.tmux.conf 2>/dev/null || true
+    else
+        print_warning "Skipping dotfiles management - no access to repository."
     fi
 
-    # Ensure ~/.local/bin is in PATH for the credential helper
-    export PATH="${HOME}/.local/bin:${PATH}"
+    print_section "Shell Configuration"
+    set_fish_as_default_shell
+    install_act
+    install_tmux_plugins
+    enable_tmux_service
+    install_iterm2_shell_integration
 
-    # Set up the credential helper for GitHub
-    setup_github_credential_helper
+    print_section "Additional Development Tools"
+    install_bun
+    install_claude_code
+    setup_rube_mcp
+    setup_compound_plugin
+    install_gemini_cli
+    install_codex_cli
 
-    install_chezmoi
-    initialize_chezmoi
-    configure_chezmoi_git
-    fix_chezmoi_remote_for_deploy_key
-    update_chezmoi
-    (chezmoi apply --force) || true
-    tmux source ~/.tmux.conf 2>/dev/null || true
-else
-    print_warning "Skipping dotfiles management - no access to repository."
-fi
+    print_section "Final Updates"
+    upgrade_npm_global_packages
 
-print_section "Shell Configuration"
-set_fish_as_default_shell
-install_act
-install_tmux_plugins
-enable_tmux_service
-install_iterm2_shell_integration
+    echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
+}
 
-print_section "Additional Development Tools"
-install_bun
-install_claude_code
-setup_rube_mcp
-setup_compound_plugin
-install_gemini_cli
-install_codex_cli
-
-print_section "Final Updates"
-upgrade_npm_global_packages
-
-echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
+main "$@"

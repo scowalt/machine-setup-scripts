@@ -60,7 +60,7 @@ can_sudo() {
         # Method 2: Check if user is in a sudo-capable group, then prompt
         elif groups 2>/dev/null | grep -qE '\b(sudo|wheel|admin)\b'; then
             # User is in sudo group but credentials aren't cached - prompt once
-            if sudo -v 2>/dev/null; then
+            if sudo -v 2>/dev/null < /dev/tty; then
                 _has_sudo=1
             else
                 _has_sudo=0
@@ -87,7 +87,7 @@ request_sudo_upfront() {
     else
         print_message "This script requires sudo access for system operations."
         print_message "Please enter your password once to authorize all operations."
-        if ! sudo -v; then
+        if ! sudo -v < /dev/tty; then
             print_warning "Sudo authentication failed. Some operations will be skipped."
             return 1
         fi
@@ -130,7 +130,7 @@ ensure_not_root() {
         echo "  # Switch to the new user and re-run this script"
         echo "  su - scowalt"
         echo ""
-        exit 0
+        return 0
     fi
 }
 
@@ -387,7 +387,7 @@ verify_arch_system() {
         if [[ -f /etc/os-release ]]; then
             grep "PRETTY_NAME" /etc/os-release
         fi
-        exit 1
+        return 1
     fi
     
     print_success "Arch Linux system confirmed."
@@ -444,7 +444,7 @@ update_system() {
     # Update all packages
     if ! sudo pacman -Syu --noconfirm; then
         print_error "Failed to update system packages."
-        exit 1
+        return 1
     fi
 
     print_success "System packages updated."
@@ -506,7 +506,7 @@ install_core_packages() {
         print_message "Installing missing packages: ${to_install[*]}"
         if ! sudo pacman -S --noconfirm "${to_install[@]}"; then
             print_error "Failed to install core packages."
-            exit 1
+            return 1
         fi
         print_success "Core packages installed."
     else
@@ -536,12 +536,12 @@ install_yay() {
         else
             print_error "Failed to build yay."
             cd ~ && rm -rf "${temp_dir}"
-            exit 1
+            return 1
         fi
     else
         print_error "Failed to clone yay repository."
         cd ~ && rm -rf "${temp_dir}"
-        exit 1
+        return 1
     fi
     
     # Cleanup
@@ -610,7 +610,7 @@ setup_ssh_key() {
             cat ~/.ssh/id_rsa.pub
             print_message "Opening GitHub SSH keys page..."
             xdg-open "https://github.com/settings/keys" 2>/dev/null || true
-            exit 1
+            return 1
         fi
     else
         print_warning "No SSH key found. Generating a new SSH key..."
@@ -620,7 +620,7 @@ setup_ssh_key() {
         cat ~/.ssh/id_rsa.pub
         print_message "Opening GitHub SSH keys page..."
         xdg-open "https://github.com/settings/keys" 2>/dev/null || true
-        exit 1
+        return 1
     fi
 }
 
@@ -637,7 +637,7 @@ add_github_to_known_hosts() {
         print_message "Adding GitHub's SSH key to known_hosts..."
         if ! ssh-keyscan github.com >> "${known_hosts_file}" 2>/dev/null; then
             print_error "Failed to add GitHub's SSH key to known_hosts."
-            exit 1
+            return 1
         fi
         print_success "GitHub's SSH key added."
     else
@@ -695,7 +695,7 @@ install_chezmoi() {
             print_success "chezmoi installed."
         else
             print_error "Failed to install chezmoi."
-            exit 1
+            return 1
         fi
     else
         print_debug "chezmoi is already installed."
@@ -718,13 +718,13 @@ initialize_chezmoi() {
             # User with verified SSH key uses default SSH for push access
             if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
                 print_error "Failed to initialize chezmoi."
-                exit 1
+                return 1
             fi
         else
             # Other users use SSH via deploy key (github-dotfiles alias)
             if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
                 print_error "Failed to initialize chezmoi."
-                exit 1
+                return 1
             fi
         fi
         print_success "chezmoi initialized with scowalt/dotfiles."
@@ -806,7 +806,7 @@ set_fish_as_default_shell() {
         if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
             echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
         fi
-        sudo chsh -s /usr/bin/fish "${USER}"
+        sudo chsh -s /usr/bin/fish "${USER}" < /dev/tty
         print_success "Fish shell set as default."
     else
         print_debug "Fish shell is already the default shell."
@@ -1257,14 +1257,14 @@ setup_code_directory() {
     fi
 }
 
-# Main execution
-echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-echo -e "${GRAY}Version 68 | Last changed: Add Compound Engineering plugin setup${NC}"
+main() {
+    echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
+    echo -e "${GRAY}Version 69 | Last changed: Wrap in main() for curl|bash safety${NC}"
 
-print_section "User & System Setup"
-ensure_not_root
-verify_arch_system
-request_sudo_upfront
+    print_section "User & System Setup"
+    ensure_not_root
+    verify_arch_system || return 1
+    request_sudo_upfront
 check_omarchy_installation
 setup_dns64_for_ipv6_only
 
@@ -1276,7 +1276,7 @@ install_core_packages
 install_yay
 
 print_section "SSH Configuration"
-add_github_to_known_hosts
+add_github_to_known_hosts || return 1
 
 if is_main_user; then
     print_section "Code Directory Setup"
@@ -1365,8 +1365,11 @@ set_fish_as_default_shell
 install_tmux_plugins
 install_iterm2_shell_integration
 
-print_section "Final Updates"
-update_all_packages
-upgrade_npm_global_packages
+    print_section "Final Updates"
+    update_all_packages
+    upgrade_npm_global_packages
 
-echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
+    echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
+}
+
+main "$@"
