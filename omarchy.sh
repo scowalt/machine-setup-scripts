@@ -961,28 +961,36 @@ install_codex_cli() {
 
 # Install Claude Code using bun
 install_claude_code() {
-    # Ensure bun is available first
+    # Uninstall any existing npm/bun versions to clean up
+    if command -v npm &> /dev/null; then
+        if npm list -g @anthropic-ai/claude-code &> /dev/null 2>&1; then
+            print_message "Removing npm-based Claude Code installation..."
+            npm uninstall -g @anthropic-ai/claude-code 2>/dev/null || true
+        fi
+    fi
+
     if [[ -d "${HOME}/.bun" ]]; then
         export PATH="${HOME}/.bun/bin:${PATH}"
     fi
 
-    if ! command -v bun &> /dev/null; then
-        print_error "Bun is not installed. Cannot install Claude Code."
-        return 1
+    if command -v bun &> /dev/null; then
+        if bun pm ls -g 2>/dev/null | grep -q "@anthropic-ai/claude-code"; then
+            print_message "Removing bun-based Claude Code installation..."
+            bun remove -g @anthropic-ai/claude-code 2>/dev/null || true
+        fi
     fi
 
-    # Skip if already installed
-    if command -v claude &> /dev/null; then
-        print_debug "Claude Code is already installed."
+    # Clean up stale lock files
+    rm -rf "${HOME}/.local/state/claude/locks" 2>/dev/null
+
+    # Skip if native version already installed
+    if [[ -x "${HOME}/.local/bin/claude" ]]; then
+        print_debug "Claude Code is already installed (native)."
         return 0
     fi
 
-    print_message "Installing Claude Code..."
-
-    # Clean up stale lock files from previous interrupted installs
-    rm -rf "${HOME}/.local/state/claude/locks" 2>/dev/null
-
-    if bun install -g @anthropic-ai/claude-code; then
+    print_message "Installing Claude Code via official installer..."
+    if curl -fsSL https://claude.ai/install.sh | bash; then
         print_success "Claude Code installed."
     else
         print_error "Failed to install Claude Code."
@@ -1207,7 +1215,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 71 | Last changed: Remove compound-engineering plugin (Wonderly uses internal plugins)${NC}"
+    echo -e "${GRAY}Version 72 | Last changed: Use official Claude Code install script${NC}"
 
     print_section "User & System Setup"
     ensure_not_root

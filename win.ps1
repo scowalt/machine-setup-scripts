@@ -412,35 +412,42 @@ function Setup-Nodejs {
     }
 }
 
-# Function to install Claude Code using bun
+# Function to install Claude Code using official installer
 function Install-ClaudeCode {
-    # Ensure bun is available
-    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
-        Write-Host "$failIcon Bun is not installed. Cannot install Claude Code." -ForegroundColor Red
-        return
+    # Uninstall any existing npm/bun versions to clean up
+    if (Get-Command npm -ErrorAction SilentlyContinue) {
+        $npmList = npm list -g @anthropic-ai/claude-code 2>$null
+        if ($npmList -match "@anthropic-ai/claude-code") {
+            Write-Host "$arrow Removing npm-based Claude Code installation..." -ForegroundColor Cyan
+            npm uninstall -g @anthropic-ai/claude-code 2>$null
+        }
     }
 
-    # Skip if already installed
-    if (Get-Command claude -ErrorAction SilentlyContinue) {
-        Write-Debug "Claude Code is already installed."
-        return
+    if (Get-Command bun -ErrorAction SilentlyContinue) {
+        $bunList = bun pm ls -g 2>$null
+        if ($bunList -match "@anthropic-ai/claude-code") {
+            Write-Host "$arrow Removing bun-based Claude Code installation..." -ForegroundColor Cyan
+            bun remove -g @anthropic-ai/claude-code 2>$null
+        }
     }
 
-    Write-Host "$arrow Installing Claude Code..." -ForegroundColor Cyan
-
-    # Clean up stale lock files from previous interrupted installs
+    # Clean up stale lock files
     $lockPath = Join-Path $env:LOCALAPPDATA "claude\locks"
     if (Test-Path $lockPath) {
         Remove-Item $lockPath -Recurse -Force -ErrorAction SilentlyContinue
     }
 
+    # Skip if native version already installed
+    $nativePath = Join-Path $env:USERPROFILE ".local\bin\claude.exe"
+    if (Test-Path $nativePath) {
+        Write-Debug "Claude Code is already installed (native)."
+        return
+    }
+
+    Write-Host "$arrow Installing Claude Code via official installer..." -ForegroundColor Cyan
     try {
-        bun install -g @anthropic-ai/claude-code
-        if ($?) {
-            Write-Host "$success Claude Code installed." -ForegroundColor Green
-        } else {
-            Write-Host "$failIcon Failed to install Claude Code." -ForegroundColor Red
-        }
+        irm https://claude.ai/install.ps1 | iex
+        Write-Host "$success Claude Code installed." -ForegroundColor Green
     }
     catch {
         Write-Host "$failIcon Failed to install Claude Code: $($_.Exception.Message)" -ForegroundColor Red
@@ -643,7 +650,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 63 | Last changed: Install latest Claude Code instead of pinned version" -ForegroundColor DarkGray
+    Write-Host "Version 64 | Last changed: Use official Claude Code install script" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages
