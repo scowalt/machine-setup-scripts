@@ -959,11 +959,8 @@ install_codex_cli() {
     fi
 }
 
-# Install Claude Code version 2.0.63 using bun
-# Pinned version to avoid breaking changes from auto-updates
+# Install Claude Code using bun
 install_claude_code() {
-    local target_version="2.0.63"
-
     # Ensure bun is available first
     if [[ -d "${HOME}/.bun" ]]; then
         export PATH="${HOME}/.bun/bin:${PATH}"
@@ -974,41 +971,19 @@ install_claude_code() {
         return 1
     fi
 
-    # Check if Claude Code is already installed
+    # Skip if already installed
     if command -v claude &> /dev/null; then
-        local current_version
-        current_version=$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-
-        if [[ "${current_version}" == "${target_version}" ]]; then
-            print_debug "Claude Code v${target_version} is already installed."
-            return 0
-        elif [[ -n "${current_version}" ]]; then
-            print_warning "Claude Code v${current_version} found, but v${target_version} is required."
-            print_message "Uninstalling current version..."
-
-            # Try to uninstall via bun first, then npm, then remove native binaries
-            bun remove -g @anthropic-ai/claude-code 2>/dev/null || true
-            npm uninstall -g @anthropic-ai/claude-code 2>/dev/null || true
-
-            # Remove native installer binaries if present
-            rm -f "${HOME}/.claude/bin/claude" 2>/dev/null || true
-            rm -f "${HOME}/.local/bin/claude" 2>/dev/null || true
-
-            # Clear shell hash table
-            hash -r 2>/dev/null || true
-
-            print_success "Previous version uninstalled."
-        fi
+        print_debug "Claude Code is already installed."
+        return 0
     fi
 
-    print_message "Installing Claude Code v${target_version}..."
+    print_message "Installing Claude Code..."
 
     # Clean up stale lock files from previous interrupted installs
     rm -rf "${HOME}/.local/state/claude/locks" 2>/dev/null
 
-    # Install specific version using bun
-    if bun install -g @anthropic-ai/claude-code@${target_version}; then
-        print_success "Claude Code v${target_version} installed."
+    if bun install -g @anthropic-ai/claude-code; then
+        print_success "Claude Code installed."
     else
         print_error "Failed to install Claude Code."
         return 1
@@ -1259,7 +1234,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 69 | Last changed: Wrap in main() for curl|bash safety${NC}"
+    echo -e "${GRAY}Version 70 | Last changed: Install latest Claude Code instead of pinned version${NC}"
 
     print_section "User & System Setup"
     ensure_not_root
