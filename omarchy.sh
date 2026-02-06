@@ -1011,33 +1011,6 @@ setup_rube_mcp() {
     fi
 }
 
-# Install Compound Engineering plugin for Claude Code
-setup_compound_plugin() {
-    if ! command -v claude &> /dev/null; then
-        print_debug "Claude Code not found. Skipping Compound plugin setup."
-        return 0
-    fi
-
-    # Check if compound-engineering plugin is already installed
-    if claude plugin list 2>/dev/null | grep -q "compound-engineering"; then
-        print_debug "Compound Engineering plugin is already installed."
-        return 0
-    fi
-
-    print_message "Adding Compound Engineering plugin marketplace..."
-    if ! claude plugin marketplace add EveryInc/compound-engineering-plugin 2>/dev/null; then
-        print_warning "Failed to add Compound Engineering marketplace."
-        return 1
-    fi
-
-    print_message "Installing Compound Engineering plugin..."
-    if claude plugin install compound-engineering --scope user 2>/dev/null; then
-        print_success "Compound Engineering plugin installed."
-    else
-        print_warning "Failed to install Compound Engineering plugin."
-    fi
-}
-
 # Install pyenv for Python version management
 install_pyenv() {
     if ! command -v pyenv &> /dev/null; then
@@ -1234,7 +1207,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 70 | Last changed: Install latest Claude Code instead of pinned version${NC}"
+    echo -e "${GRAY}Version 71 | Last changed: Remove compound-engineering plugin (Wonderly uses internal plugins)${NC}"
 
     print_section "User & System Setup"
     ensure_not_root
@@ -1270,7 +1243,6 @@ setup_nodejs
 install_bun
 install_claude_code
 setup_rube_mcp
-setup_compound_plugin
 install_gemini_cli
 install_codex_cli
 install_pyenv
