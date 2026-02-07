@@ -8,7 +8,6 @@ $wingetPackages = (
     "twpayne.chezmoi",
     "Git.Git",
     "Tyrrrz.LightBulb",
-    "Microsoft.VisualStudioCode",
     "Microsoft.PowerToys",
     "File-New-Project.EarTrumpet",
     "AgileBits.1Password",
@@ -668,7 +667,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 65 | Last changed: Rube MCP with Bearer token auth" -ForegroundColor DarkGray
+    Write-Host "Version 66 | Last changed: Remove VSCode installation" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages

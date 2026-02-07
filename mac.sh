@@ -705,21 +705,6 @@ install_codex_cli() {
     fi
 }
 
-# Install Visual Studio Code
-install_vscode() {
-    if brew list --cask visual-studio-code &> /dev/null; then
-        print_debug "Visual Studio Code is already installed."
-        return
-    fi
-    
-    print_message "Installing Visual Studio Code..."
-    if ! brew install --cask visual-studio-code > /dev/null; then
-        print_error "Failed to install Visual Studio Code."
-        return 1
-    fi
-    print_success "Visual Studio Code installed."
-}
-
 # Install Bun JavaScript runtime
 install_bun() {
     if [[ -d "${HOME}/.bun" ]]; then
@@ -864,7 +849,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 80 | Last changed: Rube MCP with Bearer token auth${NC}"
+    echo -e "${GRAY}Version 81 | Last changed: Remove VSCode installation${NC}"
 
     if is_main_user; then
         echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
@@ -988,8 +973,6 @@ HELPER_EOF
     install_codex_cli
 
     if is_main_user; then
-        install_vscode || return 1
-
         print_section "Final Updates"
         update_brew
     fi
