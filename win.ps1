@@ -460,16 +460,34 @@ function Setup-RubeMcp {
         return
     }
 
-    $mcpList = claude mcp list 2>$null
-    if ($mcpList -match "rube") {
-        Write-Debug "Rube MCP server is already configured."
+    # Try to load token from ~/.rube_token if not set
+    $rubeToken = $env:RUBE_API_KEY
+    $tokenFile = Join-Path $env:USERPROFILE ".rube_token"
+    if (-not $rubeToken -and (Test-Path $tokenFile)) {
+        $content = Get-Content $tokenFile -Raw
+        if ($content -match 'RUBE_API_KEY=(.+)') {
+            $rubeToken = $Matches[1].Trim()
+        }
+    }
+
+    if (-not $rubeToken) {
+        Write-Host "$warnIcon RUBE_API_KEY not set. Skipping Rube MCP setup." -ForegroundColor Yellow
+        Write-Debug "Create ~/.rube_token with: RUBE_API_KEY=your_api_key"
         return
     }
 
-    Write-Host "$arrow Configuring Rube MCP server for Claude Code..." -ForegroundColor Cyan
+    # Remove existing config for idempotency
+    $mcpList = claude mcp list 2>$null
+    if ($mcpList -match "rube") {
+        Write-Host "$arrow Removing existing Rube MCP configuration..." -ForegroundColor Cyan
+        claude mcp remove rube -s user 2>$null
+        claude mcp remove rube 2>$null
+    }
+
+    Write-Host "$arrow Configuring Rube MCP server with Bearer token auth..." -ForegroundColor Cyan
     try {
-        claude mcp add rube --transport http https://rube.app/mcp 2>$null
-        Write-Host "$success Rube MCP server configured." -ForegroundColor Green
+        claude mcp add --transport http rube -s user "https://rube.app/mcp" --header "Authorization:Bearer $rubeToken" 2>$null
+        Write-Host "$success Rube MCP server configured at user scope with auth." -ForegroundColor Green
     }
     catch {
         Write-Host "$warnIcon Failed to configure Rube MCP server." -ForegroundColor Yellow
@@ -650,7 +668,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 64 | Last changed: Use official Claude Code install script" -ForegroundColor DarkGray
+    Write-Host "Version 65 | Last changed: Rube MCP with Bearer token auth" -ForegroundColor DarkGray
 
     Write-Section "Package Installation"
     Install-WingetPackages

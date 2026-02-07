@@ -578,22 +578,37 @@ install_claude_code() {
     fi
 }
 
-# Configure Rube MCP server for Claude Code
+# Configure Rube MCP server for Claude Code with Bearer token auth
 setup_rube_mcp() {
     if ! command -v claude &> /dev/null; then
         print_debug "Claude Code not found. Skipping Rube MCP setup."
         return 0
     fi
 
-    # Check if rube MCP server is already configured
-    if claude mcp list 2>/dev/null | grep -q "rube"; then
-        print_debug "Rube MCP server is already configured."
+    # Source Rube token if not already set
+    if [[ -z "${RUBE_API_KEY}" ]] && [[ -f "${HOME}/.rube_token" ]]; then
+        # shellcheck source=/dev/null
+        source "${HOME}/.rube_token"
+    fi
+
+    # Check if token is available
+    if [[ -z "${RUBE_API_KEY}" ]]; then
+        print_warning "RUBE_API_KEY not set. Skipping Rube MCP setup."
+        print_debug "Create ~/.rube_token with: export RUBE_API_KEY=your_api_key"
         return 0
     fi
 
-    print_message "Configuring Rube MCP server for Claude Code..."
-    if claude mcp add rube --transport http https://rube.app/mcp 2>/dev/null; then
-        print_success "Rube MCP server configured."
+    # Remove existing config for idempotency (may have old auth or scope)
+    if claude mcp list 2>/dev/null | grep -q "rube"; then
+        print_message "Removing existing Rube MCP configuration..."
+        claude mcp remove rube -s user 2>/dev/null || true
+        claude mcp remove rube 2>/dev/null || true
+    fi
+
+    print_message "Configuring Rube MCP server with Bearer token auth..."
+    if claude mcp add --transport http rube -s user "https://rube.app/mcp" \
+        --header "Authorization:Bearer ${RUBE_API_KEY}" 2>/dev/null; then
+        print_success "Rube MCP server configured at user scope with auth."
     else
         print_warning "Failed to configure Rube MCP server."
     fi
@@ -1131,7 +1146,7 @@ setup_code_directory() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 74 | Last changed: Use official Claude Code install script${NC}"
+    echo -e "${GRAY}Version 75 | Last changed: Rube MCP with Bearer token auth${NC}"
 
     print_section "User & System Setup"
     ensure_not_root
