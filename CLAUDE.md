@@ -83,6 +83,60 @@ All scripts follow a consistent pattern:
 - Chezmoi manages dotfiles with automatic git operations
 - **IMPORTANT**: Do not add shell configuration (bashrc, zshrc, fish config, PowerShell profiles) in setup scripts - these are managed by chezmoi and will be overridden
 
+## GitHub SSH Key Security Model
+
+The setup scripts automatically detect whether a machine is physical or a VPS to enforce security best practices:
+
+### Physical Machines (Local Access)
+
+- **Detection**: No virtualization detected, no cloud-init present, or explicitly identified as Raspberry Pi/macOS/WSL
+- **SSH Access**: Full write access via SSH authentication keys (`~/.ssh/id_rsa`)
+- **Security Rationale**: Physical machines are in your possession and pose minimal risk if compromised
+- **Examples**: Laptops, desktops, Raspberry Pi devices, WSL on Windows
+
+### VPS/Cloud Machines (Remote Access)
+
+- **Detection**: Virtualization detected (systemd-detect-virt), cloud-init present, or cloud provider IP address
+- **SSH Access**: Read-only access via deploy keys (`~/.ssh/dotfiles-deploy-key`)
+- **Write Access**: Optional via fine-grained tokens manually configured in `~/.gh_token`
+- **Security Rationale**: VPS compromise should not grant attackers write access to all your GitHub repositories
+- **Examples**: DigitalOcean droplets, AWS EC2 instances, Linode VPS, Vultr servers, Hetzner cloud
+
+### Detection Algorithm
+
+The scripts use a weighted scoring system with multiple heuristic signals:
+
+1. **Virtualization (3 points)**: `systemd-detect-virt` output, DMI product/vendor strings
+2. **Cloud-init (2 points)**: Presence of `/etc/cloud/cloud.cfg`
+3. **IP Analysis (2 points)**: Cloud provider detection via ipinfo.io
+4. **Special Cases**: Raspberry Pi always detected as physical (ARM + device tree)
+
+**Threshold**: 3+ points = VPS, otherwise physical
+
+**Override**: Set `MACHINE_TYPE=physical` or `MACHINE_TYPE=vps` environment variable to manually override detection
+
+### Debugging Detection
+
+Enable debug output to see detection decisions:
+
+```bash
+DEBUG=1 ./ubuntu.sh  # or ./omarchy.sh
+```
+
+This will show:
+
+- VPS score
+- Which signals were detected
+- Final decision (vps or physical)
+
+### Migration Strategy
+
+**Existing VPS machines with SSH auth keys**:
+
+- Keys continue to work (not automatically removed)
+- Manually remove from GitHub after confirming deploy key works
+- Future runs of setup scripts will use deploy keys instead
+
 ## Nerd Font Symbols
 
 ### What are Nerd Fonts?

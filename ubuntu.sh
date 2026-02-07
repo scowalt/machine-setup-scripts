@@ -48,6 +48,95 @@ has_verified_ssh_key() {
     [[ -n "${local_key}" ]] && echo "${existing_keys}" | grep -q "${local_key}"
 }
 
+# Detect if this machine is a VPS or physical machine
+# Returns "vps" or "physical" based on multiple heuristic signals
+detect_machine_type() {
+    # Allow manual override via environment variable
+    if [[ -n "${MACHINE_TYPE}" ]]; then
+        echo "${MACHINE_TYPE}"
+        return 0
+    fi
+
+    local vps_score=0
+    local signals=""
+
+    # Signal 1: Virtualization detection (3 points - highest confidence)
+    if command -v systemd-detect-virt &>/dev/null; then
+        local virt
+        virt=$(systemd-detect-virt)
+        if [[ "${virt}" != "none" ]] && [[ "${virt}" != "wsl" ]]; then
+            vps_score=$((vps_score + 3))
+            signals="${signals}virt:${virt} "
+        fi
+    fi
+
+    # Check DMI product/vendor for cloud provider strings
+    if [[ -r /sys/class/dmi/id/product_name ]]; then
+        local product
+        local vendor
+        product=$(cat /sys/class/dmi/id/product_name 2>/dev/null)
+        vendor=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null)
+        if echo "${product} ${vendor}" | grep -qiE "droplet|amazon|google|linode|vultr|hetzner|ovh|scaleway"; then
+            vps_score=$((vps_score + 3))
+            signals="${signals}dmi:cloud "
+        fi
+    fi
+
+    # Signal 2: Cloud-init presence (2 points - high confidence)
+    if [[ -f /etc/cloud/cloud.cfg ]]; then
+        vps_score=$((vps_score + 2))
+        signals="${signals}cloud-init "
+    fi
+
+    # Signal 3: IP address analysis (2 points - medium-high confidence)
+    if command -v curl &>/dev/null; then
+        local ipinfo
+        ipinfo=$(curl -s --max-time 5 https://ipinfo.io 2>/dev/null)
+        if echo "${ipinfo}" | grep -qiE '"org".*"(digital ocean|amazon|google|linode|vultr|hetzner|ovh)"'; then
+            vps_score=$((vps_score + 2))
+            signals="${signals}cloud-ip "
+        fi
+    fi
+
+    # Special case: Raspberry Pi detection (always physical)
+    local arch
+    arch=$(uname -m)
+    if [[ "${arch}" =~ ^(arm|aarch64) ]]; then
+        if [[ -f /proc/device-tree/model ]]; then
+            local model
+            model=$(cat /proc/device-tree/model 2>/dev/null)
+            if echo "${model}" | grep -qi "raspberry pi"; then
+                if [[ -n "${DEBUG}" ]]; then
+                    echo "DEBUG: Machine type detection:" >&2
+                    echo "  Raspberry Pi detected (ARM + device tree)" >&2
+                    echo "  Decision: physical" >&2
+                fi
+                echo "physical"
+                return 0
+            fi
+        fi
+    fi
+
+    # Debug output if requested
+    if [[ -n "${DEBUG}" ]]; then
+        echo "DEBUG: Machine type detection:" >&2
+        echo "  VPS score: ${vps_score}" >&2
+        echo "  Signals: ${signals}" >&2
+        if [[ ${vps_score} -ge 3 ]]; then
+            echo "  Decision: vps" >&2
+        else
+            echo "  Decision: physical" >&2
+        fi
+    fi
+
+    # Decision threshold: 3+ points = VPS
+    if [[ ${vps_score} -ge 3 ]]; then
+        echo "vps"
+    else
+        echo "physical"
+    fi
+}
+
 # Check if user has sudo access (cached result)
 _sudo_checked=""
 _has_sudo=""
@@ -468,6 +557,17 @@ setup_ssh_key() {
     if ! can_sudo; then
         print_debug "No sudo access - skipping SSH key setup."
         return
+    fi
+
+    # Detect machine type and skip SSH auth key generation for VPS
+    local machine_type
+    machine_type=$(detect_machine_type)
+
+    if [[ "${machine_type}" == "vps" ]]; then
+        print_message "VPS detected: Skipping SSH authentication key setup for security"
+        print_message "This machine will use deploy keys (read-only) for dotfiles access"
+        print_message "For write access, manually configure GH_TOKEN_SCOWALT in ~/.gh_token"
+        return 0
     fi
 
     print_message "Checking for existing SSH key associated with GitHub..."
@@ -1503,7 +1603,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 103 | Last changed: Use official Claude Code install script${NC}"
+    echo -e "${GRAY}Version 104 | Last changed: Restrict SSH auth keys to physical machines only${NC}"
 
     print_section "User & System Setup"
     ensure_not_root
