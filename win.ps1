@@ -63,6 +63,49 @@ function Write-Debug($message) {
     Write-Host "  $message" -ForegroundColor DarkGray
 }
 
+# Create placeholder token files if they don't exist
+function New-TokenPlaceholders {
+    $ghTokenPath = Join-Path $env:USERPROFILE ".gh_token"
+    if (-not (Test-Path $ghTokenPath)) {
+        @"
+# GitHub Personal Access Tokens
+# Get tokens from: https://github.com/settings/tokens
+#
+# GH_TOKEN: Primary token for general GitHub operations
+# GH_TOKEN_SCOWALT: Token with access to scowalt/* repositories (for dotfiles)
+#
+# Uncomment and fill in your tokens:
+# GH_TOKEN=github_pat_xxx
+# GH_TOKEN_SCOWALT=github_pat_yyy
+"@ | Set-Content -Path $ghTokenPath
+        Write-Debug "Created placeholder ~/.gh_token"
+    }
+
+    $rubeTokenPath = Join-Path $env:USERPROFILE ".rube_token"
+    if (-not (Test-Path $rubeTokenPath)) {
+        @"
+# Rube MCP API Key
+# Get your API key from: https://rube.app
+#
+# Uncomment and fill in your API key:
+# RUBE_API_KEY=your_api_key_here
+"@ | Set-Content -Path $rubeTokenPath
+        Write-Debug "Created placeholder ~/.rube_token"
+    }
+
+    $opTokenPath = Join-Path $env:USERPROFILE ".op_token"
+    if (-not (Test-Path $opTokenPath)) {
+        @"
+# 1Password Service Account Token
+# Create a service account at: https://my.1password.com/integrations/infrastructure-secrets
+#
+# Uncomment and fill in your token:
+# OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
+"@ | Set-Content -Path $opTokenPath
+        Write-Debug "Created placeholder ~/.op_token"
+    }
+}
+
 function Install-Chezmoi {
     if (-not (Get-Command chezmoi -ErrorAction SilentlyContinue)) {
         Write-Host "$failIcon Failed to install chezmoi." -ForegroundColor Red
@@ -667,7 +710,10 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 66 | Last changed: Remove VSCode installation" -ForegroundColor DarkGray
+    Write-Host "Version 67 | Last changed: Add placeholder token file creation" -ForegroundColor DarkGray
+
+    # Create placeholder token files early
+    New-TokenPlaceholders
 
     Write-Section "Package Installation"
     Install-WingetPackages

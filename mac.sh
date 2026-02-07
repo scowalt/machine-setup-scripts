@@ -17,6 +17,52 @@ print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
 print_error() { printf "${RED} %s${NC}\n" "$1"; }
 print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 
+# Create placeholder token files if they don't exist
+create_token_placeholders() {
+    # ~/.gh_token placeholder
+    if [[ ! -f "${HOME}/.gh_token" ]]; then
+        cat > "${HOME}/.gh_token" << 'EOF'
+# GitHub Personal Access Tokens
+# Get tokens from: https://github.com/settings/tokens
+#
+# GH_TOKEN: Primary token for general GitHub operations
+# GH_TOKEN_SCOWALT: Token with access to scowalt/* repositories (for dotfiles)
+#
+# Uncomment and fill in your tokens:
+# export GH_TOKEN=github_pat_xxx
+# export GH_TOKEN_SCOWALT=github_pat_yyy
+EOF
+        chmod 600 "${HOME}/.gh_token"
+        print_debug "Created placeholder ~/.gh_token"
+    fi
+
+    # ~/.rube_token placeholder
+    if [[ ! -f "${HOME}/.rube_token" ]]; then
+        cat > "${HOME}/.rube_token" << 'EOF'
+# Rube MCP API Key
+# Get your API key from: https://rube.app
+#
+# Uncomment and fill in your API key:
+# export RUBE_API_KEY=your_api_key_here
+EOF
+        chmod 600 "${HOME}/.rube_token"
+        print_debug "Created placeholder ~/.rube_token"
+    fi
+
+    # ~/.op_token placeholder
+    if [[ ! -f "${HOME}/.op_token" ]]; then
+        cat > "${HOME}/.op_token" << 'EOF'
+# 1Password Service Account Token
+# Create a service account at: https://my.1password.com/integrations/infrastructure-secrets
+#
+# Uncomment and fill in your token:
+# export OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
+EOF
+        chmod 600 "${HOME}/.op_token"
+        print_debug "Created placeholder ~/.op_token"
+    fi
+}
+
 # Check if running as main user (scowalt)
 is_main_user() {
     [[ "${HOME}" == "/Users/scowalt" ]]
@@ -849,7 +895,10 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 81 | Last changed: Remove VSCode installation${NC}"
+    echo -e "${GRAY}Version 82 | Last changed: Add placeholder token file creation${NC}"
+
+    # Create placeholder token files early
+    create_token_placeholders
 
     if is_main_user; then
         echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
