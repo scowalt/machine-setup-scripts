@@ -282,11 +282,18 @@ CREDENTIAL_EOF
 # Fix zsh compaudit insecure directories warning
 fix_zsh_compaudit() {
     print_message "Fixing zsh compaudit insecure directories..."
-    # Fix all common zsh directories unconditionally
+    # Fix permissions
     chmod -R go-w /opt/homebrew/share/zsh 2>/dev/null || true
     chmod -R go-w /opt/homebrew/share/zsh-completions 2>/dev/null || true
     chmod -R go-w /usr/local/share/zsh 2>/dev/null || true
-    # Also fix any directories compaudit finds
+
+    # Fix ownership to root for multi-user compatibility (if sudo available)
+    if can_sudo; then
+        print_debug "Fixing zsh directory ownership for multi-user support..."
+        sudo chown -R root:admin /opt/homebrew/share/zsh 2>/dev/null || true
+        sudo chown -R root:admin /opt/homebrew/share/zsh-completions 2>/dev/null || true
+    fi
+
     zsh -c 'compaudit 2>/dev/null | xargs -I {} chmod go-w {} 2>/dev/null' || true
     print_success "zsh directory permissions fixed."
 }
@@ -895,7 +902,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 82 | Last changed: Add placeholder token file creation${NC}"
+    echo -e "${GRAY}Version 83 | Last changed: Fix zsh compaudit ownership for multi-user${NC}"
 
     # Create placeholder token files early
     create_token_placeholders
