@@ -1271,13 +1271,17 @@ update_all_packages() {
         # Update AUR packages if yay is available (yay internally uses sudo)
         # This also updates regular pacman packages, so we don't need separate pacman -Syu
         if command -v yay &> /dev/null; then
-            yay -Syu --noconfirm
+            if ! yay -Syu --noconfirm; then
+                print_error "Failed to update packages via yay."
+                return 1
+            fi
         else
             # Fallback to pacman only if yay isn't available
-            sudo pacman -Syu --noconfirm
+            if ! sudo pacman -Syu --noconfirm; then
+                print_error "Failed to update packages via pacman."
+                return 1
+            fi
         fi
-
-        # Note: Omarchy packages are updated through yay/pacman, no separate command needed
     else
         print_warning "No sudo access - skipping system package updates."
     fi
@@ -1383,7 +1387,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 76 | Last changed: Refresh archlinux-keyring before system upgrade to fix PGP trust errors${NC}"
+    echo -e "${GRAY}Version 77 | Last changed: Report package update failures instead of silently succeeding${NC}"
 
     # Create placeholder token files early
     create_token_placeholders
