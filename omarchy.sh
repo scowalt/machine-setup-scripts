@@ -576,6 +576,13 @@ update_system() {
     # Update pacman database
     sudo pacman -Sy --noconfirm
 
+    # Refresh archlinux-keyring first to avoid PGP signature trust errors
+    # (e.g., "signature from ... is marginal trust") during the full upgrade
+    print_message "Refreshing archlinux-keyring..."
+    if ! sudo pacman -S --noconfirm archlinux-keyring; then
+        print_warning "Failed to refresh archlinux-keyring. Package upgrades may fail."
+    fi
+
     # Update all packages
     if ! sudo pacman -Syu --noconfirm; then
         print_error "Failed to update system packages."
@@ -1376,7 +1383,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 75 | Last changed: Add placeholder token file creation${NC}"
+    echo -e "${GRAY}Version 76 | Last changed: Refresh archlinux-keyring before system upgrade to fix PGP trust errors${NC}"
 
     # Create placeholder token files early
     create_token_placeholders
