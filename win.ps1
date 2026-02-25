@@ -497,11 +497,6 @@ function Install-ClaudeCode {
 }
 
 function Setup-RubeMcp {
-    if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-        Write-Debug "Claude Code not found. Skipping Rube MCP setup."
-        return
-    }
-
     # Try to load token from ~/.rube_token if not set
     $rubeToken = $env:RUBE_API_KEY
     $tokenFile = Join-Path $env:USERPROFILE ".rube_token"
@@ -518,21 +513,70 @@ function Setup-RubeMcp {
         return
     }
 
-    # Remove existing config for idempotency
-    $mcpList = claude mcp list 2>$null
-    if ($mcpList -match "rube") {
-        Write-Host "$arrow Removing existing Rube MCP configuration..." -ForegroundColor Cyan
-        claude mcp remove rube -s user 2>$null
-        claude mcp remove rube 2>$null
+    # Configure for Claude Code
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+        # Remove existing config for idempotency
+        $mcpList = claude mcp list 2>$null
+        if ($mcpList -match "rube") {
+            Write-Host "$arrow Removing existing Claude Code Rube MCP configuration..." -ForegroundColor Cyan
+            claude mcp remove rube -s user 2>$null
+            claude mcp remove rube 2>$null
+        }
+
+        Write-Host "$arrow Configuring Rube MCP server for Claude Code..." -ForegroundColor Cyan
+        try {
+            claude mcp add --transport http rube -s user "https://rube.app/mcp" --header "Authorization:Bearer $rubeToken" 2>$null
+            Write-Host "$success Rube MCP server configured for Claude Code." -ForegroundColor Green
+        }
+        catch {
+            Write-Host "$warnIcon Failed to configure Rube MCP server for Claude Code." -ForegroundColor Yellow
+        }
+    }
+    else {
+        Write-Debug "Claude Code not found. Skipping Claude Code Rube MCP setup."
     }
 
-    Write-Host "$arrow Configuring Rube MCP server with Bearer token auth..." -ForegroundColor Cyan
-    try {
-        claude mcp add --transport http rube -s user "https://rube.app/mcp" --header "Authorization:Bearer $rubeToken" 2>$null
-        Write-Host "$success Rube MCP server configured at user scope with auth." -ForegroundColor Green
+    # Configure for Codex
+    if (Get-Command codex -ErrorAction SilentlyContinue) {
+        $codexConfigDir = Join-Path $env:USERPROFILE ".codex"
+        $codexConfig = Join-Path $codexConfigDir "config.toml"
+
+        if (-not (Test-Path $codexConfigDir)) {
+            New-Item -ItemType Directory -Path $codexConfigDir -Force | Out-Null
+        }
+
+        # Remove existing rube section for idempotency
+        if ((Test-Path $codexConfig) -and (Select-String -Path $codexConfig -Pattern '^\[mcp_servers\.rube\]' -Quiet)) {
+            $lines = Get-Content $codexConfig
+            $newLines = @()
+            $skip = $false
+            foreach ($line in $lines) {
+                if ($line -match '^\[mcp_servers\.rube\]') {
+                    $skip = $true
+                    continue
+                }
+                if ($skip -and $line -match '^\[') {
+                    $skip = $false
+                }
+                if (-not $skip) {
+                    $newLines += $line
+                }
+            }
+            $newLines | Set-Content $codexConfig
+        }
+
+        # Append rube MCP config
+        Write-Host "$arrow Configuring Rube MCP server for Codex..." -ForegroundColor Cyan
+        @"
+
+[mcp_servers.rube]
+url = "https://rube.app/mcp"
+bearer_token_env_var = "RUBE_API_KEY"
+"@ | Add-Content -Path $codexConfig
+        Write-Host "$success Rube MCP server configured for Codex." -ForegroundColor Green
     }
-    catch {
-        Write-Host "$warnIcon Failed to configure Rube MCP server." -ForegroundColor Yellow
+    else {
+        Write-Debug "Codex not found. Skipping Codex Rube MCP setup."
     }
 }
 
@@ -710,7 +754,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 67 | Last changed: Add placeholder token file creation" -ForegroundColor DarkGray
+    Write-Host "Version 68 | Last changed: Configure Rube MCP for Codex in addition to Claude Code" -ForegroundColor DarkGray
 
     # Create placeholder token files early
     New-TokenPlaceholders
