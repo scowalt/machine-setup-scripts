@@ -958,13 +958,8 @@ install_claude_code() {
     fi
 }
 
-# Configure Rube MCP server for Claude Code with Bearer token auth
+# Configure Rube MCP server for Claude Code and Codex with Bearer token auth
 setup_rube_mcp() {
-    if ! command -v claude &> /dev/null; then
-        print_debug "Claude Code not found. Skipping Rube MCP setup."
-        return 0
-    fi
-
     # Source Rube token if not already set
     if [[ -z "${RUBE_API_KEY}" ]] && [[ -f "${HOME}/.rube_token" ]]; then
         # shellcheck source=/dev/null
@@ -978,19 +973,53 @@ setup_rube_mcp() {
         return 0
     fi
 
-    # Remove existing config for idempotency (may have old auth or scope)
-    if claude mcp list 2>/dev/null | grep -q "rube"; then
-        print_message "Removing existing Rube MCP configuration..."
-        claude mcp remove rube -s user 2>/dev/null || true
-        claude mcp remove rube 2>/dev/null || true
+    # Configure for Claude Code
+    if command -v claude &> /dev/null; then
+        # Remove existing config for idempotency (may have old auth or scope)
+        if claude mcp list 2>/dev/null | grep -q "rube"; then
+            print_message "Removing existing Claude Code Rube MCP configuration..."
+            claude mcp remove rube -s user 2>/dev/null || true
+            claude mcp remove rube 2>/dev/null || true
+        fi
+
+        print_message "Configuring Rube MCP server for Claude Code..."
+        if claude mcp add --transport http rube -s user "https://rube.app/mcp" \
+            --header "Authorization:Bearer ${RUBE_API_KEY}" 2>/dev/null; then
+            print_success "Rube MCP server configured for Claude Code."
+        else
+            print_warning "Failed to configure Rube MCP server for Claude Code."
+        fi
+    else
+        print_debug "Claude Code not found. Skipping Claude Code Rube MCP setup."
     fi
 
-    print_message "Configuring Rube MCP server with Bearer token auth..."
-    if claude mcp add --transport http rube -s user "https://rube.app/mcp" \
-        --header "Authorization:Bearer ${RUBE_API_KEY}" 2>/dev/null; then
-        print_success "Rube MCP server configured at user scope with auth."
+    # Configure for Codex
+    if command -v codex &> /dev/null; then
+        local codex_config_dir="${HOME}/.codex"
+        local codex_config="${codex_config_dir}/config.toml"
+
+        mkdir -p "${codex_config_dir}"
+
+        # Remove existing rube section for idempotency
+        if [[ -f "${codex_config}" ]] && grep -q '\[mcp_servers\.rube\]' "${codex_config}"; then
+            awk '
+                /^\[mcp_servers\.rube\]/ { skip=1; next }
+                /^\[/ { skip=0 }
+                !skip { print }
+            ' "${codex_config}" > "${codex_config}.tmp" && mv "${codex_config}.tmp" "${codex_config}"
+        fi
+
+        # Append rube MCP config
+        print_message "Configuring Rube MCP server for Codex..."
+        {
+            echo ""
+            echo "[mcp_servers.rube]"
+            echo 'url = "https://rube.app/mcp"'
+            echo 'bearer_token_env_var = "RUBE_API_KEY"'
+        } >> "${codex_config}"
+        print_success "Rube MCP server configured for Codex."
     else
-        print_warning "Failed to configure Rube MCP server."
+        print_debug "Codex not found. Skipping Codex Rube MCP setup."
     fi
 }
 
@@ -1664,7 +1693,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 106 | Last changed: Add placeholder token file creation${NC}"
+    echo -e "${GRAY}Version 107 | Last changed: Configure Rube MCP for Codex in addition to Claude Code${NC}"
 
     # Create placeholder token files early
     create_token_placeholders
