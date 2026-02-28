@@ -282,17 +282,31 @@ CREDENTIAL_EOF
 # Fix zsh compaudit insecure directories warning
 fix_zsh_compaudit() {
     print_message "Fixing zsh compaudit insecure directories..."
-    # Fix permissions
+
+    # Ensure user owns the Homebrew zsh directories (required for brew upgrade)
+    # This may need sudo if root currently owns them
+    local current_user
+    current_user=$(whoami)
+    local zsh_dir="/opt/homebrew/share/zsh"
+    local zsh_completions="/opt/homebrew/share/zsh-completions"
+
+    for dir in "${zsh_dir}" "${zsh_completions}"; do
+        if [[ -d "${dir}" ]]; then
+            local owner
+            owner=$(stat -f "%Su" "${dir}" 2>/dev/null)
+            if [[ "${owner}" != "${current_user}" ]]; then
+                print_debug "Fixing ownership of ${dir} (currently owned by ${owner})..."
+                if can_sudo; then
+                    sudo chown -R "${current_user}:admin" "${dir}" 2>/dev/null || true
+                fi
+            fi
+        fi
+    done
+
+    # Fix permissions (remove group/other write) - this satisfies compaudit
     chmod -R go-w /opt/homebrew/share/zsh 2>/dev/null || true
     chmod -R go-w /opt/homebrew/share/zsh-completions 2>/dev/null || true
     chmod -R go-w /usr/local/share/zsh 2>/dev/null || true
-
-    # Fix ownership to root for multi-user compatibility (if sudo available)
-    if can_sudo; then
-        print_debug "Fixing zsh directory ownership for multi-user support..."
-        sudo chown -R root:admin /opt/homebrew/share/zsh 2>/dev/null || true
-        sudo chown -R root:admin /opt/homebrew/share/zsh-completions 2>/dev/null || true
-    fi
 
     zsh -c 'compaudit 2>/dev/null | xargs -I {} chmod go-w {} 2>/dev/null' || true
     print_success "zsh directory permissions fixed."
@@ -931,7 +945,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 84 | Last changed: Configure Rube MCP for Codex in addition to Claude Code${NC}"
+    echo -e "${GRAY}Version 85 | Last changed: Fix zsh ownership to allow brew upgrade${NC}"
 
     # Create placeholder token files early
     create_token_placeholders
