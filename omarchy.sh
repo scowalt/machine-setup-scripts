@@ -565,6 +565,13 @@ check_omarchy_installation() {
 
 # Update system packages
 update_system() {
+    # On Omarchy, omarchy-update handles system package updates along with
+    # configuration migrations. Running pacman -Syu directly is discouraged.
+    if [[ "${IS_OMARCHY}" == true ]]; then
+        print_debug "Omarchy detected - system packages will be updated via omarchy-update."
+        return
+    fi
+
     if ! can_sudo; then
         print_warning "No sudo access - skipping system updates."
         print_debug "Run 'sudo pacman -Syu' manually when you have admin access."
@@ -590,6 +597,36 @@ update_system() {
     fi
 
     print_success "System packages updated."
+}
+
+# Run Omarchy's own update system (omarchy-update)
+# This handles git pull, keyring updates, system packages, migrations, and AUR updates.
+# Omarchy warns against running pacman -Syu or yay -Syu directly, as it may miss
+# configuration migrations needed for library compatibility.
+run_omarchy_update() {
+    if [[ "${IS_OMARCHY}" != true ]]; then
+        print_debug "Not an Omarchy system, skipping omarchy-update."
+        return
+    fi
+
+    if ! command -v omarchy-update &> /dev/null; then
+        print_warning "omarchy-update command not found. Skipping Omarchy update."
+        return
+    fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access - skipping Omarchy system update."
+        print_debug "Run 'omarchy-update' manually when you have admin access."
+        return
+    fi
+
+    print_message "Running Omarchy system update..."
+    if omarchy-update -y; then
+        print_success "Omarchy system update completed."
+    else
+        print_error "Omarchy system update failed."
+        return 1
+    fi
 }
 
 # Install and configure fail2ban for brute-force protection
@@ -1294,6 +1331,13 @@ install_iterm2_shell_integration() {
 
 # Update all packages
 update_all_packages() {
+    # On Omarchy, omarchy-update already handled all package updates
+    # (system packages, AUR, orphan cleanup, and migrations).
+    if [[ "${IS_OMARCHY}" == true ]]; then
+        print_debug "Omarchy detected - packages already updated via omarchy-update."
+        return
+    fi
+
     print_message "Updating all packages..."
 
     if can_sudo; then
@@ -1305,8 +1349,6 @@ update_all_packages() {
             # Fallback to pacman only if yay isn't available
             sudo pacman -Syu --noconfirm
         fi
-
-        # Note: Omarchy packages are updated through yay/pacman, no separate command needed
     else
         print_warning "No sudo access - skipping system package updates."
     fi
@@ -1412,7 +1454,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 77 | Last changed: Configure Rube MCP for Codex in addition to Claude Code${NC}"
+    echo -e "${GRAY}Version 78 | Last changed: Use omarchy-update for Omarchy system updates instead of raw pacman${NC}"
 
     # Create placeholder token files early
     create_token_placeholders
@@ -1426,6 +1468,7 @@ setup_dns64_for_ipv6_only
 
 print_section "System Updates"
 update_system
+run_omarchy_update
 
 print_section "Core Package Installation"
 install_core_packages
