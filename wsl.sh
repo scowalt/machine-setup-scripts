@@ -1192,12 +1192,6 @@ install_tmux_plugins() {
 
 # Enable Claude remote-control systemd user service
 enable_claude_remote_service() {
-    # Skip if running inside tmux - daemon-reload can kill the session
-    if [[ -n "${TMUX}" ]]; then
-        print_debug "Running inside tmux, skipping Claude remote-control service setup."
-        return
-    fi
-
     # Check if systemd user session is available
     if ! systemctl --user status &>/dev/null; then
         print_warning "systemd user session not available. Skipping Claude remote-control service."
@@ -1373,7 +1367,7 @@ setup_code_directory() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 78 | Last changed: Add persistent Claude remote-control sessions via systemd${NC}"
+    echo -e "${GRAY}Version 79 | Last changed: Allow claude-remote service setup to run inside tmux${NC}"
 
     # Create placeholder token files early
     create_token_placeholders
