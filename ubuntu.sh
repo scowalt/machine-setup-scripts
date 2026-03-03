@@ -1650,12 +1650,6 @@ install_tmux_plugins() {
 
 # Enable tmux systemd user service for session persistence
 enable_tmux_service() {
-    # Skip if running inside tmux - daemon-reload/enable can kill the session
-    if [[ -n "${TMUX}" ]]; then
-        print_debug "Running inside tmux, skipping service reload to avoid killing session."
-        return
-    fi
-
     local service_file="${HOME}/.config/systemd/user/tmux.service"
     if [[ ! -f "${service_file}" ]]; then
         print_debug "tmux.service not found - will be created by chezmoi apply"
@@ -1664,26 +1658,34 @@ enable_tmux_service() {
 
     print_message "Enabling tmux systemd user service..."
     systemctl --user daemon-reload
-    if systemctl --user enable --now tmux.service 2>/dev/null; then
-        print_success "tmux service enabled and started."
-    else
-        # Service might already be running or have issues
-        if systemctl --user is-enabled tmux.service &>/dev/null; then
-            print_debug "tmux service already enabled."
+
+    if [[ -n "${TMUX}" ]]; then
+        # Inside tmux: enable for next boot but don't start/restart to avoid killing session
+        if systemctl --user enable tmux.service 2>/dev/null; then
+            print_success "tmux service enabled (will start on next boot, already running)."
         else
-            print_warning "Could not enable tmux service."
+            if systemctl --user is-enabled tmux.service &>/dev/null; then
+                print_debug "tmux service already enabled."
+            else
+                print_warning "Could not enable tmux service."
+            fi
+        fi
+    else
+        if systemctl --user enable --now tmux.service 2>/dev/null; then
+            print_success "tmux service enabled and started."
+        else
+            # Service might already be running or have issues
+            if systemctl --user is-enabled tmux.service &>/dev/null; then
+                print_debug "tmux service already enabled."
+            else
+                print_warning "Could not enable tmux service."
+            fi
         fi
     fi
 }
 
 # Enable Claude remote-control systemd user service for auto-start on boot
 enable_claude_remote_service() {
-    # Skip if running inside tmux - daemon-reload can kill the session
-    if [[ -n "${TMUX}" ]]; then
-        print_debug "Running inside tmux, skipping Claude remote-control service setup."
-        return
-    fi
-
     # Check if systemd user session is available
     if ! systemctl --user status &>/dev/null; then
         print_warning "systemd user session not available. Skipping Claude remote-control service."
@@ -1845,7 +1847,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 108 | Last changed: Add persistent Claude remote-control sessions via systemd${NC}"
+    echo -e "${GRAY}Version 109 | Last changed: Allow tmux and claude-remote service setup to run inside tmux${NC}"
 
     # Create placeholder token files early
     create_token_placeholders
