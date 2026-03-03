@@ -425,6 +425,52 @@ chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"
 4. Script tests the key with retry loop
 5. Chezmoi initializes using the `github-dotfiles` alias
 
+### Claude Remote Control Sessions
+
+The scripts set up persistent Claude Code remote-control sessions that automatically start on boot and watch for configuration changes.
+
+**Architecture**:
+
+1. **Config file**: `~/.claude-remote-projects` - lists project directories (relative to `~/Code/`)
+2. **Helper script**: `~/.local/bin/claude-remote-start` - long-running watcher that manages tmux sessions
+3. **Auto-start**: systemd user service (Linux/WSL) or LaunchAgent (macOS)
+
+**File Watching (Reconciliation Model)**:
+
+The `claude-remote-start` script is a long-running process, not a one-shot script. It:
+
+1. Performs initial reconciliation on startup (starts sessions for config entries, stops orphaned sessions)
+2. Watches `~/.claude-remote-projects` for changes using `inotifywait` (Linux) or `fswatch` (macOS)
+3. On any config change, reconciles again - only starting/stopping sessions that changed
+4. Falls back to 30-second polling if neither file watcher is available
+
+**Reconciliation vs Kill-All-Recreate**:
+
+- Adding a project to the config starts only that project's session (existing sessions are untouched)
+- Removing a project from the config stops only that project's session
+- Existing sessions are never disrupted during reconciliation
+
+**Systemd Service (Linux)**:
+
+```ini
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/claude-remote-start
+Restart=on-failure
+RestartSec=30
+KillMode=process
+```
+
+- `Type=simple` - the watcher stays running (not oneshot)
+- `KillMode=process` - only kills the watcher on stop, tmux sessions survive
+- `Restart=on-failure` - auto-restart if the watcher crashes
+- Service is always restarted on setup script rerun to pick up script changes
+
+**Dependencies**:
+
+- Linux: `inotify-tools` (provides `inotifywait`) - installed via core packages
+- macOS: `fswatch` - installed via Homebrew
+
 ## Development Practices
 
 ### Code Quality Tools

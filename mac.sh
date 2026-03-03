@@ -343,7 +343,7 @@ install_core_packages() {
 
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
-    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "jj" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso")
+    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "jj" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch")
     local to_install=()
     
     # Get all installed packages at once (much faster than checking individually)
@@ -684,18 +684,13 @@ install_claude_code() {
 install_claude_remote_start() {
     local script_path="${HOME}/.local/bin/claude-remote-start"
 
-    if [[ -x "${script_path}" ]]; then
-        print_debug "claude-remote-start already installed."
-        return 0
-    fi
-
     mkdir -p "${HOME}/.local/bin"
     mkdir -p "${HOME}/.local/log/claude-remote"
     chmod 700 "${HOME}/.local/log/claude-remote"
 
     cat > "${script_path}" << 'SCRIPT'
 #!/usr/bin/env bash
-# claude-remote-start: Start claude remote-control tmux sessions from config
+# claude-remote-start: Manage claude remote-control tmux sessions with file watching
 set -euo pipefail
 
 export PATH="${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${PATH}"
@@ -704,52 +699,92 @@ CONFIG="${HOME}/.claude-remote-projects"
 LOG_DIR="${HOME}/.local/log/claude-remote"
 SESSION_PREFIX="claude-rc-"
 
-if [[ ! -f "${CONFIG}" ]]; then
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] No config at ${CONFIG}" >> "${LOG_DIR}/start.log"
-    exit 0
-fi
+log() {
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $1" >> "${LOG_DIR}/start.log"
+}
 
 if ! command -v claude &> /dev/null; then
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] claude not found in PATH" >> "${LOG_DIR}/start.log"
+    log "claude not found in PATH"
     exit 0
 fi
 
 if ! command -v tmux &> /dev/null; then
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] tmux not found in PATH" >> "${LOG_DIR}/start.log"
+    log "tmux not found in PATH"
     exit 0
 fi
 
-# Kill all existing claude-rc-* sessions (clean slate)
-tmux list-sessions -F '#{session_name}' 2>/dev/null \
-    | grep "^${SESSION_PREFIX}" \
-    | while IFS= read -r session; do
-        tmux kill-session -t "=${session}" 2>/dev/null || true
-    done || true
+# Reconcile running tmux sessions with config file
+reconcile_sessions() {
+    local desired=""
+    local local_dir=""
+    local running=""
+    local session=""
+    local project=""
 
-# Start fresh sessions from config
-while IFS= read -r project; do
-    # Skip comments and blank lines
-    [[ -z "${project}" || "${project}" =~ ^[[:space:]]*# ]] && continue
-    # Trim whitespace
-    project="$(echo "${project}" | xargs)"
-    [[ -z "${project}" ]] && continue
-    # Reject absolute paths and path traversal
-    [[ "${project}" =~ ^/ ]] && continue
-    [[ "${project}" =~ \.\. ]] && continue
-
-    local_dir="${HOME}/Code/${project}"
-    if [[ ! -d "${local_dir}" ]]; then
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Skipping ${project}: ${local_dir} not found" >> "${LOG_DIR}/start.log"
-        continue
+    # Build list of desired session names from config
+    if [[ -f "${CONFIG}" ]]; then
+        while IFS= read -r project; do
+            [[ -z "${project}" || "${project}" =~ ^[[:space:]]*# ]] && continue
+            project="$(echo "${project}" | xargs)"
+            [[ -z "${project}" ]] && continue
+            [[ "${project}" =~ ^/ ]] && continue
+            [[ "${project}" =~ \.\. ]] && continue
+            local_dir="${HOME}/Code/${project}"
+            if [[ ! -d "${local_dir}" ]]; then
+                log "Skipping ${project}: ${local_dir} not found"
+                continue
+            fi
+            desired="${desired}${SESSION_PREFIX}${project}"$'\n'
+        done < "${CONFIG}"
     fi
 
-    session_name="${SESSION_PREFIX}${project}"
-    tmux new-session -d -s "${session_name}" -c "${local_dir}" \
-        "backoff=30; max_backoff=600; while true; do claude remote-control; code=\$?; echo \"[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Exited \${code}, restarting in \${backoff}s...\"; sleep \${backoff}; backoff=\$(( backoff * 2 > max_backoff ? max_backoff : backoff * 2 )); done" \
-        2>/dev/null || true
+    # Get running claude-rc-* sessions
+    running=$(tmux list-sessions -F '#{session_name}' 2>/dev/null \
+        | grep "^${SESSION_PREFIX}" || true)
 
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Started session ${session_name} in ${local_dir}" >> "${LOG_DIR}/start.log"
-done < "${CONFIG}"
+    # Stop sessions no longer in config
+    if [[ -n "${running}" ]]; then
+        while IFS= read -r session; do
+            [[ -z "${session}" ]] && continue
+            if ! echo "${desired}" | grep -qxF "${session}"; then
+                tmux kill-session -t "=${session}" 2>/dev/null || true
+                log "Stopped removed session ${session}"
+            fi
+        done <<< "${running}"
+    fi
+
+    # Start sessions in config but not yet running
+    if [[ -n "${desired}" ]]; then
+        while IFS= read -r session; do
+            [[ -z "${session}" ]] && continue
+            if [[ -z "${running}" ]] || ! echo "${running}" | grep -qxF "${session}"; then
+                project="${session#${SESSION_PREFIX}}"
+                local_dir="${HOME}/Code/${project}"
+                tmux new-session -d -s "${session}" -c "${local_dir}" \
+                    "backoff=30; max_backoff=600; while true; do claude remote-control; code=\$?; echo \"[\$(date -u +%Y-%m-%dT%H:%M:%SZ)] Exited \${code}, restarting in \${backoff}s...\"; sleep \${backoff}; backoff=\$(( backoff * 2 > max_backoff ? max_backoff : backoff * 2 )); done" \
+                    2>/dev/null || true
+                log "Started session ${session} in ${local_dir}"
+            fi
+        done <<< "${desired}"
+    fi
+}
+
+# Initial reconciliation
+reconcile_sessions
+
+log "Watching ${CONFIG} for changes..."
+
+# Watch for config changes and reconcile
+while true; do
+    if [[ -f "${CONFIG}" ]] && command -v inotifywait &>/dev/null; then
+        inotifywait -qq -e close_write,delete_self,move_self "${CONFIG}" 2>/dev/null || true
+    elif [[ -f "${CONFIG}" ]] && command -v fswatch &>/dev/null; then
+        fswatch --one-event "${CONFIG}" &>/dev/null || true
+    else
+        sleep 30
+    fi
+    reconcile_sessions
+done
 SCRIPT
     chmod +x "${script_path}"
     print_success "Installed claude-remote-start helper script."
@@ -950,12 +985,10 @@ setup_claude_remote_launchagent() {
     local plist_label="com.user.claude-remote-start"
     local plist_file="${plist_dir}/${plist_label}.plist"
 
-    if [[ -f "${plist_file}" ]]; then
-        print_debug "Claude remote-control LaunchAgent already installed."
-        return
-    fi
-
     mkdir -p "${plist_dir}"
+
+    # Bootout existing agent before updating plist
+    launchctl bootout "gui/$(id -u)/${plist_label}" 2>/dev/null || true
 
     # $HOME doesn't expand in plist values, so use /bin/bash -c wrapper
     cat > "${plist_file}" << EOF
@@ -1101,7 +1134,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 87 | Last changed: Fix claude-remote-start pipefail crash when no existing sessions${NC}"
+    echo -e "${GRAY}Version 88 | Last changed: File-watch claude-remote-projects for live session reconciliation${NC}"
 
     # Create placeholder token files early
     create_token_placeholders
