@@ -1064,7 +1064,7 @@ reconcile_sessions() {
                 project="${session#${SESSION_PREFIX}}"
                 local_dir="${HOME}/Code/${project}"
                 tmux new-session -d -s "${session}" -c "${local_dir}" \
-                    "backoff=30; max_backoff=600; while true; do claude remote-control; code=\$?; echo \"[\$(date -u +%Y-%m-%dT%H:%M:%SZ)] Exited \${code}, restarting in \${backoff}s...\"; sleep \${backoff}; backoff=\$(( backoff * 2 > max_backoff ? max_backoff : backoff * 2 )); done" \
+                    "backoff=30; max_backoff=600; while true; do echo y | claude remote-control; code=\$?; echo \"[\$(date -u +%Y-%m-%dT%H:%M:%SZ)] Exited \${code}, restarting in \${backoff}s...\"; sleep \${backoff}; backoff=\$(( backoff * 2 > max_backoff ? max_backoff : backoff * 2 )); done" \
                     2>/dev/null || true
                 log "Started session ${session} in ${local_dir}"
             fi
@@ -1877,7 +1877,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 111 | Last changed: File-watch claude-remote-projects for live session reconciliation${NC}"
+    echo -e "${GRAY}Version 112 | Last changed: Auto-accept claude remote-control interactive prompt in tmux${NC}"
 
     # Create placeholder token files early
     create_token_placeholders
