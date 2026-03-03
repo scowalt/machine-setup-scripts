@@ -1257,7 +1257,7 @@ tmux list-sessions -F '#{session_name}' 2>/dev/null \
     | grep "^${SESSION_PREFIX}" \
     | while IFS= read -r session; do
         tmux kill-session -t "=${session}" 2>/dev/null || true
-    done
+    done || true
 
 # Start fresh sessions from config
 while IFS= read -r project; do
@@ -1600,7 +1600,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 80 | Last changed: Allow claude-remote service setup to run inside tmux${NC}"
+    echo -e "${GRAY}Version 81 | Last changed: Fix claude-remote-start pipefail crash when no existing sessions${NC}"
 
     # Create placeholder token files early
     create_token_placeholders
