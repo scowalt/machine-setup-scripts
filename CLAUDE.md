@@ -36,10 +36,8 @@ Scripts are hosted at `https://scripts.scowalt.com/setup/` for remote execution 
 
 ### Repository Management
 
-Use `jj` and `gh` CLI tools to manage this repository:
+Use `gh` CLI tool to manage this repository:
 
-- `jj git fetch` - Fetch latest changes from remote
-- `jj new main` - Create a new change on top of main
 - `gh pr create` - Create pull requests via GitHub CLI
 - `gh pr merge` - Merge pull requests
 
@@ -66,7 +64,7 @@ All scripts follow a consistent pattern:
 
 ### Common Tools Installed
 
-- Version Control: git, gh (GitHub CLI), jj (jujutsu)
+- Version Control: git, gh (GitHub CLI)
 - Shell: fish (with completions), tmux
 - Node.js: fnm (Fast Node Manager)
 - Python: pyenv (Python version management)

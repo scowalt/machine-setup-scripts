@@ -23,7 +23,6 @@ $wingetPackages = (
     "DEVCOM.JetBrainsMonoNerdFont",
     "nektos.act",
     "OpenTofu.Tofu",
-    "jj-vcs.jj",
     "astral-sh.uv",
     "jqlang.jq",
     "GoLang.Go",
@@ -754,7 +753,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 68 | Last changed: Configure Rube MCP for Codex in addition to Claude Code" -ForegroundColor DarkGray
+    Write-Host "Version 69 | Last changed: Remove jj (Jujutsu) from installed packages" -ForegroundColor DarkGray
 
     # Create placeholder token files early
     New-TokenPlaceholders

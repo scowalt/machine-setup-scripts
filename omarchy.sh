@@ -664,7 +664,7 @@ install_core_packages() {
     print_message "Checking core packages..."
 
     # Define core packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "jujutsu" "uv" "go" "inotify-tools")
+    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "uv" "go" "inotify-tools")
     local to_install=()
 
     # Check which packages need installation
@@ -1469,7 +1469,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 85 | Last changed: Replace Claude remote control with happy-coder${NC}"
+    echo -e "${GRAY}Version 86 | Last changed: Remove jujutsu from installed packages${NC}"
 
     # Create placeholder token files early
     create_token_placeholders
