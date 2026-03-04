@@ -62,30 +62,6 @@ EOF
         print_debug "Created placeholder ~/.op_token"
     fi
 
-    # ~/.claude-remote-projects placeholder
-    if [[ ! -f "${HOME}/.claude-remote-projects" ]]; then
-        cat > "${HOME}/.claude-remote-projects" << 'EOF'
-# Claude Remote Control Projects
-# WARNING: Each line enables remote shell access to ~/Code/<project> via claude.ai.
-# Only list projects that require remote-control access.
-#
-# List project directory names (relative to ~/Code), one per line.
-# Lines starting with # are comments. Blank lines are ignored.
-#
-# Prerequisites for each project:
-#   1. Run `claude /login` once on this machine
-#   2. Run `claude` interactively in ~/Code/<project> to accept workspace trust
-#
-# Memory: Each session uses ~300 MB RAM. Guidance:
-#   1 GB VPS: max 2 projects | 2 GB VPS: max 4 projects | 8 GB+: 25+ projects
-#
-# Example:
-# machine-setup-scripts
-# my-web-app
-EOF
-        chmod 600 "${HOME}/.claude-remote-projects"
-        print_debug "Created placeholder ~/.claude-remote-projects"
-    fi
 }
 
 # Check if user has sudo access (cached result)
@@ -890,47 +866,6 @@ install_tmux_plugins() {
     print_success "tmux plugins installed and updated."
 }
 
-# Enable Claude remote-control systemd user service
-enable_claude_remote_service() {
-    # Check if systemd user session is available
-    if ! systemctl --user status &>/dev/null; then
-        print_warning "systemd user session not available. Skipping Claude remote-control service."
-        return
-    fi
-
-    local service_dir="${HOME}/.config/systemd/user"
-    local service_file="${service_dir}/claude-remote-control.service"
-
-    # Always write service file to pick up definition changes
-    mkdir -p "${service_dir}"
-    cat > "${service_file}" << 'EOF'
-[Unit]
-Description=Claude Code Remote Control Sessions
-
-[Service]
-Type=simple
-ExecStart=%h/.local/bin/claude-remote-start
-Restart=on-failure
-RestartSec=30
-KillMode=process
-
-[Install]
-WantedBy=default.target
-EOF
-
-    # Enable lingering so user services survive logout
-    loginctl enable-linger "${USER}" 2>/dev/null || true
-
-    print_message "Enabling Claude remote-control systemd user service..."
-    systemctl --user daemon-reload
-    systemctl --user enable claude-remote-control.service 2>/dev/null || true
-    if systemctl --user restart claude-remote-control.service 2>/dev/null; then
-        print_success "Claude remote-control service enabled and started."
-    else
-        print_warning "Could not start Claude remote-control service."
-    fi
-}
-
 # Install iTerm2 shell integration for automatic profile switching
 install_iterm2_shell_integration() {
     local shell_integration_file="${HOME}/.iterm2_shell_integration.fish"
@@ -1361,114 +1296,18 @@ install_claude_code() {
     fi
 }
 
-# Install claude-remote-start helper script for persistent remote-control sessions
-install_claude_remote_start() {
-    local script_path="${HOME}/.local/bin/claude-remote-start"
-
-    mkdir -p "${HOME}/.local/bin"
-    mkdir -p "${HOME}/.local/log/claude-remote"
-    chmod 700 "${HOME}/.local/log/claude-remote"
-
-    cat > "${script_path}" << 'SCRIPT'
-#!/usr/bin/env bash
-# claude-remote-start: Manage claude remote-control tmux sessions with file watching
-set -euo pipefail
-
-export PATH="${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${PATH}"
-
-CONFIG="${HOME}/.claude-remote-projects"
-LOG_DIR="${HOME}/.local/log/claude-remote"
-SESSION_PREFIX="claude-rc-"
-
-log() {
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $1" >> "${LOG_DIR}/start.log"
-}
-
-if ! command -v claude &> /dev/null; then
-    log "claude not found in PATH"
-    exit 0
-fi
-
-if ! command -v tmux &> /dev/null; then
-    log "tmux not found in PATH"
-    exit 0
-fi
-
-# Reconcile running tmux sessions with config file
-reconcile_sessions() {
-    local desired=""
-    local local_dir=""
-    local running=""
-    local session=""
-    local project=""
-
-    # Build list of desired session names from config
-    if [[ -f "${CONFIG}" ]]; then
-        while IFS= read -r project; do
-            [[ -z "${project}" || "${project}" =~ ^[[:space:]]*# ]] && continue
-            project="$(echo "${project}" | xargs)"
-            [[ -z "${project}" ]] && continue
-            [[ "${project}" =~ ^/ ]] && continue
-            [[ "${project}" =~ \.\. ]] && continue
-            local_dir="${HOME}/Code/${project}"
-            if [[ ! -d "${local_dir}" ]]; then
-                log "Skipping ${project}: ${local_dir} not found"
-                continue
-            fi
-            desired="${desired}${SESSION_PREFIX}${project}"$'\n'
-        done < "${CONFIG}"
+install_happy_coder() {
+    if command -v happy &> /dev/null; then
+        print_debug "happy-coder is already installed."
+        return 0
     fi
 
-    # Get running claude-rc-* sessions
-    running=$(tmux list-sessions -F '#{session_name}' 2>/dev/null \
-        | grep "^${SESSION_PREFIX}" || true)
-
-    # Stop sessions no longer in config
-    if [[ -n "${running}" ]]; then
-        while IFS= read -r session; do
-            [[ -z "${session}" ]] && continue
-            if ! echo "${desired}" | grep -qxF "${session}"; then
-                tmux kill-session -t "=${session}" 2>/dev/null || true
-                log "Stopped removed session ${session}"
-            fi
-        done <<< "${running}"
-    fi
-
-    # Start sessions in config but not yet running
-    if [[ -n "${desired}" ]]; then
-        while IFS= read -r session; do
-            [[ -z "${session}" ]] && continue
-            if [[ -z "${running}" ]] || ! echo "${running}" | grep -qxF "${session}"; then
-                project="${session#${SESSION_PREFIX}}"
-                local_dir="${HOME}/Code/${project}"
-                tmux new-session -d -s "${session}" -c "${local_dir}" \
-                    "bash -c 'backoff=30; max_backoff=600; while true; do echo y | claude remote-control; code=\$?; echo \"[\$(date -u +%Y-%m-%dT%H:%M:%SZ)] Exited \${code}, restarting in \${backoff}s...\"; sleep \${backoff}; backoff=\$(( backoff * 2 > max_backoff ? max_backoff : backoff * 2 )); done'" \
-                    2>/dev/null || true
-                log "Started session ${session} in ${local_dir}"
-            fi
-        done <<< "${desired}"
-    fi
-}
-
-# Initial reconciliation
-reconcile_sessions
-
-log "Watching ${CONFIG} for changes..."
-
-# Watch for config changes and reconcile
-while true; do
-    if [[ -f "${CONFIG}" ]] && command -v inotifywait &>/dev/null; then
-        inotifywait -qq -e close_write,delete_self,move_self "${CONFIG}" 2>/dev/null || true
-    elif [[ -f "${CONFIG}" ]] && command -v fswatch &>/dev/null; then
-        fswatch --one-event "${CONFIG}" &>/dev/null || true
+    print_message "Installing happy-coder..."
+    if bun install -g happy-coder > /dev/null 2>&1; then
+        print_success "happy-coder installed. Run 'happy --auth' to authenticate."
     else
-        sleep 30
+        print_error "Failed to install happy-coder."
     fi
-    reconcile_sessions
-done
-SCRIPT
-    chmod +x "${script_path}"
-    print_success "Installed claude-remote-start helper script."
 }
 
 # Configure Rube MCP server for Claude Code and Codex with Bearer token auth
@@ -1818,7 +1657,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 89 | Last changed: Fix tmux session shell syntax for fish compatibility${NC}"
+    echo -e "${GRAY}Version 90 | Last changed: Replace Claude remote control with happy-coder${NC}"
 
     # Create placeholder token files early
     create_token_placeholders
@@ -1860,7 +1699,7 @@ main() {
     print_section "Additional Development Tools"
     install_bun
     install_claude_code
-    install_claude_remote_start
+    install_happy_coder
     setup_rube_mcp
     setup_compound_plugin
     install_gemini_cli
@@ -1894,8 +1733,7 @@ main() {
     install_act
     install_tmux_plugins
     install_iterm2_shell_integration
-    enable_claude_remote_service
-
+    
     print_section "Final Updates"
     upgrade_npm_global_packages
 

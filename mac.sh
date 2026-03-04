@@ -62,30 +62,6 @@ EOF
         print_debug "Created placeholder ~/.op_token"
     fi
 
-    # ~/.claude-remote-projects placeholder
-    if [[ ! -f "${HOME}/.claude-remote-projects" ]]; then
-        cat > "${HOME}/.claude-remote-projects" << 'EOF'
-# Claude Remote Control Projects
-# WARNING: Each line enables remote shell access to ~/Code/<project> via claude.ai.
-# Only list projects that require remote-control access.
-#
-# List project directory names (relative to ~/Code), one per line.
-# Lines starting with # are comments. Blank lines are ignored.
-#
-# Prerequisites for each project:
-#   1. Run `claude /login` once on this machine
-#   2. Run `claude` interactively in ~/Code/<project> to accept workspace trust
-#
-# Memory: Each session uses ~300 MB RAM. Guidance:
-#   1 GB VPS: max 2 projects | 2 GB VPS: max 4 projects | 8 GB+: 25+ projects
-#
-# Example:
-# machine-setup-scripts
-# my-web-app
-EOF
-        chmod 600 "${HOME}/.claude-remote-projects"
-        print_debug "Created placeholder ~/.claude-remote-projects"
-    fi
 }
 
 # Check if running as main user (scowalt)
@@ -680,114 +656,18 @@ install_claude_code() {
     fi
 }
 
-# Install claude-remote-start helper script for persistent remote-control sessions
-install_claude_remote_start() {
-    local script_path="${HOME}/.local/bin/claude-remote-start"
-
-    mkdir -p "${HOME}/.local/bin"
-    mkdir -p "${HOME}/.local/log/claude-remote"
-    chmod 700 "${HOME}/.local/log/claude-remote"
-
-    cat > "${script_path}" << 'SCRIPT'
-#!/usr/bin/env bash
-# claude-remote-start: Manage claude remote-control tmux sessions with file watching
-set -euo pipefail
-
-export PATH="${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${PATH}"
-
-CONFIG="${HOME}/.claude-remote-projects"
-LOG_DIR="${HOME}/.local/log/claude-remote"
-SESSION_PREFIX="claude-rc-"
-
-log() {
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $1" >> "${LOG_DIR}/start.log"
-}
-
-if ! command -v claude &> /dev/null; then
-    log "claude not found in PATH"
-    exit 0
-fi
-
-if ! command -v tmux &> /dev/null; then
-    log "tmux not found in PATH"
-    exit 0
-fi
-
-# Reconcile running tmux sessions with config file
-reconcile_sessions() {
-    local desired=""
-    local local_dir=""
-    local running=""
-    local session=""
-    local project=""
-
-    # Build list of desired session names from config
-    if [[ -f "${CONFIG}" ]]; then
-        while IFS= read -r project; do
-            [[ -z "${project}" || "${project}" =~ ^[[:space:]]*# ]] && continue
-            project="$(echo "${project}" | xargs)"
-            [[ -z "${project}" ]] && continue
-            [[ "${project}" =~ ^/ ]] && continue
-            [[ "${project}" =~ \.\. ]] && continue
-            local_dir="${HOME}/Code/${project}"
-            if [[ ! -d "${local_dir}" ]]; then
-                log "Skipping ${project}: ${local_dir} not found"
-                continue
-            fi
-            desired="${desired}${SESSION_PREFIX}${project}"$'\n'
-        done < "${CONFIG}"
+install_happy_coder() {
+    if command -v happy &> /dev/null; then
+        print_debug "happy-coder is already installed."
+        return 0
     fi
 
-    # Get running claude-rc-* sessions
-    running=$(tmux list-sessions -F '#{session_name}' 2>/dev/null \
-        | grep "^${SESSION_PREFIX}" || true)
-
-    # Stop sessions no longer in config
-    if [[ -n "${running}" ]]; then
-        while IFS= read -r session; do
-            [[ -z "${session}" ]] && continue
-            if ! echo "${desired}" | grep -qxF "${session}"; then
-                tmux kill-session -t "=${session}" 2>/dev/null || true
-                log "Stopped removed session ${session}"
-            fi
-        done <<< "${running}"
-    fi
-
-    # Start sessions in config but not yet running
-    if [[ -n "${desired}" ]]; then
-        while IFS= read -r session; do
-            [[ -z "${session}" ]] && continue
-            if [[ -z "${running}" ]] || ! echo "${running}" | grep -qxF "${session}"; then
-                project="${session#${SESSION_PREFIX}}"
-                local_dir="${HOME}/Code/${project}"
-                tmux new-session -d -s "${session}" -c "${local_dir}" \
-                    "bash -c 'backoff=30; max_backoff=600; while true; do echo y | claude remote-control; code=\$?; echo \"[\$(date -u +%Y-%m-%dT%H:%M:%SZ)] Exited \${code}, restarting in \${backoff}s...\"; sleep \${backoff}; backoff=\$(( backoff * 2 > max_backoff ? max_backoff : backoff * 2 )); done'" \
-                    2>/dev/null || true
-                log "Started session ${session} in ${local_dir}"
-            fi
-        done <<< "${desired}"
-    fi
-}
-
-# Initial reconciliation
-reconcile_sessions
-
-log "Watching ${CONFIG} for changes..."
-
-# Watch for config changes and reconcile
-while true; do
-    if [[ -f "${CONFIG}" ]] && command -v inotifywait &>/dev/null; then
-        inotifywait -qq -e close_write,delete_self,move_self "${CONFIG}" 2>/dev/null || true
-    elif [[ -f "${CONFIG}" ]] && command -v fswatch &>/dev/null; then
-        fswatch --one-event "${CONFIG}" &>/dev/null || true
+    print_message "Installing happy-coder..."
+    if bun install -g happy-coder > /dev/null 2>&1; then
+        print_success "happy-coder installed. Run 'happy --auth' to authenticate."
     else
-        sleep 30
+        print_error "Failed to install happy-coder."
     fi
-    reconcile_sessions
-done
-SCRIPT
-    chmod +x "${script_path}"
-    print_success "Installed claude-remote-start helper script."
 }
 
 # Configure Rube MCP server for Claude Code and Codex with Bearer token auth
@@ -979,60 +859,6 @@ install_tmux_plugins() {
     print_success "tmux plugins installed and updated."
 }
 
-# Set up LaunchAgent for Claude remote-control sessions
-setup_claude_remote_launchagent() {
-    local plist_dir="${HOME}/Library/LaunchAgents"
-    local plist_label="com.user.claude-remote-start"
-    local plist_file="${plist_dir}/${plist_label}.plist"
-
-    mkdir -p "${plist_dir}"
-
-    # Bootout existing agent before updating plist
-    launchctl bootout "gui/$(id -u)/${plist_label}" 2>/dev/null || true
-
-    # $HOME doesn't expand in plist values, so use /bin/bash -c wrapper
-    cat > "${plist_file}" << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>${plist_label}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/bin/bash</string>
-        <string>-c</string>
-        <string>exec \$HOME/.local/bin/claude-remote-start</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
-    <key>StandardOutPath</key>
-    <string>${HOME}/.local/log/claude-remote/launchd-stdout.log</string>
-    <key>StandardErrorPath</key>
-    <string>${HOME}/.local/log/claude-remote/launchd-stderr.log</string>
-</dict>
-</plist>
-EOF
-
-    print_message "Loading Claude remote-control LaunchAgent..."
-    if launchctl bootstrap "gui/$(id -u)" "${plist_file}" 2>/dev/null; then
-        print_success "Claude remote-control LaunchAgent loaded."
-    else
-        # May already be bootstrapped, try kickstart
-        if launchctl kickstart "gui/$(id -u)/${plist_label}" 2>/dev/null; then
-            print_success "Claude remote-control LaunchAgent started."
-        else
-            print_warning "Could not load Claude remote-control LaunchAgent. Load manually with:"
-            print_message "  launchctl bootstrap gui/\$(id -u) ${plist_file}"
-        fi
-    fi
-}
-
 update_brew() {
     print_message "Updating Homebrew..."
     brew update > /dev/null
@@ -1134,7 +960,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 90 | Last changed: Fix tmux session shell syntax for fish compatibility${NC}"
+    echo -e "${GRAY}Version 91 | Last changed: Replace Claude remote control with happy-coder${NC}"
 
     # Create placeholder token files early
     create_token_placeholders
@@ -1255,14 +1081,11 @@ HELPER_EOF
     setup_nodejs
     install_bun
     install_claude_code
-    install_claude_remote_start
+    install_happy_coder
     setup_rube_mcp
     setup_compound_plugin
     install_gemini_cli
     install_codex_cli
-
-    print_section "Services"
-    setup_claude_remote_launchagent
 
     if is_main_user; then
         print_section "Final Updates"
