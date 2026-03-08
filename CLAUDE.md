@@ -98,7 +98,7 @@ The setup scripts automatically detect whether a machine is physical or a VPS to
 
 - **Detection**: Virtualization detected (systemd-detect-virt), cloud-init present, or cloud provider IP address
 - **SSH Access**: Read-only access via deploy keys (`~/.ssh/dotfiles-deploy-key`)
-- **Write Access**: Optional via fine-grained tokens manually configured in `~/.gh_token`
+- **Write Access**: Optional via fine-grained tokens manually configured in `~/.env.local`
 - **Security Rationale**: VPS compromise should not grant attackers write access to all your GitHub repositories
 - **Examples**: DigitalOcean droplets, AWS EC2 instances, Linode VPS, Vultr servers, Hetzner cloud
 

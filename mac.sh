@@ -17,51 +17,62 @@ print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
 print_error() { printf "${RED} %s${NC}\n" "$1"; }
 print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 
-# Create placeholder token files if they don't exist
-create_token_placeholders() {
-    # ~/.gh_token placeholder
-    if [[ ! -f "${HOME}/.gh_token" ]]; then
-        cat > "${HOME}/.gh_token" << 'EOF'
+# Migrate old token files (~/.gh_token, ~/.op_token, ~/.rube_token) into ~/.env.local
+migrate_token_files() {
+    local env_file="${HOME}/.env.local"
+    local migrated=0
+
+    for old_file in "${HOME}/.gh_token" "${HOME}/.rube_token" "${HOME}/.op_token"; do
+        if [[ -f "${old_file}" ]]; then
+            # Extract uncommented KEY=VALUE lines (strip 'export ' prefix if present)
+            local values
+            values=$(grep -v '^\s*#' "${old_file}" | grep -v '^\s*$' | sed 's/^export //')
+            if [[ -n "${values}" ]]; then
+                touch "${env_file}"
+                chmod 600 "${env_file}"
+                while IFS= read -r line; do
+                    local key="${line%%=*}"
+                    if ! grep -q "^${key}=" "${env_file}" 2>/dev/null; then
+                        echo "${line}" >> "${env_file}"
+                    fi
+                done <<< "${values}"
+            fi
+            rm -f "${old_file}"
+            print_debug "Migrated $(basename "${old_file}") → ~/.env.local"
+            migrated=1
+        fi
+    done
+
+    if [[ "${migrated}" -eq 1 ]]; then
+        print_message "Token files consolidated into ~/.env.local"
+    fi
+}
+
+# Create placeholder ~/.env.local if it doesn't exist
+create_env_local() {
+    migrate_token_files
+
+    if [[ ! -f "${HOME}/.env.local" ]]; then
+        cat > "${HOME}/.env.local" << 'EOF'
+# Machine-specific environment variables
+# Format: KEY=VALUE (one per line)
+
 # GitHub Personal Access Tokens
 # Get tokens from: https://github.com/settings/tokens
-#
-# GH_TOKEN: Primary token for general GitHub operations
-# GH_TOKEN_SCOWALT: Token with access to scowalt/* repositories (for dotfiles)
-#
-# Uncomment and fill in your tokens:
-# export GH_TOKEN=github_pat_xxx
-# export GH_TOKEN_SCOWALT=github_pat_yyy
-EOF
-        chmod 600 "${HOME}/.gh_token"
-        print_debug "Created placeholder ~/.gh_token"
-    fi
+# GH_TOKEN=github_pat_xxx
+# GH_TOKEN_SCOWALT=github_pat_yyy
 
-    # ~/.rube_token placeholder
-    if [[ ! -f "${HOME}/.rube_token" ]]; then
-        cat > "${HOME}/.rube_token" << 'EOF'
 # Rube MCP API Key
 # Get your API key from: https://rube.app
-#
-# Uncomment and fill in your API key:
-# export RUBE_API_KEY=your_api_key_here
-EOF
-        chmod 600 "${HOME}/.rube_token"
-        print_debug "Created placeholder ~/.rube_token"
-    fi
+# RUBE_API_KEY=your_api_key_here
 
-    # ~/.op_token placeholder
-    if [[ ! -f "${HOME}/.op_token" ]]; then
-        cat > "${HOME}/.op_token" << 'EOF'
 # 1Password Service Account Token
 # Create a service account at: https://my.1password.com/integrations/infrastructure-secrets
-#
-# Uncomment and fill in your token:
-# export OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
+# OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
 EOF
-        chmod 600 "${HOME}/.op_token"
-        print_debug "Created placeholder ~/.op_token"
+        chmod 600 "${HOME}/.env.local"
+        print_debug "Created placeholder ~/.env.local"
     fi
-
 }
 
 # Check if running as main user (scowalt)
@@ -218,19 +229,17 @@ check_dotfiles_access() {
     return 1
 }
 
-# Source GitHub tokens from ~/.gh_token if it exists
-# File format:
-#   export GH_TOKEN=github_pat_xxx           # work/primary org token
-#   export GH_TOKEN_SCOWALT=github_pat_yyy   # scowalt org token (for dotfiles)
 source_gh_tokens() {
-    if [[ -f "${HOME}/.gh_token" ]]; then
+    if [[ -f "${HOME}/.env.local" ]]; then
         # shellcheck source=/dev/null
-        source "${HOME}/.gh_token"
+        set -a
+        source "${HOME}/.env.local"
+        set +a
         if [[ -n "${GH_TOKEN}" ]]; then
-            print_debug "GH_TOKEN loaded from ~/.gh_token"
+            print_debug "GH_TOKEN loaded from ~/.env.local"
         fi
         if [[ -n "${GH_TOKEN_SCOWALT}" ]]; then
-            print_debug "GH_TOKEN_SCOWALT loaded from ~/.gh_token"
+            print_debug "GH_TOKEN_SCOWALT loaded from ~/.env.local"
         fi
         [[ -n "${GH_TOKEN}" ]] || [[ -n "${GH_TOKEN_SCOWALT}" ]]
         return $?
@@ -673,15 +682,17 @@ install_happy_coder() {
 # Configure Rube MCP server for Claude Code and Codex with Bearer token auth
 setup_rube_mcp() {
     # Source Rube token if not already set
-    if [[ -z "${RUBE_API_KEY}" ]] && [[ -f "${HOME}/.rube_token" ]]; then
+    if [[ -z "${RUBE_API_KEY}" ]] && [[ -f "${HOME}/.env.local" ]]; then
         # shellcheck source=/dev/null
-        source "${HOME}/.rube_token"
+        set -a
+        source "${HOME}/.env.local"
+        set +a
     fi
 
     # Check if token is available
     if [[ -z "${RUBE_API_KEY}" ]]; then
         print_warning "RUBE_API_KEY not set. Skipping Rube MCP setup."
-        print_debug "Create ~/.rube_token with: export RUBE_API_KEY=your_api_key"
+        print_debug "Set RUBE_API_KEY in ~/.env.local"
         return 0
     fi
 
@@ -960,10 +971,10 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 91 | Last changed: Replace Claude remote control with happy-coder${NC}"
+    echo -e "${GRAY}Version 92 | Last changed: Consolidate token files into ~/.env.local${NC}"
 
-    # Create placeholder token files early
-    create_token_placeholders
+    # Create ~/.env.local (migrating old token files if needed)
+    create_env_local
 
     if is_main_user; then
         echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"

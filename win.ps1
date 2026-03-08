@@ -63,46 +63,48 @@ function Write-Debug($message) {
     Write-Host "  $message" -ForegroundColor DarkGray
 }
 
-# Create placeholder token files if they don't exist
+# Create consolidated environment file (~/.env.local) and migrate old token files
 function New-TokenPlaceholders {
-    $ghTokenPath = Join-Path $env:USERPROFILE ".gh_token"
-    if (-not (Test-Path $ghTokenPath)) {
+    $envLocalPath = Join-Path $env:USERPROFILE ".env.local"
+
+    # Migrate old token files into ~/.env.local
+    $oldTokenFiles = @(".gh_token", ".rube_token", ".op_token")
+    foreach ($oldFile in $oldTokenFiles) {
+        $oldPath = Join-Path $env:USERPROFILE $oldFile
+        if (Test-Path $oldPath) {
+            Write-Debug "Migrating ~/$oldFile to ~/.env.local..."
+            $lines = Get-Content $oldPath
+            foreach ($line in $lines) {
+                $cleaned = $line -replace '^export\s+', ''
+                if ($cleaned -match '^[A-Z_]+=.+') {
+                    Add-Content -Path $envLocalPath -Value $cleaned
+                }
+            }
+            Remove-Item $oldPath -Force
+            Write-Debug "Removed old ~/$oldFile"
+        }
+    }
+
+    # Create placeholder ~/.env.local if it doesn't exist
+    if (-not (Test-Path $envLocalPath)) {
         @"
+# Machine-specific environment variables
+# Format: KEY=VALUE (one per line)
+
 # GitHub Personal Access Tokens
 # Get tokens from: https://github.com/settings/tokens
-#
-# GH_TOKEN: Primary token for general GitHub operations
-# GH_TOKEN_SCOWALT: Token with access to scowalt/* repositories (for dotfiles)
-#
-# Uncomment and fill in your tokens:
 # GH_TOKEN=github_pat_xxx
 # GH_TOKEN_SCOWALT=github_pat_yyy
-"@ | Set-Content -Path $ghTokenPath
-        Write-Debug "Created placeholder ~/.gh_token"
-    }
 
-    $rubeTokenPath = Join-Path $env:USERPROFILE ".rube_token"
-    if (-not (Test-Path $rubeTokenPath)) {
-        @"
 # Rube MCP API Key
 # Get your API key from: https://rube.app
-#
-# Uncomment and fill in your API key:
 # RUBE_API_KEY=your_api_key_here
-"@ | Set-Content -Path $rubeTokenPath
-        Write-Debug "Created placeholder ~/.rube_token"
-    }
 
-    $opTokenPath = Join-Path $env:USERPROFILE ".op_token"
-    if (-not (Test-Path $opTokenPath)) {
-        @"
 # 1Password Service Account Token
 # Create a service account at: https://my.1password.com/integrations/infrastructure-secrets
-#
-# Uncomment and fill in your token:
 # OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
-"@ | Set-Content -Path $opTokenPath
-        Write-Debug "Created placeholder ~/.op_token"
+"@ | Set-Content -Path $envLocalPath
+        Write-Debug "Created placeholder ~/.env.local"
     }
 }
 
@@ -497,19 +499,21 @@ function Install-ClaudeCode {
 }
 
 function Setup-RubeMcp {
-    # Try to load token from ~/.rube_token if not set
+    # Try to load token from ~/.env.local if not set
     $rubeToken = $env:RUBE_API_KEY
-    $tokenFile = Join-Path $env:USERPROFILE ".rube_token"
-    if (-not $rubeToken -and (Test-Path $tokenFile)) {
-        $content = Get-Content $tokenFile -Raw
-        if ($content -match 'RUBE_API_KEY=(.+)') {
-            $rubeToken = $Matches[1].Trim()
+    $envLocalFile = Join-Path $env:USERPROFILE ".env.local"
+    if (-not $rubeToken -and (Test-Path $envLocalFile)) {
+        foreach ($line in Get-Content $envLocalFile) {
+            if ($line -match '^\s*RUBE_API_KEY=(.+)') {
+                $rubeToken = $Matches[1].Trim()
+                break
+            }
         }
     }
 
     if (-not $rubeToken) {
         Write-Host "$warnIcon RUBE_API_KEY not set. Skipping Rube MCP setup." -ForegroundColor Yellow
-        Write-Debug "Create ~/.rube_token with: RUBE_API_KEY=your_api_key"
+        Write-Debug "Add to ~/.env.local: RUBE_API_KEY=your_api_key"
         return
     }
 
@@ -754,7 +758,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 68 | Last changed: Configure Rube MCP for Codex in addition to Claude Code" -ForegroundColor DarkGray
+    Write-Host "Version 69 | Last changed: Consolidate token files into ~/.env.local" -ForegroundColor DarkGray
 
     # Create placeholder token files early
     New-TokenPlaceholders
