@@ -609,33 +609,69 @@ update_system() {
     print_success "System packages updated."
 }
 
-# Run Omarchy's own update system (omarchy-update)
-# This handles git pull, keyring updates, system packages, migrations, and AUR updates.
-# Omarchy warns against running pacman -Syu or yay -Syu directly, as it may miss
-# configuration migrations needed for library compatibility.
+# Run Omarchy's native upgrade path.
+# Omarchy does not have a single "omarchy-update" command. Instead, the native
+# upgrade sequence is: pull latest repo, run migrations, then refresh packages.
+# Running pacman -Syu directly is discouraged because Omarchy uses its own mirrors
+# and migrations may be needed for library compatibility.
 run_omarchy_update() {
     if [[ "${IS_OMARCHY}" != true ]]; then
-        print_debug "Not an Omarchy system, skipping omarchy-update."
-        return
-    fi
-
-    if ! command -v omarchy-update &> /dev/null; then
-        print_warning "omarchy-update command not found. Skipping Omarchy update."
+        print_debug "Not an Omarchy system, skipping Omarchy update."
         return
     fi
 
     if ! can_sudo; then
         print_warning "No sudo access - skipping Omarchy system update."
-        print_debug "Run 'omarchy-update' manually when you have admin access."
+        print_debug "Run the Omarchy update commands manually when you have admin access."
         return
     fi
 
-    print_message "Running Omarchy system update..."
-    if omarchy-update -y; then
-        print_success "Omarchy system update completed."
+    local omarchy_path="${HOME}/.local/share/omarchy"
+
+    # Step 1: Update the Omarchy repo (pull latest scripts, configs, and migrations)
+    if command -v omarchy-reinstall-git &> /dev/null; then
+        print_message "Updating Omarchy repository..."
+        if omarchy-reinstall-git; then
+            print_success "Omarchy repository updated."
+        else
+            print_warning "Failed to update Omarchy repository. Continuing with existing version."
+        fi
+    elif [[ -d "${omarchy_path}/.git" ]]; then
+        print_message "Updating Omarchy repository via git pull..."
+        if git -C "${omarchy_path}" pull --ff-only; then
+            print_success "Omarchy repository updated."
+        else
+            print_warning "Failed to pull Omarchy repository. Continuing with existing version."
+        fi
     else
-        print_error "Omarchy system update failed."
-        return 1
+        print_warning "Omarchy repository not found at ${omarchy_path}. Skipping repo update."
+    fi
+
+    # Step 2: Run pending migrations
+    if command -v omarchy-migrate &> /dev/null; then
+        print_message "Running Omarchy migrations..."
+        if omarchy-migrate; then
+            print_success "Omarchy migrations completed."
+        else
+            print_warning "Some Omarchy migrations failed. Check manually with: omarchy-migrate"
+        fi
+    else
+        print_debug "omarchy-migrate not found, skipping migrations."
+    fi
+
+    # Step 3: Refresh pacman config and update all system packages
+    # omarchy-refresh-pacman updates the mirrorlist and runs pacman -Syyuu --noconfirm
+    if command -v omarchy-refresh-pacman &> /dev/null; then
+        print_message "Refreshing Omarchy packages..."
+        if omarchy-refresh-pacman; then
+            print_success "Omarchy package refresh completed."
+        else
+            print_error "Omarchy package refresh failed."
+            return 1
+        fi
+    else
+        print_warning "omarchy-refresh-pacman not found. Falling back to pacman -Syu."
+        sudo pacman -Syu --noconfirm
     fi
 }
 
@@ -1480,7 +1516,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 85 | Last changed: Replace Claude remote control with happy-coder${NC}"
+    echo -e "${GRAY}Version 86 | Last changed: Fix Omarchy upgrade path to use native commands${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
