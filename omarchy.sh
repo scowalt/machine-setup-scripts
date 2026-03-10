@@ -540,6 +540,16 @@ verify_arch_system() {
 
 # Check if system is already Omarchy
 check_omarchy_installation() {
+    # Ensure Omarchy bin directory is in PATH early so all omarchy-* commands
+    # (omarchy-update, omarchy-pkg-install, etc.) are discoverable.
+    # Omarchy installs to ~/.local/share/omarchy/bin but only adds it to PATH
+    # in its own shell config, which may not be active during setup script execution.
+    local omarchy_bin="${HOME}/.local/share/omarchy/bin"
+    if [[ -d "${omarchy_bin}" ]] && [[ ":${PATH}:" != *":${omarchy_bin}:"* ]]; then
+        export PATH="${omarchy_bin}:${PATH}"
+        print_debug "Added ${omarchy_bin} to PATH."
+    fi
+
     # Check for omarchy-pkg-install command in PATH
     if command -v omarchy-pkg-install &> /dev/null; then
         print_success "Omarchy environment detected."
@@ -610,7 +620,8 @@ update_system() {
 }
 
 # Run Omarchy's own update system (omarchy-update)
-# This handles git pull, keyring updates, system packages, migrations, and AUR updates.
+# This handles snapshots, git pull, keyring updates, system packages, migrations,
+# AUR updates, orphan cleanup, post-update hooks, and service restarts.
 # Omarchy warns against running pacman -Syu or yay -Syu directly, as it may miss
 # configuration migrations needed for library compatibility.
 run_omarchy_update() {
@@ -619,6 +630,7 @@ run_omarchy_update() {
         return
     fi
 
+    # Omarchy bin PATH is set up by check_omarchy_installation() earlier
     if ! command -v omarchy-update &> /dev/null; then
         print_warning "omarchy-update command not found. Skipping Omarchy update."
         return
@@ -1480,7 +1492,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 85 | Last changed: Replace Claude remote control with happy-coder${NC}"
+    echo -e "${GRAY}Version 86 | Last changed: Fix Omarchy upgrade path to use native commands${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
