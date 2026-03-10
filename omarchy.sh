@@ -540,6 +540,16 @@ verify_arch_system() {
 
 # Check if system is already Omarchy
 check_omarchy_installation() {
+    # Ensure Omarchy bin directory is in PATH early so all omarchy-* commands
+    # (omarchy-update, omarchy-pkg-install, etc.) are discoverable.
+    # Omarchy installs to ~/.local/share/omarchy/bin but only adds it to PATH
+    # in its own shell config, which may not be active during setup script execution.
+    local omarchy_bin="${HOME}/.local/share/omarchy/bin"
+    if [[ -d "${omarchy_bin}" ]] && [[ ":${PATH}:" != *":${omarchy_bin}:"* ]]; then
+        export PATH="${omarchy_bin}:${PATH}"
+        print_debug "Added ${omarchy_bin} to PATH."
+    fi
+
     # Check for omarchy-pkg-install command in PATH
     if command -v omarchy-pkg-install &> /dev/null; then
         print_success "Omarchy environment detected."
@@ -609,69 +619,35 @@ update_system() {
     print_success "System packages updated."
 }
 
-# Run Omarchy's native upgrade path.
-# Omarchy does not have a single "omarchy-update" command. Instead, the native
-# upgrade sequence is: pull latest repo, run migrations, then refresh packages.
-# Running pacman -Syu directly is discouraged because Omarchy uses its own mirrors
-# and migrations may be needed for library compatibility.
+# Run Omarchy's own update system (omarchy-update)
+# This handles snapshots, git pull, keyring updates, system packages, migrations,
+# AUR updates, orphan cleanup, post-update hooks, and service restarts.
+# Omarchy warns against running pacman -Syu or yay -Syu directly, as it may miss
+# configuration migrations needed for library compatibility.
 run_omarchy_update() {
     if [[ "${IS_OMARCHY}" != true ]]; then
-        print_debug "Not an Omarchy system, skipping Omarchy update."
+        print_debug "Not an Omarchy system, skipping omarchy-update."
+        return
+    fi
+
+    # Omarchy bin PATH is set up by check_omarchy_installation() earlier
+    if ! command -v omarchy-update &> /dev/null; then
+        print_warning "omarchy-update command not found. Skipping Omarchy update."
         return
     fi
 
     if ! can_sudo; then
         print_warning "No sudo access - skipping Omarchy system update."
-        print_debug "Run the Omarchy update commands manually when you have admin access."
+        print_debug "Run 'omarchy-update' manually when you have admin access."
         return
     fi
 
-    local omarchy_path="${HOME}/.local/share/omarchy"
-
-    # Step 1: Update the Omarchy repo (pull latest scripts, configs, and migrations)
-    if command -v omarchy-reinstall-git &> /dev/null; then
-        print_message "Updating Omarchy repository..."
-        if omarchy-reinstall-git; then
-            print_success "Omarchy repository updated."
-        else
-            print_warning "Failed to update Omarchy repository. Continuing with existing version."
-        fi
-    elif [[ -d "${omarchy_path}/.git" ]]; then
-        print_message "Updating Omarchy repository via git pull..."
-        if git -C "${omarchy_path}" pull --ff-only; then
-            print_success "Omarchy repository updated."
-        else
-            print_warning "Failed to pull Omarchy repository. Continuing with existing version."
-        fi
+    print_message "Running Omarchy system update..."
+    if omarchy-update -y; then
+        print_success "Omarchy system update completed."
     else
-        print_warning "Omarchy repository not found at ${omarchy_path}. Skipping repo update."
-    fi
-
-    # Step 2: Run pending migrations
-    if command -v omarchy-migrate &> /dev/null; then
-        print_message "Running Omarchy migrations..."
-        if omarchy-migrate; then
-            print_success "Omarchy migrations completed."
-        else
-            print_warning "Some Omarchy migrations failed. Check manually with: omarchy-migrate"
-        fi
-    else
-        print_debug "omarchy-migrate not found, skipping migrations."
-    fi
-
-    # Step 3: Refresh pacman config and update all system packages
-    # omarchy-refresh-pacman updates the mirrorlist and runs pacman -Syyuu --noconfirm
-    if command -v omarchy-refresh-pacman &> /dev/null; then
-        print_message "Refreshing Omarchy packages..."
-        if omarchy-refresh-pacman; then
-            print_success "Omarchy package refresh completed."
-        else
-            print_error "Omarchy package refresh failed."
-            return 1
-        fi
-    else
-        print_warning "omarchy-refresh-pacman not found. Falling back to pacman -Syu."
-        sudo pacman -Syu --noconfirm
+        print_error "Omarchy system update failed."
+        return 1
     fi
 }
 
