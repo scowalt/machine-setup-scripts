@@ -598,7 +598,7 @@ function Setup-CompoundPlugin {
     if ($pluginList -match "compound-engineering") {
         Write-Host "$arrow Updating Compound Engineering plugin..." -ForegroundColor Cyan
         try {
-            claude plugin update compound-engineering 2>$null
+            claude plugin update compound-engineering@every-marketplace 2>$null
             Write-Host "$success Compound Engineering plugin updated." -ForegroundColor Green
         }
         catch {
@@ -614,6 +614,59 @@ function Setup-CompoundPlugin {
         catch {
             Write-Host "$warnIcon Failed to install Compound Engineering plugin." -ForegroundColor Yellow
         }
+    }
+}
+
+function Setup-CodexCompoundSkills {
+    if (-not (Get-Command codex -ErrorAction SilentlyContinue)) {
+        Write-Debug "Codex CLI not found. Skipping Compound skills setup for Codex."
+        return
+    }
+
+    $repoDir = Join-Path $env:USERPROFILE ".local\share\compound-engineering-plugin"
+    $skillsDir = Join-Path $env:USERPROFILE ".agents\skills"
+
+    # Clone or update the repo
+    if (Test-Path (Join-Path $repoDir ".git")) {
+        Write-Host "$arrow Updating Compound Engineering skills for Codex..." -ForegroundColor Cyan
+        try {
+            git -C $repoDir pull --quiet 2>$null
+            Write-Host "$success Compound Engineering repo updated." -ForegroundColor Green
+        }
+        catch {
+            Write-Host "$warnIcon Failed to update Compound Engineering repo." -ForegroundColor Yellow
+        }
+    }
+    else {
+        Write-Host "$arrow Cloning Compound Engineering plugin for Codex skills..." -ForegroundColor Cyan
+        if (Test-Path $repoDir) { Remove-Item -Recurse -Force $repoDir }
+        try {
+            git clone --quiet https://github.com/EveryInc/compound-engineering-plugin.git $repoDir 2>$null
+            Write-Host "$success Compound Engineering repo cloned." -ForegroundColor Green
+        }
+        catch {
+            Write-Host "$warnIcon Failed to clone Compound Engineering repo." -ForegroundColor Yellow
+            return
+        }
+    }
+
+    # Symlink each skill into ~/.agents/skills/
+    $repoSkillsDir = Join-Path $repoDir "skills"
+    if (Test-Path $repoSkillsDir) {
+        if (-not (Test-Path $skillsDir)) {
+            New-Item -ItemType Directory -Path $skillsDir -Force | Out-Null
+        }
+        Get-ChildItem -Directory $repoSkillsDir | ForEach-Object {
+            $linkPath = Join-Path $skillsDir $_.Name
+            $targetPath = $_.FullName
+            if (-not (Test-Path $linkPath)) {
+                New-Item -ItemType SymbolicLink -Path $linkPath -Target $targetPath -Force | Out-Null
+            }
+        }
+        Write-Host "$success Compound Engineering skills linked for Codex." -ForegroundColor Green
+    }
+    else {
+        Write-Host "$warnIcon No skills directory found in Compound Engineering repo." -ForegroundColor Yellow
     }
 }
 
@@ -760,7 +813,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 70 | Last changed: Update compound-engineering plugin on re-runs" -ForegroundColor DarkGray
+    Write-Host "Version 71 | Last changed: Fix compound plugin update, add Codex skills setup" -ForegroundColor DarkGray
 
     # Create placeholder token files early
     New-TokenPlaceholders
@@ -794,6 +847,7 @@ function Initialize-WindowsEnvironment {
     Setup-CompoundPlugin
     Install-GeminiCli
     Install-CodexCli
+    Setup-CodexCompoundSkills
     Install-TursoCli
 
     Write-Section "System Updates"
