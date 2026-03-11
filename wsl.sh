@@ -724,23 +724,24 @@ setup_compound_plugin() {
         return 0
     fi
 
-    # Check if compound-engineering plugin is already installed
+    # Ensure marketplace is registered (idempotent, needed for updates too)
+    claude plugin marketplace add EveryInc/compound-engineering-plugin 2>/dev/null
+
+    # Update if already installed, install if not
     if claude plugin list 2>/dev/null | grep -q "compound-engineering"; then
-        print_debug "Compound Engineering plugin is already installed."
-        return 0
-    fi
-
-    print_message "Adding Compound Engineering plugin marketplace..."
-    if ! claude plugin marketplace add EveryInc/compound-engineering-plugin 2>/dev/null; then
-        print_warning "Failed to add Compound Engineering marketplace."
-        return 1
-    fi
-
-    print_message "Installing Compound Engineering plugin..."
-    if claude plugin install compound-engineering --scope user 2>/dev/null; then
-        print_success "Compound Engineering plugin installed."
+        print_message "Updating Compound Engineering plugin..."
+        if claude plugin update compound-engineering 2>/dev/null; then
+            print_success "Compound Engineering plugin updated."
+        else
+            print_warning "Failed to update Compound Engineering plugin."
+        fi
     else
-        print_warning "Failed to install Compound Engineering plugin."
+        print_message "Installing Compound Engineering plugin..."
+        if claude plugin install compound-engineering --scope user 2>/dev/null; then
+            print_success "Compound Engineering plugin installed."
+        else
+            print_warning "Failed to install Compound Engineering plugin."
+        fi
     fi
 }
 
@@ -1249,7 +1250,7 @@ setup_code_directory() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 84 | Last changed: Replace Claude remote control with happy-coder${NC}"
+    echo -e "${GRAY}Version 85 | Last changed: Update compound-engineering plugin on re-runs${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local

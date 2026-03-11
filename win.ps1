@@ -590,28 +590,30 @@ function Setup-CompoundPlugin {
         return
     }
 
+    # Ensure marketplace is registered (idempotent, needed for updates too)
+    claude plugin marketplace add EveryInc/compound-engineering-plugin 2>$null
+
+    # Update if already installed, install if not
     $pluginList = claude plugin list 2>$null
     if ($pluginList -match "compound-engineering") {
-        Write-Debug "Compound Engineering plugin is already installed."
-        return
+        Write-Host "$arrow Updating Compound Engineering plugin..." -ForegroundColor Cyan
+        try {
+            claude plugin update compound-engineering 2>$null
+            Write-Host "$success Compound Engineering plugin updated." -ForegroundColor Green
+        }
+        catch {
+            Write-Host "$warnIcon Failed to update Compound Engineering plugin." -ForegroundColor Yellow
+        }
     }
-
-    Write-Host "$arrow Adding Compound Engineering plugin marketplace..." -ForegroundColor Cyan
-    try {
-        claude plugin marketplace add EveryInc/compound-engineering-plugin 2>$null
-    }
-    catch {
-        Write-Host "$warnIcon Failed to add Compound Engineering marketplace." -ForegroundColor Yellow
-        return
-    }
-
-    Write-Host "$arrow Installing Compound Engineering plugin..." -ForegroundColor Cyan
-    try {
-        claude plugin install compound-engineering --scope user 2>$null
-        Write-Host "$success Compound Engineering plugin installed." -ForegroundColor Green
-    }
-    catch {
-        Write-Host "$warnIcon Failed to install Compound Engineering plugin." -ForegroundColor Yellow
+    else {
+        Write-Host "$arrow Installing Compound Engineering plugin..." -ForegroundColor Cyan
+        try {
+            claude plugin install compound-engineering --scope user 2>$null
+            Write-Host "$success Compound Engineering plugin installed." -ForegroundColor Green
+        }
+        catch {
+            Write-Host "$warnIcon Failed to install Compound Engineering plugin." -ForegroundColor Yellow
+        }
     }
 }
 
@@ -758,7 +760,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 69 | Last changed: Consolidate token files into ~/.env.local" -ForegroundColor DarkGray
+    Write-Host "Version 70 | Last changed: Update compound-engineering plugin on re-runs" -ForegroundColor DarkGray
 
     # Create placeholder token files early
     New-TokenPlaceholders
