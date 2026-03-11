@@ -26,7 +26,7 @@ migrate_token_files() {
         if [[ -f "${old_file}" ]]; then
             # Extract uncommented KEY=VALUE lines (strip 'export ' prefix if present)
             local values
-            values=$(grep -v '^\s*#' "${old_file}" | grep -v '^\s*$' | sed 's/^export //')
+            values=$(grep -v '^\s*#' "${old_file}" | grep -v '^\s*$' | sed 's/^export //') || true
             if [[ -n "${values}" ]]; then
                 touch "${env_file}"
                 chmod 600 "${env_file}"
@@ -83,7 +83,9 @@ is_scowalt_user() {
 
 # Check if running as main user (scowalt)
 is_main_user() {
-    [[ "$(whoami)" == "scowalt" ]]
+    local _whoami
+    _whoami=$(whoami)
+    [[ "${_whoami}" == "scowalt" ]]
 }
 
 # Check if user has a personal SSH key registered with GitHub
@@ -201,12 +203,15 @@ _has_sudo=""
 can_sudo() {
     if [[ -z "${_sudo_checked}" ]]; then
         _sudo_checked=1
+        local _user_groups
+        _user_groups=$(groups 2>/dev/null) || true
         # Method 1: Check if credentials are already cached
         if sudo -n true 2>/dev/null; then
             _has_sudo=1
         # Method 2: Check if user is in a sudo-capable group, then prompt
-        elif groups 2>/dev/null | grep -qE '\b(sudo|wheel|admin)\b'; then
+        elif echo "${_user_groups}" | grep -qE '\b(sudo|wheel|admin)\b'; then
             # User is in sudo group but credentials aren't cached - prompt once
+            # shellcheck disable=SC2024
             if sudo -v 2>/dev/null < /dev/tty; then
                 _has_sudo=1
             else
@@ -223,7 +228,9 @@ can_sudo() {
 # This avoids multiple password prompts during long-running scripts
 request_sudo_upfront() {
     # Skip if user doesn't have sudo capability
-    if ! groups 2>/dev/null | grep -qE '\b(sudo|wheel|admin)\b'; then
+    local _user_groups
+    _user_groups=$(groups 2>/dev/null) || true
+    if ! echo "${_user_groups}" | grep -qE '\b(sudo|wheel|admin)\b'; then
         print_debug "User not in sudo group, skipping sudo request."
         return 0
     fi
@@ -234,6 +241,7 @@ request_sudo_upfront() {
     else
         print_message "This script requires sudo access for system operations."
         print_message "Please enter your password once to authorize all operations."
+        # shellcheck disable=SC2024
         if ! sudo -v < /dev/tty; then
             print_warning "Sudo authentication failed. Some operations will be skipped."
             return 1
@@ -317,7 +325,9 @@ setup_dotfiles_deploy_key() {
         echo -e "${CYAN}Step 1: Generating deploy key...${NC}"
         mkdir -p ~/.ssh
         chmod 700 ~/.ssh
-        ssh-keygen -t ed25519 -f "${key_file}" -N '' -C "dotfiles-deploy-key-$(hostname)"
+        local _hostname
+        _hostname=$(hostname)
+        ssh-keygen -t ed25519 -f "${key_file}" -N '' -C "dotfiles-deploy-key-${_hostname}"
         print_success "Deploy key generated at ${key_file}"
         echo ""
     else
@@ -357,7 +367,9 @@ setup_dotfiles_deploy_key() {
     while [[ ${attempt} -le ${max_retries} ]]; do
         echo -e "${CYAN}Step 3: Testing deploy key access (attempt ${attempt}/${max_retries})...${NC}"
         # < /dev/null prevents ssh from consuming stdin (important for curl|bash)
-        if ssh -i "${key_file}" -o StrictHostKeyChecking=accept-new -T git@github.com < /dev/null 2>&1 | grep -q "successfully authenticated"; then
+        local _ssh_output
+        _ssh_output=$(ssh -i "${key_file}" -o StrictHostKeyChecking=accept-new -T git@github.com < /dev/null 2>&1) || true
+        if echo "${_ssh_output}" | grep -q "successfully authenticated"; then
             print_success "Deploy key works! Continuing setup..."
             return 0
         fi
@@ -391,7 +403,9 @@ check_dotfiles_access() {
     # Method 1: User with verified SSH key on GitHub
     if has_verified_ssh_key; then
         # < /dev/null prevents ssh from consuming stdin (important for curl|bash)
-        if ssh -T git@github.com < /dev/null 2>&1 | grep -q "successfully authenticated"; then
+        local _ssh_output
+        _ssh_output=$(ssh -T git@github.com < /dev/null 2>&1) || true
+        if echo "${_ssh_output}" | grep -q "successfully authenticated"; then
             print_debug "Access via SSH (verified key)"
             return 0
         fi
@@ -416,7 +430,9 @@ check_dotfiles_access() {
         bootstrap_ssh_config
         # Test if the deploy key works
         # < /dev/null prevents ssh from consuming stdin (important for curl|bash)
-        if ssh -i ~/.ssh/dotfiles-deploy-key -T git@github.com < /dev/null 2>&1 | grep -q "successfully authenticated"; then
+        local _deploy_ssh_output
+        _deploy_ssh_output=$(ssh -i ~/.ssh/dotfiles-deploy-key -T git@github.com < /dev/null 2>&1) || true
+        if echo "${_deploy_ssh_output}" | grep -q "successfully authenticated"; then
             print_debug "Access via deploy key"
             return 0
         else
@@ -430,8 +446,8 @@ check_dotfiles_access() {
 
 source_gh_tokens() {
     if [[ -f "${HOME}/.env.local" ]]; then
-        # shellcheck source=/dev/null
         set -a
+        # shellcheck source=/dev/null
         source "${HOME}/.env.local"
         set +a
         if [[ -n "${GH_TOKEN}" ]]; then
@@ -1018,6 +1034,7 @@ set_fish_as_default_shell() {
         if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
             echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
         fi
+        # shellcheck disable=SC2024
         sudo chsh -s /usr/bin/fish "${USER}" < /dev/tty
         print_success "Fish shell set as default."
     else
@@ -1186,7 +1203,9 @@ install_claude_code() {
     fi
 
     if command -v bun &> /dev/null; then
-        if bun pm ls -g 2>/dev/null | grep -q "@anthropic-ai/claude-code"; then
+        local _bun_packages
+        _bun_packages=$(bun pm ls -g 2>/dev/null) || true
+        if echo "${_bun_packages}" | grep -q "@anthropic-ai/claude-code"; then
             print_message "Removing bun-based Claude Code installation..."
             bun remove -g @anthropic-ai/claude-code 2>/dev/null || true
         fi
@@ -1202,7 +1221,9 @@ install_claude_code() {
     fi
 
     print_message "Installing Claude Code via official installer..."
-    if curl -fsSL https://claude.ai/install.sh | bash; then
+    local _install_script
+    _install_script=$(curl -fsSL https://claude.ai/install.sh) || { print_error "Failed to download Claude Code installer."; return 1; }
+    if bash <<< "${_install_script}"; then
         print_success "Claude Code installed."
     else
         print_error "Failed to install Claude Code."
@@ -1228,8 +1249,8 @@ install_happy_coder() {
 setup_rube_mcp() {
     # Source Rube token if not already set
     if [[ -z "${RUBE_API_KEY}" ]] && [[ -f "${HOME}/.env.local" ]]; then
-        # shellcheck source=/dev/null
         set -a
+        # shellcheck source=/dev/null
         source "${HOME}/.env.local"
         set +a
     fi
@@ -1244,7 +1265,9 @@ setup_rube_mcp() {
     # Configure for Claude Code
     if command -v claude &> /dev/null; then
         # Remove existing config for idempotency (may have old auth or scope)
-        if claude mcp list 2>/dev/null | grep -q "rube"; then
+        local _mcp_list
+        _mcp_list=$(claude mcp list 2>/dev/null) || true
+        if echo "${_mcp_list}" | grep -q "rube"; then
             print_message "Removing existing Claude Code Rube MCP configuration..."
             claude mcp remove rube -s user 2>/dev/null || true
             claude mcp remove rube 2>/dev/null || true
@@ -1439,7 +1462,9 @@ setup_claude_shared_directory() {
         local owner_uid
         owner_uid=$(stat -c "%u" "${claude_tmp}" 2>/dev/null)
 
-        if [[ "${owner_uid}" == "$(id -u)" ]]; then
+        local _current_uid
+        _current_uid=$(id -u)
+        if [[ "${owner_uid}" == "${_current_uid}" ]]; then
             if chmod 1777 "${claude_tmp}"; then
                 print_success "Fixed permissions on Claude temp directory."
                 return 0
@@ -1492,7 +1517,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 86 | Last changed: Fix Omarchy upgrade path to use native commands${NC}"
+    echo -e "${GRAY}Version 87 | Last changed: Fix all shellcheck warnings${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
