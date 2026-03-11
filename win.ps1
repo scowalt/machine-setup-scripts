@@ -240,6 +240,69 @@ function Test-GitHubSSHKey {
 }
 
 # Function to add Starship initialization to PowerShell profile
+function Install-SocketFirewall {
+    if (Get-Command sfw -ErrorAction SilentlyContinue) {
+        Write-Debug "sfw is already installed."
+        return
+    }
+
+    # Ensure bun is available
+    $bunPath = "$env:USERPROFILE\.bun\bin"
+    if (Test-Path $bunPath) {
+        $env:PATH = "$bunPath;$env:PATH"
+    }
+
+    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
+        Write-Host "$warnIcon Bun not found. Cannot install Socket Firewall." -ForegroundColor Yellow
+        Write-Host "  Install Bun first, then run: bun install -g sfw" -ForegroundColor DarkGray
+        return
+    }
+
+    Write-Host "$arrow Installing Socket Firewall..." -ForegroundColor Cyan
+    try {
+        bun install -g sfw
+        if ($?) {
+            Write-Host "$success Socket Firewall installed." -ForegroundColor Green
+        }
+        else {
+            Write-Host "$failIcon Failed to install Socket Firewall." -ForegroundColor Red
+        }
+    }
+    catch {
+        Write-Host "$failIcon Failed to install Socket Firewall: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+function Set-SfwWrappers {
+    $profilePath = $PROFILE
+    $markerPattern = '# Socket Firewall wrappers'
+
+    if (Select-String -Path $profilePath -Pattern ([regex]::Escape($markerPattern)) -Quiet -ErrorAction SilentlyContinue) {
+        Write-Debug "Socket Firewall wrappers already in PowerShell profile."
+        return
+    }
+
+    Write-Host "$arrow Adding Socket Firewall wrappers to PowerShell profile..." -ForegroundColor Cyan
+
+    $sfwBlock = @"
+
+# Socket Firewall wrappers - route package managers through sfw for supply chain security.
+# Bypass: call the original exe directly, e.g. & (Get-Command npm -CommandType Application).Source install <pkg>
+`$sfwPath = "`$env:USERPROFILE\.bun\bin\sfw.exe"
+if (Test-Path `$sfwPath) {
+    function npm   { & `$sfwPath npm @args }
+    function yarn  { & `$sfwPath yarn @args }
+    function pnpm  { & `$sfwPath pnpm @args }
+    function pip   { & `$sfwPath pip @args }
+    function uv    { & `$sfwPath uv @args }
+    function cargo { & `$sfwPath cargo @args }
+}
+"@
+
+    Add-Content -Path $profilePath -Value $sfwBlock
+    Write-Host "$success Socket Firewall wrappers added to PowerShell profile." -ForegroundColor Green
+}
+
 function Set-StarshipInit {
     $profilePath = $PROFILE
     $starshipInitCommand = 'Invoke-Expression (&starship init powershell)'
@@ -813,7 +876,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 71 | Last changed: Fix compound plugin update, add Codex skills setup" -ForegroundColor DarkGray
+    Write-Host "Version 72 | Last changed: Add Socket Firewall installation and PS wrappers" -ForegroundColor DarkGray
 
     # Create placeholder token files early
     New-TokenPlaceholders
@@ -838,9 +901,11 @@ function Initialize-WindowsEnvironment {
 
     Write-Section "Terminal Configuration"
     Set-StarshipInit
+    Set-SfwWrappers
     Set-WindowsTerminalConfiguration
     
     Write-Section "Additional Development Tools"
+    Install-SocketFirewall
     Setup-Nodejs
     Install-ClaudeCode
     Setup-RubeMcp

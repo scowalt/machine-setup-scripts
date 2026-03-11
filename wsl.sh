@@ -1161,6 +1161,32 @@ install_bun() {
     print_success "Bun installed."
 }
 
+# Install Socket Firewall for supply chain security scanning
+install_sfw() {
+    if command -v sfw &> /dev/null; then
+        print_debug "sfw is already installed."
+        return
+    fi
+
+    # Ensure bun is available
+    if [[ -d "${HOME}/.bun" ]]; then
+        export PATH="${HOME}/.bun/bin:${PATH}"
+    fi
+
+    if ! command -v bun &> /dev/null; then
+        print_warning "Bun not found. Cannot install Socket Firewall."
+        print_debug "Install Bun first, then run: bun install -g sfw"
+        return
+    fi
+
+    print_message "Installing Socket Firewall..."
+    if bun install -g sfw > /dev/null 2>&1; then
+        print_success "Socket Firewall installed."
+    else
+        print_error "Failed to install Socket Firewall."
+    fi
+}
+
 # Install tmux plugins for session persistence
 install_tmux_plugins() {
     local plugin_dir=~/.tmux/plugins
@@ -1320,7 +1346,7 @@ setup_code_directory() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 87 | Last changed: Fix compound plugin update, add Codex skills setup${NC}"
+    echo -e "${GRAY}Version 88 | Last changed: Add Socket Firewall installation${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -1350,6 +1376,7 @@ main() {
     install_pyenv
     install_uv
     install_bun
+    install_sfw
     install_opentofu
     install_cloudflared
     install_turso

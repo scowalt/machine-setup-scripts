@@ -943,6 +943,32 @@ install_bun() {
     fi
 }
 
+# Install Socket Firewall for supply chain security scanning
+install_sfw() {
+    if command -v sfw &> /dev/null; then
+        print_debug "sfw is already installed."
+        return
+    fi
+
+    # Ensure bun is available
+    if [[ -d "${HOME}/.bun" ]]; then
+        export PATH="${HOME}/.bun/bin:${PATH}"
+    fi
+
+    if ! command -v bun &> /dev/null; then
+        print_warning "Bun not found. Cannot install Socket Firewall."
+        print_debug "Install Bun first, then run: bun install -g sfw"
+        return
+    fi
+
+    print_message "Installing Socket Firewall..."
+    if bun install -g sfw > /dev/null 2>&1; then
+        print_success "Socket Firewall installed."
+    else
+        print_error "Failed to install Socket Firewall."
+    fi
+}
+
 # Install Claude Code using bun
 install_claude_code() {
     # Uninstall any existing npm/bun versions to clean up
@@ -1799,7 +1825,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 117 | Last changed: Fix compound plugin update, add Codex skills setup${NC}"
+    echo -e "${GRAY}Version 118 | Last changed: Add Socket Firewall installation${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
@@ -1910,6 +1936,7 @@ HELPER_EOF
 
     print_section "Additional Development Tools"
     install_bun
+    install_sfw
     install_claude_code
     install_happy_coder
     setup_rube_mcp
