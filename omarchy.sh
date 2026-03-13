@@ -658,6 +658,11 @@ run_omarchy_update() {
         return
     fi
 
+    # Ensure OMARCHY_PATH is set — omarchy-* scripts rely on it but it's only
+    # sourced in desktop sessions (UWSM env) and bash init files, so it's
+    # typically unset when running via curl|bash.
+    export OMARCHY_PATH="${OMARCHY_PATH:-${HOME}/.local/share/omarchy}"
+
     print_message "Running Omarchy system update..."
     if omarchy-update -y; then
         print_success "Omarchy system update completed."
@@ -1589,7 +1594,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 89 | Last changed: Add Socket Firewall installation${NC}"
+    echo -e "${GRAY}Version 90 | Last changed: Set OMARCHY_PATH for curl|bash context${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
