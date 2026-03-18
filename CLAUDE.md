@@ -14,6 +14,7 @@ This repository contains idempotent machine setup scripts for automating the con
 - **wsl.sh** - Windows Subsystem for Linux setup
 - **pi.sh** - Raspberry Pi specific setup with ARM optimizations
 - **omarchy.sh** - Arch Linux / Omarchy setup using pacman and yay
+- **bazzite.sh** - Bazzite OS setup using Homebrew (Lenovo Legion Go)
 
 ## Common Development Tasks
 
@@ -23,8 +24,8 @@ This repository contains idempotent machine setup scripts for automating the con
 # macOS
 ./mac.sh
 
-# Ubuntu/WSL/Pi/Arch
-sudo ./ubuntu.sh  # or ./wsl.sh, ./pi.sh, ./omarchy.sh
+# Ubuntu/WSL/Pi/Arch/Bazzite
+sudo ./ubuntu.sh  # or ./wsl.sh, ./pi.sh, ./omarchy.sh, ./bazzite.sh
 
 # Windows (PowerShell as Administrator)
 ./win.ps1
@@ -369,6 +370,7 @@ ssh -T git@github.com < /dev/null 2>&1 | grep -q "successfully authenticated"
 ```
 
 **Symptoms of this bug**:
+
 - Script exits with code 0 (success) but doesn't complete
 - EXIT trap shows `$LINENO` as 1 (context reset)
 - Happens consistently at the same point (first SSH command)

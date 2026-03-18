@@ -37,3 +37,9 @@ curl -sL https://scripts.scowalt.com/setup/pi.sh | bash
 ```bash
 curl -sL https://scripts.scowalt.com/setup/omarchy.sh | bash
 ```
+
+## Bazzite
+
+```bash
+curl -sL https://scripts.scowalt.com/setup/bazzite.sh | bash
+```
