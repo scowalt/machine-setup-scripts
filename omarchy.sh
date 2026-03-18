@@ -1228,7 +1228,9 @@ setup_codex_compound_skills() {
         for _skill in "${repo_dir}"/skills/*/; do
             local skill_name
             skill_name=$(basename "${_skill}")
-            if [[ ! -L "${skills_dir}/${skill_name}" ]] || [[ "$(readlink "${skills_dir}/${skill_name}")" != "${_skill%/}" ]]; then
+            local current_link
+            current_link=$(readlink "${skills_dir}/${skill_name}") || true
+            if [[ ! -L "${skills_dir}/${skill_name}" ]] || [[ "${current_link}" != "${_skill%/}" ]]; then
                 ln -sfn "${_skill%/}" "${skills_dir}/${skill_name}"
             fi
         done
@@ -1594,7 +1596,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 90 | Last changed: Set OMARCHY_PATH for curl|bash context${NC}"
+    echo -e "${GRAY}Version 91 | Last changed: Fix shellcheck SC2312 in Codex skills symlink${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
