@@ -1827,7 +1827,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 119 | Last changed: Fix shellcheck SC2312 in Codex skills symlink${NC}"
+    echo -e "${GRAY}Version 120 | Last changed: Fix github-dotfiles SSH alias lost after chezmoi apply${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
@@ -1920,6 +1920,10 @@ HELPER_EOF
 
         install_chezmoi
         initialize_chezmoi
+        # chezmoi init --apply overwrites ~/.ssh/config, removing the
+        # github-dotfiles host alias needed for deploy key access.
+        # Re-bootstrap it before any further chezmoi network operations.
+        bootstrap_ssh_config
         configure_chezmoi_git
         fix_chezmoi_remote_for_deploy_key
         update_chezmoi

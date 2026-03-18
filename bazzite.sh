@@ -1303,7 +1303,7 @@ update_brew() {
 
 main() {
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 1 | Last changed: Initial Bazzite setup script${NC}"
+    echo -e "${GRAY}Version 2 | Last changed: Fix github-dotfiles SSH alias lost after chezmoi apply${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
@@ -1381,6 +1381,10 @@ HELPER_EOF
 
         install_chezmoi
         initialize_chezmoi
+        # chezmoi init --apply overwrites ~/.ssh/config, removing the
+        # github-dotfiles host alias needed for deploy key access.
+        # Re-bootstrap it before any further chezmoi network operations.
+        bootstrap_ssh_config
         configure_chezmoi_git
         fix_chezmoi_remote_for_deploy_key
         update_chezmoi
