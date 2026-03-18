@@ -23,7 +23,6 @@ $wingetPackages = (
     "DEVCOM.JetBrainsMonoNerdFont",
     "nektos.act",
     "OpenTofu.Tofu",
-    "jj-vcs.jj",
     "astral-sh.uv",
     "jqlang.jq",
     "GoLang.Go",

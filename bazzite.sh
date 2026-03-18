@@ -246,7 +246,7 @@ install_core_packages() {
     print_message "Checking core packages..."
 
     # fish is pre-installed on Bazzite, so it's excluded from this list
-    local packages=("git" "curl" "wget" "jq" "unzip" "tmux" "starship" "gh" "jujutsu" "chezmoi" "opentofu" "go" "uv" "fswatch" "1password-cli" "tailscale" "act" "cloudflared" "tursodatabase/tap/turso")
+    local packages=("git" "curl" "wget" "jq" "unzip" "tmux" "starship" "gh" "chezmoi" "opentofu" "go" "uv" "fswatch" "1password-cli" "tailscale" "act" "cloudflared" "tursodatabase/tap/turso")
     local to_install=()
 
     # Get currently installed formulae
@@ -1303,7 +1303,7 @@ update_brew() {
 
 main() {
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 2 | Last changed: Fix github-dotfiles SSH alias lost after chezmoi apply${NC}"
+    echo -e "${GRAY}Version 3 | Last changed: Remove jj/jujutsu installation${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local

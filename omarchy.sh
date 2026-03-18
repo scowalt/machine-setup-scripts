@@ -706,7 +706,7 @@ install_core_packages() {
     print_message "Checking core packages..."
 
     # Define core packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "jujutsu" "uv" "go" "inotify-tools")
+    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "uv" "go" "inotify-tools")
     local to_install=()
 
     # Check which packages need installation
@@ -1596,7 +1596,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 92 | Last changed: Fix github-dotfiles SSH alias lost after chezmoi apply${NC}"
+    echo -e "${GRAY}Version 93 | Last changed: Remove jj/jujutsu installation${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local

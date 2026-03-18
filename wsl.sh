@@ -534,83 +534,6 @@ set_fish_as_default_shell() {
     print_success "Fish shell set as default."
 }
 
-# Install jj (Jujutsu) version control by downloading binary directly
-install_jj() {
-    if command -v jj &> /dev/null; then
-        print_debug "jj (Jujutsu) is already installed."
-        return
-    fi
-
-    print_message "Installing jj (Jujutsu) via direct binary download..."
-
-    # Detect architecture
-    local arch
-    arch=$(dpkg --print-architecture)
-    local jj_arch
-
-    case "${arch}" in
-        amd64)
-            jj_arch="x86_64-unknown-linux-musl"
-            ;;
-        arm64)
-            jj_arch="aarch64-unknown-linux-musl"
-            ;;
-        *)
-            print_error "Unsupported architecture for jj: ${arch}"
-            return 1
-            ;;
-    esac
-
-    # Create local bin directory if it doesn't exist
-    local bin_dir="${HOME}/.local/bin"
-    mkdir -p "${bin_dir}"
-
-    # Get the latest version tag
-    local latest_version
-    latest_version=$(curl -sL "https://api.github.com/repos/jj-vcs/jj/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/') || true
-    if [[ -z "${latest_version}" ]]; then
-        print_error "Failed to get latest jj version."
-        return 1
-    fi
-
-    # Download the latest binary
-    local download_url="https://github.com/jj-vcs/jj/releases/download/${latest_version}/jj-${latest_version}-${jj_arch}.tar.gz"
-    local temp_dir
-    temp_dir=$(mktemp -d)
-
-    print_message "Downloading jj ${latest_version} for ${arch} architecture..."
-    local tarball="${temp_dir}/jj.tar.gz"
-    if ! curl -sL "${download_url}" -o "${tarball}"; then
-        print_error "Failed to download jj."
-        rm -rf "${temp_dir}"
-        return 1
-    fi
-    if tar -xzf "${tarball}" -C "${temp_dir}"; then
-        # Move binary to local bin
-        if mv "${temp_dir}/jj" "${bin_dir}/jj"; then
-            chmod +x "${bin_dir}/jj"
-            print_success "jj installed to ${bin_dir}/jj"
-
-            # Add to PATH if not already present
-            if ! echo "${PATH}" | grep -q "${bin_dir}"; then
-                print_message "Adding ${bin_dir} to PATH in ~/.bashrc"
-                echo "export PATH=\${HOME}/.local/bin:\${PATH}" >> ~/.bashrc
-                export PATH="${bin_dir}:${PATH}"
-            fi
-        else
-            print_error "Failed to move jj binary."
-            rm -rf "${temp_dir}"
-            return 1
-        fi
-    else
-        print_error "Failed to extract jj archive."
-        rm -rf "${temp_dir}"
-        return 1
-    fi
-
-    rm -rf "${temp_dir}"
-}
-
 # Install Claude Code using bun
 install_claude_code() {
     # Uninstall any existing npm/bun versions to clean up
@@ -1348,7 +1271,7 @@ setup_code_directory() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 90 | Last changed: Fix github-dotfiles SSH alias lost after chezmoi apply${NC}"
+    echo -e "${GRAY}Version 91 | Last changed: Remove jj/jujutsu installation${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -1372,7 +1295,6 @@ main() {
 
     print_section "Development Tools"
     install_starship
-    install_jj
     install_fnm
     setup_nodejs
     install_pyenv
