@@ -118,7 +118,7 @@ ensure_not_root() {
         echo "  # Switch to the new user and re-run this script"
         echo "  su - scowalt"
         echo ""
-        return 0
+        exit 1
     fi
 }
 
@@ -1257,7 +1257,7 @@ setup_code_directory() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 92 | Last changed: Remove happy-coder installation${NC}"
+    echo -e "${GRAY}Version 93 | Last changed: Exit immediately when run as root instead of continuing${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local

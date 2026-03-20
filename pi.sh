@@ -138,7 +138,7 @@ ensure_not_root() {
         echo "  # Switch to the new user and re-run this script"
         echo "  su - scowalt"
         echo ""
-        return 0
+        exit 1
     fi
 }
 
@@ -1680,7 +1680,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 100 | Last changed: Fix Tailscale install failure from stale cloudflared GPG key${NC}"
+    echo -e "${GRAY}Version 101 | Last changed: Exit immediately when run as root instead of continuing${NC}"
 
     # Create placeholder env file early
     create_env_local

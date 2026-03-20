@@ -523,7 +523,7 @@ ensure_not_root() {
         echo "  # Switch to the new user and re-run this script"
         echo "  su - scowalt"
         echo ""
-        return 0
+        exit 1
     fi
 
     local current_user
@@ -1739,7 +1739,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 123 | Last changed: Fix Tailscale install failure from stale cloudflared GPG key${NC}"
+    echo -e "${GRAY}Version 124 | Last changed: Exit immediately when run as root instead of continuing${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
