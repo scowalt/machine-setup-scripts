@@ -577,20 +577,6 @@ install_claude_code() {
     fi
 }
 
-install_happy_coder() {
-    if command -v happy &> /dev/null; then
-        print_debug "happy-coder is already installed."
-        return 0
-    fi
-
-    print_message "Installing happy-coder..."
-    if bun install -g happy-coder > /dev/null 2>&1; then
-        print_success "happy-coder installed. Run 'happy --auth' to authenticate."
-    else
-        print_error "Failed to install happy-coder."
-    fi
-}
-
 # Configure Rube MCP server for Claude Code and Codex with Bearer token auth
 setup_rube_mcp() {
     # Source env.local if not already set
@@ -1271,7 +1257,7 @@ setup_code_directory() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 91 | Last changed: Remove jj/jujutsu installation${NC}"
+    echo -e "${GRAY}Version 92 | Last changed: Remove happy-coder installation${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -1341,7 +1327,6 @@ main() {
 
     print_section "Additional Development Tools"
     install_claude_code
-    install_happy_coder
     setup_rube_mcp
     setup_compound_plugin
     install_gemini_cli
