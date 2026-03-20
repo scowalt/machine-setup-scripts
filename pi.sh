@@ -597,10 +597,16 @@ install_starship() {
 install_tailscale() {
     if ! command -v tailscale &>/dev/null; then
         print_message "Installing Tailscale…"
-        # Official install script (adds repo + installs package) :contentReference[oaicite:0]{index=0}
+        # Official install script (adds repo + installs package)
         local tailscale_install
         tailscale_install=$(curl -fsSL https://tailscale.com/install.sh)
         echo "${tailscale_install}" | sudo sh
+
+        if ! command -v tailscale &>/dev/null; then
+            print_error "Tailscale installation failed (binary not found). Check apt errors above."
+            return
+        fi
+
         sudo systemctl enable --now tailscaled
         print_success "Tailscale installed and service started."
 
@@ -1441,28 +1447,25 @@ install_opentofu() {
 
 # Install cloudflared (Cloudflare Tunnel client)
 install_cloudflared() {
-    if command -v cloudflared &> /dev/null; then
-        print_debug "cloudflared is already installed."
-        return
-    fi
-
     if ! can_sudo; then
         print_warning "No sudo access - cannot install cloudflared."
         return
     fi
 
-    print_message "Installing cloudflared..."
-
-    # Add Cloudflare GPG key
+    # Always refresh the GPG key and repo config to prevent stale keys from
+    # breaking apt-get update for other packages (e.g. Tailscale)
     sudo mkdir -p --mode=0755 /usr/share/keyrings
     local gpg_key
     gpg_key=$(curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg)
     echo "${gpg_key}" | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
-
-    # Add cloudflared apt repository
     echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
 
-    # Install cloudflared
+    if command -v cloudflared &> /dev/null; then
+        print_debug "cloudflared is already installed (GPG key refreshed)."
+        return
+    fi
+
+    print_message "Installing cloudflared..."
     sudo apt-get update -qq
     if sudo apt-get install -y cloudflared; then
         print_success "cloudflared installed."
@@ -1677,7 +1680,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 99 | Last changed: Remove happy-coder installation${NC}"
+    echo -e "${GRAY}Version 100 | Last changed: Fix Tailscale install failure from stale cloudflared GPG key${NC}"
 
     # Create placeholder env file early
     create_env_local
