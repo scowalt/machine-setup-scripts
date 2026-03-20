@@ -595,6 +595,7 @@ install_starship() {
 }
 
 install_tailscale() {
+    # --- Install if not present ---
     if ! command -v tailscale &>/dev/null; then
         print_message "Installing Tailscale…"
         # Official install script (adds repo + installs package)
@@ -607,10 +608,27 @@ install_tailscale() {
             return
         fi
 
-        sudo systemctl enable --now tailscaled
-        print_success "Tailscale installed and service started."
+        print_success "Tailscale installed."
+    else
+        print_debug "Tailscale already installed."
+    fi
 
-        # Optional immediate login
+    # --- Ensure tailscaled service is enabled and running ---
+    if ! systemctl is-enabled tailscaled &>/dev/null; then
+        print_message "Enabling tailscaled service…"
+        sudo systemctl enable tailscaled
+    fi
+    if ! systemctl is-active tailscaled &>/dev/null; then
+        print_message "Starting tailscaled service…"
+        sudo systemctl start tailscaled
+    fi
+    print_debug "tailscaled service is enabled and running."
+
+    # --- Ensure authenticated ---
+    local backend_state
+    backend_state=$(tailscale status --json 2>/dev/null | grep -o '"BackendState":"[^"]*"' | cut -d'"' -f4)
+    if [[ "${backend_state}" != "Running" ]]; then
+        print_warning "Tailscale is not authenticated (state: ${backend_state:-unknown})."
         echo -n "Run 'tailscale up' now to authenticate? (y/n): "
         read -r ts_up < /dev/tty
         if [[ "${ts_up}" =~ ^[Yy]$ ]]; then
@@ -618,10 +636,34 @@ install_tailscale() {
             # shellcheck disable=SC2024
             sudo tailscale up < /dev/tty       # add --authkey=... if you prefer key‑based auth
         else
-            print_warning "Skip for now; run 'sudo tailscale up' later to log in."
+            print_warning "Run 'sudo tailscale up' later to log in."
+            return
         fi
     else
-        print_debug "Tailscale already installed."
+        print_debug "Tailscale is authenticated and running."
+    fi
+
+    # --- Ensure Tailscale SSH is enabled ---
+    local run_ssh
+    run_ssh=$(tailscale debug prefs 2>/dev/null | grep -o '"RunSSH":[a-z]*' | cut -d: -f2)
+    if [[ "${run_ssh}" != "true" ]]; then
+        print_message "Enabling Tailscale SSH…"
+        sudo tailscale set --ssh
+        print_success "Tailscale SSH enabled."
+    else
+        print_debug "Tailscale SSH is already enabled."
+    fi
+
+    # --- Verify SSH is accessible (ACL check) ---
+    local tailscale_ip
+    tailscale_ip=$(tailscale ip -4 2>/dev/null)
+    if [[ -n "${tailscale_ip}" ]]; then
+        # Connect to our own Tailscale SSH to verify ACLs allow it
+        if timeout 5 tailscale nc "${tailscale_ip}" 22 </dev/null &>/dev/null; then
+            print_success "Tailscale SSH is accessible (ACLs OK)."
+        else
+            print_warning "Tailscale SSH may not be accessible — check ACLs in Tailscale admin console."
+        fi
     fi
 }
 
@@ -1680,7 +1722,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 101 | Last changed: Exit immediately when run as root instead of continuing${NC}"
+    echo -e "${GRAY}Version 103 | Last changed: Enforce Tailscale service, auth, SSH, and ACL on every run${NC}"
 
     # Create placeholder env file early
     create_env_local
