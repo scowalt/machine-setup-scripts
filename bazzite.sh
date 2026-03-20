@@ -196,7 +196,7 @@ ensure_not_root() {
         echo "  # Switch to the new user and re-run this script"
         echo "  su - scowalt"
         echo ""
-        return 0
+        exit 1
     fi
 }
 
@@ -1289,7 +1289,7 @@ update_brew() {
 
 main() {
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 4 | Last changed: Remove happy-coder installation${NC}"
+    echo -e "${GRAY}Version 5 | Last changed: Exit immediately when run as root instead of continuing${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
