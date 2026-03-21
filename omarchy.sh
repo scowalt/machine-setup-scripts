@@ -706,7 +706,7 @@ install_core_packages() {
     print_message "Checking core packages..."
 
     # Define core packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "uv" "go" "inotify-tools" "shellcheck" "gitleaks")
+    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "uv" "go" "inotify-tools" "shellcheck" "gitleaks" "lefthook")
     local to_install=()
 
     # Check which packages need installation
