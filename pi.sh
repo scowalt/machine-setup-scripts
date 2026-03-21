@@ -1526,12 +1526,18 @@ install_turso() {
 install_act() {
     if ! command -v act &> /dev/null; then
         print_message "Installing act (GitHub Actions runner)..."
-        # Use the official install script
+        # Use the official install script, installing to /usr/local/bin to avoid
+        # creating ~/bin owned by root (the installer defaults to ./bin under sudo)
         local act_install
         act_install=$(curl -s https://raw.githubusercontent.com/nektos/act/master/install.sh)
-        if ! echo "${act_install}" | sudo bash; then
+        if ! echo "${act_install}" | sudo bash -s -- -b /usr/local/bin; then
             print_error "Failed to install act."
             return 1
+        fi
+        # Clean up stale ~/bin/act from previous installs
+        if [[ -f "${HOME}/bin/act" ]]; then
+            sudo rm -f "${HOME}/bin/act"
+            rmdir "${HOME}/bin" 2>/dev/null || true
         fi
         print_success "act installed."
     else
@@ -1708,7 +1714,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 104 | Last changed: Fix cloudflared GPG key, fnm idempotency, CE plugin, and Rube token leak${NC}"
+    echo -e "${GRAY}Version 105 | Last changed: Install act to /usr/local/bin instead of ~/bin to fix root ownership${NC}"
 
     # Create placeholder env file early
     create_env_local
