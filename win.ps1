@@ -591,7 +591,7 @@ function Setup-RubeMcp {
 
         Write-Host "$arrow Configuring Rube MCP server for Claude Code..." -ForegroundColor Cyan
         try {
-            claude mcp add --transport http rube -s user "https://rube.app/mcp" --header "Authorization:Bearer $rubeToken" 2>$null
+            claude mcp add --transport http rube -s user "https://rube.app/mcp" --header "Authorization:Bearer $rubeToken" *>$null
             Write-Host "$success Rube MCP server configured for Claude Code." -ForegroundColor Green
         }
         catch {
@@ -660,7 +660,7 @@ function Setup-CompoundPlugin {
     if ($pluginList -match "compound-engineering") {
         Write-Host "$arrow Updating Compound Engineering plugin..." -ForegroundColor Cyan
         try {
-            claude plugin update compound-engineering@every-marketplace 2>$null
+            claude plugin update compound-engineering@compound-engineering-plugin 2>$null
             Write-Host "$success Compound Engineering plugin updated." -ForegroundColor Green
         }
         catch {
@@ -875,7 +875,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 72 | Last changed: Add Socket Firewall installation and PS wrappers" -ForegroundColor DarkGray
+    Write-Host "Version 73 | Last changed: Fix CE plugin identifier and Rube token leak" -ForegroundColor DarkGray
 
     # Create placeholder token files early
     New-TokenPlaceholders

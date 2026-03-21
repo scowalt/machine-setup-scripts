@@ -246,7 +246,7 @@ install_core_packages() {
     print_message "Checking core packages..."
 
     # fish is pre-installed on Bazzite, so it's excluded from this list
-    local packages=("git" "curl" "wget" "jq" "unzip" "tmux" "starship" "gh" "chezmoi" "opentofu" "go" "uv" "fswatch" "1password-cli" "tailscale" "act" "cloudflared" "tursodatabase/tap/turso")
+    local packages=("git" "curl" "wget" "jq" "unzip" "tmux" "starship" "gh" "chezmoi" "opentofu" "go" "uv" "fswatch" "1password-cli" "tailscale" "act" "cloudflared" "tursodatabase/tap/turso" "shellcheck")
     local to_install=()
 
     # Get currently installed formulae
@@ -764,23 +764,7 @@ setup_nodejs() {
     if echo "${filtered_fnm_output}" | grep -q "v[0-9]"; then
         print_debug "Node.js version already installed."
 
-        # Always install latest LTS and set as default to keep Node.js current
-        print_message "Installing latest LTS Node.js..."
-        if fnm install --lts; then
-            fnm use lts-latest
-            local lts_version
-            lts_version=$(fnm current)
-            fnm default "${lts_version}"
-            # Re-initialize fnm to pick up the new default
-            local fnm_env_update
-            fnm_env_update=$("${HOME}"/.local/share/fnm/fnm env --use-on-cd)
-            eval "${fnm_env_update}"
-            print_success "Default Node.js set to ${lts_version}."
-        else
-            print_warning "Failed to install latest LTS. Keeping current default."
-        fi
-
-        # Check if a default/global version is set (in case LTS install above didn't set one)
+        # Check if a default/global version is set
         local current_version
         current_version=$(fnm current 2>/dev/null || echo "none")
         if [[ "${current_version}" == "none" ]] || [[ -z "${current_version}" ]]; then
@@ -949,7 +933,7 @@ setup_rube_mcp() {
 
         print_message "Configuring Rube MCP server for Claude Code..."
         if claude mcp add --transport http rube -s user "https://rube.app/mcp" \
-            --header "Authorization:Bearer ${RUBE_API_KEY}" 2>/dev/null; then
+            --header "Authorization:Bearer ${RUBE_API_KEY}" >/dev/null 2>&1; then
             print_success "Rube MCP server configured for Claude Code."
         else
             print_warning "Failed to configure Rube MCP server for Claude Code."
@@ -1206,10 +1190,10 @@ setup_codex_compound_skills() {
     fi
 
     # Symlink each skill into ~/.agents/skills/
-    if [[ -d "${repo_dir}/skills" ]]; then
+    if [[ -d "${repo_dir}/plugins/compound-engineering/skills" ]]; then
         mkdir -p "${skills_dir}"
         local _skill
-        for _skill in "${repo_dir}"/skills/*/; do
+        for _skill in "${repo_dir}"/plugins/compound-engineering/skills/*/; do
             local skill_name
             skill_name=$(basename "${_skill}")
             local current_link
@@ -1239,7 +1223,7 @@ setup_compound_plugin() {
     _claude_plugin_list=$(claude plugin list 2>/dev/null) || true
     if echo "${_claude_plugin_list}" | grep -q "compound-engineering"; then
         print_message "Updating Compound Engineering plugin..."
-        if claude plugin update compound-engineering@every-marketplace 2>/dev/null; then
+        if claude plugin update compound-engineering@compound-engineering-plugin 2>/dev/null; then
             print_success "Compound Engineering plugin updated."
         else
             print_warning "Failed to update Compound Engineering plugin."
@@ -1289,7 +1273,7 @@ update_brew() {
 
 main() {
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 5 | Last changed: Exit immediately when run as root instead of continuing${NC}"
+    echo -e "${GRAY}Version 6 | Last changed: Fix fnm idempotency, CE plugin, and Rube token leak${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local

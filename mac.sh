@@ -339,7 +339,7 @@ install_core_packages() {
 
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
-    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch")
+    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck")
     local to_install=()
     
     # Get all installed packages at once (much faster than checking individually)
@@ -588,20 +588,8 @@ setup_nodejs() {
     fnm_output=$(fnm list)
     if echo "${fnm_output}" | grep -q .; then
         print_debug "Node.js version already installed."
-        
-        # Always install latest LTS and set as default to keep Node.js current
-        print_message "Installing latest LTS Node.js..."
-        if fnm install --lts; then
-            fnm use lts-latest
-            local lts_version
-            lts_version=$(fnm current)
-            fnm default "${lts_version}"
-            print_success "Default Node.js set to ${lts_version}."
-        else
-            print_warning "Failed to install latest LTS. Keeping current default."
-        fi
 
-        # Check if a default/global version is set (in case LTS install above didn't set one)
+        # Check if a default/global version is set
         local current_version
         current_version=$(fnm current 2>/dev/null || echo "none")
         if [[ "${current_version}" == "none" ]] || [[ -z "${current_version}" ]]; then
@@ -710,7 +698,7 @@ setup_rube_mcp() {
 
         print_message "Configuring Rube MCP server for Claude Code..."
         if claude mcp add --transport http rube -s user "https://rube.app/mcp" \
-            --header "Authorization:Bearer ${RUBE_API_KEY}" 2>/dev/null; then
+            --header "Authorization:Bearer ${RUBE_API_KEY}" >/dev/null 2>&1; then
             print_success "Rube MCP server configured for Claude Code."
         else
             print_warning "Failed to configure Rube MCP server for Claude Code."
@@ -764,7 +752,7 @@ setup_compound_plugin() {
     _plugin_list=$(claude plugin list 2>/dev/null) || true
     if echo "${_plugin_list}" | grep -q "compound-engineering"; then
         print_message "Updating Compound Engineering plugin..."
-        if claude plugin update compound-engineering@every-marketplace 2>/dev/null; then
+        if claude plugin update compound-engineering@compound-engineering-plugin 2>/dev/null; then
             print_success "Compound Engineering plugin updated."
         else
             print_warning "Failed to update Compound Engineering plugin."
@@ -809,10 +797,10 @@ setup_codex_compound_skills() {
     fi
 
     # Symlink each skill into ~/.agents/skills/
-    if [[ -d "${repo_dir}/skills" ]]; then
+    if [[ -d "${repo_dir}/plugins/compound-engineering/skills" ]]; then
         mkdir -p "${skills_dir}"
         local _skill
-        for _skill in "${repo_dir}"/skills/*/; do
+        for _skill in "${repo_dir}"/plugins/compound-engineering/skills/*/; do
             local skill_name
             skill_name=$(basename "${_skill}")
             local current_link
@@ -1053,7 +1041,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 100 | Last changed: Remove happy-coder installation${NC}"
+    echo -e "${GRAY}Version 101 | Last changed: Fix fnm idempotency, CE plugin, and Rube token leak${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
