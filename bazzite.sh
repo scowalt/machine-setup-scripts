@@ -246,7 +246,7 @@ install_core_packages() {
     print_message "Checking core packages..."
 
     # fish is pre-installed on Bazzite, so it's excluded from this list
-    local packages=("git" "curl" "wget" "jq" "unzip" "tmux" "starship" "gh" "chezmoi" "opentofu" "go" "uv" "fswatch" "1password-cli" "tailscale" "act" "cloudflared" "tursodatabase/tap/turso" "shellcheck")
+    local packages=("git" "curl" "wget" "jq" "unzip" "tmux" "starship" "gh" "chezmoi" "opentofu" "go" "uv" "fswatch" "1password-cli" "tailscale" "act" "cloudflared" "tursodatabase/tap/turso" "shellcheck" "gitleaks")
     local to_install=()
 
     # Get currently installed formulae
