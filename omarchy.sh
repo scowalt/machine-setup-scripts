@@ -915,6 +915,24 @@ install_dev_tools_aur() {
     fi
 }
 
+# Enable Tailscale SSH for keyless access over Tailscale network
+setup_tailscale_ssh() {
+    if ! command -v tailscale &>/dev/null; then
+        print_debug "Tailscale not installed, skipping SSH setup."
+        return
+    fi
+
+    local run_ssh
+    run_ssh=$(tailscale debug prefs 2>/dev/null | grep -o '"RunSSH":[a-z]*' | cut -d: -f2)
+    if [[ "${run_ssh}" != "true" ]]; then
+        print_message "Enabling Tailscale SSH..."
+        sudo tailscale set --ssh
+        print_success "Tailscale SSH enabled."
+    else
+        print_debug "Tailscale SSH is already enabled."
+    fi
+}
+
 # Install chezmoi if not installed
 install_chezmoi() {
     if ! command -v chezmoi &> /dev/null; then
@@ -1570,7 +1588,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 96 | Last changed: Fix fnm idempotency, CE plugin, and Rube token leak${NC}"
+    echo -e "${GRAY}Version 97 | Last changed: Enable Tailscale SSH after install${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
@@ -1604,6 +1622,7 @@ install_fail2ban
 print_section "Development Environment"
 install_omarchy
 install_dev_tools_aur
+setup_tailscale_ssh
 
 print_section "Development Tools"
 setup_nodejs
