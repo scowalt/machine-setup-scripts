@@ -626,7 +626,7 @@ install_tailscale() {
 
     # --- Ensure authenticated ---
     local backend_state
-    backend_state=$(tailscale status --json 2>/dev/null | grep -o '"BackendState":"[^"]*"' | cut -d'"' -f4)
+    backend_state=$(tailscale status --json 2>/dev/null | grep -o '"BackendState":[[:space:]]*"[^"]*"' | cut -d'"' -f4)
     if [[ "${backend_state}" != "Running" ]]; then
         print_warning "Tailscale is not authenticated (state: ${backend_state:-unknown})."
         echo -n "Run 'tailscale up' now to authenticate? (y/n): "
@@ -1714,7 +1714,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 105 | Last changed: Install act to /usr/local/bin instead of ~/bin to fix root ownership${NC}"
+    echo -e "${GRAY}Version 106 | Last changed: Fix Tailscale BackendState JSON parsing for pretty-printed output${NC}"
 
     # Create placeholder env file early
     create_env_local

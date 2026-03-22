@@ -1332,7 +1332,7 @@ install_tailscale() {
 
     # --- Ensure authenticated ---
     local backend_state
-    backend_state=$(tailscale status --json 2>/dev/null | grep -o '"BackendState":"[^"]*"' | cut -d'"' -f4)
+    backend_state=$(tailscale status --json 2>/dev/null | grep -o '"BackendState":[[:space:]]*"[^"]*"' | cut -d'"' -f4)
     if [[ "${backend_state}" != "Running" ]]; then
         print_warning "Tailscale is not authenticated (state: ${backend_state:-unknown})."
         echo -n "Run 'tailscale up' now to authenticate? (y/n): "
@@ -1773,7 +1773,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 128 | Last changed: Install act to /usr/local/bin instead of ~/bin to fix root ownership${NC}"
+    echo -e "${GRAY}Version 129 | Last changed: Fix Tailscale BackendState JSON parsing for pretty-printed output${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
