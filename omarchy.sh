@@ -923,6 +923,11 @@ setup_tailscale_ssh() {
     local run_ssh
     run_ssh=$(tailscale debug prefs 2>/dev/null | grep -o '"RunSSH":[a-z]*' | cut -d: -f2)
     if [[ "${run_ssh}" != "true" ]]; then
+        if ! can_sudo; then
+            print_warning "No sudo access - cannot enable Tailscale SSH."
+            print_debug "Ask an admin to run: sudo tailscale set --ssh"
+            return
+        fi
         print_message "Enabling Tailscale SSH..."
         sudo tailscale set --ssh
         print_success "Tailscale SSH enabled."
@@ -1486,7 +1491,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 100 | Last changed: Skip AUR installs without sudo access${NC}"
+    echo -e "${GRAY}Version 101 | Last changed: Skip Tailscale SSH setup without sudo access${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
