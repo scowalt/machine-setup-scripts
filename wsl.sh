@@ -661,7 +661,7 @@ setup_compound_plugin() {
     _plugin_list=$(claude plugin list 2>/dev/null) || true
     if echo "${_plugin_list}" | grep -q "compound-engineering"; then
         print_message "Updating Compound Engineering plugin..."
-        if claude plugin update compound-engineering@compound-engineering-plugin 2>/dev/null; then
+        if claude plugin update compound-engineering@every-marketplace 2>/dev/null; then
             print_success "Compound Engineering plugin updated."
         else
             print_warning "Failed to update Compound Engineering plugin."
@@ -1172,7 +1172,7 @@ setup_code_directory() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 98 | Last changed: Remove duplicate Compound Engineering Codex skills setup${NC}"
+    echo -e "${GRAY}Version 99 | Last changed: Fix Compound Engineering plugin update identifier${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local

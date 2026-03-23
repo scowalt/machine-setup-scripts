@@ -1019,7 +1019,7 @@ setup_compound_plugin() {
     _claude_plugin_list=$(claude plugin list 2>/dev/null) || true
     if echo "${_claude_plugin_list}" | grep -q "compound-engineering"; then
         print_message "Updating Compound Engineering plugin..."
-        if claude plugin update compound-engineering@compound-engineering-plugin 2>/dev/null; then
+        if claude plugin update compound-engineering@every-marketplace 2>/dev/null; then
             print_success "Compound Engineering plugin updated."
         else
             print_warning "Failed to update Compound Engineering plugin."
@@ -1652,7 +1652,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 133 | Last changed: Remove duplicate Compound Engineering Codex skills setup${NC}"
+    echo -e "${GRAY}Version 134 | Last changed: Fix Compound Engineering plugin update identifier${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local

@@ -568,7 +568,7 @@ function Setup-CompoundPlugin {
     if ($pluginList -match "compound-engineering") {
         Write-Host "$arrow Updating Compound Engineering plugin..." -ForegroundColor Cyan
         try {
-            claude plugin update compound-engineering@compound-engineering-plugin 2>$null
+            claude plugin update compound-engineering@every-marketplace 2>$null
             Write-Host "$success Compound Engineering plugin updated." -ForegroundColor Green
         }
         catch {
@@ -730,7 +730,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 76 | Last changed: Remove duplicate Compound Engineering Codex skills setup" -ForegroundColor DarkGray
+    Write-Host "Version 77 | Last changed: Fix Compound Engineering plugin update identifier" -ForegroundColor DarkGray
 
     # Create placeholder token files early
     New-TokenPlaceholders
