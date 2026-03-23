@@ -339,7 +339,7 @@ install_core_packages() {
 
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
-    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "mise" "tailscale" "act" "terminal-notifier" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook")
+    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "mise" "tailscale" "dopplerhq/cli/doppler" "act" "terminal-notifier" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook")
     local to_install=()
     
     # Get all installed packages at once (much faster than checking individually)
@@ -985,7 +985,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 102 | Last changed: Replace fnm and pyenv with mise${NC}"
+    echo -e "${GRAY}Version 103 | Last changed: Add Doppler CLI${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local

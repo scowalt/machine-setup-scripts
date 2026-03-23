@@ -667,6 +667,39 @@ install_tailscale() {
     fi
 }
 
+# Install Doppler CLI for secrets management
+install_doppler() {
+    if command -v doppler &>/dev/null; then
+        print_debug "Doppler CLI already installed."
+        return
+    fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access - cannot install Doppler CLI."
+        return
+    fi
+
+    print_message "Installing Doppler CLI..."
+
+    # Import signing key
+    local signing_key
+    signing_key=$(curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
+        'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key')
+    echo "${signing_key}" | sudo gpg --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
+
+    # Add repo
+    echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" \
+        | sudo tee /etc/apt/sources.list.d/doppler-cli.list >/dev/null
+
+    # Install package
+    sudo apt-get update -qq
+    if sudo apt-get install -y doppler; then
+        print_success "Doppler CLI installed."
+    else
+        print_error "Failed to install Doppler CLI."
+    fi
+}
+
 # Install and configure fail2ban for brute-force protection
 install_fail2ban() {
     if dpkg -s fail2ban &> /dev/null; then
@@ -1610,7 +1643,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 108 | Last changed: Install lefthook via go install instead of apt${NC}"
+    echo -e "${GRAY}Version 109 | Last changed: Add Doppler CLI${NC}"
 
     # Create placeholder env file early
     create_env_local
@@ -1627,6 +1660,7 @@ main() {
 
     print_section "Development Tools"
     install_1password_cli
+    install_doppler
     install_lefthook
     install_mise
     install_uv

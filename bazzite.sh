@@ -246,7 +246,7 @@ install_core_packages() {
     print_message "Checking core packages..."
 
     # fish is pre-installed on Bazzite, so it's excluded from this list
-    local packages=("git" "curl" "wget" "jq" "unzip" "tmux" "starship" "gh" "chezmoi" "opentofu" "go" "uv" "fswatch" "1password-cli" "tailscale" "act" "cloudflared" "tursodatabase/tap/turso" "shellcheck" "gitleaks" "lefthook" "mise")
+    local packages=("git" "curl" "wget" "jq" "unzip" "tmux" "starship" "gh" "chezmoi" "opentofu" "go" "uv" "fswatch" "1password-cli" "tailscale" "dopplerhq/cli/doppler" "act" "cloudflared" "tursodatabase/tap/turso" "shellcheck" "gitleaks" "lefthook" "mise")
     local to_install=()
 
     # Get currently installed formulae
@@ -1152,7 +1152,7 @@ update_brew() {
 
 main() {
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 8 | Last changed: Replace fnm and pyenv with mise${NC}"
+    echo -e "${GRAY}Version 9 | Last changed: Add Doppler CLI${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
