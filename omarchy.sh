@@ -1141,6 +1141,43 @@ install_gemini_cli() {
     fi
 }
 
+# Setup Compound Engineering plugin for Claude Code
+setup_compound_plugin() {
+    if ! command -v claude &> /dev/null; then
+        print_debug "Claude Code not found. Skipping Compound plugin setup."
+        return 0
+    fi
+
+    # Ensure marketplace is registered (idempotent, needed for updates too)
+    claude plugin marketplace add EveryInc/compound-engineering-plugin 2>/dev/null
+
+    # Update if already installed, install if not
+    local _claude_plugin_list
+    _claude_plugin_list=$(claude plugin list 2>/dev/null) || true
+    if echo "${_claude_plugin_list}" | grep -q "compound-engineering"; then
+        print_message "Updating Compound Engineering plugin..."
+        if claude plugin update compound-engineering@compound-engineering-plugin 2>/dev/null; then
+            print_success "Compound Engineering plugin updated."
+        else
+            print_warning "Failed to update Compound Engineering plugin."
+        fi
+    else
+        print_message "Installing Compound Engineering plugin..."
+        if claude plugin install compound-engineering --scope user 2>/dev/null; then
+            print_success "Compound Engineering plugin installed."
+        else
+            print_warning "Failed to install Compound Engineering plugin."
+        fi
+    fi
+
+    # Clean up stale compound-plugin CLI artifacts that cause duplicate skill loading
+    if [[ -d "${HOME}/.codex/skills" ]]; then
+        print_message "Removing stale ~/.codex/skills (compound-plugin CLI artifacts)..."
+        rm -rf "${HOME}/.codex/skills"
+        print_success "Stale Codex skills directory removed."
+    fi
+}
+
 # Install Compound Engineering skills for Codex CLI
 setup_codex_compound_skills() {
     if ! command -v codex &> /dev/null; then
@@ -1491,7 +1528,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 101 | Last changed: Skip Tailscale SSH setup without sudo access${NC}"
+    echo -e "${GRAY}Version 102 | Last changed: Add Claude plugin, clean up duplicate Compound Engineering installs${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
@@ -1532,6 +1569,7 @@ install_bun
 install_sfw
 install_claude_code
 setup_rube_mcp
+setup_compound_plugin
 install_gemini_cli
 install_codex_cli
 setup_codex_compound_skills

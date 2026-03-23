@@ -1206,54 +1206,6 @@ install_gemini_cli() {
     fi
 }
 
-# Install Compound Engineering skills for Codex CLI
-setup_codex_compound_skills() {
-    if ! command -v codex &> /dev/null; then
-        print_debug "Codex CLI not found. Skipping Compound skills setup for Codex."
-        return 0
-    fi
-
-    local repo_dir="${HOME}/.local/share/compound-engineering-plugin"
-    local skills_dir="${HOME}/.agents/skills"
-
-    # Clone or update the repo
-    if [[ -d "${repo_dir}/.git" ]]; then
-        print_message "Updating Compound Engineering skills for Codex..."
-        if git -C "${repo_dir}" pull --quiet 2>/dev/null; then
-            print_success "Compound Engineering repo updated."
-        else
-            print_warning "Failed to update Compound Engineering repo."
-        fi
-    else
-        print_message "Cloning Compound Engineering plugin for Codex skills..."
-        rm -rf "${repo_dir}"
-        if git clone --quiet https://github.com/EveryInc/compound-engineering-plugin.git "${repo_dir}" 2>/dev/null; then
-            print_success "Compound Engineering repo cloned."
-        else
-            print_warning "Failed to clone Compound Engineering repo."
-            return
-        fi
-    fi
-
-    # Symlink each skill into ~/.agents/skills/
-    if [[ -d "${repo_dir}/plugins/compound-engineering/skills" ]]; then
-        mkdir -p "${skills_dir}"
-        local _skill
-        for _skill in "${repo_dir}"/plugins/compound-engineering/skills/*/; do
-            local skill_name
-            skill_name=$(basename "${_skill}")
-            local current_link
-            current_link=$(readlink "${skills_dir}/${skill_name}") || true
-            if [[ ! -L "${skills_dir}/${skill_name}" ]] || [[ "${current_link}" != "${_skill%/}" ]]; then
-                ln -sfn "${_skill%/}" "${skills_dir}/${skill_name}"
-            fi
-        done
-        print_success "Compound Engineering skills linked for Codex."
-    else
-        print_warning "No skills directory found in Compound Engineering repo."
-    fi
-}
-
 # Install Codex CLI (OpenAI's AI coding agent)
 install_codex_cli() {
     if command -v codex &> /dev/null; then
@@ -1643,7 +1595,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 109 | Last changed: Add Doppler CLI${NC}"
+    echo -e "${GRAY}Version 110 | Last changed: Remove duplicate Compound Engineering Codex skills setup${NC}"
 
     # Create placeholder env file early
     create_env_local
@@ -1690,7 +1642,6 @@ main() {
     setup_compound_plugin
     install_gemini_cli
     install_codex_cli
-    setup_codex_compound_skills
 
     print_section "Terminal & Shell"
     install_starship
