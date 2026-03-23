@@ -706,7 +706,7 @@ install_core_packages() {
     print_message "Checking core packages..."
 
     # Define core packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "uv" "go" "inotify-tools" "shellcheck" "gitleaks" "lefthook")
+    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "uv" "go" "inotify-tools" "shellcheck" "gitleaks" "lefthook" "mise")
     local to_install=()
 
     # Check which packages need installation
@@ -883,19 +883,12 @@ install_dev_tools_aur() {
     print_message "Installing development tools from AUR..."
 
     # Development tools available in AUR
-    local aur_packages=("fnm-bin" "chezmoi" "1password-cli" "tailscale" "act" "cloudflared" "turso-cli")
+    local aur_packages=("chezmoi" "1password-cli" "tailscale" "act" "cloudflared" "turso-cli")
     local to_install=()
 
     # Check which packages need installation
     for package in "${aur_packages[@]}"; do
-        # Special case: fnm-bin and fnm are alternatives that provide the same command
-        if [[ "${package}" == "fnm-bin" ]]; then
-            if pacman -Qi "fnm-bin" &> /dev/null || pacman -Qi "fnm" &> /dev/null; then
-                print_debug "fnm is already installed."
-            else
-                to_install+=("${package}")
-            fi
-        elif ! pacman -Qi "${package}" &> /dev/null; then
+        if ! pacman -Qi "${package}" &> /dev/null; then
             to_install+=("${package}")
         else
             print_debug "${package} is already installed."
@@ -1062,66 +1055,6 @@ set_fish_as_default_shell() {
         print_success "Fish shell set as default."
     else
         print_debug "Fish shell is already the default shell."
-    fi
-}
-
-# Setup Node.js using fnm
-setup_nodejs() {
-    print_message "Setting up Node.js with fnm..."
-    
-    # Initialize fnm for current session
-    if command -v fnm &> /dev/null; then
-        local fnm_env
-        fnm_env=$(fnm env --use-on-cd)
-        eval "${fnm_env}"
-    else
-        print_warning "fnm command not available. Skipping Node.js setup."
-        return
-    fi
-    
-    # Check if any Node.js version is installed
-    local fnm_output
-    fnm_output=$(fnm list)
-    local filtered_fnm
-    filtered_fnm=$(echo "${fnm_output}" | grep -v "system")
-    if echo "${filtered_fnm}" | grep -q "v[0-9]"; then
-        print_debug "Node.js version already installed."
-
-        # Check if a default/global version is set
-        local current_version
-        current_version=$(fnm current 2>/dev/null || echo "none")
-        if [[ "${current_version}" == "none" ]] || [[ -z "${current_version}" ]]; then
-            print_message "Setting the first installed version as default..."
-            local first_version
-            local fnm_list_output
-            fnm_list_output=$(fnm list)
-            local version_lines
-            version_lines=$(echo "${fnm_list_output}" | grep -E "^[[:space:]]*\*?[[:space:]]*v[0-9]")
-            local first_line
-            first_line=$(echo "${version_lines}" | head -n1)
-            local cleaned_line
-            # Remove leading whitespace and optional asterisk
-            cleaned_line="${first_line#"${first_line%%[![:space:]]*}"}"  # Remove leading whitespace
-            cleaned_line="${cleaned_line#\*}"  # Remove optional asterisk
-            cleaned_line="${cleaned_line#"${cleaned_line%%[![:space:]]*}"}"  # Remove any remaining leading whitespace
-            first_version=$(echo "${cleaned_line}" | awk '{print $1}')
-            if [[ -n "${first_version}" ]]; then
-                fnm default "${first_version}"
-                print_success "Set ${first_version} as default Node.js version."
-            fi
-        fi
-    else
-        print_message "Installing latest LTS Node.js..."
-        if fnm install --lts; then
-            print_success "Installed latest LTS Node.js."
-            local current_node
-            current_node=$(fnm current)
-            fnm default "${current_node}"
-            print_success "Set ${current_node} as default Node.js version."
-        else
-            print_error "Failed to install Node.js."
-            return 1
-        fi
     fi
 }
 
@@ -1385,39 +1318,6 @@ setup_rube_mcp() {
     fi
 }
 
-# Install pyenv for Python version management
-install_pyenv() {
-    if ! command -v pyenv &> /dev/null; then
-        # Check if ~/.pyenv exists but pyenv is not in PATH
-        if [[ -d "${HOME}/.pyenv" ]]; then
-            # Try to add pyenv to PATH
-            export PATH="${HOME}/.pyenv/bin:${PATH}"
-            if command -v pyenv &> /dev/null; then
-                print_debug "pyenv is already installed (added to PATH)."
-                return 0
-            else
-                print_warning "\$HOME/.pyenv directory exists but pyenv not functional."
-                print_message "Please check your pyenv installation or remove \$HOME/.pyenv and rerun."
-                return 1
-            fi
-        fi
-
-        print_message "Installing pyenv..."
-        # Use the official install script
-        local install_cmd
-        install_cmd=$(curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer)
-        if bash <<< "${install_cmd}"; then
-            export PATH="${HOME}/.pyenv/bin:${PATH}"
-            print_success "pyenv installed. Shell configuration will be managed by chezmoi."
-        else
-            print_error "Failed to install pyenv."
-            return 1
-        fi
-    else
-        print_debug "pyenv is already installed."
-    fi
-}
-
 # Install tmux plugins for session persistence
 install_tmux_plugins() {
     local plugin_dir=~/.tmux/plugins
@@ -1490,13 +1390,6 @@ update_all_packages() {
 
 # Upgrade global npm packages
 upgrade_npm_global_packages() {
-    # Initialize fnm for current session
-    if command -v fnm &> /dev/null; then
-        local fnm_env
-        fnm_env=$(fnm env --use-on-cd)
-        eval "${fnm_env}"
-    fi
-
     # Make sure npm is available
     if ! command -v npm &> /dev/null; then
         print_warning "npm not found. Skipping global package upgrade."
@@ -1588,7 +1481,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 97 | Last changed: Enable Tailscale SSH after install${NC}"
+    echo -e "${GRAY}Version 98 | Last changed: Replace fnm and pyenv with mise${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
@@ -1625,7 +1518,6 @@ install_dev_tools_aur
 setup_tailscale_ssh
 
 print_section "Development Tools"
-setup_nodejs
 install_bun
 install_sfw
 install_claude_code
@@ -1633,7 +1525,6 @@ setup_rube_mcp
 install_gemini_cli
 install_codex_cli
 setup_codex_compound_skills
-install_pyenv
 
 print_section "Shared Directories"
 setup_claude_shared_directory

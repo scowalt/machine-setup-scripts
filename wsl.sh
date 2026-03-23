@@ -778,77 +778,21 @@ install_codex_cli() {
     fi
 }
 
-# Install fnm (Fast Node Manager)
-install_fnm() {
-    if command -v fnm &> /dev/null; then
-        print_debug "fnm already installed."
+# Install mise (runtime version manager, replaces fnm and pyenv)
+install_mise() {
+    if command -v mise &> /dev/null; then
+        print_debug "mise already installed."
         return
     fi
 
-    print_message "Installing fnm (Fast Node Manager)..."
+    print_message "Installing mise..."
     ensure_brew_available
-    if ! brew install fnm; then
-        print_error "Failed to install fnm via Homebrew."
+    if ! brew install mise; then
+        print_error "Failed to install mise via Homebrew."
         return 1
     fi
 
-    print_success "fnm installed. Shell configuration will be managed by chezmoi."
-}
-
-# Setup Node.js using fnm
-setup_nodejs() {
-    print_message "Setting up Node.js with fnm..."
-    
-    # Initialize fnm for current session (Homebrew installation)
-    if command -v fnm &> /dev/null; then
-        local fnm_env
-        fnm_env=$(fnm env --use-on-cd)
-        eval "${fnm_env}"
-    else
-        print_warning "fnm command not available. Skipping Node.js setup."
-        return
-    fi
-    
-    # Check if any Node.js version is installed
-    local fnm_list_output
-    fnm_list_output=$(fnm list)
-    if echo "${fnm_list_output}" | grep -q .; then
-        print_debug "Node.js version already installed."
-
-        # Check if a default/global version is set
-        local current_version
-        current_version=$(fnm current 2>/dev/null || echo "none")
-        if [[ "${current_version}" == "none" ]] || [[ -z "${current_version}" ]]; then
-            print_message "No global Node.js version set. Setting the first installed version as default..."
-            local first_version
-            local fnm_versions
-            fnm_versions=$(fnm list)
-            local filtered_versions
-            filtered_versions=$(echo "${fnm_versions}" | grep -v "system")
-            local first_line
-            first_line=$(echo "${filtered_versions}" | head -n1)
-            first_version=$(echo "${first_line}" | awk '{print $2}')
-            if [[ -n "${first_version}" ]]; then
-                fnm default "${first_version}"
-                print_success "Set ${first_version} as default Node.js version."
-            fi
-        fi
-    else
-        print_message "No Node.js version installed. Installing latest LTS..."
-        if fnm install --lts; then
-            print_success "Installed latest LTS Node.js."
-            # Set it as default
-            local current_node
-            current_node=$(fnm current)
-            fnm default "${current_node}"
-            local current_version_display
-            current_version_display=$(fnm current)
-            print_success "Set ${current_version_display} as default Node.js version."
-        else
-            print_error "Failed to install Node.js."
-            return 1
-        fi
-    fi
+    print_success "mise installed. Shell configuration will be managed by chezmoi."
 }
 
 # Fix 1Password repository GPG key issues
@@ -1024,21 +968,6 @@ install_uv() {
     fi
 }
 
-# Install pyenv for Python version management
-install_pyenv() {
-    if ! command -v pyenv &> /dev/null; then
-        print_message "Installing pyenv..."
-        ensure_brew_available
-        if ! brew install pyenv; then
-            print_error "Failed to install pyenv via Homebrew."
-            return 1
-        fi
-        print_success "pyenv installed. Shell configuration will be managed by chezmoi."
-    else
-        print_debug "pyenv is already installed."
-    fi
-}
-
 # Install Bun JavaScript runtime and package manager
 install_bun() {
     if command -v bun &> /dev/null; then
@@ -1145,12 +1074,10 @@ update_packages() {
 
 # Upgrade global npm packages
 upgrade_npm_global_packages() {
-    # Make sure fnm is initialized
+    # Initialize mise for current session (provides npm if Node.js is installed)
     ensure_brew_available
-    if command -v fnm &> /dev/null; then
-        local fnm_env
-        fnm_env=$(fnm env --use-on-cd)
-        eval "${fnm_env}"
+    if command -v mise &> /dev/null; then
+        eval "$(mise activate bash)"
     fi
 
     # Make sure npm is available
@@ -1245,7 +1172,7 @@ setup_code_directory() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 94 | Last changed: Fix fnm idempotency, CE plugin, and Rube token leak${NC}"
+    echo -e "${GRAY}Version 95 | Last changed: Replace fnm and pyenv with mise${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -1269,9 +1196,7 @@ main() {
 
     print_section "Development Tools"
     install_starship
-    install_fnm
-    setup_nodejs
-    install_pyenv
+    install_mise
     install_uv
     install_bun
     install_sfw

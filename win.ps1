@@ -4,7 +4,7 @@ $wingetPackages = (
     "tailscale.tailscale",
     "Readdle.Spark",
     "Google.Chrome",
-    "Schniz.fnm",
+    "jdx.mise",
     "twpayne.chezmoi",
     "Git.Git",
     "Tyrrrz.LightBulb",
@@ -316,41 +316,6 @@ function Set-StarshipInit {
     }
 }
 
-# Function to install pyenv-win for Python version management
-function Install-PyenvWin {
-    $pyenvPath = "$env:USERPROFILE\.pyenv"
-    
-    if (-not (Test-Path "$pyenvPath\pyenv-win\bin\pyenv.bat")) {
-        Write-Host "$arrow Installing pyenv-win..." -ForegroundColor Cyan
-        
-        # Clone pyenv-win repository
-        if (Get-Command git -ErrorAction SilentlyContinue) {
-            git clone https://github.com/pyenv-win/pyenv-win.git "$pyenvPath"
-            
-            # Add pyenv to PATH
-            $currentUserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-            $pyenvBinPath = "$pyenvPath\pyenv-win\bin"
-            $pyenvShimsPath = "$pyenvPath\pyenv-win\shims"
-            
-            if ($currentUserPath -notlike "*$pyenvBinPath*") {
-                [Environment]::SetEnvironmentVariable("PATH", "$pyenvBinPath;$pyenvShimsPath;$currentUserPath", "User")
-                Write-Host "$success Added pyenv to PATH." -ForegroundColor Green
-            }
-            
-            # Add PYENV_HOME environment variable
-            [Environment]::SetEnvironmentVariable("PYENV_HOME", "$pyenvPath\pyenv-win", "User")
-            [Environment]::SetEnvironmentVariable("PYENV", "$pyenvPath\pyenv-win", "User")
-            
-            Write-Host "$success pyenv-win installed. PowerShell profile configuration will be managed by chezmoi." -ForegroundColor Green
-        }
-        else {
-            Write-Host "$failIcon Git is required to install pyenv-win. Please install Git first." -ForegroundColor Red
-        }
-    }
-    else {
-        Write-Debug "pyenv-win is already installed."
-    }
-}
 
 # Function to install Turso CLI (libSQL database platform)
 function Install-TursoCli {
@@ -459,64 +424,6 @@ function Install-CodexCli {
     }
 }
 
-# Function to setup Node.js using fnm
-function Setup-Nodejs {
-    Write-Host "$arrow Setting up Node.js with fnm..." -ForegroundColor Cyan
-    
-    # Initialize fnm for current session
-    if (Get-Command fnm -ErrorAction SilentlyContinue) {
-        fnm env --use-on-cd | Out-String | Invoke-Expression
-    }
-    else {
-        Write-Host "$warnIcon fnm command not available. Skipping Node.js setup." -ForegroundColor Yellow
-        return
-    }
-    
-    # Check if any Node.js version is installed
-    $installedVersions = fnm list 2>$null
-    if ($installedVersions) {
-        Write-Debug "Node.js version already installed."
-        
-        # Check if a default/global version is set
-        try {
-            $currentVersion = fnm current 2>$null
-            if ($currentVersion) {
-                Write-Debug "Global Node.js version already set: $currentVersion"
-            }
-            else {
-                Write-Host "$arrow No global Node.js version set. Setting the first installed version as default..." -ForegroundColor Cyan
-                $firstVersion = ($installedVersions | Select-Object -First 1) -replace '\*?\s*', ''
-                if ($firstVersion) {
-                    fnm default $firstVersion
-                    Write-Host "$success Set $firstVersion as default Node.js version." -ForegroundColor Green
-                }
-            }
-        }
-        catch {
-            # fnm current may fail if no version is set
-            Write-Host "$arrow No global Node.js version set. Setting the first installed version as default..." -ForegroundColor Cyan
-            $firstVersion = ($installedVersions | Select-Object -First 1) -replace '\*?\s*', ''
-            if ($firstVersion) {
-                fnm default $firstVersion
-                Write-Host "$success Set $firstVersion as default Node.js version." -ForegroundColor Green
-            }
-        }
-    }
-    else {
-        Write-Host "$arrow No Node.js version installed. Installing latest LTS..." -ForegroundColor Cyan
-        fnm install --lts
-        if ($?) {
-            Write-Host "$success Installed latest LTS Node.js." -ForegroundColor Green
-            # Set it as default
-            $currentVersion = fnm current
-            fnm default $currentVersion
-            Write-Host "$success Set $currentVersion as default Node.js version." -ForegroundColor Green
-        }
-        else {
-            Write-Host "$failIcon Failed to install Node.js." -ForegroundColor Red
-        }
-    }
-}
 
 # Function to install Claude Code using official installer
 function Install-ClaudeCode {
@@ -807,9 +714,9 @@ function Install-WindowsUpdates {
 
 # Function to upgrade global npm packages
 function Update-NpmGlobalPackages {
-    # Try to initialize fnm if available
-    if (Get-Command fnm -ErrorAction SilentlyContinue) {
-        fnm env --use-on-cd | Out-String | Invoke-Expression
+    # Try to initialize mise if available (provides npm if Node.js is installed)
+    if (Get-Command mise -ErrorAction SilentlyContinue) {
+        mise activate pwsh | Out-String | Invoke-Expression
     }
 
     # Make sure npm is available
@@ -875,7 +782,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 73 | Last changed: Fix CE plugin identifier and Rube token leak" -ForegroundColor DarkGray
+    Write-Host "Version 74 | Last changed: Replace fnm and pyenv with mise" -ForegroundColor DarkGray
 
     # Create placeholder token files early
     New-TokenPlaceholders
@@ -895,9 +802,6 @@ function Initialize-WindowsEnvironment {
         Update-Chezmoi
     }
 
-    Write-Section "Development Tools"
-    Install-PyenvWin
-
     Write-Section "Terminal Configuration"
     Set-StarshipInit
     Set-SfwWrappers
@@ -905,7 +809,6 @@ function Initialize-WindowsEnvironment {
     
     Write-Section "Additional Development Tools"
     Install-SocketFirewall
-    Setup-Nodejs
     Install-ClaudeCode
     Setup-RubeMcp
     Setup-CompoundPlugin
