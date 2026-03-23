@@ -883,7 +883,7 @@ install_dev_tools_aur() {
     print_message "Installing development tools from AUR..."
 
     # Development tools available in AUR
-    local aur_packages=("chezmoi" "1password-cli" "tailscale" "act" "cloudflared" "turso-cli")
+    local aur_packages=("chezmoi" "1password-cli" "tailscale" "doppler-cli-bin" "act" "cloudflared" "turso-cli")
     local to_install=()
 
     # Check which packages need installation
@@ -1481,7 +1481,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 98 | Last changed: Replace fnm and pyenv with mise${NC}"
+    echo -e "${GRAY}Version 99 | Last changed: Add Doppler CLI${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local

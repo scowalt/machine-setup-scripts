@@ -26,7 +26,8 @@ $wingetPackages = (
     "astral-sh.uv",
     "jqlang.jq",
     "GoLang.Go",
-    "Cloudflare.cloudflared"
+    "Cloudflare.cloudflared",
+    "doppler.doppler"
 )
 
 # Define Nerd Font symbols using Unicode code points
@@ -782,7 +783,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 74 | Last changed: Replace fnm and pyenv with mise" -ForegroundColor DarkGray
+    Write-Host "Version 75 | Last changed: Add Doppler CLI" -ForegroundColor DarkGray
 
     # Create placeholder token files early
     New-TokenPlaceholders
