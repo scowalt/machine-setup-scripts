@@ -43,3 +43,17 @@ curl -sL https://scripts.scowalt.com/setup/omarchy.sh | bash
 ```bash
 curl -sL https://scripts.scowalt.com/setup/bazzite.sh | bash
 ```
+
+## GitHub Codespaces
+
+Add to your dotfiles repo's `install.sh`:
+
+```bash
+curl -sL https://scripts.scowalt.com/setup/codespaces.sh | bash
+```
+
+Or run directly in a codespace terminal:
+
+```bash
+curl -sL https://scripts.scowalt.com/setup/codespaces.sh | bash
+```

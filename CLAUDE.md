@@ -15,6 +15,7 @@ This repository contains idempotent machine setup scripts for automating the con
 - **pi.sh** - Raspberry Pi specific setup with ARM optimizations
 - **omarchy.sh** - Arch Linux / Omarchy setup using pacman and yay
 - **bazzite.sh** - Bazzite OS setup using Homebrew (Lenovo Legion Go)
+- **codespaces.sh** - GitHub Codespaces setup (sources ubuntu.sh for shared functions)
 
 ## Common Development Tasks
 
@@ -54,6 +55,16 @@ All scripts follow a consistent pattern:
 4. Package manager setup
 5. Individual tool installations
 6. Configuration steps (dotfiles, shell setup)
+
+### Script Sourcing
+
+`codespaces.sh` is the first script to source another (`ubuntu.sh`) for function reuse. This is enabled by a source guard at the bottom of `ubuntu.sh`:
+
+```bash
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
+```
+
+This ensures `main()` only runs when the script is executed directly, not when sourced. Other scripts can adopt this pattern if needed in the future.
 
 ### Key Design Principles
 
