@@ -279,7 +279,7 @@ update_and_install_core() {
     print_message "Checking and installing core packages as needed..."
 
     # Define an array of required packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks" "lefthook")
+    local packages=("git" "curl" "jq" "fish" "tmux" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
@@ -937,6 +937,21 @@ install_turso() {
     fi
 }
 
+# Install lefthook (git hooks manager)
+install_lefthook() {
+    if command -v lefthook &> /dev/null; then
+        print_debug "lefthook is already installed."
+        return
+    fi
+
+    print_message "Installing lefthook..."
+    if ! go install github.com/evilmartians/lefthook@latest; then
+        print_error "Failed to install lefthook."
+        return 1
+    fi
+    print_success "lefthook installed."
+}
+
 # Install act for running GitHub Actions locally
 install_act() {
     if ! command -v act &> /dev/null; then
@@ -1172,7 +1187,7 @@ setup_code_directory() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 95 | Last changed: Replace fnm and pyenv with mise${NC}"
+    echo -e "${GRAY}Version 96 | Last changed: Install lefthook via go install instead of apt${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -1196,6 +1211,7 @@ main() {
 
     print_section "Development Tools"
     install_starship
+    install_lefthook
     install_mise
     install_uv
     install_bun
