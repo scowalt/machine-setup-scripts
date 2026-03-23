@@ -1136,106 +1136,19 @@ install_codex_cli() {
     fi
 }
 
-# Install fnm (Fast Node Manager)
-install_fnm() {
-    if command -v fnm &> /dev/null; then
-        print_debug "fnm already installed."
+# Install mise (polyglot runtime manager)
+install_mise() {
+    if command -v mise &> /dev/null; then
+        print_debug "mise already installed."
         return
     fi
 
-    print_message "Installing fnm (Fast Node Manager)..."
-    local fnm_install_script
-    fnm_install_script=$(curl -fsSL https://fnm.vercel.app/install)
-    if bash -s -- --skip-shell <<< "${fnm_install_script}"; then
-        print_success "fnm installed. Shell configuration will be managed by chezmoi."
+    print_message "Installing mise..."
+    if curl -fsSL https://mise.run | sh; then
+        print_success "mise installed. Shell configuration will be managed by chezmoi."
     else
-        print_error "Failed to install fnm."
+        print_error "Failed to install mise."
         return 1
-    fi
-}
-
-# Setup Node.js using fnm
-setup_nodejs() {
-    print_message "Setting up Node.js with fnm..."
-    
-    # Initialize fnm for current session
-    if [[ -s "${HOME}/.local/share/fnm/fnm" ]]; then
-        export PATH="${HOME}/.local/share/fnm:${PATH}"
-        local fnm_env
-        fnm_env=$("${HOME}"/.local/share/fnm/fnm env --use-on-cd)
-        eval "${fnm_env}"
-    else
-        print_warning "fnm not found in expected location. Skipping Node.js setup."
-        return
-    fi
-    
-    # Check if fnm is now available
-    if ! command -v fnm &> /dev/null; then
-        print_warning "fnm command not available. Skipping Node.js setup."
-        return
-    fi
-    
-    # Check if any Node.js version is installed
-    local fnm_list_output
-    fnm_list_output=$(fnm list 2>&1)
-    if echo "${fnm_list_output}" | grep -q "error\|Error"; then
-        print_error "fnm list returned an error: ${fnm_list_output}"
-        return 1
-    fi
-    
-    # Check if only system version is available
-    local filtered_fnm_output
-    filtered_fnm_output=$(echo "${fnm_list_output}" | grep -v "system")
-    if echo "${filtered_fnm_output}" | grep -q "v[0-9]"; then
-        print_debug "Node.js version already installed."
-
-        # Check if a default/global version is set
-        local current_version
-        current_version=$(fnm current 2>/dev/null || echo "none")
-        if [[ "${current_version}" == "none" ]] || [[ -z "${current_version}" ]]; then
-            print_message "No global Node.js version set. Setting the first installed version as default..."
-
-            local first_version
-            # Extract the first non-system version
-            local fnm_versions
-            fnm_versions=$(fnm list)
-            local version_lines
-            version_lines=$(echo "${fnm_versions}" | grep -E "^[[:space:]]*\*?[[:space:]]*v[0-9]")
-            local first_line
-            first_line=$(echo "${version_lines}" | head -n1)
-            local cleaned_line
-            # Remove leading whitespace and optional asterisk
-            cleaned_line="${first_line#"${first_line%%[![:space:]]*}"}"
-            cleaned_line="${cleaned_line#\*}"
-            cleaned_line="${cleaned_line#"${cleaned_line%%[![:space:]]*}"}"
-            first_version=$(echo "${cleaned_line}" | awk '{print $1}')
-
-            if [[ -n "${first_version}" ]]; then
-                if fnm default "${first_version}"; then
-                    print_success "Set ${first_version} as default Node.js version."
-                    local fnm_env_default
-                    fnm_env_default=$("${HOME}"/.local/share/fnm/fnm env --use-on-cd)
-                    eval "${fnm_env_default}"
-                else
-                    print_error "Failed to set default Node.js version. You may need to run: fnm default ${first_version}"
-                fi
-            fi
-        fi
-    else
-        print_message "No Node.js version installed. Installing latest LTS..."
-        if fnm install --lts; then
-            print_success "Installed latest LTS Node.js."
-            # Set it as default
-            local current_node
-            current_node=$(fnm current)
-            fnm default "${current_node}"
-            local current_display
-            current_display=$(fnm current)
-            print_success "Set ${current_display} as default Node.js version."
-        else
-            print_error "Failed to install Node.js."
-            return 1
-        fi
     fi
 }
 
@@ -1551,37 +1464,6 @@ install_uv() {
     fi
 }
 
-# Install pyenv for Python version management
-install_pyenv() {
-    if ! command -v pyenv &> /dev/null; then
-        # Check if ~/.pyenv exists but pyenv command is not available
-        if [[ -d "${HOME}/.pyenv" ]]; then
-            print_warning "pyenv directory exists but command not found. Trying to fix PATH..."
-            export PYENV_ROOT="${HOME}/.pyenv"
-            export PATH="${PYENV_ROOT}/bin:${PATH}"
-            if command -v pyenv &> /dev/null; then
-                print_success "pyenv found after fixing PATH."
-                return
-            else
-                print_error "pyenv directory exists but binary not found. Manual intervention may be required."
-                return 1
-            fi
-        fi
-        
-        print_message "Installing pyenv..."
-        # Use the official install script
-        local pyenv_installer
-        pyenv_installer=$(curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer)
-        if bash <<< "${pyenv_installer}"; then
-            print_success "pyenv installed. Shell configuration will be managed by chezmoi."
-        else
-            print_error "Failed to install pyenv."
-            return 1
-        fi
-    else
-        print_debug "pyenv is already installed."
-    fi
-}
 
 # Install tmux plugins for session persistence
 install_tmux_plugins() {
@@ -1673,12 +1555,9 @@ install_iterm2_shell_integration() {
 
 # Upgrade global npm packages
 upgrade_npm_global_packages() {
-    # Initialize fnm for current session
-    if [[ -s "${HOME}/.local/share/fnm/fnm" ]]; then
-        export PATH="${HOME}/.local/share/fnm:${PATH}"
-        local fnm_env
-        fnm_env=$(fnm env --use-on-cd)
-        eval "${fnm_env}"
+    # Initialize mise for current session (provides npm if Node.js is installed)
+    if command -v mise &> /dev/null; then
+        eval "$(mise activate bash)"
     fi
 
     # Make sure npm is available
@@ -1773,7 +1652,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 129 | Last changed: Fix Tailscale BackendState JSON parsing for pretty-printed output${NC}"
+    echo -e "${GRAY}Version 130 | Last changed: Replace fnm and pyenv with mise${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
@@ -1799,9 +1678,7 @@ main() {
 
     print_section "Development Tools"
     install_starship
-    install_fnm
-    setup_nodejs
-    install_pyenv
+    install_mise
     install_uv
     install_opentofu
     install_cloudflared

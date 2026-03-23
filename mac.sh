@@ -339,7 +339,7 @@ install_core_packages() {
 
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
-    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "fnm" "tailscale" "act" "terminal-notifier" "pyenv" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook")
+    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "mise" "tailscale" "act" "terminal-notifier" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook")
     local to_install=()
     
     # Get all installed packages at once (much faster than checking individually)
@@ -566,62 +566,6 @@ add_github_to_known_hosts() {
         print_success "GitHub's SSH key added."
     else
         print_debug "GitHub's SSH key already exists in known_hosts."
-    fi
-}
-
-# Setup Node.js using fnm
-setup_nodejs() {
-    print_message "Setting up Node.js with fnm..."
-    
-    # Initialize fnm for current session
-    if command -v fnm &> /dev/null; then
-        local fnm_env
-        fnm_env=$(fnm env --use-on-cd)
-        eval "${fnm_env}"
-    else
-        print_warning "fnm command not available. Skipping Node.js setup."
-        return
-    fi
-    
-    # Check if any Node.js version is installed
-    local fnm_output
-    fnm_output=$(fnm list)
-    if echo "${fnm_output}" | grep -q .; then
-        print_debug "Node.js version already installed."
-
-        # Check if a default/global version is set
-        local current_version
-        current_version=$(fnm current 2>/dev/null || echo "none")
-        if [[ "${current_version}" == "none" ]] || [[ -z "${current_version}" ]]; then
-            print_message "No global Node.js version set. Setting the first installed version as default..."
-            local first_version
-            local fnm_list
-            fnm_list=$(fnm list)
-            local filtered_list
-            filtered_list=$(echo "${fnm_list}" | grep -v "system")
-            local first_line
-            first_line=$(echo "${filtered_list}" | head -n1)
-            first_version=$(echo "${first_line}" | awk '{print $2}')
-            if [[ -n "${first_version}" ]]; then
-                fnm default "${first_version}"
-                print_success "Set ${first_version} as default Node.js version."
-            fi
-        fi
-    else
-        print_message "No Node.js version installed. Installing latest LTS..."
-        if fnm install --lts; then
-            print_success "Installed latest LTS Node.js."
-            # Set it as default
-            local current_node
-            current_node=$(fnm current)
-            fnm default "${current_node}"
-            local current_version_display
-            current_version_display=$(fnm current)
-            print_success "Set ${current_version_display} as default Node.js version."
-        else
-            print_error "Failed to install Node.js."
-            return 1
-        fi
     fi
 }
 
@@ -1041,7 +985,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 101 | Last changed: Fix fnm idempotency, CE plugin, and Rube token leak${NC}"
+    echo -e "${GRAY}Version 102 | Last changed: Replace fnm and pyenv with mise${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -1165,7 +1109,6 @@ HELPER_EOF
     install_tmux_plugins
 
     print_section "Development Tools"
-    setup_nodejs
     install_bun
     install_sfw
     install_claude_code

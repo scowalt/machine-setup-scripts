@@ -1084,85 +1084,19 @@ EOF
     # ------------------------------------------------------------
 }
 
-# ----------------------[ Fast Node Manager ]--------------------
-install_fnm() {
-    if command -v fnm >/dev/null; then
-        print_debug "fnm already installed."
+# ----------------------[ mise (polyglot runtime manager) ]--------------------
+install_mise() {
+    if command -v mise &> /dev/null; then
+        print_debug "mise already installed."
         return
     fi
 
-    print_message "Installing fnm (Fast Node Manager)…"
-    local fnm_install_script
-    fnm_install_script=$(curl -fsSL https://fnm.vercel.app/install)
-    if bash -s -- --skip-shell <<< "${fnm_install_script}"; then
-        print_success "fnm installed. Shell configuration will be managed by chezmoi."
+    print_message "Installing mise..."
+    if curl -fsSL https://mise.run | sh; then
+        print_success "mise installed. Shell configuration will be managed by chezmoi."
     else
-        print_error "Failed to install fnm."
+        print_error "Failed to install mise."
         return 1
-    fi
-}
-
-# Setup Node.js using fnm
-setup_nodejs() {
-    print_message "Setting up Node.js with fnm..."
-    
-    # Initialize fnm for current session
-    if [[ -s "${HOME}/.local/share/fnm/fnm" ]]; then
-        export PATH="${HOME}/.local/share/fnm:${PATH}"
-        local fnm_env
-        fnm_env=$(fnm env --use-on-cd)
-        eval "${fnm_env}"
-    else
-        print_warning "fnm not found in expected location. Skipping Node.js setup."
-        return
-    fi
-    
-    # Check if fnm is now available
-    if ! command -v fnm &> /dev/null; then
-        print_warning "fnm command not available. Skipping Node.js setup."
-        return
-    fi
-    
-    # Check if any Node.js version is installed
-    local fnm_list_output
-    fnm_list_output=$(fnm list)
-    if echo "${fnm_list_output}" | grep -q .; then
-        print_debug "Node.js version already installed."
-
-        # Check if a default/global version is set
-        local current_version
-        current_version=$(fnm current 2>/dev/null || echo "none")
-        if [[ "${current_version}" == "none" ]] || [[ -z "${current_version}" ]]; then
-            print_message "No global Node.js version set. Setting the first installed version as default..."
-            local first_version
-            local fnm_versions
-            fnm_versions=$(fnm list)
-            local filtered_versions
-            filtered_versions=$(echo "${fnm_versions}" | grep -v "system")
-            local first_line
-            first_line=$(echo "${filtered_versions}" | head -n1)
-            first_version=$(echo "${first_line}" | awk '{print $2}')
-            if [[ -n "${first_version}" ]]; then
-                fnm default "${first_version}"
-                print_success "Set ${first_version} as default Node.js version."
-            fi
-        fi
-    else
-        print_message "No Node.js version installed. Installing latest LTS..."
-        print_warning "Note: Compiling Node.js on Raspberry Pi can take 10-20 minutes."
-        if fnm install --lts; then
-            print_success "Installed latest LTS Node.js."
-            # Set it as default
-            local current_node
-            current_node=$(fnm current)
-            fnm default "${current_node}"
-            local current_display
-            current_display=$(fnm current)
-            print_success "Set ${current_display} as default Node.js version."
-        else
-            print_error "Failed to install Node.js."
-            return 1
-        fi
     fi
 }
 
@@ -1562,65 +1496,12 @@ install_uv() {
     fi
 }
 
-# Install pyenv for Python version management with Raspberry Pi optimizations
-install_pyenv() {
-    if ! command -v pyenv &> /dev/null; then
-        # Check if ~/.pyenv exists but pyenv command is not available
-        if [[ -d "${HOME}/.pyenv" ]]; then
-            print_warning "pyenv directory exists but command not found. Trying to fix PATH..."
-            export PYENV_ROOT="${HOME}/.pyenv"
-            export PATH="${PYENV_ROOT}/bin:${PATH}"
-            if command -v pyenv &> /dev/null; then
-                print_success "pyenv found after fixing PATH."
-                # Still show memory warning for Pi
-                local total_mem
-                local free_output
-    free_output=$(free -m)
-    total_mem=$(echo "${free_output}" | awk '/^Mem:/{print $2}')
-                if [[ "${total_mem}" -lt 1024 ]]; then
-                    print_warning "Limited RAM detected. Python compilation may be slow or fail."
-                    print_message "Consider using pre-built Python packages or increasing swap."
-                fi
-                return
-            else
-                print_error "pyenv directory exists but binary not found. Manual intervention may be required."
-                return 1
-            fi
-        fi
-        
-        print_message "Installing pyenv (this may take a while on Raspberry Pi)..."
-        # Use the official install script
-        local pyenv_installer
-        pyenv_installer=$(curl -L https://github.com/pyenv/pyenv-installer/raw/master/bin/pyenv-installer)
-        if bash <<< "${pyenv_installer}"; then
-            print_success "pyenv installed. Shell configuration will be managed by chezmoi."
-        else
-            print_error "Failed to install pyenv."
-            return 1
-        fi
-        
-        # Check available memory for warning about Python compilation
-        local total_mem
-    local free_output
-    free_output=$(free -m)
-    total_mem=$(echo "${free_output}" | awk '/^Mem:/{print $2}')
-        if [[ "${total_mem}" -lt 1024 ]]; then
-            print_warning "Low memory detected. Python compilation may take a very long time."
-            print_message "Consider using system Python instead if compilation fails."
-        fi
-    else
-        print_debug "pyenv is already installed."
-    fi
-}
 
 # Upgrade global npm packages
 upgrade_npm_global_packages() {
-    # Initialize fnm for current session
-    if [[ -s "${HOME}/.local/share/fnm/fnm" ]]; then
-        export PATH="${HOME}/.local/share/fnm:${PATH}"
-        local fnm_env
-        fnm_env=$(fnm env --use-on-cd)
-        eval "${fnm_env}"
+    # Initialize mise for current session (provides npm if Node.js is installed)
+    if command -v mise &> /dev/null; then
+        eval "$(mise activate bash)"
     fi
 
     # Make sure npm is available
@@ -1714,7 +1595,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 106 | Last changed: Fix Tailscale BackendState JSON parsing for pretty-printed output${NC}"
+    echo -e "${GRAY}Version 107 | Last changed: Replace fnm and pyenv with mise${NC}"
 
     # Create placeholder env file early
     create_env_local
@@ -1731,9 +1612,7 @@ main() {
 
     print_section "Development Tools"
     install_1password_cli
-    install_fnm
-    setup_nodejs
-    install_pyenv
+    install_mise
     install_uv
     install_opentofu
     install_cloudflared
