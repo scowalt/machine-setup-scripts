@@ -1652,7 +1652,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 134 | Last changed: Fix Compound Engineering plugin update identifier${NC}"
+    echo -e "${GRAY}Version 135 | Last changed: Add source guard for codespaces.sh reuse${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
@@ -1779,4 +1779,4 @@ HELPER_EOF
     echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
 }
 
-main "$@"
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
