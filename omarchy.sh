@@ -897,6 +897,11 @@ install_dev_tools_aur() {
     
     # Install missing packages via yay
     if [[ "${#to_install[@]}" -gt 0 ]]; then
+        if ! can_sudo; then
+            print_warning "No sudo access - cannot install AUR packages: ${to_install[*]}"
+            print_debug "Ask an admin to run: yay -S ${to_install[*]}"
+            return
+        fi
         print_message "Installing AUR packages: ${to_install[*]}"
         if ! yay -S --noconfirm "${to_install[@]}"; then
             print_warning "Some AUR packages failed to install. Continuing..."
@@ -1481,7 +1486,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 99 | Last changed: Add Doppler CLI${NC}"
+    echo -e "${GRAY}Version 100 | Last changed: Skip AUR installs without sudo access${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
