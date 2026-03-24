@@ -1652,7 +1652,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 135 | Last changed: Add source guard for codespaces.sh reuse${NC}"
+    echo -e "${GRAY}Version 136 | Last changed: Fix source guard to work with curl|bash execution${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
@@ -1779,4 +1779,8 @@ HELPER_EOF
     echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
 }
 
-[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
+# Run main only when executed directly (not when sourced by codespaces.sh).
+# BASH_SOURCE[0] is empty during curl|bash, so treat that as direct execution.
+if [[ -z "${BASH_SOURCE[0]}" ]] || [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
