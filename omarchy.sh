@@ -706,7 +706,7 @@ install_core_packages() {
     print_message "Checking core packages..."
 
     # Define core packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "uv" "go" "inotify-tools" "shellcheck" "gitleaks" "lefthook" "mise")
+    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "uv" "go" "inotify-tools" "shellcheck" "gitleaks" "lefthook" "mise" "poppler")
     local to_install=()
 
     # Check which packages need installation
@@ -1528,7 +1528,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 103 | Last changed: Fix Compound Engineering plugin update identifier${NC}"
+    echo -e "${GRAY}Version 104 | Last changed: Add poppler for Claude Code PDF support${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local

@@ -550,7 +550,7 @@ update_and_install_core() {
     print_message "Checking core packages..."
 
     # Define an array of required packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "fonts-firacode" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "unzip" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks")
+    local packages=("git" "curl" "jq" "fish" "tmux" "fonts-firacode" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "unzip" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks" "poppler-utils")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
@@ -1652,7 +1652,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 136 | Last changed: Fix source guard to work with curl|bash execution${NC}"
+    echo -e "${GRAY}Version 137 | Last changed: Add poppler-utils for Claude Code PDF support${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
