@@ -508,17 +508,24 @@ EOF
 
 # Update chezmoi dotfiles repository to latest version
 update_chezmoi() {
-    if [[ -d ~/.local/share/chezmoi/.git ]]; then
+    local chez_src="${HOME}/.local/share/chezmoi"
+    if [[ -d "${chez_src}/.git" ]]; then
         print_message "Updating chezmoi dotfiles repository..."
+        # Reset any dirty state (merge conflicts, uncommitted changes) before pulling.
+        # The remote repo is the source of truth — local edits in the chezmoi source dir
+        # should never exist and are safe to discard.
+        git -C "${chez_src}" reset --hard HEAD > /dev/null 2>&1
+        git -C "${chez_src}" merge --abort > /dev/null 2>&1
+        git -C "${chez_src}" clean -fd > /dev/null 2>&1
         if chezmoi update --force > /dev/null; then
             print_success "chezmoi dotfiles repository updated."
         else
             print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
         fi
-    elif [[ -d ~/.local/share/chezmoi ]]; then
+    elif [[ -d "${chez_src}" ]]; then
         # Directory exists but no .git - broken state, clean up
         print_warning "Broken chezmoi directory detected, reinitializing..."
-        rm -rf ~/.local/share/chezmoi
+        rm -rf "${chez_src}"
         initialize_chezmoi
     else
         print_debug "chezmoi not initialized yet, skipping update."
@@ -937,7 +944,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 106 | Last changed: Add poppler for Claude Code PDF support${NC}"
+    echo -e "${GRAY}Version 107 | Last changed: Auto-recover chezmoi from merge conflicts before update${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local

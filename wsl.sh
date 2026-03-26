@@ -496,8 +496,17 @@ EOF
 
 # Update chezmoi dotfiles repository to latest version
 update_chezmoi() {
-    if [[ -d ~/.local/share/chezmoi ]]; then
+    local chez_src="${HOME}/.local/share/chezmoi"
+    if [[ -d "${chez_src}" ]]; then
         print_message "Updating chezmoi dotfiles repository..."
+        # Reset any dirty state (merge conflicts, uncommitted changes) before pulling.
+        # The remote repo is the source of truth — local edits in the chezmoi source dir
+        # should never exist and are safe to discard.
+        if [[ -d "${chez_src}/.git" ]]; then
+            git -C "${chez_src}" reset --hard HEAD > /dev/null 2>&1
+            git -C "${chez_src}" merge --abort > /dev/null 2>&1
+            git -C "${chez_src}" clean -fd > /dev/null 2>&1
+        fi
         if chezmoi update --force > /dev/null; then
             print_success "chezmoi dotfiles repository updated."
         else
@@ -1172,7 +1181,7 @@ setup_code_directory() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 100 | Last changed: Add poppler-utils for Claude Code PDF support${NC}"
+    echo -e "${GRAY}Version 101 | Last changed: Auto-recover chezmoi from merge conflicts before update${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local

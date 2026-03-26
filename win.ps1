@@ -155,6 +155,13 @@ function Update-Chezmoi {
     $chezmoiConfigPath = "$HOME\AppData\Local\chezmoi"
     if (Test-Path $chezmoiConfigPath) {
         Write-Host "$arrow Updating chezmoi dotfiles repository..." -ForegroundColor Cyan
+        # Reset any dirty state (merge conflicts, uncommitted changes) before pulling.
+        # The remote repo is the source of truth — local edits are safe to discard.
+        if (Test-Path "$chezmoiConfigPath\.git") {
+            git -C $chezmoiConfigPath reset --hard HEAD 2>$null | Out-Null
+            git -C $chezmoiConfigPath merge --abort 2>$null | Out-Null
+            git -C $chezmoiConfigPath clean -fd 2>$null | Out-Null
+        }
         $updateOutput = chezmoi update --force 2>&1
         if ($LASTEXITCODE -eq 0) {
             Write-Host "$success chezmoi dotfiles repository updated." -ForegroundColor Green
@@ -730,7 +737,7 @@ function Set-WindowsTerminalConfiguration {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 77 | Last changed: Fix Compound Engineering plugin update identifier" -ForegroundColor DarkGray
+    Write-Host "Version 78 | Last changed: Auto-recover chezmoi from merge conflicts before update" -ForegroundColor DarkGray
 
     # Create placeholder token files early
     New-TokenPlaceholders
