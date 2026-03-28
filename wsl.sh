@@ -279,7 +279,7 @@ update_and_install_core() {
     print_message "Checking and installing core packages as needed..."
 
     # Define an array of required packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks" "poppler-utils" "ffmpeg")
+    local packages=("git" "curl" "jq" "fish" "tmux" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks" "poppler-utils")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
@@ -681,6 +681,60 @@ setup_compound_plugin() {
             print_success "Compound Engineering plugin installed."
         else
             print_warning "Failed to install Compound Engineering plugin."
+        fi
+    fi
+}
+
+# Install packages via Homebrew
+install_brew_packages() {
+    if ! command -v brew &> /dev/null; then
+        print_warning "Homebrew not available. Skipping brew packages."
+        return 0
+    fi
+
+    local packages=("ffmpeg")
+    local to_install=()
+
+    for package in "${packages[@]}"; do
+        if brew list "${package}" &> /dev/null 2>&1; then
+            print_debug "${package} (brew) is already installed."
+        else
+            to_install+=("${package}")
+        fi
+    done
+
+    if [[ "${#to_install[@]}" -gt 0 ]]; then
+        print_message "Installing brew packages: ${to_install[*]}"
+        brew install "${to_install[@]}" > /dev/null
+        print_success "Brew packages installed."
+    fi
+}
+
+# Install Telegram plugin for Claude Code
+setup_telegram_plugin() {
+    if ! command -v claude &> /dev/null; then
+        print_debug "Claude Code not found. Skipping Telegram plugin setup."
+        return 0
+    fi
+
+    # Ensure the official plugins marketplace is registered
+    claude plugin marketplace add anthropics/claude-plugins-official 2>/dev/null
+
+    local _claude_plugin_list
+    _claude_plugin_list=$(claude plugin list 2>/dev/null) || true
+    if echo "${_claude_plugin_list}" | grep -q "telegram"; then
+        print_message "Updating Telegram plugin..."
+        if claude plugin update telegram@claude-plugins-official 2>/dev/null; then
+            print_success "Telegram plugin updated."
+        else
+            print_debug "Telegram plugin already up to date."
+        fi
+    else
+        print_message "Installing Telegram plugin..."
+        if claude plugin install telegram@claude-plugins-official 2>/dev/null; then
+            print_success "Telegram plugin installed."
+        else
+            print_warning "Failed to install Telegram plugin."
         fi
     fi
 }
@@ -1195,7 +1249,15 @@ setup_code_directory() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 102 | Last changed: Add ffmpeg and openai-whisper for voice note transcription${NC}"
+    echo -e "${GRAY}Version 103 | Last changed: Add Homebrew, run logging, Telegram plugin, move ffmpeg to brew${NC}"
+
+    # Log this run
+    local log_dir="${HOME}/.local/log/machine-setup"
+    mkdir -p "${log_dir}"
+    local log_file
+    log_file="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
+    exec > >(tee -a "${log_file}") 2>&1
+    print_debug "Logging to ${log_file}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -1216,6 +1278,7 @@ main() {
 
     print_section "Package Manager"
     install_homebrew
+    install_brew_packages
 
     print_section "Development Tools"
     install_starship
@@ -1268,6 +1331,7 @@ main() {
     install_claude_code
     setup_rube_mcp
     setup_compound_plugin
+    setup_telegram_plugin
     install_gemini_cli
     install_codex_cli
 
