@@ -1744,6 +1744,18 @@ setup_code_directory() {
 }
 
 
+# Upload log to centralized collector (non-fatal)
+upload_log() {
+    if [[ -n "${log_file:-}" ]] && [[ -f "${log_file:-}" ]]; then
+        print_debug "Uploading log to logs.scowalt.com..."
+        curl -s -X POST \
+            -F "file=@${log_file}" \
+            "https://logs.scowalt.com/upload?hostname=$(hostname)" \
+            --max-time 10 \
+            > /dev/null 2>&1 || true
+    fi
+}
+
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
     echo -e "${GRAY}Version 140 | Last changed: Add Homebrew, run logging, Telegram plugin, move ffmpeg to brew${NC}"
@@ -1883,6 +1895,7 @@ HELPER_EOF
     upgrade_npm_global_packages
 
     echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
+    upload_log
     echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
 }
 

@@ -765,6 +765,17 @@ function Setup-TelegramPlugin {
     }
 }
 
+function Upload-Log {
+    if ($logFile -and (Test-Path $logFile)) {
+        try {
+            Write-Debug "Uploading log to logs.scowalt.com..."
+            Invoke-RestMethod -Uri "https://logs.scowalt.com/upload?hostname=$env:COMPUTERNAME" `
+                -Method Post -Form @{ file = Get-Item $logFile } `
+                -TimeoutSec 10 -ErrorAction SilentlyContinue | Out-Null
+        } catch {}
+    }
+}
+
 # Main setup function to call all necessary steps
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
@@ -821,6 +832,7 @@ function Initialize-WindowsEnvironment {
     $logFile = Get-ChildItem "$env:USERPROFILE\.local\log\machine-setup" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     Write-Host "Run log saved to: $($logFile.FullName)" -ForegroundColor DarkGray
     Stop-Transcript
+    Upload-Log
 
     Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen
 }

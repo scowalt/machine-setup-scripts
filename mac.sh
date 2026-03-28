@@ -969,6 +969,18 @@ setup_telegram_plugin() {
     fi
 }
 
+# Upload log to centralized collector (non-fatal)
+upload_log() {
+    if [[ -n "${log_file:-}" ]] && [[ -f "${log_file:-}" ]]; then
+        print_debug "Uploading log to logs.scowalt.com..."
+        curl -s -X POST \
+            -F "file=@${log_file}" \
+            "https://logs.scowalt.com/upload?hostname=$(hostname)" \
+            --max-time 10 \
+            > /dev/null 2>&1 || true
+    fi
+}
+
 main() {
     # Run the setup tasks
     current_user=$(whoami)
@@ -1122,6 +1134,7 @@ HELPER_EOF
     upgrade_npm_global_packages
 
     echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
+    upload_log
     echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
 }
 
