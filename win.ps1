@@ -575,7 +575,7 @@ function Setup-CompoundPlugin {
     if ($pluginList -match "compound-engineering") {
         Write-Host "$arrow Updating Compound Engineering plugin..." -ForegroundColor Cyan
         try {
-            claude plugin update compound-engineering@every-marketplace 2>$null
+            claude plugin update compound-engineering@compound-engineering-plugin 2>$null
             Write-Host "$success Compound Engineering plugin updated." -ForegroundColor Green
         }
         catch {

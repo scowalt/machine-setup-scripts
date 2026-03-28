@@ -1165,7 +1165,7 @@ setup_compound_plugin() {
     _claude_plugin_list=$(claude plugin list 2>/dev/null) || true
     if echo "${_claude_plugin_list}" | grep -q "compound-engineering"; then
         print_message "Updating Compound Engineering plugin..."
-        if claude plugin update compound-engineering@every-marketplace 2>/dev/null; then
+        if claude plugin update compound-engineering@compound-engineering-plugin 2>/dev/null; then
             print_success "Compound Engineering plugin updated."
         else
             print_warning "Failed to update Compound Engineering plugin."
