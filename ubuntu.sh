@@ -1051,6 +1051,12 @@ install_homebrew() {
         print_debug "Homebrew found but not in PATH, adding..."
     else
         print_message "Installing Homebrew (linuxbrew)..."
+        # Pre-create the linuxbrew directory with current sudo session
+        # so the Homebrew installer doesn't prompt for sudo again
+        if can_sudo; then
+            sudo mkdir -p /home/linuxbrew
+            sudo chown -R "$(whoami)" /home/linuxbrew
+        fi
         NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" > /dev/null
         print_success "Homebrew installed."
     fi
