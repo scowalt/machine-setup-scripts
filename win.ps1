@@ -818,9 +818,11 @@ function Initialize-WindowsEnvironment {
     Update-NpmGlobalPackages
     Install-WindowsUpdates # this should always be LAST since it may prompt a system reboot
 
-    Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen
-
+    $logFile = Get-ChildItem "$env:USERPROFILE\.local\log\machine-setup" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    Write-Host "Run log saved to: $($logFile.FullName)" -ForegroundColor DarkGray
     Stop-Transcript
+
+    Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen
 }
 
 # Run the main setup function

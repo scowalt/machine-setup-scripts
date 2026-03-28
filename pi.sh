@@ -1775,6 +1775,7 @@ main() {
     print_section "Final Updates"
     upgrade_npm_global_packages
 
+    echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
     echo -e "\n${GREEN}${BOLD}✨ Setup complete! Please log out and log back in for all changes to take effect.${NC}\n"
 }
 

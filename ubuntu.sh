@@ -1882,6 +1882,7 @@ HELPER_EOF
     print_section "Final Updates"
     upgrade_npm_global_packages
 
+    echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
     echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
 }
 

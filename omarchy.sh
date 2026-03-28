@@ -1755,6 +1755,7 @@ install_iterm2_shell_integration
     update_all_packages
     upgrade_npm_global_packages
 
+    echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
     echo -e "\n${GREEN}${BOLD}✨ Setup complete!${NC}\n"
 }
 
