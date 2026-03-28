@@ -30,7 +30,15 @@ fi
 
 main() {
     echo -e "\n${BOLD}☁️ GitHub Codespaces Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 1 | Last changed: Initial codespaces setup script${NC}"
+    echo -e "${GRAY}Version 2 | Last changed: Add run logging, Telegram plugin${NC}"
+
+    # Log this run
+    local log_dir="${HOME}/.local/log/machine-setup"
+    mkdir -p "${log_dir}"
+    local log_file
+    log_file="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
+    exec > >(tee -a "${log_file}") 2>&1
+    print_debug "Logging to ${log_file}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
@@ -120,6 +128,7 @@ HELPER_EOF
     install_claude_code
     setup_rube_mcp
     setup_compound_plugin
+    setup_telegram_plugin
     install_gemini_cli
 
     print_section "Final Updates"

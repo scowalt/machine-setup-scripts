@@ -733,11 +733,52 @@ function Set-WindowsTerminalConfiguration {
     Write-Host "$success Windows Terminal settings updated." -ForegroundColor Green
 }
 
+function Setup-TelegramPlugin {
+    if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+        Write-Debug "Claude Code not found. Skipping Telegram plugin setup."
+        return
+    }
+
+    # Ensure the official plugins marketplace is registered
+    claude plugin marketplace add anthropics/claude-plugins-official 2>$null
+
+    $pluginList = claude plugin list 2>$null
+    if ($pluginList -match "telegram") {
+        Write-Host "$arrow Updating Telegram plugin..." -ForegroundColor Cyan
+        try {
+            claude plugin update telegram@claude-plugins-official 2>$null
+            Write-Host "$success Telegram plugin updated." -ForegroundColor Green
+        }
+        catch {
+            Write-Host "$warnIcon Failed to update Telegram plugin." -ForegroundColor Yellow
+        }
+    }
+    else {
+        Write-Host "$arrow Installing Telegram plugin..." -ForegroundColor Cyan
+        try {
+            claude plugin install telegram@claude-plugins-official 2>$null
+            Write-Host "$success Telegram plugin installed." -ForegroundColor Green
+        }
+        catch {
+            Write-Host "$warnIcon Failed to install Telegram plugin." -ForegroundColor Yellow
+        }
+    }
+}
+
 # Main setup function to call all necessary steps
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 78 | Last changed: Auto-recover chezmoi from merge conflicts before update" -ForegroundColor DarkGray
+    Write-Host "Version 79 | Last changed: Add run logging, Telegram plugin" -ForegroundColor DarkGray
+
+    # Log this run
+    $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
+    if (-not (Test-Path $logDir)) {
+        New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    }
+    $logFile = Join-Path $logDir "$(Get-Date -Format 'yyyy-MM-dd-HHmmss').log"
+    Start-Transcript -Path $logFile -Append
+    Write-Debug "Logging to $logFile"
 
     # Create placeholder token files early
     New-TokenPlaceholders
@@ -767,6 +808,7 @@ function Initialize-WindowsEnvironment {
     Install-ClaudeCode
     Setup-RubeMcp
     Setup-CompoundPlugin
+    Setup-TelegramPlugin
     Install-GeminiCli
     Install-CodexCli
     Install-TursoCli
@@ -777,6 +819,8 @@ function Initialize-WindowsEnvironment {
     Install-WindowsUpdates # this should always be LAST since it may prompt a system reboot
 
     Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen
+
+    Stop-Transcript
 }
 
 # Run the main setup function

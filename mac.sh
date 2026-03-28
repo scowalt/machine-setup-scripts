@@ -339,7 +339,7 @@ install_core_packages() {
 
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
-    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "mise" "tailscale" "dopplerhq/cli/doppler" "act" "terminal-notifier" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook" "poppler")
+    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "mise" "tailscale" "dopplerhq/cli/doppler" "act" "terminal-notifier" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook" "poppler" "ffmpeg")
     local to_install=()
     
     # Get all installed packages at once (much faster than checking individually)
@@ -940,11 +940,48 @@ setup_code_directory() {
     fi
 }
 
+# Install Telegram plugin for Claude Code
+setup_telegram_plugin() {
+    if ! command -v claude &> /dev/null; then
+        print_debug "Claude Code not found. Skipping Telegram plugin setup."
+        return 0
+    fi
+
+    # Ensure the official plugins marketplace is registered
+    claude plugin marketplace add anthropics/claude-plugins-official 2>/dev/null
+
+    local _claude_plugin_list
+    _claude_plugin_list=$(claude plugin list 2>/dev/null) || true
+    if echo "${_claude_plugin_list}" | grep -q "telegram"; then
+        print_message "Updating Telegram plugin..."
+        if claude plugin update telegram@claude-plugins-official 2>/dev/null; then
+            print_success "Telegram plugin updated."
+        else
+            print_debug "Telegram plugin already up to date."
+        fi
+    else
+        print_message "Installing Telegram plugin..."
+        if claude plugin install telegram@claude-plugins-official 2>/dev/null; then
+            print_success "Telegram plugin installed."
+        else
+            print_warning "Failed to install Telegram plugin."
+        fi
+    fi
+}
+
 main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 107 | Last changed: Auto-recover chezmoi from merge conflicts before update${NC}"
+    echo -e "${GRAY}Version 108 | Last changed: Add run logging, Telegram plugin, ffmpeg via brew${NC}"
+
+    # Log this run
+    local log_dir="${HOME}/.local/log/machine-setup"
+    mkdir -p "${log_dir}"
+    local log_file
+    log_file="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
+    exec > >(tee -a "${log_file}") 2>&1
+    print_debug "Logging to ${log_file}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -1073,6 +1110,7 @@ HELPER_EOF
     install_claude_code
     setup_rube_mcp
     setup_compound_plugin
+    setup_telegram_plugin
     install_gemini_cli
     install_codex_cli
 

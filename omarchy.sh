@@ -1535,9 +1535,102 @@ setup_code_directory() {
     fi
 }
 
+# Install Homebrew (linuxbrew) on Linux
+install_homebrew() {
+    if command -v brew &> /dev/null; then
+        print_debug "Homebrew is already installed."
+    elif [[ -x "/home/linuxbrew/.linuxbrew/bin/brew" ]]; then
+        print_debug "Homebrew found but not in PATH, adding..."
+    else
+        print_message "Installing Homebrew (linuxbrew)..."
+        NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" > /dev/null
+        print_success "Homebrew installed."
+    fi
+    # Ensure brew is in PATH for this session
+    if [[ -x "/home/linuxbrew/.linuxbrew/bin/brew" ]]; then
+        eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+    fi
+}
+
+# Install packages via Homebrew
+install_brew_packages() {
+    if ! command -v brew &> /dev/null; then
+        print_warning "Homebrew not available. Skipping brew packages."
+        return 0
+    fi
+
+    local packages=("ffmpeg")
+    local to_install=()
+
+    for package in "${packages[@]}"; do
+        if brew list "${package}" &> /dev/null 2>&1; then
+            print_debug "${package} (brew) is already installed."
+        else
+            to_install+=("${package}")
+        fi
+    done
+
+    if [[ "${#to_install[@]}" -gt 0 ]]; then
+        print_message "Installing brew packages: ${to_install[*]}"
+        brew install "${to_install[@]}" > /dev/null
+        print_success "Brew packages installed."
+    fi
+}
+
+# Install Telegram plugin for Claude Code
+setup_telegram_plugin() {
+    if ! command -v claude &> /dev/null; then
+        print_debug "Claude Code not found. Skipping Telegram plugin setup."
+        return 0
+    fi
+
+    # Ensure the official plugins marketplace is registered
+    claude plugin marketplace add anthropics/claude-plugins-official 2>/dev/null
+
+    local _claude_plugin_list
+    _claude_plugin_list=$(claude plugin list 2>/dev/null) || true
+    if echo "${_claude_plugin_list}" | grep -q "telegram"; then
+        print_message "Updating Telegram plugin..."
+        if claude plugin update telegram@claude-plugins-official 2>/dev/null; then
+            print_success "Telegram plugin updated."
+        else
+            print_debug "Telegram plugin already up to date."
+        fi
+    else
+        print_message "Installing Telegram plugin..."
+        if claude plugin install telegram@claude-plugins-official 2>/dev/null; then
+            print_success "Telegram plugin installed."
+        else
+            print_warning "Failed to install Telegram plugin."
+        fi
+    fi
+}
+
+install_whisper() {
+    if pip3 show openai-whisper &> /dev/null; then
+        print_debug "openai-whisper is already installed."
+        return
+    fi
+
+    print_message "Installing openai-whisper..."
+    if pip3 install --user --break-system-packages openai-whisper; then
+        print_success "openai-whisper installed."
+    else
+        print_error "Failed to install openai-whisper."
+    fi
+}
+
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 105 | Last changed: Auto-recover chezmoi from merge conflicts before update${NC}"
+    echo -e "${GRAY}Version 106 | Last changed: Add run logging, Homebrew, Telegram plugin, ffmpeg, whisper${NC}"
+
+    # Log this run
+    local log_dir="${HOME}/.local/log/machine-setup"
+    mkdir -p "${log_dir}"
+    local log_file
+    log_file="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
+    exec > >(tee -a "${log_file}") 2>&1
+    print_debug "Logging to ${log_file}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
@@ -1573,15 +1666,21 @@ install_omarchy
 install_dev_tools_aur
 setup_tailscale_ssh
 
+print_section "Homebrew & Brew Packages"
+install_homebrew
+install_brew_packages
+
 print_section "Development Tools"
 install_bun
 install_sfw
 install_claude_code
 setup_rube_mcp
 setup_compound_plugin
+setup_telegram_plugin
 install_gemini_cli
 install_codex_cli
 setup_codex_compound_skills
+install_whisper
 
 print_section "Shared Directories"
 setup_claude_shared_directory
