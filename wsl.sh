@@ -279,7 +279,7 @@ update_and_install_core() {
     print_message "Checking and installing core packages as needed..."
 
     # Define an array of required packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks" "poppler-utils")
+    local packages=("git" "curl" "jq" "fish" "tmux" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks" "poppler-utils" "ffmpeg")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
@@ -977,6 +977,20 @@ install_uv() {
     fi
 }
 
+install_whisper() {
+    if pip3 show openai-whisper &> /dev/null; then
+        print_debug "openai-whisper is already installed."
+        return
+    fi
+
+    print_message "Installing openai-whisper..."
+    if pip3 install --user --break-system-packages openai-whisper; then
+        print_success "openai-whisper installed."
+    else
+        print_error "Failed to install openai-whisper."
+    fi
+}
+
 # Install Bun JavaScript runtime and package manager
 install_bun() {
     if command -v bun &> /dev/null; then
@@ -1181,7 +1195,7 @@ setup_code_directory() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 101 | Last changed: Auto-recover chezmoi from merge conflicts before update${NC}"
+    echo -e "${GRAY}Version 102 | Last changed: Add ffmpeg and openai-whisper for voice note transcription${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -1208,6 +1222,7 @@ main() {
     install_lefthook
     install_mise
     install_uv
+    install_whisper
     install_bun
     install_sfw
     install_opentofu

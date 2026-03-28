@@ -550,7 +550,7 @@ update_and_install_core() {
     print_message "Checking core packages..."
 
     # Define an array of required packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "fonts-firacode" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "unzip" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks" "poppler-utils")
+    local packages=("git" "curl" "jq" "fish" "tmux" "fonts-firacode" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "unzip" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks" "poppler-utils" "ffmpeg")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
@@ -1473,6 +1473,20 @@ install_uv() {
     fi
 }
 
+install_whisper() {
+    if pip3 show openai-whisper &> /dev/null; then
+        print_debug "openai-whisper is already installed."
+        return
+    fi
+
+    print_message "Installing openai-whisper..."
+    if pip3 install --user --break-system-packages openai-whisper; then
+        print_success "openai-whisper installed."
+    else
+        print_error "Failed to install openai-whisper."
+    fi
+}
+
 
 # Install tmux plugins for session persistence
 install_tmux_plugins() {
@@ -1661,7 +1675,7 @@ setup_code_directory() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 138 | Last changed: Auto-recover chezmoi from merge conflicts before update${NC}"
+    echo -e "${GRAY}Version 139 | Last changed: Add ffmpeg and openai-whisper for voice note transcription${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
@@ -1690,6 +1704,7 @@ main() {
     install_lefthook
     install_mise
     install_uv
+    install_whisper
     install_opentofu
     install_cloudflared
     install_turso
