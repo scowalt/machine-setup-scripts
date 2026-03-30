@@ -575,7 +575,7 @@ function Setup-CompoundPlugin {
     if ($pluginList -match "compound-engineering") {
         Write-Host "$arrow Updating Compound Engineering plugin..." -ForegroundColor Cyan
         try {
-            claude plugin update compound-engineering@compound-engineering-plugin 2>$null
+            claude plugin update compound-engineering 2>$null
             Write-Host "$success Compound Engineering plugin updated." -ForegroundColor Green
         }
         catch {
@@ -780,7 +780,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 79 | Last changed: Add run logging, Telegram plugin" -ForegroundColor DarkGray
+    Write-Host "Version 80 | Last changed: Fix compound plugin update command syntax" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"

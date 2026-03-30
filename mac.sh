@@ -703,7 +703,7 @@ setup_compound_plugin() {
     _plugin_list=$(claude plugin list 2>/dev/null) || true
     if echo "${_plugin_list}" | grep -q "compound-engineering"; then
         print_message "Updating Compound Engineering plugin..."
-        if claude plugin update compound-engineering@compound-engineering-plugin 2>/dev/null; then
+        if claude plugin update compound-engineering 2>/dev/null; then
             print_success "Compound Engineering plugin updated."
         else
             print_warning "Failed to update Compound Engineering plugin."
@@ -985,7 +985,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 108 | Last changed: Add run logging, Telegram plugin, ffmpeg via brew${NC}"
+    echo -e "${GRAY}Version 109 | Last changed: Fix compound plugin update command syntax${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

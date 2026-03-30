@@ -706,7 +706,7 @@ install_core_packages() {
     print_message "Checking core packages..."
 
     # Define core packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "uv" "go" "inotify-tools" "shellcheck" "gitleaks" "lefthook" "mise" "poppler")
+    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "uv" "go" "inotify-tools" "shellcheck" "gitleaks" "mise" "poppler")
     local to_install=()
 
     # Check which packages need installation
@@ -883,7 +883,7 @@ install_dev_tools_aur() {
     print_message "Installing development tools from AUR..."
 
     # Development tools available in AUR
-    local aur_packages=("chezmoi" "1password-cli" "tailscale" "doppler-cli-bin" "act" "cloudflared" "turso-cli")
+    local aur_packages=("chezmoi" "1password-cli" "tailscale" "doppler-cli-bin" "act" "cloudflared" "turso-cli" "lefthook")
     local to_install=()
 
     # Check which packages need installation
@@ -929,8 +929,11 @@ setup_tailscale_ssh() {
             return
         fi
         print_message "Enabling Tailscale SSH..."
-        sudo tailscale set --ssh
-        print_success "Tailscale SSH enabled."
+        if sudo tailscale set --ssh; then
+            print_success "Tailscale SSH enabled."
+        else
+            print_warning "Failed to enable Tailscale SSH. Client/daemon version mismatch may require a reboot."
+        fi
     else
         print_debug "Tailscale SSH is already enabled."
     fi
@@ -1165,7 +1168,7 @@ setup_compound_plugin() {
     _claude_plugin_list=$(claude plugin list 2>/dev/null) || true
     if echo "${_claude_plugin_list}" | grep -q "compound-engineering"; then
         print_message "Updating Compound Engineering plugin..."
-        if claude plugin update compound-engineering@compound-engineering-plugin 2>/dev/null; then
+        if claude plugin update compound-engineering 2>/dev/null; then
             print_success "Compound Engineering plugin updated."
         else
             print_warning "Failed to update Compound Engineering plugin."
@@ -1298,6 +1301,7 @@ install_claude_code() {
     local _install_script
     _install_script=$(curl -fsSL https://claude.ai/install.sh) || { print_error "Failed to download Claude Code installer."; return 1; }
     if bash <<< "${_install_script}"; then
+        export PATH="${HOME}/.local/bin:${PATH}"
         print_success "Claude Code installed."
     else
         print_error "Failed to install Claude Code."
@@ -1611,13 +1615,13 @@ setup_telegram_plugin() {
 }
 
 install_whisper() {
-    if pip3 show openai-whisper &> /dev/null; then
+    if python3 -m pip show openai-whisper &> /dev/null; then
         print_debug "openai-whisper is already installed."
         return
     fi
 
     print_message "Installing openai-whisper..."
-    if pip3 install --user --break-system-packages openai-whisper; then
+    if python3 -m pip install --user --break-system-packages openai-whisper; then
         print_success "openai-whisper installed."
     else
         print_error "Failed to install openai-whisper."
@@ -1638,7 +1642,7 @@ upload_log() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 106 | Last changed: Add run logging, Homebrew, Telegram plugin, ffmpeg, whisper${NC}"
+    echo -e "${GRAY}Version 107 | Last changed: Fix CWD permissions, lefthook AUR, pip3, Claude PATH, Tailscale SSH, compound plugin update${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1647,6 +1651,9 @@ main() {
     log_file="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
     exec > >(tee -a "${log_file}") 2>&1
     print_debug "Logging to ${log_file}"
+
+    # Ensure CWD is readable (non-admin users may start in restricted directories)
+    cd "${HOME}" || true
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
