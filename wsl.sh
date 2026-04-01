@@ -1284,7 +1284,7 @@ upload_log() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 105 | Last changed: Fix plugin update names and capture stderr on failure${NC}"
+    echo -e "${GRAY}Version 106 | Last changed: Fix plugin detection grep patterns${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

@@ -1787,7 +1787,7 @@ upload_log() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 142 | Last changed: Fix plugin update names and capture stderr on failure${NC}"
+    echo -e "${GRAY}Version 143 | Last changed: Fix plugin detection grep patterns${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

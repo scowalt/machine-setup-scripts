@@ -1008,7 +1008,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 110 | Last changed: Fix plugin update names and capture stderr on failure${NC}"
+    echo -e "${GRAY}Version 111 | Last changed: Fix plugin detection grep patterns${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
