@@ -568,28 +568,31 @@ function Setup-CompoundPlugin {
     }
 
     # Ensure marketplace is registered (idempotent, needed for updates too)
-    claude plugin marketplace add EveryInc/compound-engineering-plugin 2>$null
+    $output = claude plugin marketplace add EveryInc/compound-engineering-plugin 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "$warnIcon Failed to register Compound Engineering marketplace: $output" -ForegroundColor Yellow
+    }
 
     # Update if already installed, install if not
     $pluginList = claude plugin list 2>$null
     if ($pluginList -match "compound-engineering") {
         Write-Host "$arrow Updating Compound Engineering plugin..." -ForegroundColor Cyan
-        try {
-            claude plugin update compound-engineering 2>$null
+        $output = claude plugin update compound-engineering@compound-engineering-plugin 2>&1
+        if ($LASTEXITCODE -eq 0) {
             Write-Host "$success Compound Engineering plugin updated." -ForegroundColor Green
         }
-        catch {
-            Write-Host "$warnIcon Failed to update Compound Engineering plugin." -ForegroundColor Yellow
+        else {
+            Write-Host "$warnIcon Failed to update Compound Engineering plugin: $output" -ForegroundColor Yellow
         }
     }
     else {
         Write-Host "$arrow Installing Compound Engineering plugin..." -ForegroundColor Cyan
-        try {
-            claude plugin install compound-engineering --scope user 2>$null
+        $output = claude plugin install compound-engineering --scope user 2>&1
+        if ($LASTEXITCODE -eq 0) {
             Write-Host "$success Compound Engineering plugin installed." -ForegroundColor Green
         }
-        catch {
-            Write-Host "$warnIcon Failed to install Compound Engineering plugin." -ForegroundColor Yellow
+        else {
+            Write-Host "$warnIcon Failed to install Compound Engineering plugin: $output" -ForegroundColor Yellow
         }
     }
 }
@@ -740,27 +743,30 @@ function Setup-TelegramPlugin {
     }
 
     # Ensure the official plugins marketplace is registered
-    claude plugin marketplace add anthropics/claude-plugins-official 2>$null
+    $output = claude plugin marketplace add anthropics/claude-plugins-official 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "$warnIcon Failed to register official plugins marketplace: $output" -ForegroundColor Yellow
+    }
 
     $pluginList = claude plugin list 2>$null
     if ($pluginList -match "telegram") {
         Write-Host "$arrow Updating Telegram plugin..." -ForegroundColor Cyan
-        try {
-            claude plugin update telegram@claude-plugins-official 2>$null
+        $output = claude plugin update telegram@claude-plugins-official 2>&1
+        if ($LASTEXITCODE -eq 0) {
             Write-Host "$success Telegram plugin updated." -ForegroundColor Green
         }
-        catch {
-            Write-Host "$warnIcon Failed to update Telegram plugin." -ForegroundColor Yellow
+        else {
+            Write-Host "$warnIcon Failed to update Telegram plugin: $output" -ForegroundColor Yellow
         }
     }
     else {
         Write-Host "$arrow Installing Telegram plugin..." -ForegroundColor Cyan
-        try {
-            claude plugin install telegram@claude-plugins-official 2>$null
+        $output = claude plugin install telegram@claude-plugins-official 2>&1
+        if ($LASTEXITCODE -eq 0) {
             Write-Host "$success Telegram plugin installed." -ForegroundColor Green
         }
-        catch {
-            Write-Host "$warnIcon Failed to install Telegram plugin." -ForegroundColor Yellow
+        else {
+            Write-Host "$warnIcon Failed to install Telegram plugin: $output" -ForegroundColor Yellow
         }
     }
 }
@@ -780,7 +786,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 80 | Last changed: Fix compound plugin update command syntax" -ForegroundColor DarkGray
+    Write-Host "Version 81 | Last changed: Fix plugin update names and capture stderr on failure" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"

@@ -1021,24 +1021,27 @@ setup_compound_plugin() {
     fi
 
     # Ensure marketplace is registered (idempotent, needed for updates too)
-    claude plugin marketplace add EveryInc/compound-engineering-plugin 2>/dev/null
+    local _output
+    if ! _output=$(claude plugin marketplace add EveryInc/compound-engineering-plugin 2>&1); then
+        print_warning "Failed to register Compound Engineering marketplace: ${_output}"
+    fi
 
     # Update if already installed, install if not
     local _claude_plugin_list
     _claude_plugin_list=$(claude plugin list 2>/dev/null) || true
     if echo "${_claude_plugin_list}" | grep -q "compound-engineering"; then
         print_message "Updating Compound Engineering plugin..."
-        if claude plugin update compound-engineering 2>/dev/null; then
+        if _output=$(claude plugin update compound-engineering@compound-engineering-plugin 2>&1); then
             print_success "Compound Engineering plugin updated."
         else
-            print_warning "Failed to update Compound Engineering plugin."
+            print_warning "Failed to update Compound Engineering plugin: ${_output}"
         fi
     else
         print_message "Installing Compound Engineering plugin..."
-        if claude plugin install compound-engineering --scope user 2>/dev/null; then
+        if _output=$(claude plugin install compound-engineering --scope user 2>&1); then
             print_success "Compound Engineering plugin installed."
         else
-            print_warning "Failed to install Compound Engineering plugin."
+            print_warning "Failed to install Compound Engineering plugin: ${_output}"
         fi
     fi
 }
@@ -1099,23 +1102,26 @@ setup_telegram_plugin() {
     fi
 
     # Ensure the official plugins marketplace is registered
-    claude plugin marketplace add anthropics/claude-plugins-official 2>/dev/null
+    local _output
+    if ! _output=$(claude plugin marketplace add anthropics/claude-plugins-official 2>&1); then
+        print_warning "Failed to register official plugins marketplace: ${_output}"
+    fi
 
     local _claude_plugin_list
     _claude_plugin_list=$(claude plugin list 2>/dev/null) || true
     if echo "${_claude_plugin_list}" | grep -q "telegram"; then
         print_message "Updating Telegram plugin..."
-        if claude plugin update telegram@claude-plugins-official 2>/dev/null; then
+        if _output=$(claude plugin update telegram@claude-plugins-official 2>&1); then
             print_success "Telegram plugin updated."
         else
-            print_debug "Telegram plugin already up to date."
+            print_warning "Failed to update Telegram plugin: ${_output}"
         fi
     else
         print_message "Installing Telegram plugin..."
-        if claude plugin install telegram@claude-plugins-official 2>/dev/null; then
+        if _output=$(claude plugin install telegram@claude-plugins-official 2>&1); then
             print_success "Telegram plugin installed."
         else
-            print_warning "Failed to install Telegram plugin."
+            print_warning "Failed to install Telegram plugin: ${_output}"
         fi
     fi
 }
@@ -1764,7 +1770,7 @@ upload_log() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 141 | Last changed: Fix compound plugin update command syntax${NC}"
+    echo -e "${GRAY}Version 142 | Last changed: Fix plugin update names and capture stderr on failure${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
