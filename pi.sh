@@ -1355,7 +1355,7 @@ setup_compound_plugin() {
     if [[ "${BAN_COMPOUND_PLUGIN:-}" == "1" ]]; then
         local _claude_plugin_list
         _claude_plugin_list=$(claude plugin list 2>/dev/null) || true
-        if echo "${_claude_plugin_list}" | grep -q "compound-engineering"; then
+        if echo "${_claude_plugin_list}" | grep -q "compound-engineering@"; then
             print_message "BAN_COMPOUND_PLUGIN=1, uninstalling Compound Engineering plugin..."
             local _output
             if _output=$(claude plugin uninstall compound-engineering@compound-engineering-plugin 2>&1); then
@@ -1378,7 +1378,7 @@ setup_compound_plugin() {
     # Update if already installed, install if not
     local _plugin_list
     _plugin_list=$(claude plugin list 2>/dev/null) || true
-    if echo "${_plugin_list}" | grep -q "compound-engineering"; then
+    if echo "${_plugin_list}" | grep -q "compound-engineering@"; then
         print_message "Updating Compound Engineering plugin..."
         if _output=$(claude plugin update compound-engineering@compound-engineering-plugin 2>&1); then
             print_success "Compound Engineering plugin updated."
@@ -1456,7 +1456,7 @@ setup_telegram_plugin() {
 
     local _claude_plugin_list
     _claude_plugin_list=$(claude plugin list 2>/dev/null) || true
-    if echo "${_claude_plugin_list}" | grep -q "telegram"; then
+    if echo "${_claude_plugin_list}" | grep -q "telegram@"; then
         print_message "Updating Telegram plugin..."
         if _output=$(claude plugin update telegram@claude-plugins-official 2>&1); then
             print_success "Telegram plugin updated."
