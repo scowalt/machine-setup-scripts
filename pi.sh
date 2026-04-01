@@ -1352,6 +1352,11 @@ setup_compound_plugin() {
         return 0
     fi
 
+    if [[ "${SKIP_COMPOUND_PLUGIN:-}" == "1" ]]; then
+        print_debug "SKIP_COMPOUND_PLUGIN=1, skipping Compound Engineering plugin."
+        return 0
+    fi
+
     # Ensure marketplace is registered (idempotent, needed for updates too)
     local _output
     if ! _output=$(claude plugin marketplace add EveryInc/compound-engineering-plugin 2>&1); then
