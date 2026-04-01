@@ -1352,8 +1352,20 @@ setup_compound_plugin() {
         return 0
     fi
 
-    if [[ "${SKIP_COMPOUND_PLUGIN:-}" == "1" ]]; then
-        print_debug "SKIP_COMPOUND_PLUGIN=1, skipping Compound Engineering plugin."
+    if [[ "${BAN_COMPOUND_PLUGIN:-}" == "1" ]]; then
+        local _claude_plugin_list
+        _claude_plugin_list=$(claude plugin list 2>/dev/null) || true
+        if echo "${_claude_plugin_list}" | grep -q "compound-engineering"; then
+            print_message "BAN_COMPOUND_PLUGIN=1, uninstalling Compound Engineering plugin..."
+            local _output
+            if _output=$(claude plugin uninstall compound-engineering@compound-engineering-plugin 2>&1); then
+                print_success "Compound Engineering plugin uninstalled."
+            else
+                print_warning "Failed to uninstall Compound Engineering plugin: ${_output}"
+            fi
+        else
+            print_debug "BAN_COMPOUND_PLUGIN=1, Compound Engineering not installed."
+        fi
         return 0
     fi
 
