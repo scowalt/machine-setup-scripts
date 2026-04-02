@@ -1208,6 +1208,28 @@ setup_codex_compound_skills() {
         return 0
     fi
 
+    if [[ "${BAN_COMPOUND_PLUGIN:-}" == "1" ]]; then
+        # Remove Codex compound skills if banned
+        local skills_dir="${HOME}/.agents/skills"
+        local repo_dir="${HOME}/.local/share/compound-engineering-plugin"
+        if [[ -d "${repo_dir}" ]]; then
+            print_message "BAN_COMPOUND_PLUGIN=1, removing Compound Engineering Codex skills..."
+            # Remove skill symlinks
+            if [[ -d "${repo_dir}/plugins/compound-engineering/skills" ]]; then
+                for _skill in "${repo_dir}"/plugins/compound-engineering/skills/*/; do
+                    local skill_name
+                    skill_name=$(basename "${_skill}")
+                    rm -f "${skills_dir}/${skill_name}"
+                done
+            fi
+            rm -rf "${repo_dir}"
+            print_success "Compound Engineering Codex skills removed."
+        else
+            print_debug "BAN_COMPOUND_PLUGIN=1, no Codex skills to remove."
+        fi
+        return 0
+    fi
+
     local repo_dir="${HOME}/.local/share/compound-engineering-plugin"
     local skills_dir="${HOME}/.agents/skills"
 
