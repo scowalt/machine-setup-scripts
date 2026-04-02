@@ -1267,7 +1267,7 @@ upload_log() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 107 | Last changed: Fix plugin install/update logic to try install first, then update${NC}"
+    echo -e "${GRAY}Version 108 | Last changed: Source .env.local early so env vars are available before setup_compound_plugin${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1279,6 +1279,14 @@ main() {
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
+
+    # Source env vars early so BAN_COMPOUND_PLUGIN etc. are available
+    if [[ -f "${HOME}/.env.local" ]]; then
+        set -a
+        # shellcheck source=/dev/null
+        source "${HOME}/.env.local"
+        set +a
+    fi
 
     print_section "User & System Setup"
     ensure_not_root

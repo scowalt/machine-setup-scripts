@@ -1770,7 +1770,7 @@ upload_log() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 144 | Last changed: Fix plugin install/update logic to try install first, then update${NC}"
+    echo -e "${GRAY}Version 145 | Last changed: Source .env.local early so env vars are available before setup_compound_plugin${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1782,6 +1782,14 @@ main() {
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
+
+    # Source env vars early so BAN_COMPOUND_PLUGIN etc. are available
+    if [[ -f "${HOME}/.env.local" ]]; then
+        set -a
+        # shellcheck source=/dev/null
+        source "${HOME}/.env.local"
+        set +a
+    fi
 
     print_section "User & System Setup"
     ensure_not_root
