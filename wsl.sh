@@ -401,6 +401,20 @@ install_homebrew() {
         brew_env=$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)
         eval "${brew_env}"
     fi
+
+    # Fix ownership if Cellar is not writable by current user (multi-user installs)
+    local brew_prefix
+    brew_prefix="$(brew --prefix 2>/dev/null)"
+    if [[ -n "${brew_prefix}" ]] && [[ -d "${brew_prefix}/Cellar" ]] && [[ ! -w "${brew_prefix}/Cellar" ]]; then
+        if can_sudo; then
+            print_message "Fixing Homebrew permissions for $(whoami)..."
+            sudo chown -R "$(whoami)" "${brew_prefix}/Cellar" "${brew_prefix}/Homebrew" "${brew_prefix}/lib" "${brew_prefix}/bin" "${brew_prefix}/share" "${brew_prefix}/etc" "${brew_prefix}/opt" "${brew_prefix}/var" 2>/dev/null
+            print_success "Homebrew permissions fixed."
+        else
+            print_warning "Homebrew Cellar is not writable by $(whoami). Brew installs may fail."
+            print_debug "An admin can fix this: sudo chown -R $(whoami) ${brew_prefix}/Cellar"
+        fi
+    fi
 }
 
 # Ensure Homebrew is available before using it
@@ -1267,7 +1281,7 @@ upload_log() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 108 | Last changed: Source .env.local early so env vars are available before setup_compound_plugin${NC}"
+    echo -e "${GRAY}Version 109 | Last changed: Add Homebrew permissions fix for multi-user installs${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
