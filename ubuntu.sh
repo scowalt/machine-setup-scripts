@@ -117,6 +117,13 @@ detect_machine_type() {
         return 0
     fi
 
+    # Headless machines are treated as VPS for SSH purposes (deploy key only, no full auth key)
+    if [[ "${HEADLESS}" == "1" ]]; then
+        print_debug "Headless machine detected: treating as VPS for SSH key setup"
+        echo "vps"
+        return 0
+    fi
+
     local vps_score=0
     local signals=""
 
@@ -1783,7 +1790,7 @@ upload_log() {
 }
 
 setup_headless_sudo() {
-    if [[ "${IS_MACHINE_HEADLESS}" != "1" ]]; then
+    if [[ "${HEADLESS}" != "1" ]]; then
         return
     fi
 
@@ -1803,7 +1810,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 147 | Last changed: Add passwordless sudo for headless machines${NC}"
+    echo -e "${GRAY}Version 149 | Last changed: Rename IS_MACHINE_HEADLESS to HEADLESS, deploy keys for headless machines${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
