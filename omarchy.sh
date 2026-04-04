@@ -119,7 +119,7 @@ detect_machine_type() {
 
     # Headless machines are treated as VPS for SSH purposes (deploy key only, no full auth key)
     if [[ "${HEADLESS}" == "1" ]]; then
-        print_debug "Headless machine detected: treating as VPS for SSH key setup"
+        print_debug "Headless machine detected: treating as VPS for SSH key setup" >&2
         echo "vps"
         return 0
     fi
@@ -1710,7 +1710,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 115 | Last changed: Rename IS_MACHINE_HEADLESS to HEADLESS, deploy keys for headless machines${NC}"
+    echo -e "${GRAY}Version 116 | Last changed: Fix detect_machine_type stdout pollution from print_debug${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
