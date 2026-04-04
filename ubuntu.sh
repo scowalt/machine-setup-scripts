@@ -1782,9 +1782,28 @@ upload_log() {
     fi
 }
 
+setup_headless_sudo() {
+    if [[ "${IS_MACHINE_HEADLESS}" != "1" ]]; then
+        return
+    fi
+
+    local sudoers_file="/etc/sudoers.d/${USER}"
+    local sudoers_line="${USER} ALL=(ALL) NOPASSWD:ALL"
+
+    if [[ -f "${sudoers_file}" ]] && grep -qF "${sudoers_line}" "${sudoers_file}"; then
+        print_debug "Passwordless sudo already configured for ${USER}."
+        return
+    fi
+
+    print_message "Configuring passwordless sudo for headless machine..."
+    echo "${sudoers_line}" | sudo tee "${sudoers_file}" > /dev/null
+    sudo chmod 0440 "${sudoers_file}"
+    print_success "Passwordless sudo configured for ${USER}."
+}
+
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 146 | Last changed: Add Homebrew permissions fix for multi-user installs${NC}"
+    echo -e "${GRAY}Version 147 | Last changed: Add passwordless sudo for headless machines${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1804,6 +1823,8 @@ main() {
         source "${HOME}/.env.local"
         set +a
     fi
+
+    setup_headless_sudo
 
     print_section "User & System Setup"
     ensure_not_root
