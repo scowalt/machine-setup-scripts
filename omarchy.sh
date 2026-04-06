@@ -674,7 +674,9 @@ run_omarchy_update() {
     # Run omarchy-update under sudo directly so its internal sudo calls are
     # already elevated and never prompt. When run via curl|bash, a second sudo
     # prompt causes the password to echo in plaintext because tty handling breaks.
-    if sudo -E omarchy-update -y; then
+    local omarchy_update_path
+    omarchy_update_path="$(command -v omarchy-update)"
+    if sudo -E "${omarchy_update_path}" -y; then
         print_success "Omarchy system update completed."
     else
         print_error "Omarchy system update failed."
@@ -1713,7 +1715,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 118 | Last changed: Run omarchy-update under sudo to prevent internal re-prompts${NC}"
+    echo -e "${GRAY}Version 119 | Last changed: Use full path for omarchy-update under sudo${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
