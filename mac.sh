@@ -348,7 +348,8 @@ install_core_packages() {
 
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
-    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "mise" "tailscale" "dopplerhq/cli/doppler" "act" "terminal-notifier" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook" "poppler" "ffmpeg")
+    # NOTE: tailscale installed as a cask (GUI app) separately by setup_tailscale()
+    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "mise" "dopplerhq/cli/doppler" "act" "terminal-notifier" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook" "poppler" "ffmpeg")
     local to_install=()
 
     # Get all installed packages at once (much faster than checking individually)
@@ -394,34 +395,39 @@ install_core_packages() {
     fi
 }
 
-# Start Tailscale daemon and enable at login
-start_tailscale() {
-    if ! command -v tailscale &> /dev/null; then
-        print_debug "Tailscale not installed, skipping."
-        return
+# Ensure Tailscale is installed as the cask (GUI app), not the formula (CLI-only).
+# The formula's daemon management is broken on macOS — brew services can't handle
+# privileged network daemons properly. The cask installs the same app as a direct
+# download from tailscale.com and manages the daemon natively.
+setup_tailscale() {
+    # If the formula is installed (not the cask), replace it with the cask
+    if brew list --formula tailscale &>/dev/null 2>&1; then
+        print_message "Replacing Tailscale formula with cask (GUI app)..."
+        brew services stop tailscale 2>/dev/null || true
+        brew uninstall tailscale 2>/dev/null || true
     fi
 
-    # Check if the daemon is already running
-    if tailscale status &>/dev/null; then
-        print_debug "Tailscale daemon is already running."
-        return
-    fi
-
-    print_message "Starting Tailscale daemon..."
-    brew services start tailscale 2>/dev/null || true
-
-    # Wait a moment for the daemon to start
-    sleep 2
-
-    if tailscale status &>/dev/null; then
-        print_success "Tailscale daemon started."
+    # Install the cask if not already present
+    if ! brew list --cask tailscale &>/dev/null 2>&1; then
+        print_message "Installing Tailscale (cask)..."
+        brew install --cask tailscale
+        print_success "Tailscale cask installed."
     else
-        print_warning "Tailscale daemon may not have started. Run 'brew services start tailscale' manually."
+        print_debug "Tailscale cask is already installed."
     fi
 
-    # Prompt to connect if not already connected
-    if ! tailscale status 2>/dev/null | grep -q "logged in"; then
-        print_message "Run 'tailscale up' to connect to your tailnet."
+    # Launch the app if not running (starts the daemon automatically)
+    if ! tailscale status &>/dev/null 2>&1; then
+        print_message "Starting Tailscale..."
+        open -a Tailscale 2>/dev/null || true
+        sleep 3
+    fi
+
+    # Check connection status
+    if tailscale status &>/dev/null 2>&1; then
+        print_debug "Tailscale is running."
+    else
+        print_message "Tailscale installed. Open the app from the menu bar and sign in."
     fi
 }
 
@@ -1081,7 +1087,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 121 | Last changed: Fix tap package detection and fish shell idempotency${NC}"
+    echo -e "${GRAY}Version 122 | Last changed: Switch Tailscale from formula to cask, auto-replace on re-run${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1114,8 +1120,8 @@ main() {
         print_section "Core Packages"
         install_core_packages
 
-        # Start Tailscale daemon if installed but not running
-        start_tailscale
+        # Install Tailscale as cask (GUI app) and start daemon
+        setup_tailscale
 
         # Fix zsh permissions early (before any tool might invoke zsh)
         fix_zsh_compaudit
