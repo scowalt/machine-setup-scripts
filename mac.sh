@@ -392,6 +392,37 @@ install_core_packages() {
     fi
 }
 
+# Start Tailscale daemon and enable at login
+start_tailscale() {
+    if ! command -v tailscale &> /dev/null; then
+        print_debug "Tailscale not installed, skipping."
+        return
+    fi
+
+    # Check if the daemon is already running
+    if tailscale status &>/dev/null; then
+        print_debug "Tailscale daemon is already running."
+        return
+    fi
+
+    print_message "Starting Tailscale daemon..."
+    brew services start tailscale 2>/dev/null || true
+
+    # Wait a moment for the daemon to start
+    sleep 2
+
+    if tailscale status &>/dev/null; then
+        print_success "Tailscale daemon started."
+    else
+        print_warning "Tailscale daemon may not have started. Run 'brew services start tailscale' manually."
+    fi
+
+    # Prompt to connect if not already connected
+    if ! tailscale status 2>/dev/null | grep -q "logged in"; then
+        print_message "Run 'tailscale up' to connect to your tailnet."
+    fi
+}
+
 # Check and set up SSH key
 setup_ssh_key() {
     print_message "Checking for existing SSH key associated with GitHub..."
@@ -1044,7 +1075,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 119 | Last changed: Add missing brew taps and install packages individually${NC}"
+    echo -e "${GRAY}Version 120 | Last changed: Auto-start Tailscale daemon after package install${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1076,6 +1107,9 @@ main() {
 
         print_section "Core Packages"
         install_core_packages
+
+        # Start Tailscale daemon if installed but not running
+        start_tailscale
 
         # Fix zsh permissions early (before any tool might invoke zsh)
         fix_zsh_compaudit
