@@ -555,6 +555,13 @@ update_chezmoi() {
 
 # Set Fish as the default shell if it isn't already
 set_fish_as_default_shell() {
+    # Guard: don't set fish as default if it isn't installed yet
+    if [[ ! -x "/opt/homebrew/bin/fish" ]]; then
+        print_warning "Fish shell not found at /opt/homebrew/bin/fish — skipping default shell change."
+        print_debug "Install fish first with: brew install fish"
+        return
+    fi
+
     if [[ "${SHELL}" == "/opt/homebrew/bin/fish" ]]; then
         print_debug "Fish shell is already the default shell."
         return
@@ -1012,7 +1019,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 114 | Last changed: Install Xcode Command Line Tools early (git dependency)${NC}"
+    echo -e "${GRAY}Version 115 | Last changed: Guard chsh against missing fish binary${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
