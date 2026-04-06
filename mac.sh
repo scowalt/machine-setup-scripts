@@ -430,21 +430,22 @@ install_xcode_cli_tools() {
 
 # Install Homebrew if not installed
 install_homebrew() {
-    if ! command -v brew &> /dev/null; then
+    if ! command -v brew &> /dev/null && [[ ! -x "/opt/homebrew/bin/brew" ]]; then
         print_message "Installing Homebrew..."
-        local install_script
-        install_script=$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)
-        /bin/bash -c "${install_script}" > /dev/null
-        local brew_env
-        brew_env=$(/opt/homebrew/bin/brew shellenv)
-        eval "${brew_env}"
+        # Redirect stdin from /dev/null to prevent the installer from consuming
+        # script content when run via curl|bash (same pattern as SSH commands)
+        NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/null
+        if [[ ! -x "/opt/homebrew/bin/brew" ]]; then
+            print_error "Homebrew installation failed."
+            return 1
+        fi
         print_success "Homebrew installed."
     else
         print_debug "Homebrew is already installed."
-        local brew_env
-        brew_env=$(/opt/homebrew/bin/brew shellenv)
-        eval "${brew_env}"
     fi
+
+    # Always source brew shellenv to ensure PATH is set for the rest of the script
+    eval "$(/opt/homebrew/bin/brew shellenv)"
 }
 
 # Bootstrap SSH config for secondary users (needed before chezmoi can run)
@@ -1019,7 +1020,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 115 | Last changed: Guard chsh against missing fish binary${NC}"
+    echo -e "${GRAY}Version 116 | Last changed: Fix Homebrew install stdin consumption and PATH setup${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
