@@ -436,15 +436,21 @@ enable_ssh() {
         return
     fi
 
-    # Enable Remote Login (SSH) via systemsetup
-    local ssh_status
-    ssh_status=$(sudo systemsetup -getremotelogin 2>/dev/null | awk '{print $NF}')
-    if [[ "${ssh_status}" == "On" ]]; then
+    # Enable Remote Login (SSH)
+    # Check if sshd is already running
+    if sudo launchctl list com.openssh.sshd &>/dev/null; then
         print_debug "SSH (Remote Login) is already enabled."
     else
         print_message "Enabling SSH (Remote Login)..."
-        sudo systemsetup -setremotelogin on 2>/dev/null
-        print_success "SSH enabled."
+        # Try systemsetup first (works if terminal has Full Disk Access)
+        if sudo systemsetup -setremotelogin on 2>/dev/null; then
+            print_success "SSH enabled via systemsetup."
+        # Fallback: load the SSH launch daemon directly (avoids FDA requirement)
+        elif sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist 2>/dev/null; then
+            print_success "SSH enabled via launchctl."
+        else
+            print_warning "Could not enable SSH. Enable manually: System Settings → General → Sharing → Remote Login"
+        fi
     fi
 
     # Configure key-only auth (disable password auth for SSH)
@@ -1183,7 +1189,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 126 | Last changed: Enable SSH with key-only auth on all macOS devices${NC}"
+    echo -e "${GRAY}Version 127 | Last changed: Fix SSH enable with launchctl fallback for non-FDA terminals${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
