@@ -429,6 +429,61 @@ setup_tailscale() {
     fi
 }
 
+# Enable SSH (Remote Login) with key-only auth, no password
+enable_ssh() {
+    if ! can_sudo; then
+        print_warning "No sudo access — cannot enable SSH."
+        return
+    fi
+
+    # Enable Remote Login (SSH) via systemsetup
+    local ssh_status
+    ssh_status=$(sudo systemsetup -getremotelogin 2>/dev/null | awk '{print $NF}')
+    if [[ "${ssh_status}" == "On" ]]; then
+        print_debug "SSH (Remote Login) is already enabled."
+    else
+        print_message "Enabling SSH (Remote Login)..."
+        sudo systemsetup -setremotelogin on 2>/dev/null
+        print_success "SSH enabled."
+    fi
+
+    # Configure key-only auth (disable password auth for SSH)
+    local sshd_config="/etc/ssh/sshd_config"
+    local needs_restart=false
+
+    # Disable password authentication
+    if ! grep -q "^PasswordAuthentication no" "${sshd_config}" 2>/dev/null; then
+        print_message "Disabling SSH password authentication (key-only)..."
+        # Remove any existing PasswordAuthentication lines and add our own
+        sudo sed -i '' '/^#*PasswordAuthentication/d' "${sshd_config}"
+        echo "PasswordAuthentication no" | sudo tee -a "${sshd_config}" > /dev/null
+        needs_restart=true
+    fi
+
+    # Disable keyboard-interactive auth
+    if ! grep -q "^KbdInteractiveAuthentication no" "${sshd_config}" 2>/dev/null; then
+        sudo sed -i '' '/^#*KbdInteractiveAuthentication/d' "${sshd_config}"
+        echo "KbdInteractiveAuthentication no" | sudo tee -a "${sshd_config}" > /dev/null
+        needs_restart=true
+    fi
+
+    # Disable challenge-response auth
+    if ! grep -q "^ChallengeResponseAuthentication no" "${sshd_config}" 2>/dev/null; then
+        sudo sed -i '' '/^#*ChallengeResponseAuthentication/d' "${sshd_config}"
+        echo "ChallengeResponseAuthentication no" | sudo tee -a "${sshd_config}" > /dev/null
+        needs_restart=true
+    fi
+
+    if [[ "${needs_restart}" == true ]]; then
+        # Restart SSH to apply changes
+        sudo launchctl stop com.openssh.sshd 2>/dev/null || true
+        sudo launchctl start com.openssh.sshd 2>/dev/null || true
+        print_success "SSH configured for key-only authentication."
+    else
+        print_debug "SSH already configured for key-only auth."
+    fi
+}
+
 # Install a Nerd Font for terminal icons (Starship, tmux, etc.)
 install_nerd_font() {
     if brew list --cask font-jetbrains-mono-nerd-font &>/dev/null 2>&1; then
@@ -1128,7 +1183,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 125 | Last changed: Fix Tailscale app launching on every re-run${NC}"
+    echo -e "${GRAY}Version 126 | Last changed: Enable SSH with key-only auth on all macOS devices${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1160,6 +1215,9 @@ main() {
 
         print_section "Core Packages"
         install_core_packages
+
+        # Enable SSH with key-only auth
+        enable_ssh
 
         # Install Tailscale as cask (GUI app) and start daemon
         setup_tailscale
