@@ -366,8 +366,11 @@ install_core_packages() {
     # Install any packages that are not yet installed
     if [[ "${#to_install[@]}" -gt 0 ]]; then
         print_message "Installing missing packages: ${to_install[*]}"
-        brew install "${to_install[@]}" > /dev/null
-        print_success "Missing core packages installed."
+        if brew install "${to_install[@]}"; then
+            print_success "Missing core packages installed."
+        else
+            print_warning "Some packages may have failed to install. Check output above."
+        fi
     else
         print_success "All core packages are already installed."
     fi
@@ -1025,7 +1028,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 117 | Last changed: Fix Homebrew install by caching sudo and using /dev/tty for stdin${NC}"
+    echo -e "${GRAY}Version 118 | Last changed: Show brew install output and check exit code${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
