@@ -337,11 +337,20 @@ fix_zsh_compaudit() {
 install_core_packages() {
     print_message "Checking and installing core packages as needed..."
 
+    # Ensure required taps are available (some packages have cross-tap dependencies)
+    local taps=("libsql/sqld" "dopplerhq/cli" "tursodatabase/tap")
+    for tap in "${taps[@]}"; do
+        if ! brew tap | grep -q "^${tap}$"; then
+            print_debug "Tapping ${tap}..."
+            brew tap "${tap}" 2>/dev/null || true
+        fi
+    done
+
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
     local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "mise" "tailscale" "dopplerhq/cli/doppler" "act" "terminal-notifier" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook" "poppler" "ffmpeg")
     local to_install=()
-    
+
     # Get all installed packages at once (much faster than checking individually)
     print_message "Getting list of installed packages..."
     local installed_formulae
@@ -353,7 +362,7 @@ install_core_packages() {
     brew_casks_list=$(brew list --cask -1 2>/dev/null)
     installed_casks=$(echo "${brew_casks_list}" | tr '\n' ' ')
     local all_installed=" ${installed_formulae} ${installed_casks} "
-    
+
     # Check each required package against the installed list
     for package in "${packages[@]}"; do
         if [[ ! "${all_installed}" =~ \ ${package}\  ]]; then
@@ -363,13 +372,20 @@ install_core_packages() {
         fi
     done
 
-    # Install any packages that are not yet installed
+    # Install packages individually so one failure doesn't block everything
     if [[ "${#to_install[@]}" -gt 0 ]]; then
-        print_message "Installing missing packages: ${to_install[*]}"
-        if brew install "${to_install[@]}"; then
-            print_success "Missing core packages installed."
+        print_message "Installing ${#to_install[@]} missing packages..."
+        local failed=()
+        for package in "${to_install[@]}"; do
+            if ! brew install "${package}" 2>&1; then
+                print_warning "Failed to install ${package}"
+                failed+=("${package}")
+            fi
+        done
+        if [[ "${#failed[@]}" -gt 0 ]]; then
+            print_warning "Failed packages: ${failed[*]}"
         else
-            print_warning "Some packages may have failed to install. Check output above."
+            print_success "All core packages installed."
         fi
     else
         print_success "All core packages are already installed."
@@ -1028,7 +1044,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 118 | Last changed: Show brew install output and check exit code${NC}"
+    echo -e "${GRAY}Version 119 | Last changed: Add missing brew taps and install packages individually${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
