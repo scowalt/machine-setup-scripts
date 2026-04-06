@@ -431,6 +431,21 @@ setup_tailscale() {
     fi
 }
 
+# Install a Nerd Font for terminal icons (Starship, tmux, etc.)
+install_nerd_font() {
+    if brew list --cask font-jetbrains-mono-nerd-font &>/dev/null 2>&1; then
+        print_debug "JetBrains Mono Nerd Font is already installed."
+        return
+    fi
+
+    print_message "Installing JetBrains Mono Nerd Font..."
+    if brew install --cask font-jetbrains-mono-nerd-font; then
+        print_success "JetBrains Mono Nerd Font installed. Set it as your terminal font."
+    else
+        print_warning "Failed to install Nerd Font."
+    fi
+}
+
 # Check and set up SSH key
 setup_ssh_key() {
     print_message "Checking for existing SSH key associated with GitHub..."
@@ -1087,7 +1102,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 122 | Last changed: Switch Tailscale from formula to cask, auto-replace on re-run${NC}"
+    echo -e "${GRAY}Version 123 | Last changed: Install JetBrains Mono Nerd Font for terminal icons${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1122,6 +1137,9 @@ main() {
 
         # Install Tailscale as cask (GUI app) and start daemon
         setup_tailscale
+
+        # Install Nerd Font for terminal icons (Starship prompt, etc.)
+        install_nerd_font
 
         # Fix zsh permissions early (before any tool might invoke zsh)
         fix_zsh_compaudit
