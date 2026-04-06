@@ -417,17 +417,15 @@ setup_tailscale() {
     fi
 
     # Launch the app if not running (starts the daemon automatically)
-    if ! tailscale status &>/dev/null 2>&1; then
+    # Check if the Tailscale process is already running, not tailscale status
+    # (which fails if not logged in even when the daemon is running)
+    if pgrep -q "Tailscale" 2>/dev/null; then
+        print_debug "Tailscale app is already running."
+    else
         print_message "Starting Tailscale..."
         open -a Tailscale 2>/dev/null || true
         sleep 3
-    fi
-
-    # Check connection status
-    if tailscale status &>/dev/null 2>&1; then
-        print_debug "Tailscale is running."
-    else
-        print_message "Tailscale installed. Open the app from the menu bar and sign in."
+        print_success "Tailscale started."
     fi
 }
 
@@ -1130,7 +1128,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 124 | Last changed: Auto-configure Nerd Font in iTerm2 and Terminal.app${NC}"
+    echo -e "${GRAY}Version 125 | Last changed: Fix Tailscale app launching on every re-run${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
