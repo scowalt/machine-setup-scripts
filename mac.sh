@@ -432,9 +432,14 @@ install_xcode_cli_tools() {
 install_homebrew() {
     if ! command -v brew &> /dev/null && [[ ! -x "/opt/homebrew/bin/brew" ]]; then
         print_message "Installing Homebrew..."
-        # Redirect stdin from /dev/null to prevent the installer from consuming
-        # script content when run via curl|bash (same pattern as SSH commands)
-        NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/null
+        # Cache sudo credentials before running installer (Homebrew needs sudo)
+        sudo -v < /dev/tty 2>/dev/null || true
+        # Download the install script first, then run it with stdin from /dev/tty
+        # so sudo can prompt if needed. NONINTERACTIVE prevents Homebrew's own
+        # "press RETURN" prompt but still allows sudo to work.
+        local install_script
+        install_script=$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)
+        NONINTERACTIVE=1 /bin/bash -c "${install_script}" < /dev/tty
         if [[ ! -x "/opt/homebrew/bin/brew" ]]; then
             print_error "Homebrew installation failed."
             return 1
@@ -1020,7 +1025,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 116 | Last changed: Fix Homebrew install stdin consumption and PATH setup${NC}"
+    echo -e "${GRAY}Version 117 | Last changed: Fix Homebrew install by caching sudo and using /dev/tty for stdin${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
