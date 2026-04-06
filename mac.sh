@@ -407,6 +407,27 @@ setup_ssh_key() {
     fi
 }
 
+# Ensure Xcode Command Line Tools are installed (provides git, clang, etc.)
+install_xcode_cli_tools() {
+    if xcode-select -p &>/dev/null; then
+        print_debug "Xcode Command Line Tools are already installed."
+        return 0
+    fi
+
+    print_message "Installing Xcode Command Line Tools..."
+
+    # Trigger the install prompt
+    xcode-select --install 2>/dev/null || true
+
+    # Wait for the installation to complete (the install dialog is async)
+    print_message "Waiting for Xcode Command Line Tools installation to complete..."
+    until xcode-select -p &>/dev/null; do
+        sleep 5
+    done
+
+    print_success "Xcode Command Line Tools installed."
+}
+
 # Install Homebrew if not installed
 install_homebrew() {
     if ! command -v brew &> /dev/null; then
@@ -991,7 +1012,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 113 | Last changed: Source .env.local early so env vars are available before setup_compound_plugin${NC}"
+    echo -e "${GRAY}Version 114 | Last changed: Install Xcode Command Line Tools early (git dependency)${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1011,6 +1032,9 @@ main() {
         source "${HOME}/.env.local"
         set +a
     fi
+
+    print_section "Xcode Command Line Tools"
+    install_xcode_cli_tools
 
     if is_main_user; then
         echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
