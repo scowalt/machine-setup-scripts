@@ -364,11 +364,13 @@ install_core_packages() {
     local all_installed=" ${installed_formulae} ${installed_casks} "
 
     # Check each required package against the installed list
+    # For tap packages (e.g., dopplerhq/cli/doppler), also check the short name (doppler)
     for package in "${packages[@]}"; do
-        if [[ ! "${all_installed}" =~ \ ${package}\  ]]; then
-            to_install+=("${package}")
-        else
+        local short_name="${package##*/}"
+        if [[ "${all_installed}" =~ \ ${package}\  ]] || [[ "${all_installed}" =~ \ ${short_name}\  ]]; then
             print_debug "${package} is already installed."
+        else
+            to_install+=("${package}")
         fi
     done
 
@@ -618,7 +620,11 @@ set_fish_as_default_shell() {
         return
     fi
 
-    if [[ "${SHELL}" == "/opt/homebrew/bin/fish" ]]; then
+    # Check the actual configured login shell from the system (not $SHELL which
+    # reflects the current session, not the configured default)
+    local current_shell
+    current_shell=$(dscl . -read /Users/"$(whoami)" UserShell 2>/dev/null | awk '{print $2}')
+    if [[ "${current_shell}" == "/opt/homebrew/bin/fish" ]]; then
         print_debug "Fish shell is already the default shell."
         return
     fi
@@ -1075,7 +1081,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 120 | Last changed: Auto-start Tailscale daemon after package install${NC}"
+    echo -e "${GRAY}Version 121 | Last changed: Fix tap package detection and fish shell idempotency${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
