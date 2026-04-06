@@ -439,10 +439,38 @@ install_nerd_font() {
     fi
 
     print_message "Installing JetBrains Mono Nerd Font..."
-    if brew install --cask font-jetbrains-mono-nerd-font; then
-        print_success "JetBrains Mono Nerd Font installed. Set it as your terminal font."
-    else
+    if ! brew install --cask font-jetbrains-mono-nerd-font; then
         print_warning "Failed to install Nerd Font."
+        return
+    fi
+    print_success "JetBrains Mono Nerd Font installed."
+
+    # Set as default font in Terminal.app
+    local font_name="JetBrainsMonoNFM-Regular"
+    local font_size=14
+    defaults write com.apple.Terminal "Default Window Settings" -string "Basic"
+    defaults write com.apple.Terminal "Startup Window Settings" -string "Basic"
+    /usr/libexec/PlistBuddy -c "Set :Window\ Settings:Basic:Font $(python3 -c "
+import plistlib, sys
+font_data = plistlib.dumps({'NSFontNameAttribute': '${font_name}', 'NSFontSizeAttribute': ${font_size}}, fmt=plistlib.FMT_BINARY)
+sys.stdout.buffer.write(font_data)
+" | base64)" ~/Library/Preferences/com.apple.Terminal.plist 2>/dev/null || true
+    print_debug "Terminal.app font configuration attempted."
+
+    # Set as default font in iTerm2 (if installed)
+    if [[ -d "/Applications/iTerm.app" ]]; then
+        # Set font for the Default profile
+        defaults write com.googlecode.iterm2 "New Bookmarks" -array-add 2>/dev/null || true
+        /usr/libexec/PlistBuddy -c "Set ':New Bookmarks:0:Normal Font' 'JetBrainsMonoNFM-Regular 14'" \
+            ~/Library/Preferences/com.googlecode.iterm2.plist 2>/dev/null || \
+        /usr/libexec/PlistBuddy -c "Add ':New Bookmarks:0:Normal Font' string 'JetBrainsMonoNFM-Regular 14'" \
+            ~/Library/Preferences/com.googlecode.iterm2.plist 2>/dev/null || true
+        # Also set the non-ASCII font to match
+        /usr/libexec/PlistBuddy -c "Set ':New Bookmarks:0:Non Ascii Font' 'JetBrainsMonoNFM-Regular 14'" \
+            ~/Library/Preferences/com.googlecode.iterm2.plist 2>/dev/null || \
+        /usr/libexec/PlistBuddy -c "Add ':New Bookmarks:0:Non Ascii Font' string 'JetBrainsMonoNFM-Regular 14'" \
+            ~/Library/Preferences/com.googlecode.iterm2.plist 2>/dev/null || true
+        print_debug "iTerm2 font set to JetBrains Mono Nerd Font."
     fi
 }
 
@@ -1102,7 +1130,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 123 | Last changed: Install JetBrains Mono Nerd Font for terminal icons${NC}"
+    echo -e "${GRAY}Version 124 | Last changed: Auto-configure Nerd Font in iTerm2 and Terminal.app${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
