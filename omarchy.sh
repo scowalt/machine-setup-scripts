@@ -671,6 +671,10 @@ run_omarchy_update() {
     export OMARCHY_PATH="${OMARCHY_PATH:-${HOME}/.local/share/omarchy}"
 
     print_message "Running Omarchy system update..."
+    # Refresh sudo credentials right before omarchy-update to prevent it from
+    # prompting again. When run via curl|bash, a second sudo prompt causes the
+    # password to echo in plaintext because tty handling breaks.
+    sudo -v 2>/dev/null < /dev/tty || true
     if omarchy-update -y; then
         print_success "Omarchy system update completed."
     else
@@ -1710,7 +1714,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 116 | Last changed: Fix detect_machine_type stdout pollution from print_debug${NC}"
+    echo -e "${GRAY}Version 117 | Last changed: Fix sudo password echoing in plaintext during omarchy-update via curl|bash${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
