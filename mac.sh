@@ -338,7 +338,7 @@ install_core_packages() {
     print_message "Checking and installing core packages as needed..."
 
     # Ensure required taps are available (some packages have cross-tap dependencies)
-    local taps=("libsql/sqld" "dopplerhq/cli" "tursodatabase/tap")
+    local taps=("libsql/sqld" "tursodatabase/tap")
     for tap in "${taps[@]}"; do
         if ! brew tap | grep -q "^${tap}$"; then
             print_debug "Tapping ${tap}..."
@@ -349,7 +349,7 @@ install_core_packages() {
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
     # NOTE: tailscale installed as a cask (GUI app) separately by setup_tailscale()
-    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "mise" "dopplerhq/cli/doppler" "act" "terminal-notifier" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook" "poppler" "ffmpeg")
+    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "mise" "act" "terminal-notifier" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook" "poppler" "ffmpeg")
     local to_install=()
 
     # Get all installed packages at once (much faster than checking individually)
@@ -426,6 +426,39 @@ setup_tailscale() {
         open -a Tailscale 2>/dev/null || true
         sleep 3
         print_success "Tailscale started."
+    fi
+}
+
+# Install the appropriate secrets manager based on machine type
+install_secrets_manager() {
+    if [[ "${WORK_MACHINE:-}" == "1" ]]; then
+        if command -v infisical &>/dev/null; then
+            print_debug "Infisical CLI already installed."
+            return
+        fi
+        print_message "Installing Infisical CLI..."
+        if ! brew tap | grep -q "^infisical/get-cli$"; then
+            brew tap infisical/get-cli 2>/dev/null || true
+        fi
+        if brew install infisical/get-cli/infisical; then
+            print_success "Infisical CLI installed."
+        else
+            print_error "Failed to install Infisical CLI."
+        fi
+    else
+        if command -v doppler &>/dev/null; then
+            print_debug "Doppler CLI already installed."
+            return
+        fi
+        print_message "Installing Doppler CLI..."
+        if ! brew tap | grep -q "^dopplerhq/cli$"; then
+            brew tap dopplerhq/cli 2>/dev/null || true
+        fi
+        if brew install dopplerhq/cli/doppler; then
+            print_success "Doppler CLI installed."
+        else
+            print_error "Failed to install Doppler CLI."
+        fi
     fi
 }
 
@@ -1338,7 +1371,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 131 | Last changed: Add power settings for headless machines${NC}"
+    echo -e "${GRAY}Version 132 | Last changed: Install Infisical on work machines, Doppler on non-work machines${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1370,6 +1403,7 @@ main() {
 
         print_section "Core Packages"
         install_core_packages
+        install_secrets_manager
 
         # Block public upload services on work machines
         block_public_upload_services

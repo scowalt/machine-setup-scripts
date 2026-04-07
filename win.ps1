@@ -26,8 +26,7 @@ $wingetPackages = (
     "astral-sh.uv",
     "jqlang.jq",
     "GoLang.Go",
-    "Cloudflare.cloudflared",
-    "doppler.doppler"
+    "Cloudflare.cloudflared"
 )
 
 # Define Nerd Font symbols using Unicode code points
@@ -105,6 +104,47 @@ function New-TokenPlaceholders {
 # OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
 "@ | Set-Content -Path $envLocalPath
         Write-Debug "Created placeholder ~/.env.local"
+    }
+}
+
+# Install the appropriate secrets manager based on machine type
+function Install-SecretsManager {
+    # Load ~/.env.local to check WORK_MACHINE
+    $envLocalFile = Join-Path $env:USERPROFILE ".env.local"
+    $isWorkMachine = $false
+    if (Test-Path $envLocalFile) {
+        foreach ($line in Get-Content $envLocalFile) {
+            if ($line -match '^\s*WORK_MACHINE\s*=\s*1\s*$') {
+                $isWorkMachine = $true
+                break
+            }
+        }
+    }
+
+    if ($isWorkMachine) {
+        if (Get-Command infisical -ErrorAction SilentlyContinue) {
+            Write-Host "  Infisical CLI already installed." -ForegroundColor DarkGray
+            return
+        }
+        Write-Host "$arrow Installing Infisical CLI..." -ForegroundColor Cyan
+        winget install -e --id "Infisical.CLI" --silent --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "$success Infisical CLI installed." -ForegroundColor Green
+        } else {
+            Write-Host "$failIcon Failed to install Infisical CLI." -ForegroundColor Red
+        }
+    } else {
+        if (Get-Command doppler -ErrorAction SilentlyContinue) {
+            Write-Host "  Doppler CLI already installed." -ForegroundColor DarkGray
+            return
+        }
+        Write-Host "$arrow Installing Doppler CLI..." -ForegroundColor Cyan
+        winget install -e --id "doppler.doppler" --silent --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "$success Doppler CLI installed." -ForegroundColor Green
+        } else {
+            Write-Host "$failIcon Failed to install Doppler CLI." -ForegroundColor Red
+        }
     }
 }
 
@@ -786,7 +826,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 81 | Last changed: Fix plugin update names and capture stderr on failure" -ForegroundColor DarkGray
+    Write-Host "Version 82 | Last changed: Install Infisical on work machines, Doppler on non-work machines" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -802,6 +842,7 @@ function Initialize-WindowsEnvironment {
 
     Write-Section "Package Installation"
     Install-WingetPackages
+    Install-SecretsManager
 
     Write-Section "SSH Configuration"
     Test-GitHubSSHKey # this needs to be run before chezmoi to get access to dotfiles

@@ -1001,7 +1001,7 @@ install_dev_tools_aur() {
     print_message "Installing development tools from AUR..."
 
     # Development tools available in AUR
-    local aur_packages=("chezmoi" "1password-cli" "tailscale" "doppler-cli-bin" "act" "cloudflared" "turso-cli" "lefthook")
+    local aur_packages=("chezmoi" "1password-cli" "tailscale" "act" "cloudflared" "turso-cli" "lefthook")
     local to_install=()
 
     # Check which packages need installation
@@ -1028,6 +1028,41 @@ install_dev_tools_aur() {
         fi
     else
         print_success "All AUR development tools are already installed."
+    fi
+}
+
+# Install the appropriate secrets manager based on machine type
+install_secrets_manager() {
+    if [[ "${WORK_MACHINE:-}" == "1" ]]; then
+        if command -v infisical &>/dev/null; then
+            print_debug "Infisical CLI already installed."
+            return
+        fi
+        print_message "Installing Infisical CLI from AUR..."
+        if ! can_sudo; then
+            print_warning "No sudo access - cannot install Infisical CLI."
+            return
+        fi
+        if yay -S --noconfirm infisical-bin; then
+            print_success "Infisical CLI installed."
+        else
+            print_error "Failed to install Infisical CLI."
+        fi
+    else
+        if command -v doppler &>/dev/null; then
+            print_debug "Doppler CLI already installed."
+            return
+        fi
+        print_message "Installing Doppler CLI from AUR..."
+        if ! can_sudo; then
+            print_warning "No sudo access - cannot install Doppler CLI."
+            return
+        fi
+        if yay -S --noconfirm doppler-cli-bin; then
+            print_success "Doppler CLI installed."
+        else
+            print_error "Failed to install Doppler CLI."
+        fi
     fi
 }
 
@@ -1821,7 +1856,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 122 | Last changed: Force refresh package databases after adding fallback mirrors${NC}"
+    echo -e "${GRAY}Version 123 | Last changed: Install Infisical on work machines, Doppler on non-work machines${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1878,6 +1913,7 @@ install_fail2ban
 print_section "Development Environment"
 install_omarchy
 install_dev_tools_aur
+install_secrets_manager
 setup_tailscale_ssh
 
 print_section "Homebrew & Brew Packages"

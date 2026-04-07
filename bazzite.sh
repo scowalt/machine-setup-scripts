@@ -246,7 +246,7 @@ install_core_packages() {
     print_message "Checking core packages..."
 
     # fish is pre-installed on Bazzite, so it's excluded from this list
-    local packages=("git" "curl" "wget" "jq" "unzip" "tmux" "starship" "gh" "chezmoi" "opentofu" "go" "uv" "fswatch" "1password-cli" "tailscale" "dopplerhq/cli/doppler" "act" "cloudflared" "tursodatabase/tap/turso" "shellcheck" "gitleaks" "lefthook" "mise" "poppler")
+    local packages=("git" "curl" "wget" "jq" "unzip" "tmux" "starship" "gh" "chezmoi" "opentofu" "go" "uv" "fswatch" "1password-cli" "tailscale" "act" "cloudflared" "tursodatabase/tap/turso" "shellcheck" "gitleaks" "lefthook" "mise" "poppler")
     local to_install=()
 
     # Get currently installed formulae
@@ -272,6 +272,39 @@ install_core_packages() {
         fi
     else
         print_success "All core packages are already installed."
+    fi
+}
+
+# Install the appropriate secrets manager based on machine type
+install_secrets_manager() {
+    if [[ "${WORK_MACHINE:-}" == "1" ]]; then
+        if command -v infisical &>/dev/null; then
+            print_debug "Infisical CLI already installed."
+            return
+        fi
+        print_message "Installing Infisical CLI..."
+        if ! brew tap | grep -q "^infisical/get-cli$"; then
+            brew tap infisical/get-cli 2>/dev/null || true
+        fi
+        if brew install infisical/get-cli/infisical; then
+            print_success "Infisical CLI installed."
+        else
+            print_error "Failed to install Infisical CLI."
+        fi
+    else
+        if command -v doppler &>/dev/null; then
+            print_debug "Doppler CLI already installed."
+            return
+        fi
+        print_message "Installing Doppler CLI..."
+        if ! brew tap | grep -q "^dopplerhq/cli$"; then
+            brew tap dopplerhq/cli 2>/dev/null || true
+        fi
+        if brew install dopplerhq/cli/doppler; then
+            print_success "Doppler CLI installed."
+        else
+            print_error "Failed to install Doppler CLI."
+        fi
     fi
 }
 
@@ -1199,7 +1232,7 @@ upload_log() {
 
 main() {
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 19 | Last changed: Source .env.local early so env vars are available before setup_compound_plugin${NC}"
+    echo -e "${GRAY}Version 20 | Last changed: Install Infisical on work machines, Doppler on non-work machines${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1229,6 +1262,7 @@ main() {
     print_section "Package Manager"
     ensure_brew_available || return 1
     install_core_packages
+    install_secrets_manager
     install_brew_packages
     setup_tailscale_ssh
 
