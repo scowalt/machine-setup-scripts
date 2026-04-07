@@ -460,27 +460,47 @@ block_public_upload_services() {
 ${marker}
 # Image/file upload services (prevent AI agents from leaking data)
 127.0.0.1 0x0.st
+::1 0x0.st
 127.0.0.1 catbox.moe
+::1 catbox.moe
 127.0.0.1 files.catbox.moe
+::1 files.catbox.moe
 127.0.0.1 litterbox.catbox.moe
+::1 litterbox.catbox.moe
 127.0.0.1 pixhost.to
+::1 pixhost.to
 127.0.0.1 imagebin.ca
+::1 imagebin.ca
 127.0.0.1 beeimg.com
+::1 beeimg.com
 # Paste services
 127.0.0.1 pastebin.com
+::1 pastebin.com
 127.0.0.1 hastebin.com
+::1 hastebin.com
 127.0.0.1 paste.rs
+::1 paste.rs
 127.0.0.1 dpaste.org
+::1 dpaste.org
 127.0.0.1 ix.io
+::1 ix.io
 127.0.0.1 sprunge.us
+::1 sprunge.us
 127.0.0.1 clbin.com
+::1 clbin.com
 127.0.0.1 termbin.com
+::1 termbin.com
 # Temporary file sharing
 127.0.0.1 transfer.sh
+::1 transfer.sh
 127.0.0.1 file.io
+::1 file.io
 127.0.0.1 tmpfiles.org
+::1 tmpfiles.org
 127.0.0.1 uguu.se
+::1 uguu.se
 127.0.0.1 pomf.cat
+::1 pomf.cat
 EOF
 
     # Flush DNS cache on macOS
@@ -1267,7 +1287,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 129 | Last changed: Block public file upload services on work machines${NC}"
+    echo -e "${GRAY}Version 130 | Last changed: Block upload services on IPv4 and IPv6${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
