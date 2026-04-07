@@ -1283,11 +1283,62 @@ install_betterdisplay() {
     fi
 }
 
+configure_power_settings() {
+    if [[ "${HEADLESS}" != "1" ]]; then
+        return
+    fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access — cannot configure power settings."
+        return
+    fi
+
+    print_message "Configuring power settings for headless operation..."
+
+    local changed=false
+
+    # Disable system sleep (0 = never sleep)
+    if [[ "$(sudo pmset -g custom 2>/dev/null | awk '/^ sleep/{print $2; exit}')" != "0" ]]; then
+        sudo pmset -a sleep 0
+        changed=true
+    fi
+
+    # Disable display sleep
+    if [[ "$(sudo pmset -g custom 2>/dev/null | awk '/^ displaysleep/{print $2; exit}')" != "0" ]]; then
+        sudo pmset -a displaysleep 0
+        changed=true
+    fi
+
+    # Disable hard disk sleep
+    if [[ "$(sudo pmset -g custom 2>/dev/null | awk '/^ disksleep/{print $2; exit}')" != "0" ]]; then
+        sudo pmset -a disksleep 0
+        changed=true
+    fi
+
+    # Restart automatically after a power failure
+    if [[ "$(sudo pmset -g custom 2>/dev/null | awk '/^ autorestart/{print $2; exit}')" != "1" ]]; then
+        sudo pmset -a autorestart 1
+        changed=true
+    fi
+
+    # Wake on network access (for SSH/remote access)
+    if [[ "$(sudo pmset -g custom 2>/dev/null | awk '/^ womp/{print $2; exit}')" != "1" ]]; then
+        sudo pmset -a womp 1
+        changed=true
+    fi
+
+    if [[ "${changed}" == "true" ]]; then
+        print_success "Power settings configured for headless operation (never sleep, auto-restart on power loss)."
+    else
+        print_debug "Power settings already configured for headless operation."
+    fi
+}
+
 main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 130 | Last changed: Block upload services on IPv4 and IPv6${NC}"
+    echo -e "${GRAY}Version 131 | Last changed: Add power settings for headless machines${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1334,6 +1385,9 @@ main() {
 
         # Install BetterDisplay for headless machines with dummy HDMI
         install_betterdisplay
+
+        # Prevent sleep on headless machines
+        configure_power_settings
 
         # Fix zsh permissions early (before any tool might invoke zsh)
         fix_zsh_compaudit
