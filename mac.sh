@@ -683,7 +683,23 @@ setup_ssh_key() {
 # Ensure Xcode Command Line Tools are installed (provides git, clang, etc.)
 install_xcode_cli_tools() {
     if xcode-select -p &>/dev/null; then
-        print_debug "Xcode Command Line Tools are already installed."
+        # CLT is installed — check if it needs updating
+        # softwareupdate --list checks for available updates including CLT
+        local updates
+        updates=$(softwareupdate --list 2>&1)
+        if echo "${updates}" | grep -qi "Command Line Tools"; then
+            print_message "Xcode Command Line Tools update available. Installing..."
+            # Remove old CLT and reinstall to get the latest version
+            sudo rm -rf /Library/Developer/CommandLineTools 2>/dev/null
+            xcode-select --install 2>/dev/null || true
+            print_message "Waiting for Xcode Command Line Tools update to complete..."
+            until xcode-select -p &>/dev/null; do
+                sleep 5
+            done
+            print_success "Xcode Command Line Tools updated."
+        else
+            print_debug "Xcode Command Line Tools are already installed and up to date."
+        fi
         return 0
     fi
 
@@ -1371,7 +1387,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 132 | Last changed: Install Infisical on work machines, Doppler on non-work machines${NC}"
+    echo -e "${GRAY}Version 133 | Last changed: Auto-update outdated Xcode Command Line Tools${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
