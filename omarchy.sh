@@ -498,6 +498,81 @@ setup_github_credential_helper() {
     return 0
 }
 
+# Block public file upload services on work machines to prevent accidental data leaks.
+# AI coding agents may upload screenshots/code to these services.
+# Only applies when WORK_MACHINE=1 is set in ~/.env.local.
+block_public_upload_services() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Not a work machine, skipping upload service blocks."
+        return
+    fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access — cannot block upload services."
+        return
+    fi
+
+    local hosts_file="/etc/hosts"
+    local marker="# WORK_MACHINE: blocked public upload services"
+
+    if grep -q "${marker}" "${hosts_file}" 2>/dev/null; then
+        print_debug "Public upload services already blocked."
+        return
+    fi
+
+    print_message "Blocking public file upload services (work machine policy)..."
+
+    sudo tee -a "${hosts_file}" > /dev/null << EOF
+
+${marker}
+# Image/file upload services (prevent AI agents from leaking data)
+127.0.0.1 0x0.st
+::1 0x0.st
+127.0.0.1 catbox.moe
+::1 catbox.moe
+127.0.0.1 files.catbox.moe
+::1 files.catbox.moe
+127.0.0.1 litterbox.catbox.moe
+::1 litterbox.catbox.moe
+127.0.0.1 pixhost.to
+::1 pixhost.to
+127.0.0.1 imagebin.ca
+::1 imagebin.ca
+127.0.0.1 beeimg.com
+::1 beeimg.com
+# Paste services
+127.0.0.1 pastebin.com
+::1 pastebin.com
+127.0.0.1 hastebin.com
+::1 hastebin.com
+127.0.0.1 paste.rs
+::1 paste.rs
+127.0.0.1 dpaste.org
+::1 dpaste.org
+127.0.0.1 ix.io
+::1 ix.io
+127.0.0.1 sprunge.us
+::1 sprunge.us
+127.0.0.1 clbin.com
+::1 clbin.com
+127.0.0.1 termbin.com
+::1 termbin.com
+# Temporary file sharing
+127.0.0.1 transfer.sh
+::1 transfer.sh
+127.0.0.1 file.io
+::1 file.io
+127.0.0.1 tmpfiles.org
+::1 tmpfiles.org
+127.0.0.1 uguu.se
+::1 uguu.se
+127.0.0.1 pomf.cat
+::1 pomf.cat
+EOF
+
+    print_success "Blocked public upload services on this work machine."
+}
+
 # Configure DNS64 for IPv6-only networks
 # This allows reaching IPv4-only hosts (like github.com) via NAT64
 setup_dns64_for_ipv6_only() {
@@ -1715,7 +1790,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 119 | Last changed: Use full path for omarchy-update under sudo${NC}"
+    echo -e "${GRAY}Version 120 | Last changed: Block public file upload services on work machines${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1747,6 +1822,7 @@ main() {
     request_sudo_upfront
 check_omarchy_installation
 setup_dns64_for_ipv6_only
+block_public_upload_services
 
 print_section "System Updates"
 update_system
