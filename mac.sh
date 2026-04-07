@@ -1185,11 +1185,29 @@ upload_log() {
     fi
 }
 
+install_betterdisplay() {
+    if [[ "${HEADLESS}" != "1" ]]; then
+        return
+    fi
+
+    if brew list --cask betterdisplay &>/dev/null 2>&1; then
+        print_debug "BetterDisplay is already installed."
+        return
+    fi
+
+    print_message "Installing BetterDisplay for headless display management..."
+    if brew install --cask betterdisplay; then
+        print_success "BetterDisplay installed."
+    else
+        print_error "Failed to install BetterDisplay."
+    fi
+}
+
 main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 127 | Last changed: Fix SSH enable with launchctl fallback for non-FDA terminals${NC}"
+    echo -e "${GRAY}Version 128 | Last changed: Install BetterDisplay on headless machines for dummy HDMI resolution control${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1230,6 +1248,9 @@ main() {
 
         # Install Nerd Font for terminal icons (Starship prompt, etc.)
         install_nerd_font
+
+        # Install BetterDisplay for headless machines with dummy HDMI
+        install_betterdisplay
 
         # Fix zsh permissions early (before any tool might invoke zsh)
         fix_zsh_compaudit
