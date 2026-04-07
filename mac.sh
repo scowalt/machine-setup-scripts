@@ -430,6 +430,66 @@ setup_tailscale() {
 }
 
 # Enable SSH (Remote Login) with key-only auth, no password
+# Block public file upload services on work machines to prevent accidental data leaks.
+# AI coding agents (Claude Code, Codex) may upload screenshots/code to these services.
+# Only applies when WORK_MACHINE=1 is set in ~/.env.local.
+block_public_upload_services() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Not a work machine, skipping upload service blocks."
+        return
+    fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access — cannot block upload services."
+        return
+    fi
+
+    local hosts_file="/etc/hosts"
+    local marker="# WORK_MACHINE: blocked public upload services"
+
+    # Check if already configured
+    if grep -q "${marker}" "${hosts_file}" 2>/dev/null; then
+        print_debug "Public upload services already blocked."
+        return
+    fi
+
+    print_message "Blocking public file upload services (work machine policy)..."
+
+    sudo tee -a "${hosts_file}" > /dev/null << EOF
+
+${marker}
+# Image/file upload services (prevent AI agents from leaking data)
+127.0.0.1 0x0.st
+127.0.0.1 catbox.moe
+127.0.0.1 files.catbox.moe
+127.0.0.1 litterbox.catbox.moe
+127.0.0.1 pixhost.to
+127.0.0.1 imagebin.ca
+127.0.0.1 beeimg.com
+# Paste services
+127.0.0.1 pastebin.com
+127.0.0.1 hastebin.com
+127.0.0.1 paste.rs
+127.0.0.1 dpaste.org
+127.0.0.1 ix.io
+127.0.0.1 sprunge.us
+127.0.0.1 clbin.com
+127.0.0.1 termbin.com
+# Temporary file sharing
+127.0.0.1 transfer.sh
+127.0.0.1 file.io
+127.0.0.1 tmpfiles.org
+127.0.0.1 uguu.se
+127.0.0.1 pomf.cat
+EOF
+
+    # Flush DNS cache on macOS
+    sudo dscacheutil -flushcache 2>/dev/null
+    sudo killall -HUP mDNSResponder 2>/dev/null
+
+    print_success "Blocked ${marker##*: } on this work machine."
+}
+
 enable_ssh() {
     if ! can_sudo; then
         print_warning "No sudo access — cannot enable SSH."
@@ -1207,7 +1267,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 128 | Last changed: Install BetterDisplay on headless machines for dummy HDMI resolution control${NC}"
+    echo -e "${GRAY}Version 129 | Last changed: Block public file upload services on work machines${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1239,6 +1299,9 @@ main() {
 
         print_section "Core Packages"
         install_core_packages
+
+        # Block public upload services on work machines
+        block_public_upload_services
 
         # Enable SSH with key-only auth
         enable_ssh
