@@ -682,6 +682,31 @@ check_omarchy_installation() {
 }
 
 # Update system packages
+# Ensure fallback Arch mirrors are in the mirrorlist.
+# Omarchy's stable mirror sometimes returns 404s for packages between monthly snapshots.
+# Adding official Arch mirrors as fallbacks prevents pacman from failing entirely.
+ensure_fallback_mirrors() {
+    if ! can_sudo; then
+        return
+    fi
+
+    local mirrorlist="/etc/pacman.d/mirrorlist"
+    local rackspace_mirror="Server = https://mirror.rackspace.com/archlinux/\$repo/os/\$arch"
+    local geo_mirror="Server = https://geo.mirror.pkgbuild.com/\$repo/os/\$arch"
+
+    if grep -q "mirror.rackspace.com" "${mirrorlist}" 2>/dev/null; then
+        print_debug "Fallback mirrors already configured."
+        return
+    fi
+
+    print_message "Adding fallback Arch mirrors to mirrorlist..."
+    echo "" | sudo tee -a "${mirrorlist}" > /dev/null
+    echo "# Fallback mirrors (added by setup script for when omarchy mirror returns 404s)" | sudo tee -a "${mirrorlist}" > /dev/null
+    echo "${rackspace_mirror}" | sudo tee -a "${mirrorlist}" > /dev/null
+    echo "${geo_mirror}" | sudo tee -a "${mirrorlist}" > /dev/null
+    print_success "Fallback mirrors added."
+}
+
 update_system() {
     # On Omarchy, omarchy-update handles system package updates along with
     # configuration migrations. Running pacman -Syu directly is discouraged.
@@ -1790,7 +1815,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 120 | Last changed: Block public file upload services on work machines${NC}"
+    echo -e "${GRAY}Version 121 | Last changed: Add fallback Arch mirrors for when Omarchy mirror 404s${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1825,6 +1850,7 @@ setup_dns64_for_ipv6_only
 block_public_upload_services
 
 print_section "System Updates"
+ensure_fallback_mirrors
 update_system
 run_omarchy_update
 
