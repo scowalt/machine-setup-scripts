@@ -877,7 +877,7 @@ install_tailscale() {
     print_message "Skipping Tailscale installation as it is not needed on WSL."
 }
 
-# Install Doppler CLI for secrets management
+# Install Doppler CLI for secrets management (non-work machines)
 install_doppler() {
     if command -v doppler &>/dev/null; then
         print_debug "Doppler CLI already installed."
@@ -907,6 +907,42 @@ install_doppler() {
         print_success "Doppler CLI installed."
     else
         print_error "Failed to install Doppler CLI."
+    fi
+}
+
+# Install Infisical CLI for secrets management (work machines)
+install_infisical() {
+    if command -v infisical &>/dev/null; then
+        print_debug "Infisical CLI already installed."
+        return
+    fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access - cannot install Infisical CLI."
+        return
+    fi
+
+    print_message "Installing Infisical CLI..."
+
+    # Add repository and install
+    if curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' | sudo bash; then
+        sudo apt-get update -qq
+        if sudo apt-get install -y infisical; then
+            print_success "Infisical CLI installed."
+        else
+            print_error "Failed to install Infisical CLI."
+        fi
+    else
+        print_error "Failed to add Infisical repository."
+    fi
+}
+
+# Install the appropriate secrets manager based on machine type
+install_secrets_manager() {
+    if [[ "${WORK_MACHINE:-}" == "1" ]]; then
+        install_infisical
+    else
+        install_doppler
     fi
 }
 
@@ -1281,7 +1317,7 @@ upload_log() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 109 | Last changed: Add Homebrew permissions fix for multi-user installs${NC}"
+    echo -e "${GRAY}Version 110 | Last changed: Install Infisical on work machines, Doppler on non-work machines${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1335,7 +1371,7 @@ main() {
     print_section "Security Tools"
     install_1password_cli
     install_tailscale
-    install_doppler
+    install_secrets_manager
     setup_unattended_upgrades
 
     print_section "Shared Directories"
