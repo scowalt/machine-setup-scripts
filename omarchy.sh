@@ -705,6 +705,12 @@ ensure_fallback_mirrors() {
     echo "${rackspace_mirror}" | sudo tee -a "${mirrorlist}" > /dev/null
     echo "${geo_mirror}" | sudo tee -a "${mirrorlist}" > /dev/null
     print_success "Fallback mirrors added."
+
+    # Force refresh package databases to avoid stale metadata pointing to
+    # package versions that no longer exist on any mirror
+    print_message "Refreshing package databases..."
+    sudo pacman -Syy --noconfirm > /dev/null 2>&1
+    print_success "Package databases refreshed."
 }
 
 update_system() {
@@ -1815,7 +1821,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 121 | Last changed: Add fallback Arch mirrors for when Omarchy mirror 404s${NC}"
+    echo -e "${GRAY}Version 122 | Last changed: Force refresh package databases after adding fallback mirrors${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
