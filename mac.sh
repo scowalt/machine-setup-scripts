@@ -680,22 +680,19 @@ setup_ssh_key() {
     fi
 }
 
-# Ensure Xcode Command Line Tools are installed (provides git, clang, etc.)
+# Install Xcode CLT headlessly via softwareupdate (no GUI dialog)
+# xcode-select --install opens a GUI prompt that hangs on headless machines.
+# Instead, we create the /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress
+# sentinel file and use softwareupdate to find and install the CLT package directly.
 install_xcode_cli_tools() {
     if xcode-select -p &>/dev/null; then
         # CLT is installed — check if it needs updating
-        # softwareupdate --list checks for available updates including CLT
         local updates
         updates=$(softwareupdate --list 2>&1)
         if echo "${updates}" | grep -qi "Command Line Tools"; then
             print_message "Xcode Command Line Tools update available. Installing..."
-            # Remove old CLT and reinstall to get the latest version
             sudo rm -rf /Library/Developer/CommandLineTools 2>/dev/null
-            xcode-select --install 2>/dev/null || true
-            print_message "Waiting for Xcode Command Line Tools update to complete..."
-            until xcode-select -p &>/dev/null; do
-                sleep 5
-            done
+            _install_clt_via_softwareupdate
             print_success "Xcode Command Line Tools updated."
         else
             print_debug "Xcode Command Line Tools are already installed and up to date."
@@ -704,17 +701,43 @@ install_xcode_cli_tools() {
     fi
 
     print_message "Installing Xcode Command Line Tools..."
-
-    # Trigger the install prompt
-    xcode-select --install 2>/dev/null || true
-
-    # Wait for the installation to complete (the install dialog is async)
-    print_message "Waiting for Xcode Command Line Tools installation to complete..."
-    until xcode-select -p &>/dev/null; do
-        sleep 5
-    done
-
+    _install_clt_via_softwareupdate
     print_success "Xcode Command Line Tools installed."
+}
+
+# Helper: install CLT non-interactively using softwareupdate
+_install_clt_via_softwareupdate() {
+    # This sentinel file makes softwareupdate list the CLT package
+    local placeholder="/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress"
+    sudo touch "${placeholder}"
+
+    # Find the latest Command Line Tools package label
+    local clt_label
+    clt_label=$(softwareupdate --list 2>&1 \
+        | grep -o 'Label: Command Line Tools.*' \
+        | sed 's/^Label: //' \
+        | sort -V \
+        | tail -n1)
+
+    if [[ -z "${clt_label}" ]]; then
+        # Fallback: try the '*' wildcard format (older macOS)
+        clt_label=$(softwareupdate --list 2>&1 \
+            | grep '\* .*Command Line Tools' \
+            | sed 's/^[[:space:]]*\* //' \
+            | sort -V \
+            | tail -n1)
+    fi
+
+    if [[ -z "${clt_label}" ]]; then
+        sudo rm -f "${placeholder}"
+        print_error "Could not find Command Line Tools package in softwareupdate."
+        return 1
+    fi
+
+    print_message "Installing '${clt_label}' via softwareupdate..."
+    sudo softwareupdate --install "${clt_label}" --verbose
+
+    sudo rm -f "${placeholder}"
 }
 
 # Install Homebrew if not installed
@@ -1387,7 +1410,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 133 | Last changed: Auto-update outdated Xcode Command Line Tools${NC}"
+    echo -e "${GRAY}Version 134 | Last changed: Fix xcode-select headless install via softwareupdate${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
