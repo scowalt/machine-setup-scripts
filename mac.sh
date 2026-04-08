@@ -1406,11 +1406,35 @@ configure_power_settings() {
     fi
 }
 
+enable_screen_sharing() {
+    if [[ "${HEADLESS}" != "1" ]]; then
+        return
+    fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access — cannot enable Screen Sharing."
+        return
+    fi
+
+    # Check if Screen Sharing is already enabled
+    if sudo launchctl list com.apple.screensharing &>/dev/null; then
+        print_debug "Screen Sharing is already enabled."
+        return
+    fi
+
+    print_message "Enabling Screen Sharing for headless operation..."
+    if sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null; then
+        print_success "Screen Sharing enabled."
+    else
+        print_warning "Could not enable Screen Sharing. Enable manually: System Settings → General → Sharing → Screen Sharing"
+    fi
+}
+
 main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 134 | Last changed: Fix xcode-select headless install via softwareupdate${NC}"
+    echo -e "${GRAY}Version 135 | Last changed: Enable Screen Sharing on headless Macs${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1461,6 +1485,9 @@ main() {
 
         # Prevent sleep on headless machines
         configure_power_settings
+
+        # Enable Screen Sharing on headless machines (VNC access)
+        enable_screen_sharing
 
         # Fix zsh permissions early (before any tool might invoke zsh)
         fix_zsh_compaudit
