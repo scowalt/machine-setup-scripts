@@ -971,6 +971,12 @@ install_claude_code() {
 
 # Configure Rube MCP server for Claude Code and Codex with Bearer token auth
 setup_rube_mcp() {
+    # Rube is only needed on work machines (personal machines use claude.ai integrations)
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Not a work machine. Skipping Rube MCP setup."
+        return 0
+    fi
+
     # Source Rube token if not already set
     if [[ -z "${RUBE_API_KEY}" ]] && [[ -f "${HOME}/.env.local" ]]; then
         set -a
@@ -1434,7 +1440,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 135 | Last changed: Enable Screen Sharing on headless Macs${NC}"
+    echo -e "${GRAY}Version 136 | Last changed: Only install Rube MCP on work machines${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

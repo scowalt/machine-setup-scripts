@@ -953,6 +953,12 @@ install_claude_code() {
 
 # Configure Rube MCP server for Claude Code and Codex with Bearer token auth
 setup_rube_mcp() {
+    # Rube is only needed on work machines (personal machines use claude.ai integrations)
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Not a work machine. Skipping Rube MCP setup."
+        return 0
+    fi
+
     # Source Rube token if not already set
     if [[ -z "${RUBE_API_KEY}" ]] && [[ -f "${HOME}/.env.local" ]]; then
         set -a
@@ -1846,7 +1852,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 151 | Last changed: Install Infisical on work machines, Doppler on non-work machines${NC}"
+    echo -e "${GRAY}Version 152 | Last changed: Only install Rube MCP on work machines${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
