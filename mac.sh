@@ -1422,17 +1422,27 @@ enable_screen_sharing() {
         return
     fi
 
-    # Check if Screen Sharing is already enabled
-    if sudo launchctl list com.apple.screensharing &>/dev/null; then
-        print_debug "Screen Sharing is already enabled."
-        return
+    # Ensure the screensharing launchd job is loaded
+    if ! sudo launchctl list com.apple.screensharing &>/dev/null; then
+        print_message "Loading Screen Sharing launchd job..."
+        sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null
+        sudo launchctl enable system/com.apple.screensharing 2>/dev/null
     fi
 
-    print_message "Enabling Screen Sharing for headless operation..."
-    if sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null; then
-        print_success "Screen Sharing enabled."
+    # Verify Screen Sharing actually accepts connections by checking for a VNC handshake.
+    # The daemon can be loaded but reject connections if Screen Sharing was never
+    # enabled via System Settings. A working VNC server responds with "RFB" on connect.
+    local vnc_response
+    vnc_response=$(echo "" | nc -w 2 localhost 5900 2>/dev/null | head -c 3)
+    if [[ "$vnc_response" == "RFB" ]]; then
+        print_debug "Screen Sharing is enabled and accepting connections."
     else
-        print_warning "Could not enable Screen Sharing. Enable manually: System Settings → General → Sharing → Screen Sharing"
+        print_error "Screen Sharing is NOT accepting connections."
+        print_error "This must be enabled manually via the GUI (clickops required):"
+        print_error "  1. Open System Settings → General → Sharing"
+        print_error "  2. Toggle ON 'Screen Sharing'"
+        print_error "  3. Re-run this setup script to verify"
+        print_error "If you cannot access the GUI, connect a monitor/keyboard temporarily."
     fi
 }
 
