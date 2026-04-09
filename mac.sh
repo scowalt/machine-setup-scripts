@@ -1433,8 +1433,19 @@ enable_screen_sharing() {
     # The launchd job can be loaded and VNC port listening, but connections get rejected
     # if Screen Sharing was never toggled on in System Settings. The kickstart command
     # prints "must be enabled from System Settings" when this is the case.
+    local kickstart="/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
+    local tmpfile
+    tmpfile=$(mktemp)
+    sudo "$kickstart" -activate &>"$tmpfile" &
+    local pid=$!
+    ( sleep 10 && kill "$pid" 2>/dev/null ) &
+    local watchdog=$!
+    wait "$pid" 2>/dev/null
+    kill "$watchdog" 2>/dev/null
+    wait "$watchdog" 2>/dev/null
     local kickstart_output
-    kickstart_output=$(sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate 2>&1)
+    kickstart_output=$(cat "$tmpfile")
+    rm -f "$tmpfile"
     if echo "$kickstart_output" | grep -q "must be enabled from System Settings"; then
         print_error "Screen Sharing is NOT properly enabled."
         print_error "The launchd job is loaded but macOS requires manual GUI enablement:"
@@ -1451,7 +1462,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 138 | Last changed: Use kickstart to detect Screen Sharing state${NC}"
+    echo -e "${GRAY}Version 139 | Last changed: Add timeout to kickstart Screen Sharing check${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
