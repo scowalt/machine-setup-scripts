@@ -1450,7 +1450,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 136 | Last changed: Only install Rube MCP on work machines${NC}"
+    echo -e "${GRAY}Version 137 | Last changed: Detect when Screen Sharing needs manual GUI enablement${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
