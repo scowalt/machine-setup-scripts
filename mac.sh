@@ -1429,20 +1429,21 @@ enable_screen_sharing() {
         sudo launchctl enable system/com.apple.screensharing 2>/dev/null
     fi
 
-    # Verify Screen Sharing actually accepts connections by checking for a VNC handshake.
-    # The daemon can be loaded but reject connections if Screen Sharing was never
-    # enabled via System Settings. A working VNC server responds with "RFB" on connect.
-    local vnc_response
-    vnc_response=$(echo "" | nc -w 2 localhost 5900 2>/dev/null | head -c 3)
-    if [[ "$vnc_response" == "RFB" ]]; then
-        print_debug "Screen Sharing is enabled and accepting connections."
-    else
-        print_error "Screen Sharing is NOT accepting connections."
-        print_error "This must be enabled manually via the GUI (clickops required):"
+    # Verify Screen Sharing is properly enabled via System Settings.
+    # The launchd job can be loaded and VNC port listening, but connections get rejected
+    # if Screen Sharing was never toggled on in System Settings. The kickstart command
+    # prints "must be enabled from System Settings" when this is the case.
+    local kickstart_output
+    kickstart_output=$(sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate 2>&1)
+    if echo "$kickstart_output" | grep -q "must be enabled from System Settings"; then
+        print_error "Screen Sharing is NOT properly enabled."
+        print_error "The launchd job is loaded but macOS requires manual GUI enablement:"
         print_error "  1. Open System Settings → General → Sharing"
         print_error "  2. Toggle ON 'Screen Sharing'"
         print_error "  3. Re-run this setup script to verify"
         print_error "If you cannot access the GUI, connect a monitor/keyboard temporarily."
+    else
+        print_debug "Screen Sharing is enabled and accepting connections."
     fi
 }
 
@@ -1450,7 +1451,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 137 | Last changed: Detect when Screen Sharing needs manual GUI enablement${NC}"
+    echo -e "${GRAY}Version 138 | Last changed: Use kickstart to detect Screen Sharing state${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
