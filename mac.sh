@@ -1453,16 +1453,29 @@ enable_screen_sharing() {
         print_error "  2. Toggle ON 'Screen Sharing'"
         print_error "  3. Re-run this setup script to verify"
         print_error "If you cannot access the GUI, connect a monitor/keyboard temporarily."
-    else
-        print_debug "Screen Sharing is enabled and accepting connections."
+        return
     fi
+
+    # Grant all remote management privileges (observe, control, etc.) to all users.
+    # Without this, authentication succeeds but authorization fails with privilege level 0,
+    # which macOS displays as an incorrect password shake.
+    print_message "Configuring Screen Sharing privileges..."
+    sudo "$kickstart" -configure -allowAccessFor -allUsers -privs -all -restart -agent &>"$tmpfile" &
+    pid=$!
+    ( sleep 10 && kill "$pid" 2>/dev/null ) &
+    watchdog=$!
+    wait "$pid" 2>/dev/null
+    kill "$watchdog" 2>/dev/null
+    wait "$watchdog" 2>/dev/null
+    rm -f "$tmpfile"
+    print_debug "Screen Sharing is enabled and accepting connections."
 }
 
 main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 139 | Last changed: Add timeout to kickstart Screen Sharing check${NC}"
+    echo -e "${GRAY}Version 140 | Last changed: Grant Screen Sharing privileges via kickstart${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
