@@ -127,7 +127,7 @@ GitHub Codespaces provides ephemeral Ubuntu 24.04 containers with a pre-configur
     - **Shared Directories**: `setup_claude_shared_directory`
     - **Dotfiles Management**: Token bridging (`GH_TOKEN`), then `check_dotfiles_access`, credential helper bootstrap, `install_chezmoi`, `initialize_chezmoi`, `configure_chezmoi_git`, `update_chezmoi`, `chezmoi apply`
     - **Shell Configuration**: `set_fish_as_default_shell`, `install_tmux_plugins`
-    - **Development Tools (AI/JS)**: `install_bun`, `install_sfw`, `install_claude_code`, `setup_rube_mcp`, `setup_compound_plugin`, `install_gemini_cli`
+    - **Development Tools (AI/JS)**: `install_bun`, `install_sfw`, `install_claude_code`, `setup_compound_plugin`, `install_gemini_cli`
     - **Final**: `upgrade_npm_global_packages`, completion message
   - Skip entirely: SSH server/keys, tailscale, 1password, doppler, fail2ban, unattended-upgrades, opentofu, cloudflared, turso, act, enable_tmux_service, iterm2_shell_integration, codex CLI
   - Include the source guard on its own main: `[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"`

@@ -67,7 +67,7 @@ function New-TokenPlaceholders {
     $envLocalPath = Join-Path $env:USERPROFILE ".env.local"
 
     # Migrate old token files into ~/.env.local
-    $oldTokenFiles = @(".gh_token", ".rube_token", ".op_token")
+    $oldTokenFiles = @(".gh_token", ".op_token")
     foreach ($oldFile in $oldTokenFiles) {
         $oldPath = Join-Path $env:USERPROFILE $oldFile
         if (Test-Path $oldPath) {
@@ -94,10 +94,6 @@ function New-TokenPlaceholders {
 # Get tokens from: https://github.com/settings/tokens
 # GH_TOKEN=github_pat_xxx
 # GH_TOKEN_SCOWALT=github_pat_yyy
-
-# Rube MCP API Key
-# Get your API key from: https://rube.app
-# RUBE_API_KEY=your_api_key_here
 
 # 1Password Service Account Token
 # Create a service account at: https://my.1password.com/integrations/infrastructure-secrets
@@ -515,92 +511,6 @@ function Install-ClaudeCode {
     }
 }
 
-function Setup-RubeMcp {
-    # Try to load token from ~/.env.local if not set
-    $rubeToken = $env:RUBE_API_KEY
-    $envLocalFile = Join-Path $env:USERPROFILE ".env.local"
-    if (-not $rubeToken -and (Test-Path $envLocalFile)) {
-        foreach ($line in Get-Content $envLocalFile) {
-            if ($line -match '^\s*RUBE_API_KEY=(.+)') {
-                $rubeToken = $Matches[1].Trim()
-                break
-            }
-        }
-    }
-
-    if (-not $rubeToken) {
-        Write-Host "$warnIcon RUBE_API_KEY not set. Skipping Rube MCP setup." -ForegroundColor Yellow
-        Write-Debug "Add to ~/.env.local: RUBE_API_KEY=your_api_key"
-        return
-    }
-
-    # Configure for Claude Code
-    if (Get-Command claude -ErrorAction SilentlyContinue) {
-        # Remove existing config for idempotency
-        $mcpList = claude mcp list 2>$null
-        if ($mcpList -match "rube") {
-            Write-Host "$arrow Removing existing Claude Code Rube MCP configuration..." -ForegroundColor Cyan
-            claude mcp remove rube -s user 2>$null
-            claude mcp remove rube 2>$null
-        }
-
-        Write-Host "$arrow Configuring Rube MCP server for Claude Code..." -ForegroundColor Cyan
-        try {
-            claude mcp add --transport http rube -s user "https://rube.app/mcp" --header "Authorization:Bearer $rubeToken" *>$null
-            Write-Host "$success Rube MCP server configured for Claude Code." -ForegroundColor Green
-        }
-        catch {
-            Write-Host "$warnIcon Failed to configure Rube MCP server for Claude Code." -ForegroundColor Yellow
-        }
-    }
-    else {
-        Write-Debug "Claude Code not found. Skipping Claude Code Rube MCP setup."
-    }
-
-    # Configure for Codex
-    if (Get-Command codex -ErrorAction SilentlyContinue) {
-        $codexConfigDir = Join-Path $env:USERPROFILE ".codex"
-        $codexConfig = Join-Path $codexConfigDir "config.toml"
-
-        if (-not (Test-Path $codexConfigDir)) {
-            New-Item -ItemType Directory -Path $codexConfigDir -Force | Out-Null
-        }
-
-        # Remove existing rube section for idempotency
-        if ((Test-Path $codexConfig) -and (Select-String -Path $codexConfig -Pattern '^\[mcp_servers\.rube\]' -Quiet)) {
-            $lines = Get-Content $codexConfig
-            $newLines = @()
-            $skip = $false
-            foreach ($line in $lines) {
-                if ($line -match '^\[mcp_servers\.rube\]') {
-                    $skip = $true
-                    continue
-                }
-                if ($skip -and $line -match '^\[') {
-                    $skip = $false
-                }
-                if (-not $skip) {
-                    $newLines += $line
-                }
-            }
-            $newLines | Set-Content $codexConfig
-        }
-
-        # Append rube MCP config
-        Write-Host "$arrow Configuring Rube MCP server for Codex..." -ForegroundColor Cyan
-        @"
-
-[mcp_servers.rube]
-url = "https://rube.app/mcp"
-bearer_token_env_var = "RUBE_API_KEY"
-"@ | Add-Content -Path $codexConfig
-        Write-Host "$success Rube MCP server configured for Codex." -ForegroundColor Green
-    }
-    else {
-        Write-Debug "Codex not found. Skipping Codex Rube MCP setup."
-    }
-}
-
 function Setup-CompoundPlugin {
     if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
         Write-Debug "Claude Code not found. Skipping Compound plugin setup."
@@ -826,7 +736,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 82 | Last changed: Install Infisical on work machines, Doppler on non-work machines" -ForegroundColor DarkGray
+    Write-Host "Version 83 | Last changed: Remove Rube MCP (EOL)" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -864,7 +774,6 @@ function Initialize-WindowsEnvironment {
     Write-Section "Additional Development Tools"
     Install-SocketFirewall
     Install-ClaudeCode
-    Setup-RubeMcp
     Setup-CompoundPlugin
     Setup-TelegramPlugin
     Install-GeminiCli

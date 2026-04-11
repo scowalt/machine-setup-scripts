@@ -138,7 +138,6 @@ HELPER_EOF
     install_bun
     install_sfw
     install_claude_code
-    setup_rube_mcp
     setup_compound_plugin
     setup_telegram_plugin
     install_gemini_cli

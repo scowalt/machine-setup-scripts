@@ -17,12 +17,12 @@ print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
 print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 print_error() { printf "${RED} %s${NC}\n" "$1"; }
 
-# Migrate old token files (~/.gh_token, ~/.op_token, ~/.rube_token) into ~/.env.local
+# Migrate old token files (~/.gh_token, ~/.op_token) into ~/.env.local
 migrate_token_files() {
     local env_file="${HOME}/.env.local"
     local migrated=0
 
-    for old_file in "${HOME}/.gh_token" "${HOME}/.rube_token" "${HOME}/.op_token"; do
+    for old_file in "${HOME}/.gh_token" "${HOME}/.op_token"; do
         if [[ -f "${old_file}" ]]; then
             # Extract uncommented KEY=VALUE lines (strip 'export ' prefix if present)
             local values
@@ -61,10 +61,6 @@ create_env_local() {
 # Get tokens from: https://github.com/settings/tokens
 # GH_TOKEN=github_pat_xxx
 # GH_TOKEN_SCOWALT=github_pat_yyy
-
-# Rube MCP API Key
-# Get your API key from: https://rube.app
-# RUBE_API_KEY=your_api_key_here
 
 # 1Password Service Account Token
 # Create a service account at: https://my.1password.com/integrations/infrastructure-secrets
@@ -1312,75 +1308,6 @@ install_claude_code() {
     fi
 }
 
-# Configure Rube MCP server for Claude Code and Codex with Bearer token auth
-setup_rube_mcp() {
-    # Source env file if RUBE_API_KEY not already set
-    if [[ -z "${RUBE_API_KEY}" ]] && [[ -f "${HOME}/.env.local" ]]; then
-        set -a
-        # shellcheck source=/dev/null
-        source "${HOME}/.env.local"
-        set +a
-    fi
-
-    # Check if token is available
-    if [[ -z "${RUBE_API_KEY}" ]]; then
-        print_warning "RUBE_API_KEY not set. Skipping Rube MCP setup."
-        print_debug "Add RUBE_API_KEY=your_api_key to ~/.env.local"
-        return 0
-    fi
-
-    # Configure for Claude Code
-    if command -v claude &> /dev/null; then
-        # Remove existing config for idempotency (may have old auth or scope)
-        local _mcp_list
-        _mcp_list=$(claude mcp list 2>/dev/null) || true
-        if echo "${_mcp_list}" | grep -q "rube"; then
-            print_message "Removing existing Claude Code Rube MCP configuration..."
-            claude mcp remove rube -s user 2>/dev/null || true
-            claude mcp remove rube 2>/dev/null || true
-        fi
-
-        print_message "Configuring Rube MCP server for Claude Code..."
-        if claude mcp add --transport http rube -s user "https://rube.app/mcp" \
-            --header "Authorization:Bearer ${RUBE_API_KEY}" >/dev/null 2>&1; then
-            print_success "Rube MCP server configured for Claude Code."
-        else
-            print_warning "Failed to configure Rube MCP server for Claude Code."
-        fi
-    else
-        print_debug "Claude Code not found. Skipping Claude Code Rube MCP setup."
-    fi
-
-    # Configure for Codex
-    if command -v codex &> /dev/null; then
-        local codex_config_dir="${HOME}/.codex"
-        local codex_config="${codex_config_dir}/config.toml"
-
-        mkdir -p "${codex_config_dir}"
-
-        # Remove existing rube section for idempotency
-        if [[ -f "${codex_config}" ]] && grep -q '\[mcp_servers\.rube\]' "${codex_config}"; then
-            awk '
-                /^\[mcp_servers\.rube\]/ { skip=1; next }
-                /^\[/ { skip=0 }
-                !skip { print }
-            ' "${codex_config}" > "${codex_config}.tmp" && mv "${codex_config}.tmp" "${codex_config}"
-        fi
-
-        # Append rube MCP config
-        print_message "Configuring Rube MCP server for Codex..."
-        {
-            echo ""
-            echo "[mcp_servers.rube]"
-            echo 'url = "https://rube.app/mcp"'
-            echo 'bearer_token_env_var = "RUBE_API_KEY"'
-        } >> "${codex_config}"
-        print_success "Rube MCP server configured for Codex."
-    else
-        print_debug "Codex not found. Skipping Codex Rube MCP setup."
-    fi
-}
-
 # Install Compound Engineering plugin for Claude Code
 setup_compound_plugin() {
     if ! command -v claude &> /dev/null; then
@@ -1814,7 +1741,6 @@ main() {
     install_bun
     install_sfw
     install_claude_code
-    setup_rube_mcp
     setup_compound_plugin
     setup_telegram_plugin
     install_gemini_cli
