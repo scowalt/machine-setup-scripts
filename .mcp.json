@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "backlog": {
-      "command": "/home/scowalt/.bun/bin/backlog",
+      "command": "/usr/local/bin/backlog",
       "args": ["mcp", "start", "--cwd", "/home/scowalt/Code/machine-setup-scripts"]
     }
   }
