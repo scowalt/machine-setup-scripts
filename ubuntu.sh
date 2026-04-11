@@ -1050,30 +1050,6 @@ install_brew_packages() {
     fi
 }
 
-# Install Telegram plugin for Claude Code
-setup_telegram_plugin() {
-    if ! command -v claude &> /dev/null; then
-        print_debug "Claude Code not found. Skipping Telegram plugin setup."
-        return 0
-    fi
-
-    # Ensure the official plugins marketplace is registered
-    local _output
-    if ! _output=$(claude plugin marketplace add anthropics/claude-plugins-official 2>&1); then
-        print_warning "Failed to register official plugins marketplace: ${_output}"
-    fi
-
-    # Try install first (succeeds if not installed), then update (succeeds if already installed)
-    print_message "Installing/updating Telegram plugin..."
-    if _output=$(claude plugin install telegram@claude-plugins-official 2>&1); then
-        print_success "Telegram plugin installed."
-    elif _output=$(claude plugin update telegram@claude-plugins-official 2>&1); then
-        print_success "Telegram plugin updated."
-    else
-        print_warning "Failed to install/update Telegram plugin: ${_output}"
-    fi
-}
-
 # Install Gemini CLI (Google's AI coding agent)
 install_gemini_cli() {
     if command -v gemini &> /dev/null; then
@@ -1773,7 +1749,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 153 | Last changed: Remove Rube MCP (EOL)${NC}"
+    echo -e "${GRAY}Version 154 | Last changed: Remove Telegram plugin auto-install${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1911,7 +1887,7 @@ HELPER_EOF
     install_sfw
     install_claude_code
     setup_compound_plugin
-    setup_telegram_plugin
+
     install_gemini_cli
     install_codex_cli
 

@@ -1228,30 +1228,6 @@ setup_code_directory() {
     fi
 }
 
-# Install Telegram plugin for Claude Code
-setup_telegram_plugin() {
-    if ! command -v claude &> /dev/null; then
-        print_debug "Claude Code not found. Skipping Telegram plugin setup."
-        return 0
-    fi
-
-    # Ensure the official plugins marketplace is registered
-    local _output
-    if ! _output=$(claude plugin marketplace add anthropics/claude-plugins-official 2>&1); then
-        print_warning "Failed to register official plugins marketplace: ${_output}"
-    fi
-
-    # Try install first (succeeds if not installed), then update (succeeds if already installed)
-    print_message "Installing/updating Telegram plugin..."
-    if _output=$(claude plugin install telegram@claude-plugins-official 2>&1); then
-        print_success "Telegram plugin installed."
-    elif _output=$(claude plugin update telegram@claude-plugins-official 2>&1); then
-        print_success "Telegram plugin updated."
-    else
-        print_warning "Failed to install/update Telegram plugin: ${_output}"
-    fi
-}
-
 # Upload log to centralized collector (non-fatal)
 upload_log() {
     if [[ -n "${log_file:-}" ]] && [[ -f "${log_file:-}" ]]; then
@@ -1396,7 +1372,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 141 | Last changed: Remove Rube MCP (EOL)${NC}"
+    echo -e "${GRAY}Version 142 | Last changed: Remove Telegram plugin auto-install${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
@@ -1565,7 +1541,7 @@ HELPER_EOF
     install_sfw
     install_claude_code
     setup_compound_plugin
-    setup_telegram_plugin
+
     install_gemini_cli
     install_codex_cli
 

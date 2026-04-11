@@ -686,40 +686,7 @@ function Set-WindowsTerminalConfiguration {
     Write-Host "$success Windows Terminal settings updated." -ForegroundColor Green
 }
 
-function Setup-TelegramPlugin {
-    if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-        Write-Debug "Claude Code not found. Skipping Telegram plugin setup."
-        return
-    }
 
-    # Ensure the official plugins marketplace is registered
-    $output = claude plugin marketplace add anthropics/claude-plugins-official 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "$warnIcon Failed to register official plugins marketplace: $output" -ForegroundColor Yellow
-    }
-
-    $pluginList = claude plugin list 2>$null
-    if ($pluginList -match "telegram") {
-        Write-Host "$arrow Updating Telegram plugin..." -ForegroundColor Cyan
-        $output = claude plugin update telegram@claude-plugins-official 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "$success Telegram plugin updated." -ForegroundColor Green
-        }
-        else {
-            Write-Host "$warnIcon Failed to update Telegram plugin: $output" -ForegroundColor Yellow
-        }
-    }
-    else {
-        Write-Host "$arrow Installing Telegram plugin..." -ForegroundColor Cyan
-        $output = claude plugin install telegram@claude-plugins-official 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "$success Telegram plugin installed." -ForegroundColor Green
-        }
-        else {
-            Write-Host "$warnIcon Failed to install Telegram plugin: $output" -ForegroundColor Yellow
-        }
-    }
-}
 
 function Upload-Log {
     if ($logFile -and (Test-Path $logFile)) {
@@ -736,7 +703,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 83 | Last changed: Remove Rube MCP (EOL)" -ForegroundColor DarkGray
+    Write-Host "Version 84 | Last changed: Remove Telegram plugin auto-install" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -775,7 +742,7 @@ function Initialize-WindowsEnvironment {
     Install-SocketFirewall
     Install-ClaudeCode
     Setup-CompoundPlugin
-    Setup-TelegramPlugin
+
     Install-GeminiCli
     Install-CodexCli
     Install-TursoCli
