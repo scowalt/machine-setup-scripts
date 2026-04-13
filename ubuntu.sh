@@ -1577,28 +1577,26 @@ enable_tmux_service() {
     print_message "Enabling tmux systemd user service..."
     systemctl --user daemon-reload
 
-    if [[ -n "${TMUX}" ]]; then
-        # Inside tmux: enable for next boot but don't start/restart to avoid killing session
-        if systemctl --user enable tmux.service 2>/dev/null; then
-            print_success "tmux service enabled (will start on next boot, already running)."
+    # Enable for next boot (never restart — restarting kills existing tmux windows)
+    if systemctl --user enable tmux.service 2>/dev/null; then
+        print_success "tmux service enabled."
+    else
+        if systemctl --user is-enabled tmux.service &>/dev/null; then
+            print_debug "tmux service already enabled."
         else
-            if systemctl --user is-enabled tmux.service &>/dev/null; then
-                print_debug "tmux service already enabled."
-            else
-                print_warning "Could not enable tmux service."
-            fi
+            print_warning "Could not enable tmux service."
+        fi
+    fi
+
+    # Start only if not already running (never restart)
+    if ! systemctl --user is-active tmux.service &>/dev/null; then
+        if systemctl --user start tmux.service 2>/dev/null; then
+            print_success "tmux service started."
+        else
+            print_warning "Could not start tmux service."
         fi
     else
-        if systemctl --user enable --now tmux.service 2>/dev/null; then
-            print_success "tmux service enabled and started."
-        else
-            # Service might already be running or have issues
-            if systemctl --user is-enabled tmux.service &>/dev/null; then
-                print_debug "tmux service already enabled."
-            else
-                print_warning "Could not enable tmux service."
-            fi
-        fi
+        print_debug "tmux service already running."
     fi
 }
 
@@ -1749,7 +1747,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 154 | Last changed: Remove Telegram plugin auto-install${NC}"
+    echo -e "${GRAY}Version 155 | Last changed: Never restart tmux service to avoid killing existing windows${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
