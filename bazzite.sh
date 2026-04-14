@@ -1029,6 +1029,16 @@ install_ccgram() {
         return
     fi
 
+    # Ensure uv can find system CA certificates (its statically-linked OpenSSL
+    # may not find them automatically, especially behind TLS-intercepting proxies)
+    if [[ -z "${SSL_CERT_FILE:-}" ]]; then
+        if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
+            export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+        elif [[ -f /etc/ssl/cert.pem ]]; then
+            export SSL_CERT_FILE=/etc/ssl/cert.pem
+        fi
+    fi
+
     print_message "Installing/updating ccgram..."
     if uv tool install --force --upgrade ccgram --from "git+https://github.com/scowalt/ccgram.git@main"; then
         print_success "ccgram installed/updated."
