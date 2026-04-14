@@ -1418,7 +1418,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 143 | Last changed: Gate Socket Firewall behind WORK_MACHINE=1${NC}"
+    echo -e "${GRAY}Version 145 | Last changed: Fix uv SSL cert verification for ccgram install${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

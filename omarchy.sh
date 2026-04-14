@@ -1829,7 +1829,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 126 | Last changed: Gate Socket Firewall behind WORK_MACHINE=1${NC}"
+    echo -e "${GRAY}Version 128 | Last changed: Fix uv SSL cert verification for ccgram install${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

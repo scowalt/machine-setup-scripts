@@ -1290,7 +1290,7 @@ upload_log() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 113 | Last changed: Gate Socket Firewall behind WORK_MACHINE=1${NC}"
+    echo -e "${GRAY}Version 115 | Last changed: Fix uv SSL cert verification for ccgram install${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

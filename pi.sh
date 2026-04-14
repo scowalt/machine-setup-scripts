@@ -1725,7 +1725,7 @@ upload_log() {
 
 main() {
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 122 | Last changed: Gate Socket Firewall behind WORK_MACHINE=1${NC}"
+    echo -e "${GRAY}Version 124 | Last changed: Fix uv SSL cert verification for ccgram install${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
