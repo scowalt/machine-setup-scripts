@@ -284,6 +284,21 @@ function Test-GitHubSSHKey {
 
 # Function to add Starship initialization to PowerShell profile
 function Install-SocketFirewall {
+    $envLocalFile = Join-Path $env:USERPROFILE ".env.local"
+    $isWorkMachine = $false
+    if (Test-Path $envLocalFile) {
+        foreach ($line in Get-Content $envLocalFile) {
+            if ($line -match '^\s*WORK_MACHINE\s*=\s*1\s*$') {
+                $isWorkMachine = $true
+                break
+            }
+        }
+    }
+    if (-not $isWorkMachine) {
+        Write-Debug "Skipping Socket Firewall (not a work machine)."
+        return
+    }
+
     if (Get-Command sfw -ErrorAction SilentlyContinue) {
         Write-Debug "sfw is already installed."
         return
@@ -703,7 +718,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 84 | Last changed: Remove Telegram plugin auto-install" -ForegroundColor DarkGray
+    Write-Host "Version 85 | Last changed: Gate Socket Firewall behind WORK_MACHINE=1" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"

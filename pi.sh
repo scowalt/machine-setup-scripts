@@ -1187,6 +1187,11 @@ install_bun() {
 
 # Install Socket Firewall for supply chain security scanning
 install_sfw() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Skipping Socket Firewall (not a work machine)."
+        return
+    fi
+
     if command -v sfw &> /dev/null; then
         print_debug "sfw is already installed."
         return
@@ -1679,7 +1684,7 @@ upload_log() {
 
 main() {
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 121 | Last changed: Install Infisical on work machines, Doppler on non-work machines${NC}"
+    echo -e "${GRAY}Version 122 | Last changed: Gate Socket Firewall behind WORK_MACHINE=1${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

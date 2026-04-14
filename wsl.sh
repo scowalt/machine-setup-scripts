@@ -1051,6 +1051,11 @@ install_bun() {
 
 # Install Socket Firewall for supply chain security scanning
 install_sfw() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Skipping Socket Firewall (not a work machine)."
+        return
+    fi
+
     if command -v sfw &> /dev/null; then
         print_debug "sfw is already installed."
         return
@@ -1244,7 +1249,7 @@ upload_log() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 112 | Last changed: Remove Rube MCP (EOL)${NC}"
+    echo -e "${GRAY}Version 113 | Last changed: Gate Socket Firewall behind WORK_MACHINE=1${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

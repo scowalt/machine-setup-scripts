@@ -878,8 +878,13 @@ install_bun() {
     fi
 }
 
-# Install Socket Firewall for supply chain security scanning
+# Install Socket Firewall for supply chain security scanning (work machines only)
 install_sfw() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Skipping Socket Firewall (not a work machine)."
+        return
+    fi
+
     if command -v sfw &> /dev/null; then
         print_debug "sfw is already installed."
         return
@@ -1747,7 +1752,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 155 | Last changed: Never restart tmux service to avoid killing existing windows${NC}"
+    echo -e "${GRAY}Version 156 | Last changed: Gate Socket Firewall behind WORK_MACHINE=1${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

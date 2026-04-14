@@ -1251,6 +1251,11 @@ install_bun() {
 
 # Install Socket Firewall for supply chain security scanning
 install_sfw() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Skipping Socket Firewall (not a work machine)."
+        return
+    fi
+
     if command -v sfw &> /dev/null; then
         print_debug "sfw is already installed."
         return
@@ -1473,18 +1478,13 @@ install_claude_code() {
     # Clean up stale lock files
     rm -rf "${HOME}/.local/state/claude/locks" 2>/dev/null
 
-    # Skip if native version already installed
-    if [[ -x "${HOME}/.local/bin/claude" ]]; then
-        print_debug "Claude Code is already installed (native)."
-        return 0
-    fi
-
-    print_message "Installing Claude Code via official installer..."
+    # Always run the installer — it handles both install and update idempotently
+    print_message "Installing/updating Claude Code via official installer..."
     local _install_script
     _install_script=$(curl -fsSL https://claude.ai/install.sh) || { print_error "Failed to download Claude Code installer."; return 1; }
     if bash <<< "${_install_script}"; then
         export PATH="${HOME}/.local/bin:${PATH}"
-        print_success "Claude Code installed."
+        print_success "Claude Code installed/updated."
     else
         print_error "Failed to install Claude Code."
         return 1
@@ -1783,7 +1783,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 125 | Last changed: Remove Rube MCP (EOL)${NC}"
+    echo -e "${GRAY}Version 126 | Last changed: Gate Socket Firewall behind WORK_MACHINE=1${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

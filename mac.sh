@@ -1079,6 +1079,11 @@ install_bun() {
 
 # Install Socket Firewall for supply chain security scanning
 install_sfw() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Skipping Socket Firewall (not a work machine)."
+        return
+    fi
+
     if command -v sfw &> /dev/null; then
         print_debug "sfw is already installed."
         return
@@ -1372,7 +1377,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 142 | Last changed: Remove Telegram plugin auto-install${NC}"
+    echo -e "${GRAY}Version 143 | Last changed: Gate Socket Firewall behind WORK_MACHINE=1${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
