@@ -579,17 +579,12 @@ install_claude_code() {
     # Clean up stale lock files
     rm -rf "${HOME}/.local/state/claude/locks" 2>/dev/null
 
-    # Skip if native version already installed
-    if [[ -x "${HOME}/.local/bin/claude" ]]; then
-        print_debug "Claude Code is already installed (native)."
-        return 0
-    fi
-
-    print_message "Installing Claude Code via official installer..."
+    # Always run the installer — it handles both install and update idempotently
+    print_message "Installing/updating Claude Code via official installer..."
     local _claude_install_script
     _claude_install_script=$(curl -fsSL https://claude.ai/install.sh)
     if bash <<< "${_claude_install_script}"; then
-        print_success "Claude Code installed."
+        print_success "Claude Code installed/updated."
     else
         print_error "Failed to install Claude Code."
         return 1
@@ -737,6 +732,32 @@ install_codex_cli() {
         print_success "Codex CLI installed."
     else
         print_error "Failed to install Codex CLI."
+    fi
+}
+
+# Install/update ccgram (Telegram-to-tmux bridge for AI coding agents)
+install_ccgram() {
+    if ! command -v uv &> /dev/null; then
+        print_warning "uv not found. Cannot install ccgram."
+        return
+    fi
+
+    print_message "Installing/updating ccgram..."
+    if uv tool install --force --upgrade ccgram --from "git+https://github.com/scowalt/ccgram.git@main"; then
+        print_success "ccgram installed/updated."
+    else
+        print_error "Failed to install ccgram."
+        return 1
+    fi
+
+    # Register Claude Code hooks for auto-detection and interactive UI
+    if command -v ccgram &> /dev/null && command -v claude &> /dev/null; then
+        print_message "Installing ccgram hooks..."
+        if ccgram hook --install; then
+            print_success "ccgram hooks installed."
+        else
+            print_warning "Failed to install ccgram hooks."
+        fi
     fi
 }
 
@@ -1341,6 +1362,7 @@ main() {
     setup_telegram_plugin
     install_gemini_cli
     install_codex_cli
+    install_ccgram
 
     print_section "Final Updates"
     update_packages

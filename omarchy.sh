@@ -1452,6 +1452,32 @@ install_codex_cli() {
     fi
 }
 
+# Install/update ccgram (Telegram-to-tmux bridge for AI coding agents)
+install_ccgram() {
+    if ! command -v uv &> /dev/null; then
+        print_warning "uv not found. Cannot install ccgram."
+        return
+    fi
+
+    print_message "Installing/updating ccgram..."
+    if uv tool install --force --upgrade ccgram --from "git+https://github.com/scowalt/ccgram.git@main"; then
+        print_success "ccgram installed/updated."
+    else
+        print_error "Failed to install ccgram."
+        return 1
+    fi
+
+    # Register Claude Code hooks for auto-detection and interactive UI
+    if command -v ccgram &> /dev/null && command -v claude &> /dev/null; then
+        print_message "Installing ccgram hooks..."
+        if ccgram hook --install; then
+            print_success "ccgram hooks installed."
+        else
+            print_warning "Failed to install ccgram hooks."
+        fi
+    fi
+}
+
 # Install Claude Code using bun
 install_claude_code() {
     # Uninstall any existing npm/bun versions to clean up
@@ -1855,6 +1881,7 @@ setup_compound_plugin
 setup_telegram_plugin
 install_gemini_cli
 install_codex_cli
+install_ccgram
 setup_codex_compound_skills
 install_whisper
 
