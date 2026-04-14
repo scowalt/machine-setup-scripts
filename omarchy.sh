@@ -1504,7 +1504,17 @@ install_claude_code() {
     # Clean up stale lock files
     rm -rf "${HOME}/.local/state/claude/locks" 2>/dev/null
 
-    # Always run the installer — it handles both install and update idempotently
+    # Skip installer if already on the latest version
+    if command -v claude &> /dev/null; then
+        local _installed_version _latest_version
+        _installed_version=$(claude --version 2>/dev/null | head -1 | awk '{print $1}')
+        _latest_version=$(curl -fsSL https://registry.npmjs.org/@anthropic-ai/claude-code/latest 2>/dev/null | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)
+        if [[ -n "${_installed_version}" && -n "${_latest_version}" && "${_installed_version}" == "${_latest_version}" ]]; then
+            print_success "Claude Code already at latest version (${_installed_version})."
+            return 0
+        fi
+    fi
+
     print_message "Installing/updating Claude Code via official installer..."
     local _install_script
     _install_script=$(curl -fsSL https://claude.ai/install.sh) || { print_error "Failed to download Claude Code installer."; return 1; }
