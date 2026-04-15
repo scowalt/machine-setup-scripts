@@ -1029,15 +1029,9 @@ install_ccgram() {
         return
     fi
 
-    # Ensure uv can find system CA certificates (its statically-linked OpenSSL
-    # may not find them automatically, especially behind TLS-intercepting proxies)
-    if [[ -z "${SSL_CERT_FILE:-}" ]]; then
-        if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
-            export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-        elif [[ -f /etc/ssl/cert.pem ]]; then
-            export SSL_CERT_FILE=/etc/ssl/cert.pem
-        fi
-    fi
+    # Use system-native TLS instead of uv's bundled OpenSSL, which may not find
+    # system CA certificates (especially behind TLS-intercepting proxies like sfw)
+    export UV_NATIVE_TLS=true
 
     print_message "Installing/updating ccgram..."
     if uv tool install --force --upgrade ccgram --from "git+https://github.com/scowalt/ccgram.git@main"; then
@@ -1209,7 +1203,7 @@ upload_log() {
 
 main() {
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 24 | Last changed: Pin tmux during brew upgrade to protect sessions${NC}"
+    echo -e "${GRAY}Version 25 | Last changed: Use UV_NATIVE_TLS for ccgram install SSL fix${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
