@@ -1462,6 +1462,15 @@ install_ccgram() {
     # Use system-native TLS instead of uv's bundled OpenSSL, which may not find
     # system CA certificates (especially behind TLS-intercepting proxies like sfw)
     export UV_NATIVE_TLS=true
+    # Also set GIT_SSL_CAINFO so the /usr/bin/git subprocess uv spawns can find
+    # system CA certificates (UV_NATIVE_TLS only affects uv's own HTTP client)
+    if [[ -z "${GIT_SSL_CAINFO:-}" ]]; then
+        if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
+            export GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
+        elif [[ -f /etc/ssl/cert.pem ]]; then
+            export GIT_SSL_CAINFO=/etc/ssl/cert.pem
+        fi
+    fi
 
     print_message "Installing/updating ccgram..."
     if uv tool install --force --upgrade ccgram --from "git+https://github.com/scowalt/ccgram.git@main"; then
@@ -1823,7 +1832,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 130 | Last changed: Use UV_NATIVE_TLS for ccgram install SSL fix${NC}"
+    echo -e "${GRAY}Version 131 | Last changed: Add GIT_SSL_CAINFO for uv git subprocess SSL fix${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
