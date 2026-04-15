@@ -1280,19 +1280,12 @@ install_ccgram() {
         return
     fi
 
-    # Determine system CA bundle path for git SSL verification
-    local ca_bundle=""
-    if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
-        ca_bundle="/etc/ssl/certs/ca-certificates.crt"
-    elif [[ -f /etc/ssl/cert.pem ]]; then
-        ca_bundle="/etc/ssl/cert.pem"
-    fi
-
     print_message "Installing/updating ccgram..."
+    # GIT_SSL_NO_VERIFY: Socket Firewall (sfw) intercepts TLS with its own CA
+    # that isn't in the system CA bundle. Since this fetches from our own GitHub
+    # repo, disabling SSL verification here is an acceptable tradeoff.
     # UV_NATIVE_TLS: use system TLS instead of uv's bundled OpenSSL
-    # GIT_SSL_CAINFO: point git subprocess at system CA bundle
-    # Prefixed inline to ensure they reach both uv and its git subprocess
-    if GIT_SSL_CAINFO="${ca_bundle}" UV_NATIVE_TLS=true uv tool install --force --upgrade ccgram --from "git+https://github.com/scowalt/ccgram.git@main"; then
+    if GIT_SSL_NO_VERIFY=1 UV_NATIVE_TLS=true uv tool install --force --upgrade ccgram --from "git+https://github.com/scowalt/ccgram.git@main"; then
         print_success "ccgram installed/updated."
     else
         print_error "Failed to install ccgram."
@@ -1737,7 +1730,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 129 | Last changed: Inline SSL env vars on uv command for ccgram install${NC}"
+    echo -e "${GRAY}Version 130 | Last changed: Use GIT_SSL_NO_VERIFY for ccgram install (sfw TLS interception)${NC}"
 
     # Create placeholder env file early
     create_env_local
