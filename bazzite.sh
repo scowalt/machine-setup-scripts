@@ -1211,16 +1211,16 @@ upload_log() {
 }
 
 main() {
-    echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 26 | Last changed: Add GIT_SSL_CAINFO for uv git subprocess SSL fix${NC}"
-
-    # Log this run
+    # Log this run (before banner so version appears in logs)
     local log_dir="${HOME}/.local/log/machine-setup"
     mkdir -p "${log_dir}"
     local log_file
     log_file="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
     exec > >(tee -a "${log_file}") 2>&1
     print_debug "Logging to ${log_file}"
+
+    echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
+    echo -e "${GRAY}Version 27 | Last changed: Include version banner in log output${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local

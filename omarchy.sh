@@ -1831,16 +1831,16 @@ setup_headless_sudo() {
 }
 
 main() {
-    echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 131 | Last changed: Add GIT_SSL_CAINFO for uv git subprocess SSL fix${NC}"
-
-    # Log this run
+    # Log this run (before banner so version appears in logs)
     local log_dir="${HOME}/.local/log/machine-setup"
     mkdir -p "${log_dir}"
     local log_file
     log_file="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
     exec > >(tee -a "${log_file}") 2>&1
     print_debug "Logging to ${log_file}"
+
+    echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
+    echo -e "${GRAY}Version 132 | Last changed: Include version banner in log output${NC}"
 
     # Ensure CWD is readable (non-admin users may start in restricted directories)
     cd "${HOME}" || true
