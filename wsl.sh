@@ -1167,10 +1167,15 @@ install_iterm2_shell_integration() {
 update_packages() {
     print_message "Updating all packages..."
     brew update
+    # Pin tmux during upgrades to prevent killing existing sessions (ccgram, etc.)
+    brew pin tmux 2>/dev/null || true
     brew upgrade
+    brew unpin tmux 2>/dev/null || true
     if can_sudo; then
         sudo apt update
+        sudo apt-mark hold tmux 2>/dev/null || true
         sudo apt upgrade -y
+        sudo apt-mark unhold tmux 2>/dev/null || true
         sudo apt autoremove -y
     else
         print_warning "No sudo access - skipping apt system updates."
@@ -1290,7 +1295,7 @@ upload_log() {
 main() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 115 | Last changed: Fix uv SSL cert verification for ccgram install${NC}"
+    echo -e "${GRAY}Version 116 | Last changed: Hold/pin tmux during package upgrades to protect sessions${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

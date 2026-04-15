@@ -1178,8 +1178,11 @@ install_tmux_plugins() {
 update_brew() {
     print_message "Updating Homebrew..."
     brew update > /dev/null
+    # Pin tmux during upgrades to prevent killing existing sessions (ccgram, etc.)
+    brew pin tmux 2>/dev/null || true
     print_message "Upgrading outdated packages..."
     brew upgrade > /dev/null
+    brew unpin tmux 2>/dev/null || true
     print_success "Homebrew updated."
 }
 
@@ -1418,7 +1421,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 145 | Last changed: Fix uv SSL cert verification for ccgram install${NC}"
+    echo -e "${GRAY}Version 146 | Last changed: Pin tmux during brew upgrade to protect sessions${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

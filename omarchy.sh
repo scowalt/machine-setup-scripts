@@ -735,8 +735,8 @@ update_system() {
         print_warning "Failed to refresh archlinux-keyring. Package upgrades may fail."
     fi
 
-    # Update all packages
-    if ! sudo pacman -Syu --noconfirm; then
+    # Update all packages (ignore tmux to prevent killing existing sessions)
+    if ! sudo pacman -Syu --noconfirm --ignore tmux; then
         print_error "Failed to update system packages."
         return 1
     fi
@@ -1829,7 +1829,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 128 | Last changed: Fix uv SSL cert verification for ccgram install${NC}"
+    echo -e "${GRAY}Version 129 | Last changed: Ignore tmux during pacman -Syu to protect sessions${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

@@ -1124,8 +1124,11 @@ upgrade_npm_global_packages() {
 update_brew() {
     print_message "Updating Homebrew..."
     brew update > /dev/null
+    # Pin tmux during upgrades to prevent killing existing sessions (ccgram, etc.)
+    brew pin tmux 2>/dev/null || true
     print_message "Upgrading outdated packages..."
     brew upgrade > /dev/null
+    brew unpin tmux 2>/dev/null || true
     print_success "Homebrew updated."
 }
 
@@ -1206,7 +1209,7 @@ upload_log() {
 
 main() {
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 23 | Last changed: Fix uv SSL cert verification for ccgram install${NC}"
+    echo -e "${GRAY}Version 24 | Last changed: Pin tmux during brew upgrade to protect sessions${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

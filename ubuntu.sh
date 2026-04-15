@@ -543,7 +543,10 @@ update_dependencies() {
     fi
     print_message "Updating package lists..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get update
+    # Hold tmux during upgrades to prevent killing existing sessions (ccgram, etc.)
+    sudo apt-mark hold tmux 2>/dev/null || true
     sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" upgrade -y
+    sudo apt-mark unhold tmux 2>/dev/null || true
     sudo DEBIAN_FRONTEND=noninteractive apt-get autoremove -y
     print_success "Package lists updated."
 }
@@ -1793,7 +1796,7 @@ setup_headless_sudo() {
 
 main() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 158 | Last changed: Fix uv SSL cert verification for ccgram install${NC}"
+    echo -e "${GRAY}Version 159 | Last changed: Hold tmux during package upgrades to protect sessions${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"

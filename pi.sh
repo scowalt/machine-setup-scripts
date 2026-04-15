@@ -387,8 +387,11 @@ update_dependencies() {
     print_message "Updating package lists (this may take a while on Raspberry Pi)..."
     sudo apt update
 
+    # Hold tmux during upgrades to prevent killing existing sessions (ccgram, etc.)
+    sudo apt-mark hold tmux 2>/dev/null || true
     print_message "Upgrading packages (this may take a while)..."
     sudo apt upgrade -y
+    sudo apt-mark unhold tmux 2>/dev/null || true
 
     print_message "Removing unnecessary packages..."
     sudo apt autoremove -y
@@ -1725,7 +1728,7 @@ upload_log() {
 
 main() {
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 124 | Last changed: Fix uv SSL cert verification for ccgram install${NC}"
+    echo -e "${GRAY}Version 125 | Last changed: Hold tmux during apt upgrade to protect sessions${NC}"
 
     # Log this run
     local log_dir="${HOME}/.local/log/machine-setup"
