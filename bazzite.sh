@@ -1029,21 +1029,19 @@ install_ccgram() {
         return
     fi
 
-    # Use system-native TLS instead of uv's bundled OpenSSL, which may not find
-    # system CA certificates (especially behind TLS-intercepting proxies like sfw)
-    export UV_NATIVE_TLS=true
-    # Also set GIT_SSL_CAINFO so the /usr/bin/git subprocess uv spawns can find
-    # system CA certificates (UV_NATIVE_TLS only affects uv's own HTTP client)
-    if [[ -z "${GIT_SSL_CAINFO:-}" ]]; then
-        if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
-            export GIT_SSL_CAINFO=/etc/ssl/certs/ca-certificates.crt
-        elif [[ -f /etc/ssl/cert.pem ]]; then
-            export GIT_SSL_CAINFO=/etc/ssl/cert.pem
-        fi
+    # Determine system CA bundle path for git SSL verification
+    local ca_bundle=""
+    if [[ -f /etc/ssl/certs/ca-certificates.crt ]]; then
+        ca_bundle="/etc/ssl/certs/ca-certificates.crt"
+    elif [[ -f /etc/ssl/cert.pem ]]; then
+        ca_bundle="/etc/ssl/cert.pem"
     fi
 
     print_message "Installing/updating ccgram..."
-    if uv tool install --force --upgrade ccgram --from "git+https://github.com/scowalt/ccgram.git@main"; then
+    # UV_NATIVE_TLS: use system TLS instead of uv's bundled OpenSSL
+    # GIT_SSL_CAINFO: point git subprocess at system CA bundle
+    # Prefixed inline to ensure they reach both uv and its git subprocess
+    if GIT_SSL_CAINFO="${ca_bundle}" UV_NATIVE_TLS=true uv tool install --force --upgrade ccgram --from "git+https://github.com/scowalt/ccgram.git@main"; then
         print_success "ccgram installed/updated."
     else
         print_error "Failed to install ccgram."
@@ -1220,7 +1218,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 27 | Last changed: Include version banner in log output${NC}"
+    echo -e "${GRAY}Version 28 | Last changed: Inline SSL env vars on uv command for ccgram install${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
