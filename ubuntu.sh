@@ -946,6 +946,8 @@ install_claude_code() {
         if [[ -n "${_installed_version}" && -n "${_latest_version}" && "${_installed_version}" == "${_latest_version}" ]]; then
             print_success "Claude Code already at latest version (${_installed_version})."
             return 0
+        else
+            print_message "Claude Code update available: ${_installed_version:-unknown} → ${_latest_version:-unknown}"
         fi
     fi
 
@@ -1798,7 +1800,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 164 | Last changed: Use GIT_SSL_NO_VERIFY for ccgram install (sfw TLS interception)${NC}"
+    echo -e "${GRAY}Version 165 | Last changed: Log current and latest Claude Code versions on update${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
