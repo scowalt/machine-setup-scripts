@@ -1079,7 +1079,7 @@ install_ccgram() {
     # that isn't in the system CA bundle. Since this fetches from our own GitHub
     # repo, disabling SSL verification here is an acceptable tradeoff.
     # UV_NATIVE_TLS: use system TLS instead of uv's bundled OpenSSL
-    if GIT_SSL_NO_VERIFY=1 UV_NATIVE_TLS=true uv tool install --force --upgrade ccgram --from "git+https://github.com/scowalt/ccgram.git@main"; then
+    if GIT_SSL_NO_VERIFY=1 UV_NATIVE_TLS=true uv tool install --force --upgrade --python 3.14 ccgram --from "git+https://github.com/scowalt/ccgram.git@main"; then
         print_success "ccgram installed/updated."
     else
         print_error "Failed to install ccgram."
@@ -1425,7 +1425,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 152 | Last changed: Log current and latest Claude Code versions on update${NC}"
+    echo -e "${GRAY}Version 153 | Last changed: Pin ccgram to Python 3.14 via uv --python${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local

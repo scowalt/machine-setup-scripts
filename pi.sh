@@ -1285,7 +1285,7 @@ install_ccgram() {
     # that isn't in the system CA bundle. Since this fetches from our own GitHub
     # repo, disabling SSL verification here is an acceptable tradeoff.
     # UV_NATIVE_TLS: use system TLS instead of uv's bundled OpenSSL
-    if GIT_SSL_NO_VERIFY=1 UV_NATIVE_TLS=true uv tool install --force --upgrade ccgram --from "git+https://github.com/scowalt/ccgram.git@main"; then
+    if GIT_SSL_NO_VERIFY=1 UV_NATIVE_TLS=true uv tool install --force --upgrade --python 3.14 ccgram --from "git+https://github.com/scowalt/ccgram.git@main"; then
         print_success "ccgram installed/updated."
     else
         print_error "Failed to install ccgram."
@@ -1732,7 +1732,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 131 | Last changed: Log current and latest Claude Code versions on update${NC}"
+    echo -e "${GRAY}Version 132 | Last changed: Pin ccgram to Python 3.14 via uv --python${NC}"
 
     # Create placeholder env file early
     create_env_local
