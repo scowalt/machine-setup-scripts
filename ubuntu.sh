@@ -1620,7 +1620,14 @@ enable_tmux_service() {
     fi
 
     print_message "Enabling tmux systemd user service..."
-    systemctl --user daemon-reload
+
+    # systemctl --user requires a D-Bus session bus; skip if unavailable
+    # (e.g. running via curl | bash over SSH or from a non-login context)
+    if ! systemctl --user daemon-reload 2>/dev/null; then
+        print_warning "D-Bus session bus not available — skipping tmux service setup."
+        print_debug "Run 'systemctl --user enable --now tmux.service' manually in a login session."
+        return
+    fi
 
     # Enable for next boot (never restart — restarting kills existing tmux windows)
     if systemctl --user enable tmux.service 2>/dev/null; then
@@ -1800,7 +1807,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 167 | Last changed: Allow insecure host for uv Python download behind sfw${NC}"
+    echo -e "${GRAY}Version 168 | Last changed: Skip tmux service setup when D-Bus session bus unavailable${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
