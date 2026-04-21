@@ -1074,6 +1074,11 @@ install_ccgram() {
         return
     fi
 
+    local old_version=""
+    if command -v ccgram &> /dev/null; then
+        old_version=$(ccgram --version 2>/dev/null || echo "")
+    fi
+
     print_message "Installing/updating ccgram..."
     # GIT_SSL_NO_VERIFY: Socket Firewall (sfw) intercepts TLS with its own CA
     # that isn't in the system CA bundle. Since this fetches from our own GitHub
@@ -1094,6 +1099,15 @@ install_ccgram() {
         else
             print_warning "Failed to install ccgram hooks."
         fi
+    fi
+
+    # Restart ccgram if version changed (macOS: kill process, runloop will restart it)
+    local new_version=""
+    new_version=$(ccgram --version 2>/dev/null || echo "")
+    if [[ -n "$old_version" && "$old_version" != "$new_version" ]]; then
+        print_message "ccgram upgraded ($old_version -> $new_version), restarting..."
+        pkill -f "ccgram" 2>/dev/null || true
+        print_success "ccgram process signaled to restart."
     fi
 }
 

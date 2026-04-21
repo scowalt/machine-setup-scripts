@@ -1031,6 +1031,11 @@ install_ccgram() {
         return
     fi
 
+    local old_version=""
+    if command -v ccgram &> /dev/null; then
+        old_version=$(ccgram --version 2>/dev/null || echo "")
+    fi
+
     print_message "Installing/updating ccgram..."
     # GIT_SSL_NO_VERIFY: Socket Firewall (sfw) intercepts TLS with its own CA
     # that isn't in the system CA bundle. Since this fetches from our own GitHub
@@ -1050,6 +1055,32 @@ install_ccgram() {
             print_success "ccgram hooks installed."
         else
             print_warning "Failed to install ccgram hooks."
+        fi
+    fi
+
+    # Enable and manage ccgram systemd service
+    local service_file="${HOME}/.config/systemd/user/ccgram.service"
+    if [[ -f "${service_file}" ]] && systemctl --user daemon-reload 2>/dev/null; then
+        if ! systemctl --user is-enabled ccgram.service &>/dev/null; then
+            if systemctl --user enable ccgram.service 2>/dev/null; then
+                print_success "ccgram service enabled."
+            fi
+        fi
+
+        local new_version=""
+        new_version=$(ccgram --version 2>/dev/null || echo "")
+
+        if [[ -n "$old_version" && "$old_version" != "$new_version" ]]; then
+            print_message "ccgram upgraded ($old_version -> $new_version), restarting service..."
+            if systemctl --user restart ccgram.service 2>/dev/null; then
+                print_success "ccgram service restarted."
+            else
+                print_warning "Could not restart ccgram service."
+            fi
+        elif ! systemctl --user is-active ccgram.service &>/dev/null; then
+            if systemctl --user start ccgram.service 2>/dev/null; then
+                print_success "ccgram service started."
+            fi
         fi
     fi
 }
