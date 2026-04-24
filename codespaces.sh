@@ -139,7 +139,6 @@ HELPER_EOF
     install_sfw
     install_claude_code
     setup_compound_plugin
-    setup_telegram_plugin
     install_gemini_cli
 
     print_section "Final Updates"
