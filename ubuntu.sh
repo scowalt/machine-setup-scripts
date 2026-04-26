@@ -1814,6 +1814,11 @@ setup_headless_sudo() {
         return
     fi
 
+    if ! can_sudo; then
+        print_debug "No sudo access - skipping headless sudo setup."
+        return
+    fi
+
     local sudoers_file="/etc/sudoers.d/${USER}"
     local sudoers_line="${USER} ALL=(ALL) NOPASSWD:ALL"
 
