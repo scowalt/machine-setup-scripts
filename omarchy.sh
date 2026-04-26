@@ -820,7 +820,7 @@ install_core_packages() {
     print_message "Checking core packages..."
 
     # Define core packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "uv" "go" "inotify-tools" "shellcheck" "gitleaks" "mise" "poppler")
+    local packages=("git" "curl" "jq" "fish" "tmux" "base-devel" "wget" "unzip" "github-cli" "starship" "openssh" "opentofu" "uv" "go" "inotify-tools" "shellcheck" "gitleaks" "mise" "poppler" "bubblewrap")
     local to_install=()
 
     # Check which packages need installation
@@ -1425,14 +1425,9 @@ setup_codex_compound_skills() {
     fi
 }
 
-# Install Codex CLI (OpenAI's AI coding agent)
+# Install/update Codex CLI (OpenAI's AI coding agent)
 install_codex_cli() {
-    if command -v codex &> /dev/null; then
-        print_debug "Codex CLI is already installed."
-        return
-    fi
-
-    print_message "Installing Codex CLI..."
+    print_message "Installing/updating Codex CLI..."
 
     # Ensure bun is available
     if [[ -d "${HOME}/.bun" ]]; then
@@ -1446,7 +1441,7 @@ install_codex_cli() {
     fi
 
     if bun install -g @openai/codex; then
-        print_success "Codex CLI installed."
+        print_success "Codex CLI installed/updated."
     else
         print_error "Failed to install Codex CLI."
     fi

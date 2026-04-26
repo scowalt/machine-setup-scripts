@@ -448,14 +448,9 @@ function Install-GeminiCli {
     }
 }
 
-# Function to install Codex CLI (OpenAI's AI coding agent)
+# Function to install/update Codex CLI (OpenAI's AI coding agent)
 function Install-CodexCli {
-    if (Get-Command codex -ErrorAction SilentlyContinue) {
-        Write-Debug "Codex CLI is already installed."
-        return
-    }
-
-    Write-Host "$arrow Installing Codex CLI..." -ForegroundColor Cyan
+    Write-Host "$arrow Installing/updating Codex CLI..." -ForegroundColor Cyan
 
     # Ensure bun is available
     $bunPath = "$env:USERPROFILE\.bun\bin"
@@ -472,7 +467,7 @@ function Install-CodexCli {
     try {
         bun install -g @openai/codex
         if ($?) {
-            Write-Host "$success Codex CLI installed." -ForegroundColor Green
+            Write-Host "$success Codex CLI installed/updated." -ForegroundColor Green
         }
         else {
             Write-Host "$failIcon Failed to install Codex CLI." -ForegroundColor Red

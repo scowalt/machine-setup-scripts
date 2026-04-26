@@ -242,7 +242,7 @@ install_core_packages() {
     print_message "Checking core packages..."
 
     # fish is pre-installed on Bazzite, so it's excluded from this list
-    local packages=("git" "curl" "wget" "jq" "unzip" "tmux" "starship" "gh" "chezmoi" "opentofu" "go" "uv" "fswatch" "1password-cli" "tailscale" "act" "cloudflared" "tursodatabase/tap/turso" "shellcheck" "gitleaks" "lefthook" "mise" "poppler")
+    local packages=("git" "curl" "wget" "jq" "unzip" "tmux" "starship" "gh" "chezmoi" "opentofu" "go" "uv" "fswatch" "1password-cli" "tailscale" "act" "cloudflared" "tursodatabase/tap/turso" "shellcheck" "gitleaks" "lefthook" "mise" "poppler" "bubblewrap")
     local to_install=()
 
     # Get currently installed formulae
@@ -997,14 +997,9 @@ install_gemini_cli() {
     fi
 }
 
-# Install Codex CLI (OpenAI's AI coding agent)
+# Install/update Codex CLI (OpenAI's AI coding agent)
 install_codex_cli() {
-    if command -v codex &> /dev/null; then
-        print_debug "Codex CLI is already installed."
-        return
-    fi
-
-    print_message "Installing Codex CLI..."
+    print_message "Installing/updating Codex CLI..."
 
     # Ensure bun is available
     if [[ -d "${HOME}/.bun" ]]; then
@@ -1018,7 +1013,7 @@ install_codex_cli() {
     fi
 
     if bun install -g @openai/codex; then
-        print_success "Codex CLI installed."
+        print_success "Codex CLI installed/updated."
     else
         print_error "Failed to install Codex CLI."
     fi

@@ -275,7 +275,7 @@ update_and_install_core() {
     print_message "Checking and installing core packages as needed..."
 
     # Define an array of required packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks" "poppler-utils")
+    local packages=("git" "curl" "jq" "fish" "tmux" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks" "poppler-utils" "bubblewrap")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
@@ -697,14 +697,9 @@ install_gemini_cli() {
     fi
 }
 
-# Install Codex CLI (OpenAI's AI coding agent)
+# Install/update Codex CLI (OpenAI's AI coding agent)
 install_codex_cli() {
-    if command -v codex &> /dev/null; then
-        print_debug "Codex CLI is already installed."
-        return
-    fi
-
-    print_message "Installing Codex CLI..."
+    print_message "Installing/updating Codex CLI..."
 
     # Ensure bun is available
     if [[ -d "${HOME}/.bun" ]]; then
@@ -718,7 +713,7 @@ install_codex_cli() {
     fi
 
     if bun install -g @openai/codex; then
-        print_success "Codex CLI installed."
+        print_success "Codex CLI installed/updated."
     else
         print_error "Failed to install Codex CLI."
     fi
