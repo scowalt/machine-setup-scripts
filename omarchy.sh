@@ -1447,6 +1447,28 @@ install_codex_cli() {
     fi
 }
 
+# Install/update Pi coding agent
+install_pi_cli() {
+    print_message "Installing/updating Pi coding agent..."
+
+    # Ensure bun is available
+    if [[ -d "${HOME}/.bun" ]]; then
+        export PATH="${HOME}/.bun/bin:${PATH}"
+    fi
+
+    if ! command -v bun &> /dev/null; then
+        print_warning "Bun not found. Cannot install Pi coding agent."
+        print_debug "Install Bun first, then run: bun install -g @mariozechner/pi"
+        return
+    fi
+
+    if bun install -g @mariozechner/pi; then
+        print_success "Pi coding agent installed/updated."
+    else
+        print_error "Failed to install Pi coding agent."
+    fi
+}
+
 # Install/update ccgram (Telegram-to-tmux bridge for AI coding agents)
 install_ccgram() {
     if ! command -v uv &> /dev/null; then
@@ -1836,7 +1858,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 137 | Last changed: Allow insecure host for uv Python download behind sfw${NC}"
+    echo -e "${GRAY}Version 138 | Last changed: Add Pi coding agent installation${NC}"
 
     # Ensure CWD is readable (non-admin users may start in restricted directories)
     cd "${HOME}" || true
@@ -1899,6 +1921,7 @@ install_claude_code
 setup_compound_plugin
 install_gemini_cli
 install_codex_cli
+install_pi_cli
 install_ccgram
 setup_codex_compound_skills
 install_whisper

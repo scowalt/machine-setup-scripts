@@ -1114,6 +1114,28 @@ install_codex_cli() {
     fi
 }
 
+# Install/update Pi coding agent
+install_pi_cli() {
+    print_message "Installing/updating Pi coding agent..."
+
+    # Ensure bun is available
+    if [[ -d "${HOME}/.bun" ]]; then
+        export PATH="${HOME}/.bun/bin:${PATH}"
+    fi
+
+    if ! command -v bun &> /dev/null; then
+        print_warning "Bun not found. Cannot install Pi coding agent."
+        print_debug "Install Bun first, then run: bun install -g @mariozechner/pi"
+        return
+    fi
+
+    if bun install -g @mariozechner/pi; then
+        print_success "Pi coding agent installed/updated."
+    else
+        print_error "Failed to install Pi coding agent."
+    fi
+}
+
 # Install/update ccgram (Telegram-to-tmux bridge for AI coding agents)
 install_ccgram() {
     if ! command -v uv &> /dev/null; then
@@ -1838,7 +1860,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 168 | Last changed: Skip tmux service setup when D-Bus session bus unavailable${NC}"
+    echo -e "${GRAY}Version 169 | Last changed: Add Pi coding agent installation${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
@@ -1971,6 +1993,7 @@ HELPER_EOF
 
     install_gemini_cli
     install_codex_cli
+    install_pi_cli
     install_ccgram
 
     print_section "Final Updates"

@@ -1042,12 +1042,7 @@ install_gemini_cli() {
 
 # Install Codex CLI (OpenAI's AI coding agent)
 install_codex_cli() {
-    if command -v codex &> /dev/null; then
-        print_debug "Codex CLI is already installed."
-        return
-    fi
-
-    print_message "Installing Codex CLI..."
+    print_message "Installing/updating Codex CLI..."
 
     # Ensure bun is available
     if [[ -d "${HOME}/.bun" ]]; then
@@ -1061,9 +1056,31 @@ install_codex_cli() {
     fi
 
     if bun install -g @openai/codex; then
-        print_success "Codex CLI installed."
+        print_success "Codex CLI installed/updated."
     else
         print_error "Failed to install Codex CLI."
+    fi
+}
+
+# Install/update Pi coding agent
+install_pi_cli() {
+    print_message "Installing/updating Pi coding agent..."
+
+    # Ensure bun is available
+    if [[ -d "${HOME}/.bun" ]]; then
+        export PATH="${HOME}/.bun/bin:${PATH}"
+    fi
+
+    if ! command -v bun &> /dev/null; then
+        print_warning "Bun not found. Cannot install Pi coding agent."
+        print_debug "Install Bun first, then run: bun install -g @mariozechner/pi"
+        return
+    fi
+
+    if bun install -g @mariozechner/pi; then
+        print_success "Pi coding agent installed/updated."
+    else
+        print_error "Failed to install Pi coding agent."
     fi
 }
 
@@ -1439,7 +1456,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 154 | Last changed: Allow insecure host for uv Python download behind sfw${NC}"
+    echo -e "${GRAY}Version 155 | Last changed: Add Pi coding agent, fix Codex CLI always-update${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -1603,6 +1620,7 @@ HELPER_EOF
 
     install_gemini_cli
     install_codex_cli
+    install_pi_cli
     install_ccgram
 
     if is_main_user; then

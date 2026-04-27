@@ -478,6 +478,36 @@ function Install-CodexCli {
     }
 }
 
+# Function to install/update Pi coding agent
+function Install-PiCli {
+    Write-Host "$arrow Installing/updating Pi coding agent..." -ForegroundColor Cyan
+
+    # Ensure bun is available
+    $bunPath = "$env:USERPROFILE\.bun\bin"
+    if (Test-Path $bunPath) {
+        $env:PATH = "$bunPath;$env:PATH"
+    }
+
+    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
+        Write-Host "$warnIcon Bun not found. Cannot install Pi coding agent." -ForegroundColor Yellow
+        Write-Host "  Install Bun first, then run: bun install -g @mariozechner/pi" -ForegroundColor DarkGray
+        return
+    }
+
+    try {
+        bun install -g @mariozechner/pi
+        if ($?) {
+            Write-Host "$success Pi coding agent installed/updated." -ForegroundColor Green
+        }
+        else {
+            Write-Host "$failIcon Failed to install Pi coding agent." -ForegroundColor Red
+        }
+    }
+    catch {
+        Write-Host "$failIcon Failed to install Pi coding agent: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
 
 # Function to install Claude Code using official installer
 function Install-ClaudeCode {
@@ -713,7 +743,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 85 | Last changed: Gate Socket Firewall behind WORK_MACHINE=1" -ForegroundColor DarkGray
+    Write-Host "Version 86 | Last changed: Add Pi coding agent installation" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -755,6 +785,7 @@ function Initialize-WindowsEnvironment {
 
     Install-GeminiCli
     Install-CodexCli
+    Install-PiCli
     Install-TursoCli
 
     Write-Section "System Updates"
