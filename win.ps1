@@ -490,12 +490,12 @@ function Install-PiCli {
 
     if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
         Write-Host "$warnIcon Bun not found. Cannot install Pi coding agent." -ForegroundColor Yellow
-        Write-Host "  Install Bun first, then run: bun install -g @mariozechner/pi" -ForegroundColor DarkGray
+        Write-Host "  Install Bun first, then run: bun install -g @mariozechner/pi-coding-agent" -ForegroundColor DarkGray
         return
     }
 
     try {
-        bun install -g @mariozechner/pi
+        bun install -g @mariozechner/pi-coding-agent
         if ($?) {
             Write-Host "$success Pi coding agent installed/updated." -ForegroundColor Green
         }

@@ -1073,11 +1073,11 @@ install_pi_cli() {
 
     if ! command -v bun &> /dev/null; then
         print_warning "Bun not found. Cannot install Pi coding agent."
-        print_debug "Install Bun first, then run: bun install -g @mariozechner/pi"
+        print_debug "Install Bun first, then run: bun install -g @mariozechner/pi-coding-agent"
         return
     fi
 
-    if bun install -g @mariozechner/pi; then
+    if bun install -g @mariozechner/pi-coding-agent; then
         print_success "Pi coding agent installed/updated."
     else
         print_error "Failed to install Pi coding agent."
