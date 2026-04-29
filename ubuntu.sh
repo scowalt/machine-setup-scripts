@@ -1659,6 +1659,27 @@ install_tmux_plugins() {
     print_success "tmux plugins installed and updated."
 }
 
+# Enable loginctl lingering so systemd user services survive logout
+enable_user_lingering() {
+    if loginctl show-user "$(whoami)" --property=Linger 2>/dev/null | grep -q 'Linger=yes'; then
+        print_debug "User lingering already enabled."
+        return
+    fi
+
+    print_message "Enabling user lingering for systemd user services..."
+
+    if can_sudo; then
+        if sudo loginctl enable-linger "$(whoami)"; then
+            print_success "User lingering enabled — systemd user services will survive logout."
+        else
+            print_warning "Could not enable user lingering."
+        fi
+    else
+        print_warning "No sudo access — cannot enable user lingering."
+        print_debug "Run 'sudo loginctl enable-linger $(whoami)' manually."
+    fi
+}
+
 # Enable tmux systemd user service for session persistence
 enable_tmux_service() {
     local service_file="${HOME}/.config/systemd/user/tmux.service"
@@ -1982,6 +2003,7 @@ HELPER_EOF
     set_fish_as_default_shell
     install_act
     install_tmux_plugins
+    enable_user_lingering
     enable_tmux_service
     install_iterm2_shell_integration
 
