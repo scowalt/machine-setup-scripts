@@ -778,7 +778,9 @@ run_omarchy_update() {
     # prompt causes the password to echo in plaintext because tty handling breaks.
     local omarchy_update_path
     omarchy_update_path="$(command -v omarchy-update)"
-    if sudo -E "${omarchy_update_path}" -y; then
+    # sudo's secure_path resets PATH even with -E, so pass it explicitly
+    # so omarchy-snapshot, omarchy-update-git, etc. are discoverable.
+    if sudo -E PATH="${PATH}" "${omarchy_update_path}" -y; then
         print_success "Omarchy system update completed."
     else
         print_error "Omarchy system update failed."
@@ -1879,7 +1881,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 138 | Last changed: Add Pi coding agent installation${NC}"
+    echo -e "${GRAY}Version 139 | Last changed: Fix omarchy-update PATH under sudo${NC}"
 
     # Ensure CWD is readable (non-admin users may start in restricted directories)
     cd "${HOME}" || true
