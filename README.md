@@ -2,6 +2,10 @@
 
 Idempotent scripts I use to set up my machines.
 
+## AI Coding Agents
+
+The personal-machine setup scripts install/update Claude Code, Gemini CLI, Codex CLI, Pi, and Compound Engineering resources for supported agents. Set `WORK_MACHINE=1` in `~/.env.local` for work machines. Set `BAN_COMPOUND_PLUGIN=1` to skip Compound Engineering setup.
+
 ## Windows
 
 ```powershell
@@ -42,18 +46,4 @@ curl -sL https://scripts.scowalt.com/setup/omarchy.sh | bash
 
 ```bash
 curl -sL https://scripts.scowalt.com/setup/bazzite.sh | bash
-```
-
-## GitHub Codespaces
-
-Add to your dotfiles repo's `install.sh`:
-
-```bash
-curl -sL https://scripts.scowalt.com/setup/codespaces.sh | bash
-```
-
-Or run directly in a codespace terminal:
-
-```bash
-curl -sL https://scripts.scowalt.com/setup/codespaces.sh | bash
 ```

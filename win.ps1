@@ -98,26 +98,46 @@ function New-TokenPlaceholders {
 # 1Password Service Account Token
 # Create a service account at: https://my.1password.com/integrations/infrastructure-secrets
 # OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
+
+# Machine/setup guards
+# WORK_MACHINE=1
+# BAN_COMPOUND_PLUGIN=1
 "@ | Set-Content -Path $envLocalPath
         Write-Debug "Created placeholder ~/.env.local"
     }
 }
 
-# Install the appropriate secrets manager based on machine type
-function Install-SecretsManager {
-    # Load ~/.env.local to check WORK_MACHINE
+# Read KEY=1 guards from the process environment or ~/.env.local.
+function Test-EnvLocalFlag {
+    param([Parameter(Mandatory=$true)][string]$Name)
+
+    $envValue = [Environment]::GetEnvironmentVariable($Name)
+    if ($envValue -eq "1") {
+        return $true
+    }
+
     $envLocalFile = Join-Path $env:USERPROFILE ".env.local"
-    $isWorkMachine = $false
     if (Test-Path $envLocalFile) {
         foreach ($line in Get-Content $envLocalFile) {
-            if ($line -match '^\s*WORK_MACHINE\s*=\s*1\s*$') {
-                $isWorkMachine = $true
-                break
+            $cleaned = $line -replace '^\s*export\s+', ''
+            $parts = $cleaned -split '=', 2
+            if ($parts.Count -eq 2 -and $parts[0].Trim() -eq $Name) {
+                $value = $parts[1].Trim()
+                $value = $value.Trim('"')
+                $value = $value.Trim("'")
+                if ($value -eq "1") {
+                    return $true
+                }
             }
         }
     }
 
-    if ($isWorkMachine) {
+    return $false
+}
+
+# Install the appropriate secrets manager based on machine type
+function Install-SecretsManager {
+    if (Test-EnvLocalFlag "WORK_MACHINE") {
         if (Get-Command infisical -ErrorAction SilentlyContinue) {
             Write-Host "  Infisical CLI already installed." -ForegroundColor DarkGray
             return
@@ -508,6 +528,59 @@ function Install-PiCli {
     }
 }
 
+# Function to install Compound Engineering prompts/skills for Pi
+function Setup-PiCompoundEngineering {
+    if (Test-EnvLocalFlag "WORK_MACHINE") {
+        Write-Debug "WORK_MACHINE=1, skipping Compound Engineering for Pi."
+        return
+    }
+
+    if (Test-EnvLocalFlag "BAN_COMPOUND_PLUGIN") {
+        Write-Debug "BAN_COMPOUND_PLUGIN=1, skipping Compound Engineering for Pi."
+        return
+    }
+
+    # Ensure bun is available
+    $bunPath = "$env:USERPROFILE\.bun\bin"
+    if (Test-Path $bunPath) {
+        $env:PATH = "$bunPath;$env:PATH"
+    }
+
+    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
+        Write-Host "$warnIcon Bun not found. Cannot install Compound Engineering for Pi." -ForegroundColor Yellow
+        Write-Host "  Install Bun first, then run: bunx @every-env/compound-plugin install compound-engineering --to pi" -ForegroundColor DarkGray
+        return
+    }
+
+    if (-not (Get-Command bunx -ErrorAction SilentlyContinue)) {
+        Write-Host "$warnIcon bunx not found. Cannot install Compound Engineering for Pi." -ForegroundColor Yellow
+        return
+    }
+
+    if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
+        Write-Host "$warnIcon Pi coding agent not found. Cannot install Compound Engineering for Pi." -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "$arrow Installing/updating Compound Engineering for Pi..." -ForegroundColor Cyan
+    $output = & bunx "@every-env/compound-plugin" install compound-engineering --to pi 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
+        $extensionPath = Join-Path $agentDir "extensions\compound-engineering-compat.ts"
+        $agentsPath = Join-Path $agentDir "AGENTS.md"
+        $hasAgentsBlock = (Test-Path $agentsPath) -and (Select-String -Path $agentsPath -Pattern "BEGIN COMPOUND PI TOOL MAP" -Quiet)
+
+        if ((Test-Path $extensionPath) -or $hasAgentsBlock) {
+            Write-Host "$success Compound Engineering installed for Pi." -ForegroundColor Green
+        }
+        else {
+            Write-Host "$warnIcon Compound Engineering Pi install completed, but expected artifacts were not found." -ForegroundColor Yellow
+        }
+    }
+    else {
+        Write-Host "$warnIcon Failed to install Compound Engineering for Pi: $output" -ForegroundColor Yellow
+    }
+}
 
 # Function to install Claude Code using official installer
 function Install-ClaudeCode {
@@ -554,6 +627,24 @@ function Install-ClaudeCode {
 function Setup-CompoundPlugin {
     if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
         Write-Debug "Claude Code not found. Skipping Compound plugin setup."
+        return
+    }
+
+    if (Test-EnvLocalFlag "BAN_COMPOUND_PLUGIN") {
+        $pluginList = claude plugin list 2>$null
+        if ($pluginList -match "compound-engineering") {
+            Write-Host "$arrow BAN_COMPOUND_PLUGIN=1, uninstalling Compound Engineering plugin..." -ForegroundColor Cyan
+            $output = claude plugin uninstall compound-engineering@compound-engineering-plugin 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "$success Compound Engineering plugin uninstalled." -ForegroundColor Green
+            }
+            else {
+                Write-Host "$warnIcon Failed to uninstall Compound Engineering plugin: $output" -ForegroundColor Yellow
+            }
+        }
+        else {
+            Write-Debug "BAN_COMPOUND_PLUGIN=1, Compound Engineering not installed."
+        }
         return
     }
 
@@ -743,7 +834,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 86 | Last changed: Add Pi coding agent installation" -ForegroundColor DarkGray
+    Write-Host "Version 87 | Last changed: Install Compound Engineering for Pi" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -786,6 +877,7 @@ function Initialize-WindowsEnvironment {
     Install-GeminiCli
     Install-CodexCli
     Install-PiCli
+    Setup-PiCompoundEngineering
     Install-TursoCli
 
     Write-Section "System Updates"

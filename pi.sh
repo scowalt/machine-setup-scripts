@@ -65,6 +65,10 @@ create_env_local() {
 # 1Password Service Account Token
 # Create a service account at: https://my.1password.com/integrations/infrastructure-secrets
 # OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
+
+# Machine/setup guards
+# WORK_MACHINE=1
+# BAN_COMPOUND_PLUGIN=1
 EOF
         chmod 600 "${HOME}/.env.local"
         print_debug "Created placeholder ~/.env.local"
@@ -1290,6 +1294,59 @@ install_pi_cli() {
     fi
 }
 
+# Install Compound Engineering prompts/skills for Pi
+setup_pi_compound_engineering() {
+    local _helper="${HOME}/.local/bin/setup-pi-compound-engineering"
+    if [[ -x "${_helper}" ]]; then
+        "${_helper}"
+        return 0
+    fi
+
+    if [[ "${WORK_MACHINE:-}" == "1" ]]; then
+        print_debug "WORK_MACHINE=1, skipping Compound Engineering for Pi."
+        return 0
+    fi
+
+    if [[ "${BAN_COMPOUND_PLUGIN:-}" == "1" ]]; then
+        print_debug "BAN_COMPOUND_PLUGIN=1, skipping Compound Engineering for Pi."
+        return 0
+    fi
+
+    # Ensure bun is available
+    if [[ -d "${HOME}/.bun" ]]; then
+        export PATH="${HOME}/.bun/bin:${PATH}"
+    fi
+
+    if ! command -v bun &> /dev/null; then
+        print_warning "Bun not found. Cannot install Compound Engineering for Pi."
+        print_debug "Install Bun first, then run: bunx @every-env/compound-plugin install compound-engineering --to pi"
+        return 0
+    fi
+
+    if ! command -v bunx &> /dev/null; then
+        print_warning "bunx not found. Cannot install Compound Engineering for Pi."
+        return 0
+    fi
+
+    if ! command -v pi &> /dev/null; then
+        print_warning "Pi coding agent not found. Cannot install Compound Engineering for Pi."
+        return 0
+    fi
+
+    print_message "Installing/updating Compound Engineering for Pi..."
+    local _output
+    if _output=$(bunx @every-env/compound-plugin install compound-engineering --to pi 2>&1); then
+        local _agent_dir="${HOME}/.pi/agent"
+        if [[ -f "${_agent_dir}/extensions/compound-engineering-compat.ts" ]] || grep -q "BEGIN COMPOUND PI TOOL MAP" "${_agent_dir}/AGENTS.md" 2>/dev/null; then
+            print_success "Compound Engineering installed for Pi."
+        else
+            print_warning "Compound Engineering Pi install completed, but expected artifacts were not found."
+        fi
+    else
+        print_warning "Failed to install Compound Engineering for Pi: ${_output}"
+    fi
+}
+
 # Enable loginctl lingering so systemd user services survive logout
 enable_user_lingering() {
     if loginctl show-user "$(whoami)" --property=Linger 2>/dev/null | grep -q 'Linger=yes'; then
@@ -1778,7 +1835,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 134 | Last changed: Add Pi coding agent installation${NC}"
+    echo -e "${GRAY}Version 135 | Last changed: Install Compound Engineering for Pi${NC}"
 
     # Create placeholder env file early
     create_env_local
@@ -1836,6 +1893,7 @@ main() {
     install_gemini_cli
     install_codex_cli
     install_pi_cli
+    setup_pi_compound_engineering
     install_ccgram
 
     print_section "Terminal & Shell"

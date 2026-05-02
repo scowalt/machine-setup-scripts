@@ -15,7 +15,6 @@ This repository contains idempotent machine setup scripts for automating the con
 - **pi.sh** - Raspberry Pi specific setup with ARM optimizations
 - **omarchy.sh** - Arch Linux / Omarchy setup using pacman and yay
 - **bazzite.sh** - Bazzite OS setup using Homebrew (Lenovo Legion Go)
-- **codespaces.sh** - GitHub Codespaces setup (sources ubuntu.sh for shared functions)
 
 ## Common Development Tasks
 
@@ -56,16 +55,6 @@ All scripts follow a consistent pattern:
 5. Individual tool installations
 6. Configuration steps (dotfiles, shell setup)
 
-### Script Sourcing
-
-`codespaces.sh` is the first script to source another (`ubuntu.sh`) for function reuse. This is enabled by a source guard at the bottom of `ubuntu.sh`:
-
-```bash
-[[ "${BASH_SOURCE[0]}" == "${0}" ]] && main "$@"
-```
-
-This ensures `main()` only runs when the script is executed directly, not when sourced. Other scripts can adopt this pattern if needed in the future.
-
 ### Key Design Principles
 
 - **Idempotency**: Scripts check for existing installations before proceeding
@@ -84,6 +73,8 @@ This ensures `main()` only runs when the script is executed directly, not when s
 - Dotfiles: Chezmoi (with auto-sync)
 - Terminal: Starship prompt
 - CI/CD: act (local GitHub Actions)
+- AI agents: Claude Code, Gemini CLI, Codex CLI, Pi coding agent
+- Agent skills/plugins: Compound Engineering is installed for Claude Code and Pi on personal machines; skip with `WORK_MACHINE=1` or `BAN_COMPOUND_PLUGIN=1` in `~/.env.local`
 
 ### Important Notes
 

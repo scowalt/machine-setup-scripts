@@ -65,6 +65,10 @@ create_env_local() {
 # 1Password Service Account Token
 # Create a service account at: https://my.1password.com/integrations/infrastructure-secrets
 # OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
+
+# Machine/setup guards
+# WORK_MACHINE=1
+# BAN_COMPOUND_PLUGIN=1
 EOF
         chmod 600 "${HOME}/.env.local"
         print_debug "Created placeholder ~/.env.local"
@@ -1084,6 +1088,59 @@ install_pi_cli() {
     fi
 }
 
+# Install Compound Engineering prompts/skills for Pi
+setup_pi_compound_engineering() {
+    local _helper="${HOME}/.local/bin/setup-pi-compound-engineering"
+    if [[ -x "${_helper}" ]]; then
+        "${_helper}"
+        return 0
+    fi
+
+    if [[ "${WORK_MACHINE:-}" == "1" ]]; then
+        print_debug "WORK_MACHINE=1, skipping Compound Engineering for Pi."
+        return 0
+    fi
+
+    if [[ "${BAN_COMPOUND_PLUGIN:-}" == "1" ]]; then
+        print_debug "BAN_COMPOUND_PLUGIN=1, skipping Compound Engineering for Pi."
+        return 0
+    fi
+
+    # Ensure bun is available
+    if [[ -d "${HOME}/.bun" ]]; then
+        export PATH="${HOME}/.bun/bin:${PATH}"
+    fi
+
+    if ! command -v bun &> /dev/null; then
+        print_warning "Bun not found. Cannot install Compound Engineering for Pi."
+        print_debug "Install Bun first, then run: bunx @every-env/compound-plugin install compound-engineering --to pi"
+        return 0
+    fi
+
+    if ! command -v bunx &> /dev/null; then
+        print_warning "bunx not found. Cannot install Compound Engineering for Pi."
+        return 0
+    fi
+
+    if ! command -v pi &> /dev/null; then
+        print_warning "Pi coding agent not found. Cannot install Compound Engineering for Pi."
+        return 0
+    fi
+
+    print_message "Installing/updating Compound Engineering for Pi..."
+    local _output
+    if _output=$(bunx @every-env/compound-plugin install compound-engineering --to pi 2>&1); then
+        local _agent_dir="${HOME}/.pi/agent"
+        if [[ -f "${_agent_dir}/extensions/compound-engineering-compat.ts" ]] || grep -q "BEGIN COMPOUND PI TOOL MAP" "${_agent_dir}/AGENTS.md" 2>/dev/null; then
+            print_success "Compound Engineering installed for Pi."
+        else
+            print_warning "Compound Engineering Pi install completed, but expected artifacts were not found."
+        fi
+    else
+        print_warning "Failed to install Compound Engineering for Pi: ${_output}"
+    fi
+}
+
 # Install/update ccgram (Telegram-to-tmux bridge for AI coding agents)
 install_ccgram() {
     if ! command -v uv &> /dev/null; then
@@ -1456,7 +1513,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 155 | Last changed: Add Pi coding agent, fix Codex CLI always-update${NC}"
+    echo -e "${GRAY}Version 156 | Last changed: Install Compound Engineering for Pi${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -1621,6 +1678,7 @@ HELPER_EOF
     install_gemini_cli
     install_codex_cli
     install_pi_cli
+    setup_pi_compound_engineering
     install_ccgram
 
     if is_main_user; then
