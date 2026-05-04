@@ -102,6 +102,7 @@ function New-TokenPlaceholders {
 # Machine/setup guards
 # WORK_MACHINE=1
 # BAN_COMPOUND_PLUGIN=1
+# BAN_PI_SUBAGENTS=1
 "@ | Set-Content -Path $envLocalPath
         Write-Debug "Created placeholder ~/.env.local"
     }
@@ -528,6 +529,175 @@ function Install-PiCli {
     }
 }
 
+# Function to set or remove JSON properties on a PSCustomObject
+function Set-JsonProperty {
+    param(
+        [Parameter(Mandatory=$true)]$Object,
+        [Parameter(Mandatory=$true)][string]$Name,
+        [Parameter(Mandatory=$true)]
+        [AllowNull()]
+        [AllowEmptyCollection()]$Value
+    )
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($property) {
+        $property.Value = $Value
+    }
+    else {
+        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+    }
+}
+
+function Remove-JsonProperty {
+    param(
+        [Parameter(Mandatory=$true)]$Object,
+        [Parameter(Mandatory=$true)][string]$Name
+    )
+
+    if ($Object.PSObject.Properties[$Name]) {
+        $Object.PSObject.Properties.Remove($Name)
+    }
+}
+
+# Function to update Pi settings for the tintinweb subagents extension
+function Update-PiSubagentsSettings {
+    param([ValidateSet("Install", "Remove")][string]$Mode = "Install")
+
+    if ($env:PI_CODING_AGENT_DIR) {
+        $agentDir = $env:PI_CODING_AGENT_DIR
+    }
+    else {
+        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    }
+
+    $settingsPath = Join-Path $agentDir "settings.json"
+
+    if (-not (Test-Path $agentDir)) {
+        New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
+    }
+
+    $settingsJson = "{}"
+    if (Test-Path $settingsPath) {
+        $settingsJson = Get-Content -Path $settingsPath -Raw
+        if ([string]::IsNullOrWhiteSpace($settingsJson)) {
+            $settingsJson = "{}"
+        }
+    }
+
+    try {
+        $settings = $settingsJson | ConvertFrom-Json
+        if ($null -eq $settings) {
+            $settings = New-Object PSObject
+        }
+    }
+    catch {
+        Write-Warning "Failed to parse Pi settings at $settingsPath. Leaving settings unchanged."
+        return $false
+    }
+
+    $packages = @()
+    if ($settings.PSObject.Properties["packages"]) {
+        $packages = @($settings.packages)
+    }
+
+    $filteredPackages = @()
+    foreach ($package in $packages) {
+        $source = ""
+        if ($package -is [string]) {
+            $source = $package
+        }
+        elseif ($null -ne $package -and $package.PSObject.Properties["source"]) {
+            $source = [string]$package.source
+        }
+
+        if ($Mode -eq "Remove") {
+            if ($source -ne "npm:pi-subagents" -and $source -ne "npm:@tintinweb/pi-subagents") {
+                $filteredPackages += $package
+            }
+        }
+        else {
+            if ($source -ne "npm:pi-subagents") {
+                $filteredPackages += $package
+            }
+        }
+    }
+
+    if ($Mode -eq "Remove") {
+        if ($filteredPackages.Count -eq 0) {
+            Remove-JsonProperty -Object $settings -Name "packages"
+        }
+        else {
+            Set-JsonProperty -Object $settings -Name "packages" -Value ([object[]]$filteredPackages)
+        }
+    }
+    else {
+        Set-JsonProperty -Object $settings -Name "npmCommand" -Value ([object[]]@("bun"))
+        Set-JsonProperty -Object $settings -Name "packages" -Value ([object[]]$filteredPackages)
+    }
+
+    try {
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsPath -Encoding UTF8
+    }
+    catch {
+        Write-Warning "Failed to write Pi settings at $settingsPath."
+        return $false
+    }
+
+    return $true
+}
+
+# Function to install/update tintinweb Pi subagents extension
+function Setup-PiSubagents {
+    $package = "npm:@tintinweb/pi-subagents"
+
+    # Ensure bun is available
+    $bunPath = "$env:USERPROFILE\.bun\bin"
+    if (Test-Path $bunPath) {
+        $env:PATH = "$bunPath;$env:PATH"
+    }
+
+    if (Test-EnvLocalFlag "BAN_PI_SUBAGENTS") {
+        if (Update-PiSubagentsSettings -Mode "Remove") {
+            Write-Success "Pi subagents extension disabled in Pi settings."
+        }
+        return
+    }
+
+    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
+        Write-Warning "Bun not found. Cannot install Pi subagents."
+        Write-Debug "Install Bun first, then run: pi install npm:@tintinweb/pi-subagents"
+        return
+    }
+
+    if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
+        Write-Warning "Pi coding agent not found. Cannot install Pi subagents."
+        return
+    }
+
+    if (-not (Update-PiSubagentsSettings -Mode "Install")) {
+        return
+    }
+
+    Write-Message "Installing/updating tintinweb Pi subagents..."
+    $output = & pi install $package 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $listOutput = & pi list 2>&1
+        $listText = ($listOutput | Out-String)
+        $hasPackage = $listText.Contains($package)
+        $hasLegacyPackage = $listText -match '(^|\s)npm:pi-subagents(\s|$)'
+
+        if ($LASTEXITCODE -eq 0 -and $hasPackage -and -not $hasLegacyPackage) {
+            Write-Success "tintinweb Pi subagents installed/updated."
+        }
+        else {
+            Write-Warning "Pi subagents install completed, but package validation was inconclusive: $listText"
+        }
+    }
+    else {
+        Write-Warning "Failed to install tintinweb Pi subagents: $output"
+    }
+}
+
 # Function to install Compound Engineering prompts/skills for Pi
 function Setup-PiCompoundEngineering {
     if (Test-EnvLocalFlag "WORK_MACHINE") {
@@ -834,7 +1004,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 87 | Last changed: Install Compound Engineering for Pi" -ForegroundColor DarkGray
+    Write-Host "Version 88 | Last changed: Install tintinweb Pi subagents" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -877,6 +1047,7 @@ function Initialize-WindowsEnvironment {
     Install-GeminiCli
     Install-CodexCli
     Install-PiCli
+    Setup-PiSubagents
     Setup-PiCompoundEngineering
     Install-TursoCli
 

@@ -69,6 +69,7 @@ create_env_local() {
 # Machine/setup guards
 # WORK_MACHINE=1
 # BAN_COMPOUND_PLUGIN=1
+# BAN_PI_SUBAGENTS=1
 EOF
         chmod 600 "${HOME}/.env.local"
         print_debug "Created placeholder ~/.env.local"
@@ -1475,6 +1476,108 @@ install_pi_cli() {
     fi
 }
 
+# Update Pi settings for the tintinweb subagents extension
+update_pi_subagents_settings() {
+    local _mode="${1:-install}"
+    local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _settings_file="${_settings_dir}/settings.json"
+    local _tmp=""
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot update Pi subagents settings."
+        return 1
+    fi
+
+    mkdir -p "${_settings_dir}"
+
+    if [[ ! -f "${_settings_file}" ]]; then
+        printf '{}\n' > "${_settings_file}"
+    fi
+
+    _tmp=$(mktemp)
+    if [[ "${_mode}" == "remove" ]]; then
+        if jq '
+            def package_source:
+                if type == "string" then .
+                elif type == "object" then (.source // "")
+                else ""
+                end;
+            def packages_array:
+                if (.packages | type) == "array" then .packages else [] end;
+            .packages = (packages_array | map(select((package_source != "npm:pi-subagents") and (package_source != "npm:@tintinweb/pi-subagents"))))
+            | if (.packages | length) == 0 then del(.packages) else . end
+        ' "${_settings_file}" > "${_tmp}"; then
+            mv "${_tmp}" "${_settings_file}"
+        else
+            rm -f "${_tmp}"
+            print_warning "Failed to update Pi settings at ${_settings_file}."
+            return 1
+        fi
+    else
+        if jq '
+            def package_source:
+                if type == "string" then .
+                elif type == "object" then (.source // "")
+                else ""
+                end;
+            def packages_array:
+                if (.packages | type) == "array" then .packages else [] end;
+            .npmCommand = ["bun"]
+            | .packages = (packages_array | map(select(package_source != "npm:pi-subagents")))
+        ' "${_settings_file}" > "${_tmp}"; then
+            mv "${_tmp}" "${_settings_file}"
+        else
+            rm -f "${_tmp}"
+            print_warning "Failed to update Pi settings at ${_settings_file}."
+            return 1
+        fi
+    fi
+}
+
+# Install/update tintinweb Pi subagents extension
+setup_pi_subagents() {
+    local _package="npm:@tintinweb/pi-subagents"
+    local _output=""
+
+    # Ensure bun is available
+    if [[ -d "${HOME}/.bun" ]]; then
+        export PATH="${HOME}/.bun/bin:${PATH}"
+    fi
+
+    if [[ "${BAN_PI_SUBAGENTS:-}" == "1" ]]; then
+        if update_pi_subagents_settings remove; then
+            print_success "Pi subagents extension disabled in Pi settings."
+        fi
+        return 0
+    fi
+
+    if ! command -v bun &> /dev/null; then
+        print_warning "Bun not found. Cannot install Pi subagents."
+        print_debug "Install Bun first, then run: pi install npm:@tintinweb/pi-subagents"
+        return 0
+    fi
+
+    if ! command -v pi &> /dev/null; then
+        print_warning "Pi coding agent not found. Cannot install Pi subagents."
+        return 0
+    fi
+
+    if ! update_pi_subagents_settings install; then
+        return 0
+    fi
+
+    print_message "Installing/updating tintinweb Pi subagents..."
+    if _output=$(pi install "${_package}" 2>&1); then
+        if _output=$(pi list 2>&1) && grep -q "npm:@tintinweb/pi-subagents" <<< "${_output}" && ! grep -q "npm:pi-subagents" <<< "${_output}"; then
+            print_success "tintinweb Pi subagents installed/updated."
+        else
+            print_warning "Pi subagents install completed, but package validation was inconclusive: ${_output}"
+        fi
+    else
+        print_warning "Failed to install tintinweb Pi subagents: ${_output}"
+    fi
+}
+
 # Install Compound Engineering prompts/skills for Pi
 setup_pi_compound_engineering() {
     local _helper="${HOME}/.local/bin/setup-pi-compound-engineering"
@@ -1938,7 +2041,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 140 | Last changed: Install Compound Engineering for Pi${NC}"
+    echo -e "${GRAY}Version 141 | Last changed: Install tintinweb Pi subagents${NC}"
 
     # Ensure CWD is readable (non-admin users may start in restricted directories)
     cd "${HOME}" || true
@@ -2002,6 +2105,7 @@ setup_compound_plugin
 install_gemini_cli
 install_codex_cli
 install_pi_cli
+setup_pi_subagents
 setup_pi_compound_engineering
 install_ccgram
 setup_codex_compound_skills

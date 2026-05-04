@@ -4,7 +4,7 @@ Idempotent scripts I use to set up my machines.
 
 ## AI Coding Agents
 
-The personal-machine setup scripts install/update Claude Code, Gemini CLI, Codex CLI, Pi, and Compound Engineering resources for supported agents. Set `WORK_MACHINE=1` in `~/.env.local` for work machines. Set `BAN_COMPOUND_PLUGIN=1` to skip Compound Engineering setup.
+The personal-machine setup scripts install/update Claude Code, Gemini CLI, Codex CLI, Pi, tintinweb Pi subagents, and Compound Engineering resources for supported agents. Set `WORK_MACHINE=1` in `~/.env.local` for work machines. Set `BAN_COMPOUND_PLUGIN=1` to skip Compound Engineering setup. Set `BAN_PI_SUBAGENTS=1` to keep the tintinweb Pi subagents extension inactive.
 
 ## Windows
 
