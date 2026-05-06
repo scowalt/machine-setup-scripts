@@ -1341,8 +1341,7 @@ update_pi_subagents_settings() {
                 end;
             def packages_array:
                 if (.packages | type) == "array" then .packages else [] end;
-            .npmCommand = ["bun"]
-            | .packages = (packages_array | map(select(package_source != "npm:pi-subagents")))
+            .packages = (packages_array | map(select(package_source != "npm:pi-subagents")))
         ' "${_settings_file}" > "${_tmp}"; then
             mv "${_tmp}" "${_settings_file}"
         else
@@ -1938,7 +1937,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 136 | Last changed: Install tintinweb Pi subagents${NC}"
+    echo -e "${GRAY}Version 137 | Last changed: Stop setting Pi npmCommand${NC}"
 
     # Create placeholder env file early
     create_env_local

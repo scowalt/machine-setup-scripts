@@ -1135,8 +1135,7 @@ update_pi_subagents_settings() {
                 end;
             def packages_array:
                 if (.packages | type) == "array" then .packages else [] end;
-            .npmCommand = ["bun"]
-            | .packages = (packages_array | map(select(package_source != "npm:pi-subagents")))
+            .packages = (packages_array | map(select(package_source != "npm:pi-subagents")))
         ' "${_settings_file}" > "${_tmp}"; then
             mv "${_tmp}" "${_settings_file}"
         else
@@ -1616,7 +1615,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 157 | Last changed: Install tintinweb Pi subagents${NC}"
+    echo -e "${GRAY}Version 158 | Last changed: Stop setting Pi npmCommand${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local

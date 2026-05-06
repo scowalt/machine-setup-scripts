@@ -631,7 +631,6 @@ function Update-PiSubagentsSettings {
         }
     }
     else {
-        Set-JsonProperty -Object $settings -Name "npmCommand" -Value ([object[]]@("bun"))
         Set-JsonProperty -Object $settings -Name "packages" -Value ([object[]]$filteredPackages)
     }
 
@@ -1004,7 +1003,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 88 | Last changed: Install tintinweb Pi subagents" -ForegroundColor DarkGray
+    Write-Host "Version 89 | Last changed: Stop setting Pi npmCommand" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
