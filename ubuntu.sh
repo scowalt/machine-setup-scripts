@@ -1242,6 +1242,60 @@ setup_pi_subagents() {
     fi
 }
 
+
+# Remove Claude-only AskUserQuestion references from Compound Engineering files installed for Pi.
+sanitize_pi_compound_engineering_for_pi() {
+    local _agent_dir="${1:-${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}}"
+    local _skills_dir="${_agent_dir}/skills"
+    # shellcheck disable=SC2016
+    local _perl_expr='
+s/^[ \t]*-[ \t]*AskUserQuestion\r?\n//mg;
+s/`AskUserQuestion` in Claude Code with `ToolSearch select:AskUserQuestion` pre-loaded if needed,[ \t]*//g;
+s/`AskUserQuestion` in Claude Code — call `ToolSearch` with `select:AskUserQuestion`[^;]*;[ \t]*//g;
+s/`AskUserQuestion` in Claude Code \(call `ToolSearch` with `select:AskUserQuestion`[^)]*\),[ \t]*//g;
+s/`AskUserQuestion` in Claude Code,[ \t]*//g;
+s/`AskUserQuestion` in Claude Code[ \t]*//g;
+s/[ \t]*\*\*Claude Code only:\*\* if `AskUserQuestion`[^\n.]*\.[ \t]*/ /g;
+s/[ \t]*In Claude Code,? call `ToolSearch` with `select:AskUserQuestion`[^\n.]*\.[ \t]*/ /g;
+s/[ \t]*In Claude Code,? the tool should already be loaded[^\n.]*`ToolSearch`[^\n.]*\.[ \t]*/ /g;
+s/[ \t]*In Claude Code the tool should already be loaded[^\n.]*`ToolSearch`[^\n.]*\.[ \t]*/ /g;
+s/[ \t]*In Claude Code[^\n.]*`select:AskUserQuestion`[^\n.]*\.[ \t]*/ /g;
+s/[ \t]*At the start of Interactive-mode work[^\n.]*`select:AskUserQuestion`[^\n.]*\.[ \t]*/ /g;
+s/[ \t]*Load it \*\*once[^\n.]*\.[ \t]*/ /g;
+s/`ToolSearch` returns no match, the tool call explicitly fails, or/the tool call is unavailable, errors, or/g;
+s/Only when `ToolSearch` explicitly returns no match or the tool call errors — or on a platform with no blocking question tool —/Only when no blocking question tool exists or the tool call errors,/g;
+s/A pending schema load is not a fallback trigger; call `ToolSearch` first per the pre-load rule\. //g;
+s/A pending schema load is not a fallback trigger\. //g;
+s/ — not because a schema load is required//g;
+s/no `AskUserQuestion` menu/no formal question menu/g;
+s/`AskUserQuestion` menu/formal question menu/g;
+s/AskUserQuestion/blocking question tool/g;
+'
+
+    if [[ ! -d "${_skills_dir}" && ! -f "${_agent_dir}/AGENTS.md" ]]; then
+        return 0
+    fi
+
+    if ! command -v perl &> /dev/null; then
+        print_warning "perl not found. Cannot sanitize Compound Engineering Pi skill files."
+        return 0
+    fi
+
+    if [[ -d "${_skills_dir}" ]]; then
+        find "${_skills_dir}" -type f -name '*.md' -exec perl -0pi -e "${_perl_expr}" {} +
+    fi
+
+    if [[ -f "${_agent_dir}/AGENTS.md" ]]; then
+        perl -0pi -e "${_perl_expr}" "${_agent_dir}/AGENTS.md"
+    fi
+
+    if { [[ -d "${_skills_dir}" ]] && grep -R "AskUserQuestion" "${_skills_dir}" &> /dev/null; } || { [[ -f "${_agent_dir}/AGENTS.md" ]] && grep -q "AskUserQuestion" "${_agent_dir}/AGENTS.md"; }; then
+        print_warning "Compound Engineering Pi files still mention AskUserQuestion after sanitizing."
+    else
+        print_success "Compound Engineering Pi files sanitized for Pi."
+    fi
+}
+
 # Install Compound Engineering prompts/skills for Pi
 setup_pi_compound_engineering() {
     local _helper="${HOME}/.local/bin/setup-pi-compound-engineering"
@@ -1290,6 +1344,7 @@ setup_pi_compound_engineering() {
         else
             print_warning "Compound Engineering Pi install completed, but expected artifacts were not found."
         fi
+        sanitize_pi_compound_engineering_for_pi "${_agent_dir}"
     else
         print_warning "Failed to install Compound Engineering for Pi: ${_output}"
     fi
@@ -2040,7 +2095,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 172 | Last changed: Stop setting Pi npmCommand${NC}"
+    echo -e "${GRAY}Version 173 | Last changed: Sanitize Pi Compound Engineering skills${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local

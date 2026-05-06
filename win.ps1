@@ -697,6 +697,85 @@ function Setup-PiSubagents {
     }
 }
 
+
+# Function to remove Claude-only AskUserQuestion references from Compound Engineering files installed for Pi
+function Sanitize-PiCompoundEngineeringForPi {
+    param([string]$AgentDir)
+
+    if (-not $AgentDir) {
+        if ($env:PI_CODING_AGENT_DIR) {
+            $AgentDir = $env:PI_CODING_AGENT_DIR
+        }
+        else {
+            $AgentDir = Join-Path $env:USERPROFILE ".pi\agent"
+        }
+    }
+
+    $paths = @()
+    $skillsDir = Join-Path $AgentDir "skills"
+    if (Test-Path $skillsDir) {
+        $paths += Get-ChildItem -Path $skillsDir -Recurse -File -Filter "*.md"
+    }
+
+    $agentsPath = Join-Path $AgentDir "AGENTS.md"
+    if (Test-Path $agentsPath) {
+        $paths += Get-Item $agentsPath
+    }
+
+    if (@($paths).Count -eq 0) {
+        return
+    }
+
+    foreach ($path in $paths) {
+        $text = Get-Content -Path $path.FullName -Raw
+        if ($null -eq $text) {
+            continue
+        }
+
+        $original = $text
+        $text = $text -replace '(?m)^[ \t]*-[ \t]*AskUserQuestion\r?\n', ''
+        $text = $text -replace '`AskUserQuestion` in Claude Code with `ToolSearch select:AskUserQuestion` pre-loaded if needed,\s*', ''
+        $text = $text -replace '`AskUserQuestion` in Claude Code — call `ToolSearch` with `select:AskUserQuestion`[^;]*;\s*', ''
+        $text = $text -replace '`AskUserQuestion` in Claude Code \(call `ToolSearch` with `select:AskUserQuestion`[^)]*\),\s*', ''
+        $text = $text -replace '`AskUserQuestion` in Claude Code,\s*', ''
+        $text = $text -replace '`AskUserQuestion` in Claude Code\s*', ''
+        $text = $text -replace '\s*\*\*Claude Code only:\*\* if `AskUserQuestion`[^\r\n.]*\.[ \t]*', ' '
+        $text = $text -replace '\s*In Claude Code,? call `ToolSearch` with `select:AskUserQuestion`[^\r\n.]*\.[ \t]*', ' '
+        $text = $text -replace '\s*In Claude Code,? the tool should already be loaded[^\r\n.]*`ToolSearch`[^\r\n.]*\.[ \t]*', ' '
+        $text = $text -replace '\s*In Claude Code the tool should already be loaded[^\r\n.]*`ToolSearch`[^\r\n.]*\.[ \t]*', ' '
+        $text = $text -replace '\s*In Claude Code[^\r\n.]*`select:AskUserQuestion`[^\r\n.]*\.[ \t]*', ' '
+        $text = $text -replace '\s*At the start of Interactive-mode work[^\r\n.]*`select:AskUserQuestion`[^\r\n.]*\.[ \t]*', ' '
+        $text = $text -replace '\s*Load it \*\*once[^\r\n.]*\.[ \t]*', ' '
+        $text = $text -replace '`ToolSearch` returns no match, the tool call explicitly fails, or', 'the tool call is unavailable, errors, or'
+        $text = $text -replace 'Only when `ToolSearch` explicitly returns no match or the tool call errors — or on a platform with no blocking question tool —', 'Only when no blocking question tool exists or the tool call errors,'
+        $text = $text -replace 'A pending schema load is not a fallback trigger; call `ToolSearch` first per the pre-load rule\. ', ''
+        $text = $text -replace 'A pending schema load is not a fallback trigger\. ', ''
+        $text = $text -replace ' — not because a schema load is required', ''
+        $text = $text -replace 'no `AskUserQuestion` menu', 'no formal question menu'
+        $text = $text -replace '`AskUserQuestion` menu', 'formal question menu'
+        $text = $text -replace 'AskUserQuestion', 'blocking question tool'
+
+        if ($text -ne $original) {
+            Set-Content -Path $path.FullName -Value $text -Encoding UTF8 -NoNewline
+        }
+    }
+
+    $remaining = $false
+    foreach ($path in $paths) {
+        if (Select-String -Path $path.FullName -Pattern "AskUserQuestion" -Quiet) {
+            $remaining = $true
+            break
+        }
+    }
+
+    if ($remaining) {
+        Write-Warning "Compound Engineering Pi files still mention AskUserQuestion after sanitizing."
+    }
+    else {
+        Write-Success "Compound Engineering Pi files sanitized for Pi."
+    }
+}
+
 # Function to install Compound Engineering prompts/skills for Pi
 function Setup-PiCompoundEngineering {
     if (Test-EnvLocalFlag "WORK_MACHINE") {
@@ -745,6 +824,7 @@ function Setup-PiCompoundEngineering {
         else {
             Write-Host "$warnIcon Compound Engineering Pi install completed, but expected artifacts were not found." -ForegroundColor Yellow
         }
+        Sanitize-PiCompoundEngineeringForPi -AgentDir $agentDir
     }
     else {
         Write-Host "$warnIcon Failed to install Compound Engineering for Pi: $output" -ForegroundColor Yellow
@@ -1003,7 +1083,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 89 | Last changed: Stop setting Pi npmCommand" -ForegroundColor DarkGray
+    Write-Host "Version 90 | Last changed: Sanitize Pi Compound Engineering skills" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
