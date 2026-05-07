@@ -725,8 +725,49 @@ install_codex_cli() {
     fi
 }
 
+# Resolve the Pi command target across Linux, macOS, and WSL.
+pi_command_target() {
+    local _pi_cmd=""
+    local _link_target=""
+    local _link_dir=""
+
+    if ! command -v pi &> /dev/null; then
+        return 1
+    fi
+
+    _pi_cmd=$(command -v pi)
+
+    if command -v realpath &> /dev/null; then
+        realpath "${_pi_cmd}" 2>/dev/null && return 0
+    fi
+
+    if readlink -f "${_pi_cmd}" > /dev/null 2>&1; then
+        readlink -f "${_pi_cmd}" 2>/dev/null && return 0
+    fi
+
+    if [[ -L "${_pi_cmd}" ]]; then
+        _link_target=$(readlink "${_pi_cmd}" 2>/dev/null || true)
+        if [[ "${_link_target}" == /* ]]; then
+            printf '%s\n' "${_link_target}"
+        elif [[ -n "${_link_target}" ]]; then
+            _link_dir=$(cd "$(dirname "${_pi_cmd}")" && pwd -P)
+            printf '%s\n' "${_link_dir}/${_link_target}"
+        else
+            printf '%s\n' "${_pi_cmd}"
+        fi
+    else
+        printf '%s\n' "${_pi_cmd}"
+    fi
+}
+
 # Install/update Pi coding agent
 install_pi_cli() {
+    local _new_package="@earendil-works/pi-coding-agent"
+    local _old_package="@mariozechner/pi-coding-agent"
+    local _global_packages=""
+    local _pi_target=""
+    local _needs_reinstall=0
+
     print_message "Installing/updating Pi coding agent..."
 
     # Ensure bun is available
@@ -736,15 +777,69 @@ install_pi_cli() {
 
     if ! command -v bun &> /dev/null; then
         print_warning "Bun not found. Cannot install Pi coding agent."
-        print_debug "Install Bun first, then run: bun install -g @mariozechner/pi-coding-agent"
-        return
+        print_debug "Install Bun first, then run: bun install -g ${_new_package}"
+        return 1
     fi
 
-    if bun install -g @mariozechner/pi-coding-agent; then
-        print_success "Pi coding agent installed/updated."
-    else
+    if ! bun install -g "${_new_package}"; then
         print_error "Failed to install Pi coding agent."
+        return 1
     fi
+
+    hash -r 2>/dev/null || true
+
+    if bun pm ls -g 2>/dev/null | grep -Fq "${_old_package}"; then
+        print_message "Removing deprecated Pi package ${_old_package}..."
+        if bun remove -g "${_old_package}"; then
+            hash -r 2>/dev/null || true
+            print_success "Deprecated Pi package removed."
+        else
+            print_warning "Failed to remove old ${_old_package} package."
+        fi
+    fi
+
+    _pi_target=$(pi_command_target 2>/dev/null || true)
+    if [[ -z "${_pi_target}" ]]; then
+        print_warning "Pi command was not found after migration. Reinstalling ${_new_package}."
+        _needs_reinstall=1
+    elif [[ "${_pi_target}" == *"${_old_package}"* ]]; then
+        print_warning "Pi still points to old @mariozechner install path: ${_pi_target}"
+        print_message "Reinstalling ${_new_package} to refresh the Pi shim..."
+        _needs_reinstall=1
+    fi
+
+    if [[ "${_needs_reinstall}" -eq 1 ]]; then
+        if bun install -g "${_new_package}"; then
+            hash -r 2>/dev/null || true
+        else
+            print_warning "Failed to reinstall ${_new_package} after cleanup."
+        fi
+    fi
+
+    _global_packages=$(bun pm ls -g 2>/dev/null || true)
+    _pi_target=$(pi_command_target 2>/dev/null || true)
+
+    if ! grep -Fq "${_new_package}" <<< "${_global_packages}"; then
+        print_warning "Pi migration incomplete: ${_new_package} is not listed in Bun global packages."
+        return 1
+    fi
+
+    if grep -Fq "${_old_package}" <<< "${_global_packages}"; then
+        print_warning "Pi migration incomplete: deprecated ${_old_package} is still listed in Bun global packages."
+        return 1
+    fi
+
+    if [[ -z "${_pi_target}" ]]; then
+        print_warning "Pi migration incomplete: pi command is not available after installing ${_new_package}."
+        return 1
+    fi
+
+    if [[ "${_pi_target}" == *"${_old_package}"* ]]; then
+        print_warning "Pi migration incomplete: pi still points to old @mariozechner install path after reinstall: ${_pi_target}"
+        return 1
+    fi
+
+    print_success "Pi coding agent installed/updated."
 }
 
 # Update Pi settings for the tintinweb subagents extension
@@ -1633,7 +1728,7 @@ main() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 130 | Last changed: Install Pi goal/autoresearch extensions${NC}"
+    echo -e "${GRAY}Version 131 | Last changed: Migrate Pi to @earendil-works package${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -1717,10 +1812,13 @@ main() {
     setup_compound_plugin
     install_gemini_cli
     install_codex_cli
-    install_pi_cli
-    setup_pi_subagents
-    setup_pi_goal_autoresearch
-    setup_pi_compound_engineering
+    if install_pi_cli; then
+        setup_pi_subagents
+        setup_pi_goal_autoresearch
+        setup_pi_compound_engineering
+    else
+        print_warning "Skipping Pi extension setup because Pi migration failed."
+    fi
     install_ccgram
 
     print_section "Final Updates"

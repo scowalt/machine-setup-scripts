@@ -502,6 +502,9 @@ function Install-CodexCli {
 
 # Function to install/update Pi coding agent
 function Install-PiCli {
+    $newPackage = "@earendil-works/pi-coding-agent"
+    $oldPackage = "@mariozechner/pi-coding-agent"
+
     Write-Host "$arrow Installing/updating Pi coding agent..." -ForegroundColor Cyan
 
     # Ensure bun is available
@@ -512,21 +515,86 @@ function Install-PiCli {
 
     if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
         Write-Host "$warnIcon Bun not found. Cannot install Pi coding agent." -ForegroundColor Yellow
-        Write-Host "  Install Bun first, then run: bun install -g @mariozechner/pi-coding-agent" -ForegroundColor DarkGray
-        return
+        Write-Host "  Install Bun first, then run: bun install -g $newPackage" -ForegroundColor DarkGray
+        return $false
     }
 
     try {
-        bun install -g @mariozechner/pi-coding-agent
-        if ($?) {
-            Write-Host "$success Pi coding agent installed/updated." -ForegroundColor Green
-        }
-        else {
+        & bun install -g $newPackage
+        if ($LASTEXITCODE -ne 0) {
             Write-Host "$failIcon Failed to install Pi coding agent." -ForegroundColor Red
+            return $false
         }
+
+        $globalPackages = & bun pm ls -g 2>$null | Out-String
+        if ($globalPackages.Contains($oldPackage)) {
+            Write-Host "$arrow Removing deprecated Pi package $oldPackage..." -ForegroundColor Cyan
+            & bun remove -g $oldPackage
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "$success Deprecated Pi package removed." -ForegroundColor Green
+            }
+            else {
+                Write-Host "$warnIcon Failed to remove old $oldPackage package." -ForegroundColor Yellow
+            }
+        }
+
+        $piCommand = Get-Command pi -ErrorAction SilentlyContinue
+        $piTarget = ""
+        $needsReinstall = $false
+        if ($piCommand) {
+            $piTarget = $piCommand.Source
+        }
+
+        if (-not $piCommand) {
+            Write-Host "$warnIcon Pi command was not found after migration. Reinstalling $newPackage." -ForegroundColor Yellow
+            $needsReinstall = $true
+        }
+        elseif ($piTarget.Contains($oldPackage)) {
+            Write-Host "$warnIcon Pi still points to old @mariozechner install path: $piTarget" -ForegroundColor Yellow
+            Write-Host "$arrow Reinstalling $newPackage to refresh the Pi shim..." -ForegroundColor Cyan
+            $needsReinstall = $true
+        }
+
+        if ($needsReinstall) {
+            & bun install -g $newPackage
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "$warnIcon Failed to reinstall $newPackage after cleanup." -ForegroundColor Yellow
+            }
+        }
+
+        $globalPackages = & bun pm ls -g 2>$null | Out-String
+        $piCommand = Get-Command pi -ErrorAction SilentlyContinue
+        $piTarget = ""
+        if ($piCommand) {
+            $piTarget = $piCommand.Source
+        }
+
+        if (-not $globalPackages.Contains($newPackage)) {
+            Write-Host "$warnIcon Pi migration incomplete: $newPackage is not listed in Bun global packages." -ForegroundColor Yellow
+            return $false
+        }
+
+        if ($globalPackages.Contains($oldPackage)) {
+            Write-Host "$warnIcon Pi migration incomplete: deprecated $oldPackage is still listed in Bun global packages." -ForegroundColor Yellow
+            return $false
+        }
+
+        if (-not $piCommand) {
+            Write-Host "$warnIcon Pi migration incomplete: pi command is not available after installing $newPackage." -ForegroundColor Yellow
+            return $false
+        }
+
+        if ($piTarget.Contains($oldPackage)) {
+            Write-Host "$warnIcon Pi migration incomplete: pi still points to old @mariozechner install path after reinstall: $piTarget" -ForegroundColor Yellow
+            return $false
+        }
+
+        Write-Host "$success Pi coding agent installed/updated." -ForegroundColor Green
+        return $true
     }
     catch {
         Write-Host "$failIcon Failed to install Pi coding agent: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
     }
 }
 
@@ -1198,7 +1266,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 91 | Last changed: Install Pi goal/autoresearch extensions" -ForegroundColor DarkGray
+    Write-Host "Version 92 | Last changed: Migrate Pi to @earendil-works package" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -1240,10 +1308,14 @@ function Initialize-WindowsEnvironment {
 
     Install-GeminiCli
     Install-CodexCli
-    Install-PiCli
-    Setup-PiSubagents
-    Setup-PiGoalAutoresearch
-    Setup-PiCompoundEngineering
+    if (Install-PiCli) {
+        Setup-PiSubagents
+        Setup-PiGoalAutoresearch
+        Setup-PiCompoundEngineering
+    }
+    else {
+        Write-Warning "Skipping Pi extension setup because Pi migration failed."
+    }
     Install-TursoCli
 
     Write-Section "System Updates"
