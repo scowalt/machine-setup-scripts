@@ -103,6 +103,7 @@ function New-TokenPlaceholders {
 # WORK_MACHINE=1
 # BAN_COMPOUND_PLUGIN=1
 # BAN_PI_SUBAGENTS=1
+# BAN_PI_GOAL_AUTORESEARCH=1
 "@ | Set-Content -Path $envLocalPath
         Write-Debug "Created placeholder ~/.env.local"
     }
@@ -697,6 +698,120 @@ function Setup-PiSubagents {
     }
 }
 
+# Function to remove Pi goal/autoresearch package sources from settings when disabled
+function Remove-PiGoalAutoresearchSettings {
+    if ($env:PI_CODING_AGENT_DIR) {
+        $agentDir = $env:PI_CODING_AGENT_DIR
+    }
+    else {
+        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    }
+
+    $settingsPath = Join-Path $agentDir "settings.json"
+
+    if (-not (Test-Path $agentDir)) {
+        New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
+    }
+
+    $settingsJson = "{}"
+    if (Test-Path $settingsPath) {
+        $settingsJson = Get-Content -Path $settingsPath -Raw
+        if ([string]::IsNullOrWhiteSpace($settingsJson)) {
+            $settingsJson = "{}"
+        }
+    }
+
+    try {
+        $settings = $settingsJson | ConvertFrom-Json
+        if ($null -eq $settings) {
+            $settings = New-Object PSObject
+        }
+    }
+    catch {
+        Write-Warning "Failed to parse Pi settings at $settingsPath. Leaving settings unchanged."
+        return $false
+    }
+
+    $packages = @()
+    if ($settings.PSObject.Properties["packages"]) {
+        $packages = @($settings.packages)
+    }
+
+    $filteredPackages = @()
+    foreach ($package in $packages) {
+        $source = ""
+        if ($package -is [string]) {
+            $source = $package
+        }
+        elseif ($null -ne $package -and $package.PSObject.Properties["source"]) {
+            $source = [string]$package.source
+        }
+
+        if ($source -ne "npm:pi-goal" -and $source -ne "npm:pi-autoresearch") {
+            $filteredPackages += $package
+        }
+    }
+
+    if ($filteredPackages.Count -eq 0) {
+        Remove-JsonProperty -Object $settings -Name "packages"
+    }
+    else {
+        Set-JsonProperty -Object $settings -Name "packages" -Value ([object[]]$filteredPackages)
+    }
+
+    try {
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsPath -Encoding UTF8
+    }
+    catch {
+        Write-Warning "Failed to write Pi settings at $settingsPath."
+        return $false
+    }
+
+    return $true
+}
+
+# Function to install/update Pi goal and autoresearch extensions
+function Setup-PiGoalAutoresearch {
+    $packages = @("npm:pi-goal", "npm:pi-autoresearch")
+    $hadFailure = $false
+
+    if (Test-EnvLocalFlag "BAN_PI_GOAL_AUTORESEARCH") {
+        if (Remove-PiGoalAutoresearchSettings) {
+            Write-Success "Pi goal/autoresearch extensions disabled in Pi settings."
+        }
+        return
+    }
+
+    if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
+        Write-Warning "Pi coding agent not found. Cannot install Pi goal/autoresearch extensions."
+        return
+    }
+
+    foreach ($package in $packages) {
+        Write-Message "Installing/updating $package..."
+        $output = & pi install $package 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "$package installed/updated."
+        }
+        else {
+            $hadFailure = $true
+            Write-Warning "Failed to install ${package}: $output"
+        }
+    }
+
+    $listOutput = & pi list 2>&1
+    $listText = ($listOutput | Out-String)
+    $hasGoal = $listText.Contains("npm:pi-goal")
+    $hasAutoresearch = $listText.Contains("npm:pi-autoresearch")
+
+    if ($LASTEXITCODE -eq 0 -and $hasGoal -and $hasAutoresearch) {
+        Write-Success "Pi goal/autoresearch extensions are active."
+    }
+    elseif (-not $hadFailure) {
+        Write-Warning "Pi goal/autoresearch install completed, but package validation was inconclusive: $listText"
+    }
+}
+
 
 # Function to remove Claude-only AskUserQuestion references from Compound Engineering files installed for Pi
 function Sanitize-PiCompoundEngineeringForPi {
@@ -1083,7 +1198,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 90 | Last changed: Sanitize Pi Compound Engineering skills" -ForegroundColor DarkGray
+    Write-Host "Version 91 | Last changed: Install Pi goal/autoresearch extensions" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -1127,6 +1242,7 @@ function Initialize-WindowsEnvironment {
     Install-CodexCli
     Install-PiCli
     Setup-PiSubagents
+    Setup-PiGoalAutoresearch
     Setup-PiCompoundEngineering
     Install-TursoCli
 

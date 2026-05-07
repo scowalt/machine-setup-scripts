@@ -70,6 +70,7 @@ create_env_local() {
 # WORK_MACHINE=1
 # BAN_COMPOUND_PLUGIN=1
 # BAN_PI_SUBAGENTS=1
+# BAN_PI_GOAL_AUTORESEARCH=1
 EOF
         chmod 600 "${HOME}/.env.local"
         print_debug "Created placeholder ~/.env.local"
@@ -847,6 +848,79 @@ setup_pi_subagents() {
     fi
 }
 
+# Remove Pi goal/autoresearch package sources from settings when disabled
+remove_pi_goal_autoresearch_settings() {
+    local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _settings_file="${_settings_dir}/settings.json"
+    local _tmp=""
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot update Pi goal/autoresearch settings."
+        return 1
+    fi
+
+    mkdir -p "${_settings_dir}"
+
+    if [[ ! -f "${_settings_file}" ]]; then
+        printf '{}\n' > "${_settings_file}"
+    fi
+
+    _tmp=$(mktemp)
+    if jq '
+        def package_source:
+            if type == "string" then .
+            elif type == "object" then (.source // "")
+            else ""
+            end;
+        def packages_array:
+            if (.packages | type) == "array" then .packages else [] end;
+        .packages = (packages_array | map(select((package_source != "npm:pi-goal") and (package_source != "npm:pi-autoresearch"))))
+        | if (.packages | length) == 0 then del(.packages) else . end
+    ' "${_settings_file}" > "${_tmp}"; then
+        mv "${_tmp}" "${_settings_file}"
+    else
+        rm -f "${_tmp}"
+        print_warning "Failed to update Pi settings at ${_settings_file}."
+        return 1
+    fi
+}
+
+# Install/update Pi goal and autoresearch extensions
+setup_pi_goal_autoresearch() {
+    local _package=""
+    local _output=""
+    local _list_output=""
+    local _had_failure=0
+
+    if [[ "${BAN_PI_GOAL_AUTORESEARCH:-}" == "1" ]]; then
+        if remove_pi_goal_autoresearch_settings; then
+            print_success "Pi goal/autoresearch extensions disabled in Pi settings."
+        fi
+        return 0
+    fi
+
+    if ! command -v pi &> /dev/null; then
+        print_warning "Pi coding agent not found. Cannot install Pi goal/autoresearch extensions."
+        return 0
+    fi
+
+    for _package in npm:pi-goal npm:pi-autoresearch; do
+        print_message "Installing/updating ${_package}..."
+        if _output=$(pi install "${_package}" 2>&1); then
+            print_success "${_package} installed/updated."
+        else
+            _had_failure=1
+            print_warning "Failed to install ${_package}: ${_output}"
+        fi
+    done
+
+    if _list_output=$(pi list 2>&1) && grep -q "npm:pi-goal" <<< "${_list_output}" && grep -q "npm:pi-autoresearch" <<< "${_list_output}"; then
+        print_success "Pi goal/autoresearch extensions are active."
+    elif [[ "${_had_failure}" -eq 0 ]]; then
+        print_warning "Pi goal/autoresearch install completed, but package validation was inconclusive: ${_list_output}"
+    fi
+}
+
 
 # Remove Claude-only AskUserQuestion references from Compound Engineering files installed for Pi.
 sanitize_pi_compound_engineering_for_pi() {
@@ -1559,7 +1633,7 @@ main() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 129 | Last changed: Sanitize Pi Compound Engineering skills${NC}"
+    echo -e "${GRAY}Version 130 | Last changed: Install Pi goal/autoresearch extensions${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -1645,6 +1719,7 @@ main() {
     install_codex_cli
     install_pi_cli
     setup_pi_subagents
+    setup_pi_goal_autoresearch
     setup_pi_compound_engineering
     install_ccgram
 
