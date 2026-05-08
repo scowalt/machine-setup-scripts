@@ -1274,6 +1274,61 @@ install_codex_cli() {
     fi
 }
 
+# Check whether the active Node.js runtime can run current Pi packages.
+pi_node_runtime_ready() {
+    command -v node &> /dev/null || return 1
+    node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 20 || (major === 20 && minor >= 6) ? 0 : 1)' >/dev/null 2>&1
+}
+
+# Ensure Pi runs with a Node.js version new enough for current @earendil-works packages.
+ensure_pi_node_runtime() {
+    local _runtime="node@24"
+
+    if pi_node_runtime_ready; then
+        print_debug "Node.js $(node --version) is ready for Pi."
+        return 0
+    fi
+
+    if [[ -d "${HOME}/.local/bin" ]]; then
+        export PATH="${HOME}/.local/bin:${PATH}"
+    fi
+
+    if [[ -d "${HOME}/.mise/bin" ]]; then
+        export PATH="${HOME}/.mise/bin:${PATH}"
+    fi
+
+    if ! command -v mise &> /dev/null; then
+        print_warning "Node.js >=20.6 is required for Pi, but mise is not available to install it."
+        print_debug "Install mise, then run: mise use -g -y ${_runtime}"
+        return 1
+    fi
+
+    print_message "Ensuring Node.js 24 runtime for Pi..."
+    if ! mise use -g -y "${_runtime}" > /dev/null; then
+        print_warning "Failed to install/configure ${_runtime} with mise."
+        return 1
+    fi
+
+    local _mise_env=""
+    if ! _mise_env=$(mise env -s bash "${_runtime}"); then
+        print_warning "Failed to generate mise environment for ${_runtime}."
+        return 1
+    fi
+
+    if ! eval "${_mise_env}"; then
+        print_warning "Failed to activate ${_runtime} with mise."
+        return 1
+    fi
+
+    if pi_node_runtime_ready; then
+        print_success "Node.js $(node --version) is ready for Pi."
+        return 0
+    fi
+
+    print_warning "Node.js >=20.6 is still not active after installing ${_runtime}."
+    return 1
+}
+
 # Resolve the Pi command target across Linux, macOS, and WSL.
 pi_command_target() {
     local _pi_cmd=""
@@ -1327,6 +1382,11 @@ install_pi_cli() {
     if ! command -v bun &> /dev/null; then
         print_warning "Bun not found. Cannot install Pi coding agent."
         print_debug "Install Bun first, then run: bun install -g ${_new_package}"
+        return 1
+    fi
+
+    if ! ensure_pi_node_runtime; then
+        print_warning "Skipping Pi installation and extension setup because the Pi Node.js runtime is not ready."
         return 1
     fi
 
@@ -2157,11 +2217,12 @@ main() {
     mkdir -p "${log_dir}"
     local log_file
     log_file="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
+    exec 3>&1
     exec > >(tee -a "${log_file}") 2>&1
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 140 | Last changed: Migrate Pi to @earendil-works package${NC}"
+    echo -e "${GRAY}Version 141 | Last changed: Ensure Pi Node runtime and final log upload${NC}"
 
     # Create placeholder env file early
     create_env_local
@@ -2266,8 +2327,8 @@ main() {
     upgrade_npm_global_packages
 
     echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
+    printf '\n%s%s✨ Setup complete! Please log out and log back in for all changes to take effect.%s\n\n' "${GREEN}" "${BOLD}" "${NC}" | tee -a "${log_file}" >&3
     upload_log
-    echo -e "\n${GREEN}${BOLD}✨ Setup complete! Please log out and log back in for all changes to take effect.${NC}\n"
 }
 
 main "$@"
