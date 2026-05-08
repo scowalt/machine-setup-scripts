@@ -500,6 +500,65 @@ function Install-CodexCli {
     }
 }
 
+# Check whether the active Node.js runtime can run current Pi packages.
+function Test-PiNodeRuntimeReady {
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    & node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 20 || (major === 20 && minor >= 6) ? 0 : 1)' *> $null
+    return ($LASTEXITCODE -eq 0)
+}
+
+# Ensure Pi runs with a Node.js version new enough for current @earendil-works packages.
+function Enable-PiNodeRuntime {
+    $runtime = "node@24"
+
+    if (Test-PiNodeRuntimeReady) {
+        $nodeVersion = (& node --version 2>$null | Out-String).Trim()
+        Write-Debug "Node.js $nodeVersion is ready for Pi."
+        return $true
+    }
+
+    $pathCandidates = @(
+        [Environment]::GetEnvironmentVariable("Path", "User"),
+        [Environment]::GetEnvironmentVariable("Path", "Machine"),
+        (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links"),
+        (Join-Path $env:USERPROFILE ".local\bin")
+    ) | Where-Object { $_ -and $_.Trim() -ne "" }
+    $env:PATH = (($pathCandidates + @($env:PATH)) -join ";")
+
+    if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
+        Write-Warning "Node.js >=20.6 is required for Pi, but mise is not available to install it."
+        Write-Debug "Install mise, then run: mise use -g -y $runtime"
+        return $false
+    }
+
+    Write-Message "Ensuring Node.js 24 runtime for Pi..."
+    & mise use -g -y $runtime *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to install/configure $runtime with mise."
+        return $false
+    }
+
+    $miseEnv = & mise env -s pwsh $runtime 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to activate $runtime with mise."
+        return $false
+    }
+
+    $miseEnv | Out-String | Invoke-Expression
+
+    if (Test-PiNodeRuntimeReady) {
+        $nodeVersion = (& node --version 2>$null | Out-String).Trim()
+        Write-Success "Node.js $nodeVersion is ready for Pi."
+        return $true
+    }
+
+    Write-Warning "Node.js >=20.6 is still not active after installing $runtime."
+    return $false
+}
+
 # Function to install/update Pi coding agent
 function Install-PiCli {
     $newPackage = "@earendil-works/pi-coding-agent"
@@ -520,6 +579,11 @@ function Install-PiCli {
     }
 
     try {
+        if (-not (Enable-PiNodeRuntime)) {
+            Write-Warning "Skipping Pi installation and extension setup because the Pi Node.js runtime is not ready."
+            return $false
+        }
+
         & bun install -g $newPackage
         if ($LASTEXITCODE -ne 0) {
             Write-Host "$failIcon Failed to install Pi coding agent." -ForegroundColor Red
@@ -1266,7 +1330,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 92 | Last changed: Migrate Pi to @earendil-works package" -ForegroundColor DarkGray
+    Write-Host "Version 93 | Last changed: Ensure Pi Node runtime and final log upload" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -1325,10 +1389,9 @@ function Initialize-WindowsEnvironment {
 
     $logFile = Get-ChildItem "$env:USERPROFILE\.local\log\machine-setup" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     Write-Host "Run log saved to: $($logFile.FullName)" -ForegroundColor DarkGray
+    Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen
     Stop-Transcript
     Upload-Log
-
-    Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen
 }
 
 # Run the main setup function
