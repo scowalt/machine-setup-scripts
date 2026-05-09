@@ -1534,6 +1534,47 @@ install_secrets_manager() {
     fi
 }
 
+# Install Google Cloud CLI on work machines.
+install_gcloud_cli() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Skipping Google Cloud CLI (not a work machine)."
+        return
+    fi
+
+    if command -v gcloud &>/dev/null; then
+        print_debug "Google Cloud CLI already installed."
+        return
+    fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access - cannot install Google Cloud CLI."
+        return
+    fi
+
+    print_message "Installing Google Cloud CLI..."
+
+    sudo install -m 0755 -d /usr/share/keyrings
+    if ! curl --connect-timeout 10 --max-time 60 -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+        | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/cloud.google.gpg; then
+        print_warning "Failed to install Google Cloud CLI signing key."
+        return
+    fi
+
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+        | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list >/dev/null
+
+    if ! sudo apt-get update -qq; then
+        print_warning "Failed to update apt repositories for Google Cloud CLI."
+        return
+    fi
+
+    if sudo apt-get install -y google-cloud-cli; then
+        print_success "Google Cloud CLI installed."
+    else
+        print_warning "Failed to install Google Cloud CLI."
+    fi
+}
+
 # Install and configure unattended-upgrades for automatic security updates
 setup_unattended_upgrades() {
     if ! can_sudo; then
@@ -1924,7 +1965,7 @@ main() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 133 | Last changed: Install Matt Pocock Pi skills${NC}"
+    echo -e "${GRAY}Version 134 | Last changed: Install gcloud on work machines${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -1971,6 +2012,7 @@ main() {
     install_1password_cli
     install_tailscale
     install_secrets_manager
+    install_gcloud_cli
     setup_unattended_upgrades
 
     print_section "Shared Directories"

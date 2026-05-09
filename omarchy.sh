@@ -1071,6 +1071,36 @@ install_secrets_manager() {
     fi
 }
 
+# Install Google Cloud CLI on work machines.
+install_gcloud_cli() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Skipping Google Cloud CLI (not a work machine)."
+        return
+    fi
+
+    if command -v gcloud &>/dev/null; then
+        print_debug "Google Cloud CLI already installed."
+        return
+    fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access - cannot install Google Cloud CLI."
+        return
+    fi
+
+    if ! command -v yay &>/dev/null; then
+        print_warning "yay not found. Cannot install Google Cloud CLI."
+        return
+    fi
+
+    print_message "Installing Google Cloud CLI from AUR..."
+    if yay -S --noconfirm google-cloud-cli; then
+        print_success "Google Cloud CLI installed."
+    else
+        print_warning "Failed to install Google Cloud CLI."
+    fi
+}
+
 # Enable Tailscale SSH for keyless access over Tailscale network
 setup_tailscale_ssh() {
     if ! command -v tailscale &>/dev/null; then
@@ -2460,7 +2490,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 147 | Last changed: Install Matt Pocock Pi skills${NC}"
+    echo -e "${GRAY}Version 148 | Last changed: Install gcloud on work machines${NC}"
 
     # Ensure CWD is readable (non-admin users may start in restricted directories)
     cd "${HOME}" || true
@@ -2510,6 +2540,7 @@ print_section "Development Environment"
 install_omarchy
 install_dev_tools_aur
 install_secrets_manager
+install_gcloud_cli
 setup_tailscale_ssh
 
 print_section "Homebrew & Brew Packages"

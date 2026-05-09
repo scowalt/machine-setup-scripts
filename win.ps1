@@ -167,6 +167,28 @@ function Install-SecretsManager {
     }
 }
 
+# Install Google Cloud CLI on work machines.
+function Install-GcloudCli {
+    if (-not (Test-EnvLocalFlag "WORK_MACHINE")) {
+        Write-Debug "Skipping Google Cloud CLI (not a work machine)."
+        return
+    }
+
+    if (Get-Command gcloud -ErrorAction SilentlyContinue) {
+        Write-Debug "Google Cloud CLI already installed."
+        return
+    }
+
+    Write-Message "Installing Google Cloud CLI..."
+    winget install -e --id "Google.CloudSDK" --silent --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "Google Cloud CLI installed."
+    }
+    else {
+        Write-Warning "Failed to install Google Cloud CLI."
+    }
+}
+
 function Install-Chezmoi {
     if (-not (Get-Command chezmoi -ErrorAction SilentlyContinue)) {
         Write-Host "$failIcon Failed to install chezmoi." -ForegroundColor Red
@@ -1492,7 +1514,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 94 | Last changed: Install Matt Pocock Pi skills" -ForegroundColor DarkGray
+    Write-Host "Version 95 | Last changed: Install gcloud on work machines" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -1509,6 +1531,7 @@ function Initialize-WindowsEnvironment {
     Write-Section "Package Installation"
     Install-WingetPackages
     Install-SecretsManager
+    Install-GcloudCli
 
     Write-Section "SSH Configuration"
     Test-GitHubSSHKey # this needs to be run before chezmoi to get access to dotfiles

@@ -742,6 +742,47 @@ install_secrets_manager() {
     fi
 }
 
+# Install Google Cloud CLI on work machines.
+install_gcloud_cli() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Skipping Google Cloud CLI (not a work machine)."
+        return
+    fi
+
+    if command -v gcloud &>/dev/null; then
+        print_debug "Google Cloud CLI already installed."
+        return
+    fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access - cannot install Google Cloud CLI."
+        return
+    fi
+
+    print_message "Installing Google Cloud CLI..."
+
+    sudo install -m 0755 -d /usr/share/keyrings
+    if ! curl --connect-timeout 10 --max-time 60 -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+        | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/cloud.google.gpg; then
+        print_warning "Failed to install Google Cloud CLI signing key."
+        return
+    fi
+
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+        | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list >/dev/null
+
+    if ! sudo apt-get update -qq; then
+        print_warning "Failed to update apt repositories for Google Cloud CLI."
+        return
+    fi
+
+    if sudo apt-get install -y google-cloud-cli; then
+        print_success "Google Cloud CLI installed."
+    else
+        print_warning "Failed to install Google Cloud CLI."
+    fi
+}
+
 # Install and configure fail2ban for brute-force protection
 install_fail2ban() {
     if dpkg -s fail2ban &> /dev/null; then
@@ -2357,7 +2398,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 142 | Last changed: Install Matt Pocock Pi skills${NC}"
+    echo -e "${GRAY}Version 143 | Last changed: Install gcloud on work machines${NC}"
 
     # Create placeholder env file early
     create_env_local
@@ -2385,6 +2426,7 @@ main() {
     install_brew_packages
     install_1password_cli
     install_secrets_manager
+    install_gcloud_cli
     install_lefthook
     install_mise
     install_uv

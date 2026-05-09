@@ -465,6 +465,31 @@ install_secrets_manager() {
     fi
 }
 
+# Install Google Cloud CLI on work machines.
+install_gcloud_cli() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Skipping Google Cloud CLI (not a work machine)."
+        return
+    fi
+
+    if command -v gcloud &>/dev/null; then
+        print_debug "Google Cloud CLI already installed."
+        return
+    fi
+
+    if ! command -v brew &>/dev/null; then
+        print_warning "Homebrew not found. Cannot install Google Cloud CLI."
+        return
+    fi
+
+    print_message "Installing Google Cloud CLI..."
+    if brew install --cask gcloud-cli; then
+        print_success "Google Cloud CLI installed."
+    else
+        print_warning "Failed to install Google Cloud CLI."
+    fi
+}
+
 # Enable SSH (Remote Login) with key-only auth, no password
 # Block public file upload services on work machines to prevent accidental data leaks.
 # AI coding agents (Claude Code, Codex) may upload screenshots/code to these services.
@@ -2035,7 +2060,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 163 | Last changed: Install Matt Pocock Pi skills${NC}"
+    echo -e "${GRAY}Version 164 | Last changed: Install gcloud on work machines${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -2060,6 +2085,7 @@ main() {
         print_section "Core Packages"
         install_core_packages
         install_secrets_manager
+        install_gcloud_cli
 
         # Block public upload services on work machines
         block_public_upload_services

@@ -311,6 +311,31 @@ install_secrets_manager() {
     fi
 }
 
+# Install Google Cloud CLI on work machines.
+install_gcloud_cli() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Skipping Google Cloud CLI (not a work machine)."
+        return
+    fi
+
+    if command -v gcloud &>/dev/null; then
+        print_debug "Google Cloud CLI already installed."
+        return
+    fi
+
+    if ! command -v brew &>/dev/null; then
+        print_warning "Homebrew not found. Cannot install Google Cloud CLI."
+        return
+    fi
+
+    print_message "Installing Google Cloud CLI..."
+    if brew install --cask gcloud-cli; then
+        print_success "Google Cloud CLI installed."
+    else
+        print_warning "Failed to install Google Cloud CLI."
+    fi
+}
+
 # Enable Tailscale SSH for keyless access over Tailscale network
 setup_tailscale_ssh() {
     if ! command -v tailscale &>/dev/null; then
@@ -1838,7 +1863,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 41 | Last changed: Install Matt Pocock Pi skills${NC}"
+    echo -e "${GRAY}Version 42 | Last changed: Install gcloud on work machines${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
@@ -1861,6 +1886,7 @@ main() {
     ensure_brew_available || return 1
     install_core_packages
     install_secrets_manager
+    install_gcloud_cli
     install_brew_packages
     setup_tailscale_ssh
 
