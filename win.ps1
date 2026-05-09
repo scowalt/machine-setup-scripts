@@ -104,6 +104,7 @@ function New-TokenPlaceholders {
 # BAN_COMPOUND_PLUGIN=1
 # BAN_PI_SUBAGENTS=1
 # BAN_PI_GOAL_AUTORESEARCH=1
+# BAN_MATT_POCOCK_SKILLS=1
 "@ | Set-Content -Path $envLocalPath
         Write-Debug "Created placeholder ~/.env.local"
     }
@@ -945,6 +946,167 @@ function Setup-PiGoalAutoresearch {
 }
 
 
+function Test-MattPocockPiSkillsDisabled {
+    return ((Test-EnvLocalFlag "WORK_MACHINE") -or (Test-EnvLocalFlag "BAN_MATT_POCOCK_SKILLS") -or (Test-EnvLocalFlag "BAN_MATT_POCKOCK_SKILLS"))
+}
+
+# Function to remove Matt Pocock skill copies from Pi when disabled
+function Remove-MattPocockPiSkills {
+    $skills = @(
+        "setup-matt-pocock-skills",
+        "diagnose",
+        "tdd",
+        "improve-codebase-architecture",
+        "zoom-out",
+        "grill-with-docs"
+    )
+
+    $defaultAgentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    if ($env:PI_CODING_AGENT_DIR) {
+        $activeAgentDir = $env:PI_CODING_AGENT_DIR
+    }
+    else {
+        $activeAgentDir = $defaultAgentDir
+    }
+
+    $skillsDirs = @((Join-Path $defaultAgentDir "skills"))
+    if ($activeAgentDir -ne $defaultAgentDir) {
+        $skillsDirs += (Join-Path $activeAgentDir "skills")
+    }
+
+    $removed = $false
+    $failed = @()
+    foreach ($skillsDir in $skillsDirs) {
+        foreach ($skill in $skills) {
+            $skillPath = Join-Path $skillsDir $skill
+            if (Test-Path $skillPath) {
+                try {
+                    Remove-Item -Path $skillPath -Recurse -Force -ErrorAction Stop
+                    if (Test-Path $skillPath) {
+                        $failed += $skill
+                    }
+                    else {
+                        $removed = $true
+                    }
+                }
+                catch {
+                    $failed += $skill
+                }
+            }
+        }
+    }
+
+    if ($failed.Count -gt 0) {
+        Write-Warning "Failed to remove Matt Pocock Pi skills: $($failed -join ', ')"
+    }
+    elseif ($removed) {
+        Write-Success "Matt Pocock Pi skills disabled."
+    }
+    else {
+        Write-Debug "Matt Pocock Pi skills disabled; no installed copies found."
+    }
+}
+
+# Function to install/update Matt Pocock engineering skills for Pi
+function Setup-MattPocockPiSkills {
+    $skills = @(
+        "setup-matt-pocock-skills",
+        "diagnose",
+        "tdd",
+        "improve-codebase-architecture",
+        "zoom-out",
+        "grill-with-docs"
+    )
+
+    if (Test-MattPocockPiSkillsDisabled) {
+        if (Test-EnvLocalFlag "WORK_MACHINE") {
+            Write-Debug "WORK_MACHINE=1, skipping Matt Pocock Pi skills."
+        }
+        Remove-MattPocockPiSkills
+        return
+    }
+
+    if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
+        Write-Warning "Pi coding agent not found. Cannot install Matt Pocock Pi skills."
+        return
+    }
+
+    if (-not (Enable-PiNodeRuntime)) {
+        Write-Warning "Skipping Matt Pocock Pi skills because the Pi Node.js runtime is not ready."
+        return
+    }
+
+    if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
+        Write-Warning "npx not found. Cannot install Matt Pocock Pi skills."
+        Write-Debug "Install Node.js >=20.6, then run: npx --yes skills@latest add mattpocock/skills --global --agent pi --copy"
+        return
+    }
+
+    $defaultAgentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    if ($env:PI_CODING_AGENT_DIR) {
+        $agentDir = $env:PI_CODING_AGENT_DIR
+    }
+    else {
+        $agentDir = $defaultAgentDir
+    }
+
+    $defaultSkillsDir = Join-Path $defaultAgentDir "skills"
+    $skillsDir = Join-Path $agentDir "skills"
+    $npxArgs = @("--yes", "skills@latest", "add", "mattpocock/skills", "--global", "--agent", "pi", "--copy", "-y")
+    foreach ($skill in $skills) {
+        $npxArgs += @("--skill", $skill)
+    }
+
+    Write-Message "Installing/updating Matt Pocock Pi skills..."
+    $output = & npx @npxArgs 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to install Matt Pocock Pi skills: $output"
+        return
+    }
+
+    $syncFailed = @()
+    if ($agentDir -ne $defaultAgentDir) {
+        New-Item -ItemType Directory -Force -Path $skillsDir | Out-Null
+        foreach ($skill in $skills) {
+            $sourcePath = Join-Path $defaultSkillsDir $skill
+            $destPath = Join-Path $skillsDir $skill
+            if (Test-Path $sourcePath) {
+                try {
+                    if (Test-Path $destPath) {
+                        Remove-Item -Path $destPath -Recurse -Force -ErrorAction Stop
+                    }
+                    Copy-Item -Path $sourcePath -Destination $destPath -Recurse -Force -ErrorAction Stop
+                }
+                catch {
+                    $syncFailed += $skill
+                }
+            }
+            else {
+                $syncFailed += $skill
+            }
+        }
+    }
+
+    $missing = @()
+    foreach ($skill in $skills) {
+        $skillFile = Join-Path (Join-Path $skillsDir $skill) "SKILL.md"
+        if (-not (Test-Path $skillFile)) {
+            $missing += $skill
+        }
+    }
+
+    if ($syncFailed.Count -gt 0) {
+        Write-Warning "Matt Pocock Pi skills installed, but failed to sync to active Pi dir ${agentDir}: $($syncFailed -join ', ')"
+    }
+    elseif ($missing.Count -eq 0) {
+        Write-Success "Matt Pocock Pi skills installed/updated."
+    }
+    else {
+        Write-Warning "Matt Pocock Pi skills install completed, but missing expected skills: $($missing -join ', ')"
+    }
+}
+
+
 # Function to remove Claude-only AskUserQuestion references from Compound Engineering files installed for Pi
 function Sanitize-PiCompoundEngineeringForPi {
     param([string]$AgentDir)
@@ -1330,7 +1492,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 93 | Last changed: Ensure Pi Node runtime and final log upload" -ForegroundColor DarkGray
+    Write-Host "Version 94 | Last changed: Install Matt Pocock Pi skills" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -1372,9 +1534,15 @@ function Initialize-WindowsEnvironment {
 
     Install-GeminiCli
     Install-CodexCli
+    if (Test-MattPocockPiSkillsDisabled) {
+        Setup-MattPocockPiSkills
+    }
     if (Install-PiCli) {
         Setup-PiSubagents
         Setup-PiGoalAutoresearch
+        if (-not (Test-MattPocockPiSkillsDisabled)) {
+            Setup-MattPocockPiSkills
+        }
         Setup-PiCompoundEngineering
     }
     else {

@@ -71,6 +71,7 @@ create_env_local() {
 # BAN_COMPOUND_PLUGIN=1
 # BAN_PI_SUBAGENTS=1
 # BAN_PI_GOAL_AUTORESEARCH=1
+# BAN_MATT_POCOCK_SKILLS=1
 EOF
         chmod 600 "${HOME}/.env.local"
         print_debug "Created placeholder ~/.env.local"
@@ -1377,6 +1378,140 @@ setup_pi_goal_autoresearch() {
 }
 
 
+# Matt Pocock skills to install for Pi.
+matt_pocock_pi_skills() {
+    printf '%s\n' \
+        setup-matt-pocock-skills \
+        diagnose \
+        tdd \
+        improve-codebase-architecture \
+        zoom-out \
+        grill-with-docs
+}
+
+matt_pocock_pi_skills_disabled() {
+    [[ "${WORK_MACHINE:-}" == "1" || "${BAN_MATT_POCOCK_SKILLS:-}" == "1" || "${BAN_MATT_POCKOCK_SKILLS:-}" == "1" ]]
+}
+
+# Remove Matt Pocock skill copies from Pi when disabled.
+remove_matt_pocock_pi_skills() {
+    local _default_agent_dir="${HOME}/.pi/agent"
+    local _active_agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
+    local _skills_dir=""
+    local _skill=""
+    local _skill_path=""
+    local _removed=0
+    local _failed=()
+    local _skills_dirs=("${_default_agent_dir}/skills")
+
+    if [[ "${_active_agent_dir}" != "${_default_agent_dir}" ]]; then
+        _skills_dirs+=("${_active_agent_dir}/skills")
+    fi
+
+    for _skills_dir in "${_skills_dirs[@]}"; do
+        while IFS= read -r _skill; do
+            _skill_path="${_skills_dir}/${_skill}"
+            if [[ -e "${_skill_path}" ]]; then
+                if rm -rf -- "${_skill_path:?}" && [[ ! -e "${_skill_path}" ]]; then
+                    _removed=1
+                else
+                    _failed+=("${_skill}")
+                fi
+            fi
+        done < <(matt_pocock_pi_skills)
+    done
+
+    if [[ "${#_failed[@]}" -gt 0 ]]; then
+        print_warning "Failed to remove Matt Pocock Pi skills: ${_failed[*]}"
+        return 1
+    elif [[ "${_removed}" -eq 1 ]]; then
+        print_success "Matt Pocock Pi skills disabled."
+    else
+        print_debug "Matt Pocock Pi skills disabled; no installed copies found."
+    fi
+}
+
+# Install/update Matt Pocock engineering skills for Pi.
+setup_matt_pocock_pi_skills() {
+    local _repo="mattpocock/skills"
+    local _default_agent_dir="${HOME}/.pi/agent"
+    local _agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
+    local _default_skills_dir="${_default_agent_dir}/skills"
+    local _skills_dir="${_agent_dir}/skills"
+    local _skill=""
+    local _output=""
+    local _source_path=""
+    local _dest_path=""
+    local _args=(--yes skills@latest add "${_repo}" --global --agent pi --copy -y)
+    local _missing=()
+    local _sync_failed=()
+
+    if matt_pocock_pi_skills_disabled; then
+        if [[ "${WORK_MACHINE:-}" == "1" ]]; then
+            print_debug "WORK_MACHINE=1, skipping Matt Pocock Pi skills."
+        fi
+        remove_matt_pocock_pi_skills
+        return 0
+    fi
+
+    if ! command -v pi &> /dev/null; then
+        print_warning "Pi coding agent not found. Cannot install Matt Pocock Pi skills."
+        return 0
+    fi
+
+    if ! ensure_pi_node_runtime; then
+        print_warning "Skipping Matt Pocock Pi skills because the Pi Node.js runtime is not ready."
+        return 0
+    fi
+
+    if ! command -v npx &> /dev/null; then
+        print_warning "npx not found. Cannot install Matt Pocock Pi skills."
+        print_debug "Install Node.js >=20.6, then run: npx --yes skills@latest add mattpocock/skills --global --agent pi --copy"
+        return 0
+    fi
+
+    while IFS= read -r _skill; do
+        _args+=(--skill "${_skill}")
+    done < <(matt_pocock_pi_skills)
+
+    print_message "Installing/updating Matt Pocock Pi skills..."
+    if _output=$(npx "${_args[@]}" 2>&1); then
+        if [[ "${_agent_dir}" != "${_default_agent_dir}" ]]; then
+            mkdir -p "${_skills_dir}"
+            while IFS= read -r _skill; do
+                _source_path="${_default_skills_dir}/${_skill}"
+                _dest_path="${_skills_dir}/${_skill}"
+                if [[ -d "${_source_path}" ]]; then
+                    if rm -rf -- "${_dest_path:?}" && cp -a "${_source_path}" "${_dest_path}"; then
+                        true
+                    else
+                        _sync_failed+=("${_skill}")
+                    fi
+                else
+                    _sync_failed+=("${_skill}")
+                fi
+            done < <(matt_pocock_pi_skills)
+        fi
+
+        while IFS= read -r _skill; do
+            if [[ ! -f "${_skills_dir}/${_skill}/SKILL.md" ]]; then
+                _missing+=("${_skill}")
+            fi
+        done < <(matt_pocock_pi_skills)
+
+        if [[ "${#_sync_failed[@]}" -gt 0 ]]; then
+            print_warning "Matt Pocock Pi skills installed, but failed to sync to active Pi dir ${_agent_dir}: ${_sync_failed[*]}"
+        elif [[ "${#_missing[@]}" -eq 0 ]]; then
+            print_success "Matt Pocock Pi skills installed/updated."
+        else
+            print_warning "Matt Pocock Pi skills install completed, but missing expected skills: ${_missing[*]}"
+        fi
+    else
+        print_warning "Failed to install Matt Pocock Pi skills: ${_output}"
+    fi
+}
+
+
 # Remove Claude-only AskUserQuestion references from Compound Engineering files installed for Pi.
 sanitize_pi_compound_engineering_for_pi() {
     local _agent_dir="${1:-${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}}"
@@ -1703,7 +1838,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 40 | Last changed: Ensure Pi Node runtime and final log upload${NC}"
+    echo -e "${GRAY}Version 41 | Last changed: Install Matt Pocock Pi skills${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
@@ -1814,9 +1949,15 @@ HELPER_EOF
     setup_compound_plugin
     install_gemini_cli
     install_codex_cli
+    if matt_pocock_pi_skills_disabled; then
+        setup_matt_pocock_pi_skills
+    fi
     if install_pi_cli; then
         setup_pi_subagents
         setup_pi_goal_autoresearch
+        if ! matt_pocock_pi_skills_disabled; then
+            setup_matt_pocock_pi_skills
+        fi
         setup_pi_compound_engineering
     else
         print_warning "Skipping Pi extension setup because Pi migration failed."
