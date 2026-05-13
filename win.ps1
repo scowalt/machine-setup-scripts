@@ -105,6 +105,7 @@ function New-TokenPlaceholders {
 # BAN_PI_SUBAGENTS=1
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
+# BAN_RTK=1
 "@ | Set-Content -Path $envLocalPath
         Write-Debug "Created placeholder ~/.env.local"
     }
@@ -548,6 +549,162 @@ function Install-CodexCli {
     }
     catch {
         Write-Host "$failIcon Failed to install Codex CLI: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+
+# Check whether the installed rtk is Rust Token Killer, not the unrelated Rust Type Kit.
+function Test-RtkCliReady {
+    $rtkCommand = Get-Command rtk -ErrorAction SilentlyContinue
+    if (-not $rtkCommand) {
+        return $false
+    }
+
+    try {
+        & $rtkCommand.Source gain *> $null
+        return ($LASTEXITCODE -eq 0)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Add-RtkToPath {
+    param([Parameter(Mandatory=$true)][string]$RtkDir)
+
+    if ($env:PATH -notlike "*$RtkDir*") {
+        $env:PATH = "$RtkDir;$env:PATH"
+    }
+
+    $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+    if ($currentPath -notlike "*$RtkDir*") {
+        if ([string]::IsNullOrWhiteSpace($currentPath)) {
+            [Environment]::SetEnvironmentVariable("PATH", $RtkDir, "User")
+        }
+        else {
+            [Environment]::SetEnvironmentVariable("PATH", "$currentPath;$RtkDir", "User")
+        }
+        Write-Success "Added RTK CLI to PATH."
+    }
+}
+
+# Function to install RTK (Rust Token Killer) for token-optimized agent command output.
+function Install-RtkCli {
+    if (Test-EnvLocalFlag "BAN_RTK") {
+        Write-Debug "BAN_RTK=1, skipping RTK setup."
+        return
+    }
+
+    $rtkDir = Join-Path $env:LOCALAPPDATA "rtk\bin"
+    if (Test-Path $rtkDir) {
+        Add-RtkToPath -RtkDir $rtkDir
+    }
+
+    $hadRtk = Test-RtkCliReady
+    if ($hadRtk) {
+        Write-Message "Updating RTK CLI..."
+    }
+    elseif (Get-Command rtk -ErrorAction SilentlyContinue) {
+        Write-Warning "An rtk command exists, but it does not look like Rust Token Killer. Installing the rtk-ai binary to a user-local directory."
+    }
+    else {
+        Write-Message "Installing RTK CLI..."
+    }
+
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("rtk-" + [System.Guid]::NewGuid().ToString())
+    try {
+        New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/rtk-ai/rtk/releases/latest"
+        $asset = $release.assets | Where-Object { $_.name -eq "rtk-x86_64-pc-windows-msvc.zip" } | Select-Object -First 1
+        if (-not $asset) {
+            throw "Could not find Windows RTK release asset."
+        }
+
+        $zipPath = Join-Path $tempDir "rtk.zip"
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath
+        Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
+
+        $rtkExe = Get-ChildItem -Path $tempDir -Filter "rtk.exe" -Recurse | Select-Object -First 1
+        if (-not $rtkExe) {
+            throw "Downloaded RTK archive did not contain rtk.exe."
+        }
+
+        New-Item -ItemType Directory -Force -Path $rtkDir | Out-Null
+        Copy-Item -Path $rtkExe.FullName -Destination (Join-Path $rtkDir "rtk.exe") -Force
+        Add-RtkToPath -RtkDir $rtkDir
+
+        if (Test-RtkCliReady) {
+            Write-Success "RTK CLI installed/updated."
+        }
+        else {
+            Write-Warning "RTK installed, but 'rtk gain' did not verify the expected binary."
+        }
+    }
+    catch {
+        if ($hadRtk) {
+            Write-Warning "Failed to update RTK CLI; existing install remains available: $($_.Exception.Message)"
+        }
+        else {
+            Write-Warning "Failed to install RTK CLI: $($_.Exception.Message)"
+        }
+    }
+    finally {
+        if (Test-Path $tempDir) {
+            Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# Configure RTK integrations for installed AI agents. Non-fatal by design.
+function Setup-RtkIntegrations {
+    if (Test-EnvLocalFlag "BAN_RTK") {
+        Write-Debug "BAN_RTK=1, skipping RTK integrations."
+        return
+    }
+
+    if (-not (Test-RtkCliReady)) {
+        Write-Warning "RTK CLI is not available; skipping RTK integrations."
+        return
+    }
+
+    # Automated setup should not prompt for telemetry consent. Users can opt in later with `rtk telemetry enable`.
+    & rtk telemetry disable *> $null
+
+    if (Get-Command claude -ErrorAction SilentlyContinue) {
+        Write-Message "Configuring RTK for Claude Code..."
+        $output = & rtk init -g --auto-patch 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "RTK configured for Claude Code."
+        }
+        else {
+            Write-Warning "Failed to configure RTK for Claude Code."
+            if ($output) { Write-Debug ($output | Out-String) }
+        }
+    }
+    else {
+        Write-Debug "Claude Code not installed; skipping RTK Claude integration."
+    }
+
+    if (Get-Command gemini -ErrorAction SilentlyContinue) {
+        Write-Debug "Native Windows RTK Gemini hook setup is Unix-shell based; use WSL for transparent Gemini rewrites."
+    }
+    else {
+        Write-Debug "Gemini CLI not installed; skipping RTK Gemini integration."
+    }
+
+    if (Get-Command codex -ErrorAction SilentlyContinue) {
+        Write-Message "Configuring RTK for Codex CLI..."
+        $output = & rtk init -g --codex 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "RTK configured for Codex CLI."
+        }
+        else {
+            Write-Warning "Failed to configure RTK for Codex CLI."
+            if ($output) { Write-Debug ($output | Out-String) }
+        }
+    }
+    else {
+        Write-Debug "Codex CLI not installed; skipping RTK Codex integration."
     }
 }
 
@@ -1542,7 +1699,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 96 | Last changed: Update gcloud components" -ForegroundColor DarkGray
+    Write-Host "Version 97 | Last changed: Install and initialize RTK CLI" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -1585,6 +1742,8 @@ function Initialize-WindowsEnvironment {
 
     Install-GeminiCli
     Install-CodexCli
+    Install-RtkCli
+    Setup-RtkIntegrations
     if (Test-MattPocockPiSkillsDisabled) {
         Setup-MattPocockPiSkills
     }
