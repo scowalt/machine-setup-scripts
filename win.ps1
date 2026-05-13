@@ -167,6 +167,32 @@ function Install-SecretsManager {
     }
 }
 
+# Update Google Cloud CLI components when the component manager is available.
+function Update-GcloudComponents {
+    if (-not (Get-Command gcloud -ErrorAction SilentlyContinue)) {
+        Write-Debug "Google Cloud CLI not installed; skipping component update."
+        return
+    }
+
+    Write-Message "Updating Google Cloud CLI components..."
+    $updateOutput = & gcloud components update --quiet 2>&1
+    $updateExitCode = $LASTEXITCODE
+    $updateText = $updateOutput -join "`n"
+
+    if ($updateExitCode -eq 0) {
+        Write-Success "Google Cloud CLI components updated."
+    }
+    elseif ($updateText -match "component manager is disabled|managed by an external package manager") {
+        Write-Debug "Google Cloud CLI components are managed by the package manager; skipping component update."
+    }
+    else {
+        Write-Warning "Failed to update Google Cloud CLI components."
+        if ($updateText) {
+            Write-Debug $updateText
+        }
+    }
+}
+
 # Install Google Cloud CLI on work machines.
 function Install-GcloudCli {
     if (-not (Test-EnvLocalFlag "WORK_MACHINE")) {
@@ -176,6 +202,7 @@ function Install-GcloudCli {
 
     if (Get-Command gcloud -ErrorAction SilentlyContinue) {
         Write-Debug "Google Cloud CLI already installed."
+        Update-GcloudComponents
         return
     }
 
@@ -183,6 +210,7 @@ function Install-GcloudCli {
     winget install -e --id "Google.CloudSDK" --silent --accept-package-agreements --accept-source-agreements
     if ($LASTEXITCODE -eq 0) {
         Write-Success "Google Cloud CLI installed."
+        Update-GcloudComponents
     }
     else {
         Write-Warning "Failed to install Google Cloud CLI."
@@ -1514,7 +1542,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 95 | Last changed: Install gcloud on work machines" -ForegroundColor DarkGray
+    Write-Host "Version 96 | Last changed: Update gcloud components" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"

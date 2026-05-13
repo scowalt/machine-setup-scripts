@@ -74,7 +74,7 @@ All scripts follow a consistent pattern:
 - Terminal: Starship prompt
 - CI/CD: act (local GitHub Actions)
 - AI agents: Claude Code, Gemini CLI, Codex CLI, Pi coding agent
-- Agent skills/plugins: Compound Engineering is installed for Claude Code and Pi on personal machines; Matt Pocock engineering skills are installed for Pi on personal machines. Work machines install Google Cloud CLI. Skip Compound with `WORK_MACHINE=1` or `BAN_COMPOUND_PLUGIN=1`; skip Matt Pocock skills with `WORK_MACHINE=1` or `BAN_MATT_POCOCK_SKILLS=1` in `~/.env.local`
+- Agent skills/plugins: Compound Engineering is installed for Claude Code and Pi on personal machines; Matt Pocock engineering skills are installed for Pi on personal machines. Work machines install Google Cloud CLI and update its components when the component manager is available. Skip Compound with `WORK_MACHINE=1` or `BAN_COMPOUND_PLUGIN=1`; skip Matt Pocock skills with `WORK_MACHINE=1` or `BAN_MATT_POCOCK_SKILLS=1` in `~/.env.local`
 
 ### Important Notes
 

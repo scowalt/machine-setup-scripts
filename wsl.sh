@@ -389,19 +389,19 @@ install_homebrew() {
     if ! command -v brew &> /dev/null; then
         print_message "Installing Homebrew..."
         local install_script
-        install_script=$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)
+        install_script=$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh || true)
         if ! /bin/bash -c "${install_script}"; then
             print_error "Failed to install Homebrew. Please check your internet connection."
             return 1
         fi
         local brew_env
-        brew_env=$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)
+        brew_env=$(/home/linuxbrew/.linuxbrew/bin/brew shellenv || true)
         eval "${brew_env}"
         print_success "Homebrew installed."
     else
         print_debug "Homebrew is already installed."
         local brew_env
-        brew_env=$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)
+        brew_env=$(/home/linuxbrew/.linuxbrew/bin/brew shellenv || true)
         eval "${brew_env}"
     fi
 
@@ -410,12 +410,12 @@ install_homebrew() {
     brew_prefix="$(brew --prefix 2>/dev/null)"
     if [[ -n "${brew_prefix}" ]] && [[ -d "${brew_prefix}/Cellar" ]] && [[ ! -w "${brew_prefix}/Cellar" ]]; then
         if can_sudo; then
-            print_message "Fixing Homebrew permissions for $(whoami)..."
-            sudo chown -R "$(whoami)" "${brew_prefix}/Cellar" "${brew_prefix}/Homebrew" "${brew_prefix}/lib" "${brew_prefix}/bin" "${brew_prefix}/share" "${brew_prefix}/etc" "${brew_prefix}/opt" "${brew_prefix}/var" 2>/dev/null
+            print_message "Fixing Homebrew permissions for $(whoami || true)..."
+            sudo chown -R "$(whoami || true)" "${brew_prefix}/Cellar" "${brew_prefix}/Homebrew" "${brew_prefix}/lib" "${brew_prefix}/bin" "${brew_prefix}/share" "${brew_prefix}/etc" "${brew_prefix}/opt" "${brew_prefix}/var" 2>/dev/null
             print_success "Homebrew permissions fixed."
         else
-            print_warning "Homebrew Cellar is not writable by $(whoami). Brew installs may fail."
-            print_debug "An admin can fix this: sudo chown -R $(whoami) ${brew_prefix}/Cellar"
+            print_warning "Homebrew Cellar is not writable by $(whoami || true). Brew installs may fail."
+            print_debug "An admin can fix this: sudo chown -R $(whoami || true) ${brew_prefix}/Cellar"
         fi
     fi
 }
@@ -473,7 +473,7 @@ initialize_chezmoi() {
     if [[ ! -d "${chez_src}" ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
         local _current_user
-        _current_user=$(whoami)
+        _current_user=$(whoami || true)
         if [[ "${_current_user}" == "scowalt" ]]; then
             # Main user uses SSH with default key for push access
             if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
@@ -589,8 +589,8 @@ install_claude_code() {
     # Skip installer if already on the latest version
     if command -v claude &> /dev/null; then
         local _installed_version _latest_version
-        _installed_version=$(claude --version 2>/dev/null | head -1 | awk '{print $1}')
-        _latest_version=$(curl -fsSL https://registry.npmjs.org/@anthropic-ai/claude-code/latest 2>/dev/null | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)
+        _installed_version=$(claude --version 2>/dev/null | head -1 | awk '{print $1}' || true)
+        _latest_version=$(curl -fsSL https://registry.npmjs.org/@anthropic-ai/claude-code/latest 2>/dev/null | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
         if [[ -n "${_installed_version}" && -n "${_latest_version}" && "${_installed_version}" == "${_latest_version}" ]]; then
             print_success "Claude Code already at latest version (${_installed_version})."
             return 0
@@ -737,7 +737,7 @@ ensure_pi_node_runtime() {
     local _runtime="node@24"
 
     if pi_node_runtime_ready; then
-        print_debug "Node.js $(node --version) is ready for Pi."
+        print_debug "Node.js $(node --version || true) is ready for Pi."
         return 0
     fi
 
@@ -773,7 +773,7 @@ ensure_pi_node_runtime() {
     fi
 
     if pi_node_runtime_ready; then
-        print_success "Node.js $(node --version) is ready for Pi."
+        print_success "Node.js $(node --version || true) is ready for Pi."
         return 0
     fi
 
@@ -849,7 +849,7 @@ install_pi_cli() {
 
     hash -r 2>/dev/null || true
 
-    if bun pm ls -g 2>/dev/null | grep -Fq "${_old_package}"; then
+    if { bun pm ls -g 2>/dev/null || true; } | grep -Fq "${_old_package}"; then
         print_message "Removing deprecated Pi package ${_old_package}..."
         if bun remove -g "${_old_package}"; then
             hash -r 2>/dev/null || true
@@ -1118,7 +1118,7 @@ remove_matt_pocock_pi_skills() {
                     _failed+=("${_skill}")
                 fi
             fi
-        done < <(matt_pocock_pi_skills)
+        done < <(matt_pocock_pi_skills || true)
     done
 
     if [[ "${#_failed[@]}" -gt 0 ]]; then
@@ -1172,7 +1172,7 @@ setup_matt_pocock_pi_skills() {
 
     while IFS= read -r _skill; do
         _args+=(--skill "${_skill}")
-    done < <(matt_pocock_pi_skills)
+    done < <(matt_pocock_pi_skills || true)
 
     print_message "Installing/updating Matt Pocock Pi skills..."
     if _output=$(npx "${_args[@]}" 2>&1); then
@@ -1190,14 +1190,14 @@ setup_matt_pocock_pi_skills() {
                 else
                     _sync_failed+=("${_skill}")
                 fi
-            done < <(matt_pocock_pi_skills)
+            done < <(matt_pocock_pi_skills || true)
         fi
 
         while IFS= read -r _skill; do
             if [[ ! -f "${_skills_dir}/${_skill}/SKILL.md" ]]; then
                 _missing+=("${_skill}")
             fi
-        done < <(matt_pocock_pi_skills)
+        done < <(matt_pocock_pi_skills || true)
 
         if [[ "${#_sync_failed[@]}" -gt 0 ]]; then
             print_warning "Matt Pocock Pi skills installed, but failed to sync to active Pi dir ${_agent_dir}: ${_sync_failed[*]}"
@@ -1321,7 +1321,7 @@ setup_pi_compound_engineering() {
 
 # Enable loginctl lingering so systemd user services survive logout
 enable_user_lingering() {
-    if loginctl show-user "$(whoami)" --property=Linger 2>/dev/null | grep -q 'Linger=yes'; then
+    if { loginctl show-user "$(whoami || true)" --property=Linger 2>/dev/null || true; } | grep -q 'Linger=yes'; then
         print_debug "User lingering already enabled."
         return
     fi
@@ -1329,14 +1329,14 @@ enable_user_lingering() {
     print_message "Enabling user lingering for systemd user services..."
 
     if can_sudo; then
-        if sudo loginctl enable-linger "$(whoami)"; then
+        if sudo loginctl enable-linger "$(whoami || true)"; then
             print_success "User lingering enabled — systemd user services will survive logout."
         else
             print_warning "Could not enable user lingering."
         fi
     else
         print_warning "No sudo access — cannot enable user lingering."
-        print_debug "Run 'sudo loginctl enable-linger $(whoami)' manually."
+        print_debug "Run 'sudo loginctl enable-linger $(whoami || true)' manually."
     fi
 }
 
@@ -1386,8 +1386,8 @@ install_ccgram() {
         local new_version=""
         new_version=$(ccgram --version 2>/dev/null || echo "")
 
-        if [[ -n "$old_version" && "$old_version" != "$new_version" ]]; then
-            print_message "ccgram upgraded ($old_version -> $new_version), restarting service..."
+        if [[ -n "${old_version}" && "${old_version}" != "${new_version}" ]]; then
+            print_message "ccgram upgraded (${old_version} -> ${new_version}), restarting service..."
             if systemctl --user restart ccgram.service 2>/dev/null; then
                 print_success "ccgram service restarted."
             else
@@ -1513,7 +1513,7 @@ install_infisical() {
     print_message "Installing Infisical CLI..."
 
     # Add repository and install
-    if curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' | sudo bash; then
+    if { curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' || true; } | sudo bash; then
         sudo apt-get update -qq
         if sudo apt-get install -y infisical; then
             print_success "Infisical CLI installed."
@@ -1534,6 +1534,27 @@ install_secrets_manager() {
     fi
 }
 
+# Update Google Cloud CLI components when the component manager is available.
+update_gcloud_components() {
+    if ! command -v gcloud &>/dev/null; then
+        print_debug "Google Cloud CLI not installed; skipping component update."
+        return
+    fi
+
+    local update_output
+    print_message "Updating Google Cloud CLI components..."
+    if update_output=$(gcloud components update --quiet < /dev/null 2>&1); then
+        print_success "Google Cloud CLI components updated."
+    elif grep -qiE "component manager is disabled|managed by an external package manager" <<< "${update_output}"; then
+        print_debug "Google Cloud CLI components are managed by the package manager; skipping component update."
+    else
+        print_warning "Failed to update Google Cloud CLI components."
+        if [[ -n "${update_output}" ]]; then
+            print_debug "${update_output}"
+        fi
+    fi
+}
+
 # Install Google Cloud CLI on work machines.
 install_gcloud_cli() {
     if [[ "${WORK_MACHINE:-}" != "1" ]]; then
@@ -1543,6 +1564,7 @@ install_gcloud_cli() {
 
     if command -v gcloud &>/dev/null; then
         print_debug "Google Cloud CLI already installed."
+        update_gcloud_components
         return
     fi
 
@@ -1554,7 +1576,7 @@ install_gcloud_cli() {
     print_message "Installing Google Cloud CLI..."
 
     sudo install -m 0755 -d /usr/share/keyrings
-    if ! curl --connect-timeout 10 --max-time 60 -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+    if ! { curl --connect-timeout 10 --max-time 60 -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg || true; } \
         | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/cloud.google.gpg; then
         print_warning "Failed to install Google Cloud CLI signing key."
         return
@@ -1570,6 +1592,7 @@ install_gcloud_cli() {
 
     if sudo apt-get install -y google-cloud-cli; then
         print_success "Google Cloud CLI installed."
+        update_gcloud_components
     else
         print_warning "Failed to install Google Cloud CLI."
     fi
@@ -1849,7 +1872,9 @@ upgrade_npm_global_packages() {
     # Initialize mise for current session (provides npm if Node.js is installed)
     ensure_brew_available
     if command -v mise &> /dev/null; then
-        eval "$(mise activate bash)"
+        local mise_activation
+        mise_activation=$(mise activate bash || true)
+        eval "${mise_activation}"
     fi
 
     # Make sure npm is available
@@ -1960,12 +1985,12 @@ main() {
     local log_file
     log_file="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
     exec 3>&1
-    exec > >(tee -a "${log_file}") 2>&1
+    exec > >({ tee -a "${log_file}" || true; }) 2>&1
     print_debug "Logging to ${log_file}"
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 134 | Last changed: Install gcloud on work machines${NC}"
+    echo -e "${GRAY}Version 135 | Last changed: Update gcloud components and fix shellcheck${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -1986,7 +2011,7 @@ main() {
     setup_ssh_key || return 1
     add_github_to_known_hosts || return 1
 
-    current_user=$(whoami)
+    current_user=$(whoami || true)
     if [[ "${current_user}" == "scowalt" ]]; then
         print_section "Code Directory Setup"
         setup_code_directory

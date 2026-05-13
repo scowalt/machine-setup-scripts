@@ -80,14 +80,14 @@ EOF
 
 # Check if user is scowalt or a secondary user (<org>-scowalt pattern)
 is_scowalt_user() {
-    local user="${1:-$(whoami)}"
+    local user="${1:-$(whoami || true)}"
     [[ "${user}" == "scowalt" ]] || [[ "${user}" == *-scowalt ]]
 }
 
 # Check if running as main user (scowalt)
 is_main_user() {
     local _whoami
-    _whoami=$(whoami)
+    _whoami=$(whoami || true)
     [[ "${_whoami}" == "scowalt" ]]
 }
 
@@ -233,7 +233,7 @@ ensure_brew_available() {
     if [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
         print_message "Initializing Homebrew..."
         local brew_env
-        brew_env=$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)
+        brew_env=$(/home/linuxbrew/.linuxbrew/bin/brew shellenv || true)
         eval "${brew_env}"
         print_success "Homebrew initialized."
         return 0
@@ -286,7 +286,7 @@ install_secrets_manager() {
             return
         fi
         print_message "Installing Infisical CLI..."
-        if ! brew tap | grep -q "^infisical/get-cli$"; then
+        if ! { brew tap || true; } | grep -q "^infisical/get-cli$"; then
             brew tap infisical/get-cli 2>/dev/null || true
         fi
         if brew install infisical/get-cli/infisical; then
@@ -300,13 +300,34 @@ install_secrets_manager() {
             return
         fi
         print_message "Installing Doppler CLI..."
-        if ! brew tap | grep -q "^dopplerhq/cli$"; then
+        if ! { brew tap || true; } | grep -q "^dopplerhq/cli$"; then
             brew tap dopplerhq/cli 2>/dev/null || true
         fi
         if brew install dopplerhq/cli/doppler; then
             print_success "Doppler CLI installed."
         else
             print_error "Failed to install Doppler CLI."
+        fi
+    fi
+}
+
+# Update Google Cloud CLI components when the component manager is available.
+update_gcloud_components() {
+    if ! command -v gcloud &>/dev/null; then
+        print_debug "Google Cloud CLI not installed; skipping component update."
+        return
+    fi
+
+    local update_output
+    print_message "Updating Google Cloud CLI components..."
+    if update_output=$(gcloud components update --quiet < /dev/null 2>&1); then
+        print_success "Google Cloud CLI components updated."
+    elif grep -qiE "component manager is disabled|managed by an external package manager" <<< "${update_output}"; then
+        print_debug "Google Cloud CLI components are managed by the package manager; skipping component update."
+    else
+        print_warning "Failed to update Google Cloud CLI components."
+        if [[ -n "${update_output}" ]]; then
+            print_debug "${update_output}"
         fi
     fi
 }
@@ -320,6 +341,7 @@ install_gcloud_cli() {
 
     if command -v gcloud &>/dev/null; then
         print_debug "Google Cloud CLI already installed."
+        update_gcloud_components
         return
     fi
 
@@ -331,6 +353,7 @@ install_gcloud_cli() {
     print_message "Installing Google Cloud CLI..."
     if brew install --cask gcloud-cli; then
         print_success "Google Cloud CLI installed."
+        update_gcloud_components
     else
         print_warning "Failed to install Google Cloud CLI."
     fi
@@ -344,7 +367,7 @@ setup_tailscale_ssh() {
     fi
 
     local run_ssh
-    run_ssh=$(tailscale debug prefs 2>/dev/null | grep -o '"RunSSH":[a-z]*' | cut -d: -f2)
+    run_ssh=$(tailscale debug prefs 2>/dev/null | grep -o '"RunSSH":[a-z]*' | cut -d: -f2 || true)
     if [[ "${run_ssh}" != "true" ]]; then
         print_message "Enabling Tailscale SSH..."
         sudo tailscale set --ssh
@@ -879,8 +902,8 @@ install_claude_code() {
     # Skip installer if already on the latest version
     if command -v claude &> /dev/null; then
         local _installed_version _latest_version
-        _installed_version=$(claude --version 2>/dev/null | head -1 | awk '{print $1}')
-        _latest_version=$(curl -fsSL https://registry.npmjs.org/@anthropic-ai/claude-code/latest 2>/dev/null | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)
+        _installed_version=$(claude --version 2>/dev/null | head -1 | awk '{print $1}' || true)
+        _latest_version=$(curl -fsSL https://registry.npmjs.org/@anthropic-ai/claude-code/latest 2>/dev/null | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
         if [[ -n "${_installed_version}" && -n "${_latest_version}" && "${_installed_version}" == "${_latest_version}" ]]; then
             print_success "Claude Code already at latest version (${_installed_version})."
             return 0
@@ -1062,7 +1085,7 @@ ensure_pi_node_runtime() {
     local _runtime="node@24"
 
     if pi_node_runtime_ready; then
-        print_debug "Node.js $(node --version) is ready for Pi."
+        print_debug "Node.js $(node --version || true) is ready for Pi."
         return 0
     fi
 
@@ -1098,7 +1121,7 @@ ensure_pi_node_runtime() {
     fi
 
     if pi_node_runtime_ready; then
-        print_success "Node.js $(node --version) is ready for Pi."
+        print_success "Node.js $(node --version || true) is ready for Pi."
         return 0
     fi
 
@@ -1174,7 +1197,7 @@ install_pi_cli() {
 
     hash -r 2>/dev/null || true
 
-    if bun pm ls -g 2>/dev/null | grep -Fq "${_old_package}"; then
+    if { bun pm ls -g 2>/dev/null || true; } | grep -Fq "${_old_package}"; then
         print_message "Removing deprecated Pi package ${_old_package}..."
         if bun remove -g "${_old_package}"; then
             hash -r 2>/dev/null || true
@@ -1443,7 +1466,7 @@ remove_matt_pocock_pi_skills() {
                     _failed+=("${_skill}")
                 fi
             fi
-        done < <(matt_pocock_pi_skills)
+        done < <(matt_pocock_pi_skills || true)
     done
 
     if [[ "${#_failed[@]}" -gt 0 ]]; then
@@ -1497,7 +1520,7 @@ setup_matt_pocock_pi_skills() {
 
     while IFS= read -r _skill; do
         _args+=(--skill "${_skill}")
-    done < <(matt_pocock_pi_skills)
+    done < <(matt_pocock_pi_skills || true)
 
     print_message "Installing/updating Matt Pocock Pi skills..."
     if _output=$(npx "${_args[@]}" 2>&1); then
@@ -1515,14 +1538,14 @@ setup_matt_pocock_pi_skills() {
                 else
                     _sync_failed+=("${_skill}")
                 fi
-            done < <(matt_pocock_pi_skills)
+            done < <(matt_pocock_pi_skills || true)
         fi
 
         while IFS= read -r _skill; do
             if [[ ! -f "${_skills_dir}/${_skill}/SKILL.md" ]]; then
                 _missing+=("${_skill}")
             fi
-        done < <(matt_pocock_pi_skills)
+        done < <(matt_pocock_pi_skills || true)
 
         if [[ "${#_sync_failed[@]}" -gt 0 ]]; then
             print_warning "Matt Pocock Pi skills installed, but failed to sync to active Pi dir ${_agent_dir}: ${_sync_failed[*]}"
@@ -1646,7 +1669,7 @@ setup_pi_compound_engineering() {
 
 # Enable loginctl lingering so systemd user services survive logout
 enable_user_lingering() {
-    if loginctl show-user "$(whoami)" --property=Linger 2>/dev/null | grep -q 'Linger=yes'; then
+    if { loginctl show-user "$(whoami || true)" --property=Linger 2>/dev/null || true; } | grep -q 'Linger=yes'; then
         print_debug "User lingering already enabled."
         return
     fi
@@ -1654,14 +1677,14 @@ enable_user_lingering() {
     print_message "Enabling user lingering for systemd user services..."
 
     if can_sudo; then
-        if sudo loginctl enable-linger "$(whoami)"; then
+        if sudo loginctl enable-linger "$(whoami || true)"; then
             print_success "User lingering enabled — systemd user services will survive logout."
         else
             print_warning "Could not enable user lingering."
         fi
     else
         print_warning "No sudo access — cannot enable user lingering."
-        print_debug "Run 'sudo loginctl enable-linger $(whoami)' manually."
+        print_debug "Run 'sudo loginctl enable-linger $(whoami || true)' manually."
     fi
 }
 
@@ -1711,8 +1734,8 @@ install_ccgram() {
         local new_version=""
         new_version=$(ccgram --version 2>/dev/null || echo "")
 
-        if [[ -n "$old_version" && "$old_version" != "$new_version" ]]; then
-            print_message "ccgram upgraded ($old_version -> $new_version), restarting service..."
+        if [[ -n "${old_version}" && "${old_version}" != "${new_version}" ]]; then
+            print_message "ccgram upgraded (${old_version} -> ${new_version}), restarting service..."
             if systemctl --user restart ccgram.service 2>/dev/null; then
                 print_success "ccgram service restarted."
             else
@@ -1771,7 +1794,9 @@ setup_compound_plugin() {
 upgrade_npm_global_packages() {
     # Initialize mise for current session (provides npm if Node.js is installed)
     if command -v mise &> /dev/null; then
-        eval "$(mise activate bash)"
+        local mise_activation
+        mise_activation=$(mise activate bash || true)
+        eval "${mise_activation}"
     fi
 
     # Make sure npm is available
@@ -1859,11 +1884,11 @@ main() {
     local log_file
     log_file="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
     exec 3>&1
-    exec > >(tee -a "${log_file}") 2>&1
+    exec > >({ tee -a "${log_file}" || true; }) 2>&1
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 42 | Last changed: Install gcloud on work machines${NC}"
+    echo -e "${GRAY}Version 43 | Last changed: Update gcloud components and fix shellcheck${NC}"
 
     # Create placeholder env file early (migrates old token files if present)
     create_env_local

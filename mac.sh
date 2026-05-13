@@ -310,7 +310,7 @@ fix_zsh_compaudit() {
     # Ensure user owns the Homebrew zsh directories (required for brew upgrade)
     # This may need sudo if root currently owns them
     local current_user
-    current_user=$(whoami)
+    current_user=$(whoami || true)
     local zsh_dir="/opt/homebrew/share/zsh"
     local zsh_completions="/opt/homebrew/share/zsh-completions"
 
@@ -343,7 +343,7 @@ install_core_packages() {
     # Ensure required taps are available (some packages have cross-tap dependencies)
     local taps=("libsql/sqld" "tursodatabase/tap")
     for tap in "${taps[@]}"; do
-        if ! brew tap | grep -q "^${tap}$"; then
+        if ! { brew tap || true; } | grep -q "^${tap}$"; then
             print_debug "Tapping ${tap}..."
             brew tap "${tap}" 2>/dev/null || true
         fi
@@ -440,7 +440,7 @@ install_secrets_manager() {
             return
         fi
         print_message "Installing Infisical CLI..."
-        if ! brew tap | grep -q "^infisical/get-cli$"; then
+        if ! { brew tap || true; } | grep -q "^infisical/get-cli$"; then
             brew tap infisical/get-cli 2>/dev/null || true
         fi
         if brew install infisical/get-cli/infisical; then
@@ -454,13 +454,34 @@ install_secrets_manager() {
             return
         fi
         print_message "Installing Doppler CLI..."
-        if ! brew tap | grep -q "^dopplerhq/cli$"; then
+        if ! { brew tap || true; } | grep -q "^dopplerhq/cli$"; then
             brew tap dopplerhq/cli 2>/dev/null || true
         fi
         if brew install dopplerhq/cli/doppler; then
             print_success "Doppler CLI installed."
         else
             print_error "Failed to install Doppler CLI."
+        fi
+    fi
+}
+
+# Update Google Cloud CLI components when the component manager is available.
+update_gcloud_components() {
+    if ! command -v gcloud &>/dev/null; then
+        print_debug "Google Cloud CLI not installed; skipping component update."
+        return
+    fi
+
+    local update_output
+    print_message "Updating Google Cloud CLI components..."
+    if update_output=$(gcloud components update --quiet < /dev/null 2>&1); then
+        print_success "Google Cloud CLI components updated."
+    elif grep -qiE "component manager is disabled|managed by an external package manager" <<< "${update_output}"; then
+        print_debug "Google Cloud CLI components are managed by the package manager; skipping component update."
+    else
+        print_warning "Failed to update Google Cloud CLI components."
+        if [[ -n "${update_output}" ]]; then
+            print_debug "${update_output}"
         fi
     fi
 }
@@ -474,6 +495,7 @@ install_gcloud_cli() {
 
     if command -v gcloud &>/dev/null; then
         print_debug "Google Cloud CLI already installed."
+        update_gcloud_components
         return
     fi
 
@@ -485,6 +507,7 @@ install_gcloud_cli() {
     print_message "Installing Google Cloud CLI..."
     if brew install --cask gcloud-cli; then
         print_success "Google Cloud CLI installed."
+        update_gcloud_components
     else
         print_warning "Failed to install Google Cloud CLI."
     fi
@@ -745,7 +768,7 @@ _install_clt_via_softwareupdate() {
         | grep -o 'Label: Command Line Tools.*' \
         | sed 's/^Label: //' \
         | sort -V \
-        | tail -n1)
+        | tail -n1 || true)
 
     if [[ -z "${clt_label}" ]]; then
         # Fallback: try the '*' wildcard format (older macOS)
@@ -753,7 +776,7 @@ _install_clt_via_softwareupdate() {
             | grep '\* .*Command Line Tools' \
             | sed 's/^[[:space:]]*\* //' \
             | sort -V \
-            | tail -n1)
+            | tail -n1 || true)
     fi
 
     if [[ -z "${clt_label}" ]]; then
@@ -773,12 +796,13 @@ install_homebrew() {
     if ! command -v brew &> /dev/null && [[ ! -x "/opt/homebrew/bin/brew" ]]; then
         print_message "Installing Homebrew..."
         # Cache sudo credentials before running installer (Homebrew needs sudo)
+        # shellcheck disable=SC2024 # sudo must read from the terminal when setup is run via curl|bash.
         sudo -v < /dev/tty 2>/dev/null || true
         # Download the install script first, then run it with stdin from /dev/tty
         # so sudo can prompt if needed. NONINTERACTIVE prevents Homebrew's own
         # "press RETURN" prompt but still allows sudo to work.
         local install_script
-        install_script=$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)
+        install_script=$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh || true)
         NONINTERACTIVE=1 /bin/bash -c "${install_script}" < /dev/tty
         if [[ ! -x "/opt/homebrew/bin/brew" ]]; then
             print_error "Homebrew installation failed."
@@ -790,7 +814,9 @@ install_homebrew() {
     fi
 
     # Always source brew shellenv to ensure PATH is set for the rest of the script
-    eval "$(/opt/homebrew/bin/brew shellenv)"
+    local brew_shellenv
+    brew_shellenv=$(/opt/homebrew/bin/brew shellenv || true)
+    eval "${brew_shellenv}"
 }
 
 # Bootstrap SSH config for secondary users (needed before chezmoi can run)
@@ -911,7 +937,7 @@ set_fish_as_default_shell() {
     # Check the actual configured login shell from the system (not $SHELL which
     # reflects the current session, not the configured default)
     local current_shell
-    current_shell=$(dscl . -read /Users/"$(whoami)" UserShell 2>/dev/null | awk '{print $2}')
+    current_shell=$(dscl . -read /Users/"$(whoami || true)" UserShell 2>/dev/null | awk '{print $2}' || true)
     if [[ "${current_shell}" == "/opt/homebrew/bin/fish" ]]; then
         print_debug "Fish shell is already the default shell."
         return
@@ -983,8 +1009,8 @@ install_claude_code() {
     # Skip installer if already on the latest version
     if command -v claude &> /dev/null; then
         local _installed_version _latest_version
-        _installed_version=$(claude --version 2>/dev/null | head -1 | awk '{print $1}')
-        _latest_version=$(curl -fsSL https://registry.npmjs.org/@anthropic-ai/claude-code/latest 2>/dev/null | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)
+        _installed_version=$(claude --version 2>/dev/null | head -1 | awk '{print $1}' || true)
+        _latest_version=$(curl -fsSL https://registry.npmjs.org/@anthropic-ai/claude-code/latest 2>/dev/null | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
         if [[ -n "${_installed_version}" && -n "${_latest_version}" && "${_installed_version}" == "${_latest_version}" ]]; then
             print_success "Claude Code already at latest version (${_installed_version})."
             return 0
@@ -1105,7 +1131,7 @@ ensure_pi_node_runtime() {
     local _runtime="node@24"
 
     if pi_node_runtime_ready; then
-        print_debug "Node.js $(node --version) is ready for Pi."
+        print_debug "Node.js $(node --version || true) is ready for Pi."
         return 0
     fi
 
@@ -1141,7 +1167,7 @@ ensure_pi_node_runtime() {
     fi
 
     if pi_node_runtime_ready; then
-        print_success "Node.js $(node --version) is ready for Pi."
+        print_success "Node.js $(node --version || true) is ready for Pi."
         return 0
     fi
 
@@ -1217,7 +1243,7 @@ install_pi_cli() {
 
     hash -r 2>/dev/null || true
 
-    if bun pm ls -g 2>/dev/null | grep -Fq "${_old_package}"; then
+    if { bun pm ls -g 2>/dev/null || true; } | grep -Fq "${_old_package}"; then
         print_message "Removing deprecated Pi package ${_old_package}..."
         if bun remove -g "${_old_package}"; then
             hash -r 2>/dev/null || true
@@ -1486,7 +1512,7 @@ remove_matt_pocock_pi_skills() {
                     _failed+=("${_skill}")
                 fi
             fi
-        done < <(matt_pocock_pi_skills)
+        done < <(matt_pocock_pi_skills || true)
     done
 
     if [[ "${#_failed[@]}" -gt 0 ]]; then
@@ -1540,7 +1566,7 @@ setup_matt_pocock_pi_skills() {
 
     while IFS= read -r _skill; do
         _args+=(--skill "${_skill}")
-    done < <(matt_pocock_pi_skills)
+    done < <(matt_pocock_pi_skills || true)
 
     print_message "Installing/updating Matt Pocock Pi skills..."
     if _output=$(npx "${_args[@]}" 2>&1); then
@@ -1558,14 +1584,14 @@ setup_matt_pocock_pi_skills() {
                 else
                     _sync_failed+=("${_skill}")
                 fi
-            done < <(matt_pocock_pi_skills)
+            done < <(matt_pocock_pi_skills || true)
         fi
 
         while IFS= read -r _skill; do
             if [[ ! -f "${_skills_dir}/${_skill}/SKILL.md" ]]; then
                 _missing+=("${_skill}")
             fi
-        done < <(matt_pocock_pi_skills)
+        done < <(matt_pocock_pi_skills || true)
 
         if [[ "${#_sync_failed[@]}" -gt 0 ]]; then
             print_warning "Matt Pocock Pi skills installed, but failed to sync to active Pi dir ${_agent_dir}: ${_sync_failed[*]}"
@@ -1724,8 +1750,8 @@ install_ccgram() {
     # Restart ccgram if version changed (macOS: kill process, runloop will restart it)
     local new_version=""
     new_version=$(ccgram --version 2>/dev/null || echo "")
-    if [[ -n "$old_version" && "$old_version" != "$new_version" ]]; then
-        print_message "ccgram upgraded ($old_version -> $new_version), restarting..."
+    if [[ -n "${old_version}" && "${old_version}" != "${new_version}" ]]; then
+        print_message "ccgram upgraded (${old_version} -> ${new_version}), restarting..."
         pkill -f "ccgram" 2>/dev/null || true
         print_success "ccgram process signaled to restart."
     fi
@@ -1920,7 +1946,7 @@ upload_log() {
 }
 
 install_betterdisplay() {
-    if [[ "${HEADLESS}" != "1" ]]; then
+    if [[ "${HEADLESS:-}" != "1" ]]; then
         return
     fi
 
@@ -1938,7 +1964,7 @@ install_betterdisplay() {
 }
 
 configure_power_settings() {
-    if [[ "${HEADLESS}" != "1" ]]; then
+    if [[ "${HEADLESS:-}" != "1" ]]; then
         return
     fi
 
@@ -1952,31 +1978,31 @@ configure_power_settings() {
     local changed=false
 
     # Disable system sleep (0 = never sleep)
-    if [[ "$(sudo pmset -g custom 2>/dev/null | awk '/^ sleep/{print $2; exit}')" != "0" ]]; then
+    if [[ "$(sudo pmset -g custom 2>/dev/null | awk '/^ sleep/{print $2; exit}' || true)" != "0" ]]; then
         sudo pmset -a sleep 0
         changed=true
     fi
 
     # Disable display sleep
-    if [[ "$(sudo pmset -g custom 2>/dev/null | awk '/^ displaysleep/{print $2; exit}')" != "0" ]]; then
+    if [[ "$(sudo pmset -g custom 2>/dev/null | awk '/^ displaysleep/{print $2; exit}' || true)" != "0" ]]; then
         sudo pmset -a displaysleep 0
         changed=true
     fi
 
     # Disable hard disk sleep
-    if [[ "$(sudo pmset -g custom 2>/dev/null | awk '/^ disksleep/{print $2; exit}')" != "0" ]]; then
+    if [[ "$(sudo pmset -g custom 2>/dev/null | awk '/^ disksleep/{print $2; exit}' || true)" != "0" ]]; then
         sudo pmset -a disksleep 0
         changed=true
     fi
 
     # Restart automatically after a power failure
-    if [[ "$(sudo pmset -g custom 2>/dev/null | awk '/^ autorestart/{print $2; exit}')" != "1" ]]; then
+    if [[ "$(sudo pmset -g custom 2>/dev/null | awk '/^ autorestart/{print $2; exit}' || true)" != "1" ]]; then
         sudo pmset -a autorestart 1
         changed=true
     fi
 
     # Wake on network access (for SSH/remote access)
-    if [[ "$(sudo pmset -g custom 2>/dev/null | awk '/^ womp/{print $2; exit}')" != "1" ]]; then
+    if [[ "$(sudo pmset -g custom 2>/dev/null | awk '/^ womp/{print $2; exit}' || true)" != "1" ]]; then
         sudo pmset -a womp 1
         changed=true
     fi
@@ -1989,7 +2015,7 @@ configure_power_settings() {
 }
 
 enable_screen_sharing() {
-    if [[ "${HEADLESS}" != "1" ]]; then
+    if [[ "${HEADLESS:-}" != "1" ]]; then
         return
     fi
 
@@ -2012,17 +2038,18 @@ enable_screen_sharing() {
     local kickstart="/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
     local tmpfile
     tmpfile=$(mktemp)
-    sudo "$kickstart" -activate &>"$tmpfile" &
+    # shellcheck disable=SC2024 # Capture kickstart output in a user-writable temp file.
+    sudo "${kickstart}" -activate &>"${tmpfile}" &
     local pid=$!
-    ( sleep 10 && kill "$pid" 2>/dev/null ) &
+    ( sleep 10 && kill "${pid}" 2>/dev/null ) &
     local watchdog=$!
-    wait "$pid" 2>/dev/null
-    kill "$watchdog" 2>/dev/null
-    wait "$watchdog" 2>/dev/null
+    wait "${pid}" 2>/dev/null
+    kill "${watchdog}" 2>/dev/null
+    wait "${watchdog}" 2>/dev/null
     local kickstart_output
-    kickstart_output=$(cat "$tmpfile")
-    rm -f "$tmpfile"
-    if echo "$kickstart_output" | grep -q "must be enabled from System Settings"; then
+    kickstart_output=$(cat "${tmpfile}")
+    rm -f "${tmpfile}"
+    if echo "${kickstart_output}" | grep -q "must be enabled from System Settings"; then
         print_error "Screen Sharing is NOT properly enabled."
         print_error "The launchd job is loaded but macOS requires manual GUI enablement:"
         print_error "  1. Open System Settings → General → Sharing"
@@ -2036,14 +2063,15 @@ enable_screen_sharing() {
     # Without this, authentication succeeds but authorization fails with privilege level 0,
     # which macOS displays as an incorrect password shake.
     print_message "Configuring Screen Sharing privileges..."
-    sudo "$kickstart" -configure -allowAccessFor -allUsers -privs -all -restart -agent &>"$tmpfile" &
+    # shellcheck disable=SC2024 # Capture kickstart output in a user-writable temp file.
+    sudo "${kickstart}" -configure -allowAccessFor -allUsers -privs -all -restart -agent &>"${tmpfile}" &
     pid=$!
-    ( sleep 10 && kill "$pid" 2>/dev/null ) &
+    ( sleep 10 && kill "${pid}" 2>/dev/null ) &
     watchdog=$!
-    wait "$pid" 2>/dev/null
-    kill "$watchdog" 2>/dev/null
-    wait "$watchdog" 2>/dev/null
-    rm -f "$tmpfile"
+    wait "${pid}" 2>/dev/null
+    kill "${watchdog}" 2>/dev/null
+    wait "${watchdog}" 2>/dev/null
+    rm -f "${tmpfile}"
     print_debug "Screen Sharing is enabled and accepting connections."
 }
 
@@ -2054,13 +2082,13 @@ main() {
     local log_file
     log_file="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
     exec 3>&1
-    exec > >(tee -a "${log_file}") 2>&1
+    exec > >({ tee -a "${log_file}" || true; }) 2>&1
     print_debug "Logging to ${log_file}"
 
     # Run the setup tasks
-    current_user=$(whoami)
+    current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 164 | Last changed: Install gcloud on work machines${NC}"
+    echo -e "${GRAY}Version 165 | Last changed: Update gcloud components and fix shellcheck${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
