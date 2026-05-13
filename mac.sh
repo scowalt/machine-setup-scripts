@@ -72,6 +72,7 @@ create_env_local() {
 # BAN_PI_SUBAGENTS=1
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
+# BAN_RTK=1
 EOF
         chmod 600 "${HOME}/.env.local"
         print_debug "Created placeholder ~/.env.local"
@@ -1120,6 +1121,117 @@ install_codex_cli() {
     fi
 }
 
+
+# Verify the installed rtk is Rust Token Killer, not the unrelated Rust Type Kit.
+rtk_cli_ready() {
+    command -v rtk &> /dev/null && rtk gain > /dev/null 2>&1
+}
+
+# Install RTK (Rust Token Killer) for token-optimized agent command output.
+install_rtk_cli() {
+    if [[ "${BAN_RTK:-}" == "1" ]]; then
+        print_debug "BAN_RTK=1, skipping RTK setup."
+        return
+    fi
+
+    export PATH="${HOME}/.local/bin:${PATH}"
+
+    local had_rtk=0
+    if rtk_cli_ready; then
+        had_rtk=1
+        print_message "Updating RTK CLI..."
+    elif command -v rtk &> /dev/null; then
+        print_warning "An rtk command exists, but it does not look like Rust Token Killer. Installing the rtk-ai binary to ~/.local/bin."
+    else
+        print_message "Installing RTK CLI..."
+    fi
+
+    local install_script
+    if ! install_script=$(curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh 2>&1); then
+        if [[ "${had_rtk}" == "1" ]]; then
+            print_warning "Failed to update RTK CLI; existing install remains available."
+        else
+            print_warning "Failed to download RTK installer."
+        fi
+        print_debug "${install_script}"
+        return
+    fi
+
+    local install_output
+    if install_output=$(RTK_INSTALL_DIR="${HOME}/.local/bin" sh -c "${install_script}" 2>&1); then
+        hash -r 2>/dev/null || true
+        if rtk_cli_ready; then
+            print_success "RTK CLI installed/updated."
+        else
+            print_warning "RTK installer completed, but 'rtk gain' did not verify the expected binary."
+            print_debug "${install_output}"
+        fi
+    else
+        if [[ "${had_rtk}" == "1" ]]; then
+            print_warning "Failed to update RTK CLI; existing install remains available."
+        else
+            print_warning "Failed to install RTK CLI."
+        fi
+        print_debug "${install_output}"
+    fi
+}
+
+# Configure RTK integrations for installed AI agents. Non-fatal by design.
+setup_rtk_integrations() {
+    if [[ "${BAN_RTK:-}" == "1" ]]; then
+        print_debug "BAN_RTK=1, skipping RTK integrations."
+        return
+    fi
+
+    export PATH="${HOME}/.local/bin:${PATH}"
+
+    if ! rtk_cli_ready; then
+        print_warning "RTK CLI is not available; skipping RTK integrations."
+        return
+    fi
+
+    # Automated setup should not prompt for telemetry consent. Users can opt in later with `rtk telemetry enable`.
+    rtk telemetry disable > /dev/null 2>&1 || true
+
+    local init_output
+
+    if command -v claude &> /dev/null; then
+        print_message "Configuring RTK for Claude Code..."
+        if init_output=$(rtk init -g --auto-patch < /dev/null 2>&1); then
+            print_success "RTK configured for Claude Code."
+        else
+            print_warning "Failed to configure RTK for Claude Code."
+            print_debug "${init_output}"
+        fi
+    else
+        print_debug "Claude Code not installed; skipping RTK Claude integration."
+    fi
+
+    if command -v gemini &> /dev/null; then
+        print_message "Configuring RTK for Gemini CLI..."
+        if init_output=$(rtk init -g --gemini --auto-patch < /dev/null 2>&1); then
+            print_success "RTK configured for Gemini CLI."
+        else
+            print_warning "Failed to configure RTK for Gemini CLI."
+            print_debug "${init_output}"
+        fi
+    else
+        print_debug "Gemini CLI not installed; skipping RTK Gemini integration."
+    fi
+
+    if command -v codex &> /dev/null; then
+        print_message "Configuring RTK for Codex CLI..."
+        if init_output=$(rtk init -g --codex < /dev/null 2>&1); then
+            print_success "RTK configured for Codex CLI."
+        else
+            print_warning "Failed to configure RTK for Codex CLI."
+            print_debug "${init_output}"
+        fi
+    else
+        print_debug "Codex CLI not installed; skipping RTK Codex integration."
+    fi
+}
+
 # Check whether the active Node.js runtime can run current Pi packages.
 pi_node_runtime_ready() {
     command -v node &> /dev/null || return 1
@@ -2088,7 +2200,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 165 | Last changed: Update gcloud components and fix shellcheck${NC}"
+    echo -e "${GRAY}Version 166 | Last changed: Install and initialize RTK CLI${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -2253,6 +2365,8 @@ HELPER_EOF
 
     install_gemini_cli
     install_codex_cli
+    install_rtk_cli
+    setup_rtk_integrations
     if matt_pocock_pi_skills_disabled; then
         setup_matt_pocock_pi_skills
     fi
