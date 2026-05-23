@@ -670,21 +670,6 @@ function Setup-RtkIntegrations {
     # Automated setup should not prompt for telemetry consent. Users can opt in later with `rtk telemetry enable`.
     & rtk telemetry disable *> $null
 
-    if (Get-Command claude -ErrorAction SilentlyContinue) {
-        Write-Message "Configuring RTK for Claude Code..."
-        $output = & rtk init -g --auto-patch 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Success "RTK configured for Claude Code."
-        }
-        else {
-            Write-Warning "Failed to configure RTK for Claude Code."
-            if ($output) { Write-Debug ($output | Out-String) }
-        }
-    }
-    else {
-        Write-Debug "Claude Code not installed; skipping RTK Claude integration."
-    }
-
     if (Get-Command gemini -ErrorAction SilentlyContinue) {
         Write-Debug "Native Windows RTK Gemini hook setup is Unix-shell based; use WSL for transparent Gemini rewrites."
     }
@@ -1314,7 +1299,7 @@ function Setup-MattPocockPiSkills {
 }
 
 
-# Function to remove Claude-only AskUserQuestion references from Compound Engineering files installed for Pi
+# Function to remove unsupported AskUserQuestion references from Compound Engineering files installed for Pi
 function Sanitize-PiCompoundEngineeringForPi {
     param([string]$AgentDir)
 
@@ -1350,16 +1335,16 @@ function Sanitize-PiCompoundEngineeringForPi {
 
         $original = $text
         $text = $text -replace '(?m)^[ \t]*-[ \t]*AskUserQuestion\r?\n', ''
-        $text = $text -replace '`AskUserQuestion` in Claude Code with `ToolSearch select:AskUserQuestion` pre-loaded if needed,\s*', ''
-        $text = $text -replace '`AskUserQuestion` in Claude Code — call `ToolSearch` with `select:AskUserQuestion`[^;]*;\s*', ''
-        $text = $text -replace '`AskUserQuestion` in Claude Code \(call `ToolSearch` with `select:AskUserQuestion`[^)]*\),\s*', ''
-        $text = $text -replace '`AskUserQuestion` in Claude Code,\s*', ''
-        $text = $text -replace '`AskUserQuestion` in Claude Code\s*', ''
-        $text = $text -replace '\s*\*\*Claude Code only:\*\* if `AskUserQuestion`[^\r\n.]*\.[ \t]*', ' '
-        $text = $text -replace '\s*In Claude Code,? call `ToolSearch` with `select:AskUserQuestion`[^\r\n.]*\.[ \t]*', ' '
-        $text = $text -replace '\s*In Claude Code,? the tool should already be loaded[^\r\n.]*`ToolSearch`[^\r\n.]*\.[ \t]*', ' '
-        $text = $text -replace '\s*In Claude Code the tool should already be loaded[^\r\n.]*`ToolSearch`[^\r\n.]*\.[ \t]*', ' '
-        $text = $text -replace '\s*In Claude Code[^\r\n.]*`select:AskUserQuestion`[^\r\n.]*\.[ \t]*', ' '
+        $text = $text -replace '`AskUserQuestion` in [^,;.]* with `ToolSearch select:AskUserQuestion` pre-loaded if needed,\s*', ''
+        $text = $text -replace '`AskUserQuestion` in [^,;.]* — call `ToolSearch` with `select:AskUserQuestion`[^;]*;\s*', ''
+        $text = $text -replace '`AskUserQuestion` in [^,;.]* \(call `ToolSearch` with `select:AskUserQuestion`[^)]*\),\s*', ''
+        $text = $text -replace '`AskUserQuestion` in [^,;.]*,\s*', ''
+        $text = $text -replace '`AskUserQuestion` in [^,;.]*\s*', ''
+        $text = $text -replace '\s*\*\*[^*]* only:\*\* if `AskUserQuestion`[^\r\n.]*\.[ \t]*', ' '
+        $text = $text -replace '\s*In [^,\r\n.]*,? call `ToolSearch` with `select:AskUserQuestion`[^\r\n.]*\.[ \t]*', ' '
+        $text = $text -replace '\s*In [^,\r\n.]*,? the tool should already be loaded[^\r\n.]*`ToolSearch`[^\r\n.]*\.[ \t]*', ' '
+        $text = $text -replace '\s*In [^\r\n.]* the tool should already be loaded[^\r\n.]*`ToolSearch`[^\r\n.]*\.[ \t]*', ' '
+        $text = $text -replace '\s*In [^\r\n.]*`select:AskUserQuestion`[^\r\n.]*\.[ \t]*', ' '
         $text = $text -replace '\s*At the start of Interactive-mode work[^\r\n.]*`select:AskUserQuestion`[^\r\n.]*\.[ \t]*', ' '
         $text = $text -replace '\s*Load it \*\*once[^\r\n.]*\.[ \t]*', ' '
         $text = $text -replace '`ToolSearch` returns no match, the tool call explicitly fails, or', 'the tool call is unavailable, errors, or'
@@ -1444,102 +1429,6 @@ function Setup-PiCompoundEngineering {
     }
     else {
         Write-Host "$warnIcon Failed to install Compound Engineering for Pi: $output" -ForegroundColor Yellow
-    }
-}
-
-# Function to install Claude Code using official installer
-function Install-ClaudeCode {
-    # Uninstall any existing npm/bun versions to clean up
-    if (Get-Command npm -ErrorAction SilentlyContinue) {
-        $npmList = npm list -g @anthropic-ai/claude-code 2>$null
-        if ($npmList -match "@anthropic-ai/claude-code") {
-            Write-Host "$arrow Removing npm-based Claude Code installation..." -ForegroundColor Cyan
-            npm uninstall -g @anthropic-ai/claude-code 2>$null
-        }
-    }
-
-    if (Get-Command bun -ErrorAction SilentlyContinue) {
-        $bunList = bun pm ls -g 2>$null
-        if ($bunList -match "@anthropic-ai/claude-code") {
-            Write-Host "$arrow Removing bun-based Claude Code installation..." -ForegroundColor Cyan
-            bun remove -g @anthropic-ai/claude-code 2>$null
-        }
-    }
-
-    # Clean up stale lock files
-    $lockPath = Join-Path $env:LOCALAPPDATA "claude\locks"
-    if (Test-Path $lockPath) {
-        Remove-Item $lockPath -Recurse -Force -ErrorAction SilentlyContinue
-    }
-
-    # Skip if native version already installed
-    $nativePath = Join-Path $env:USERPROFILE ".local\bin\claude.exe"
-    if (Test-Path $nativePath) {
-        Write-Debug "Claude Code is already installed (native)."
-        return
-    }
-
-    Write-Host "$arrow Installing Claude Code via official installer..." -ForegroundColor Cyan
-    try {
-        irm https://claude.ai/install.ps1 | iex
-        Write-Host "$success Claude Code installed." -ForegroundColor Green
-    }
-    catch {
-        Write-Host "$failIcon Failed to install Claude Code: $($_.Exception.Message)" -ForegroundColor Red
-    }
-}
-
-function Setup-CompoundPlugin {
-    if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-        Write-Debug "Claude Code not found. Skipping Compound plugin setup."
-        return
-    }
-
-    if (Test-EnvLocalFlag "BAN_COMPOUND_PLUGIN") {
-        $pluginList = claude plugin list 2>$null
-        if ($pluginList -match "compound-engineering") {
-            Write-Host "$arrow BAN_COMPOUND_PLUGIN=1, uninstalling Compound Engineering plugin..." -ForegroundColor Cyan
-            $output = claude plugin uninstall compound-engineering@compound-engineering-plugin 2>&1
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "$success Compound Engineering plugin uninstalled." -ForegroundColor Green
-            }
-            else {
-                Write-Host "$warnIcon Failed to uninstall Compound Engineering plugin: $output" -ForegroundColor Yellow
-            }
-        }
-        else {
-            Write-Debug "BAN_COMPOUND_PLUGIN=1, Compound Engineering not installed."
-        }
-        return
-    }
-
-    # Ensure marketplace is registered (idempotent, needed for updates too)
-    $output = claude plugin marketplace add EveryInc/compound-engineering-plugin 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "$warnIcon Failed to register Compound Engineering marketplace: $output" -ForegroundColor Yellow
-    }
-
-    # Update if already installed, install if not
-    $pluginList = claude plugin list 2>$null
-    if ($pluginList -match "compound-engineering") {
-        Write-Host "$arrow Updating Compound Engineering plugin..." -ForegroundColor Cyan
-        $output = claude plugin update compound-engineering@compound-engineering-plugin 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "$success Compound Engineering plugin updated." -ForegroundColor Green
-        }
-        else {
-            Write-Host "$warnIcon Failed to update Compound Engineering plugin: $output" -ForegroundColor Yellow
-        }
-    }
-    else {
-        Write-Host "$arrow Installing Compound Engineering plugin..." -ForegroundColor Cyan
-        $output = claude plugin install compound-engineering --scope user 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "$success Compound Engineering plugin installed." -ForegroundColor Green
-        }
-        else {
-            Write-Host "$warnIcon Failed to install Compound Engineering plugin: $output" -ForegroundColor Yellow
-        }
     }
 }
 
@@ -1699,7 +1588,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 97 | Last changed: Install and initialize RTK CLI" -ForegroundColor DarkGray
+    Write-Host "Version 98 | Last changed: Remove retired AI agent setup" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -1737,9 +1626,6 @@ function Initialize-WindowsEnvironment {
     
     Write-Section "Additional Development Tools"
     Install-SocketFirewall
-    Install-ClaudeCode
-    Setup-CompoundPlugin
-
     Install-GeminiCli
     Install-CodexCli
     Install-RtkCli

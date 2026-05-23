@@ -561,96 +561,7 @@ set_fish_as_default_shell() {
     print_success "Fish shell set as default."
 }
 
-# Install Claude Code using bun
-install_claude_code() {
-    # Uninstall any existing npm/bun versions to clean up
-    if command -v npm &> /dev/null; then
-        if npm list -g @anthropic-ai/claude-code &> /dev/null 2>&1; then
-            print_message "Removing npm-based Claude Code installation..."
-            npm uninstall -g @anthropic-ai/claude-code 2>/dev/null || true
-        fi
-    fi
 
-    if [[ -d "${HOME}/.bun" ]]; then
-        export PATH="${HOME}/.bun/bin:${PATH}"
-    fi
-
-    if command -v bun &> /dev/null; then
-        local _bun_global_list
-        _bun_global_list=$(bun pm ls -g 2>/dev/null) || true
-        if echo "${_bun_global_list}" | grep -q "@anthropic-ai/claude-code"; then
-            print_message "Removing bun-based Claude Code installation..."
-            bun remove -g @anthropic-ai/claude-code 2>/dev/null || true
-        fi
-    fi
-
-    # Clean up stale lock files
-    rm -rf "${HOME}/.local/state/claude/locks" 2>/dev/null
-
-    # Skip installer if already on the latest version
-    if command -v claude &> /dev/null; then
-        local _installed_version _latest_version
-        _installed_version=$(claude --version 2>/dev/null | head -1 | awk '{print $1}' || true)
-        _latest_version=$(curl -fsSL https://registry.npmjs.org/@anthropic-ai/claude-code/latest 2>/dev/null | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
-        if [[ -n "${_installed_version}" && -n "${_latest_version}" && "${_installed_version}" == "${_latest_version}" ]]; then
-            print_success "Claude Code already at latest version (${_installed_version})."
-            return 0
-        else
-            print_message "Claude Code update available: ${_installed_version:-unknown} → ${_latest_version:-unknown}"
-        fi
-    fi
-
-    print_message "Installing/updating Claude Code via official installer..."
-    local _claude_install_script
-    _claude_install_script=$(curl -fsSL https://claude.ai/install.sh)
-    if bash <<< "${_claude_install_script}"; then
-        print_success "Claude Code installed/updated."
-    else
-        print_error "Failed to install Claude Code."
-        return 1
-    fi
-}
-
-# Install Compound Engineering plugin for Claude Code
-setup_compound_plugin() {
-    if ! command -v claude &> /dev/null; then
-        print_debug "Claude Code not found. Skipping Compound plugin setup."
-        return 0
-    fi
-
-    if [[ "${BAN_COMPOUND_PLUGIN:-}" == "1" ]]; then
-        local _claude_plugin_list
-        _claude_plugin_list=$(claude plugin list 2>/dev/null) || true
-        if echo "${_claude_plugin_list}" | grep -q "compound-engineering@"; then
-            print_message "BAN_COMPOUND_PLUGIN=1, uninstalling Compound Engineering plugin..."
-            local _output
-            if _output=$(claude plugin uninstall compound-engineering@compound-engineering-plugin 2>&1); then
-                print_success "Compound Engineering plugin uninstalled."
-            else
-                print_warning "Failed to uninstall Compound Engineering plugin: ${_output}"
-            fi
-        else
-            print_debug "BAN_COMPOUND_PLUGIN=1, Compound Engineering not installed."
-        fi
-        return 0
-    fi
-
-    # Ensure marketplace is registered
-    local _output
-    if ! _output=$(claude plugin marketplace add EveryInc/compound-engineering-plugin 2>&1); then
-        print_warning "Failed to register Compound Engineering marketplace: ${_output}"
-    fi
-
-    # Try install first (succeeds if not installed), then update (succeeds if already installed)
-    print_message "Installing/updating Compound Engineering plugin..."
-    if _output=$(claude plugin install compound-engineering --scope user 2>&1); then
-        print_success "Compound Engineering plugin installed."
-    elif _output=$(claude plugin update compound-engineering@compound-engineering-plugin 2>&1); then
-        print_success "Compound Engineering plugin updated."
-    else
-        print_warning "Failed to install/update Compound Engineering plugin: ${_output}"
-    fi
-}
 
 # Install packages via Homebrew
 install_brew_packages() {
@@ -800,18 +711,6 @@ setup_rtk_integrations() {
     rtk telemetry disable > /dev/null 2>&1 || true
 
     local init_output
-
-    if command -v claude &> /dev/null; then
-        print_message "Configuring RTK for Claude Code..."
-        if init_output=$(rtk init -g --auto-patch < /dev/null 2>&1); then
-            print_success "RTK configured for Claude Code."
-        else
-            print_warning "Failed to configure RTK for Claude Code."
-            print_debug "${init_output}"
-        fi
-    else
-        print_debug "Claude Code not installed; skipping RTK Claude integration."
-    fi
 
     if command -v gemini &> /dev/null; then
         print_message "Configuring RTK for Gemini CLI..."
@@ -1324,23 +1223,23 @@ setup_matt_pocock_pi_skills() {
 }
 
 
-# Remove Claude-only AskUserQuestion references from Compound Engineering files installed for Pi.
+# Remove unsupported AskUserQuestion references from Compound Engineering files installed for Pi.
 sanitize_pi_compound_engineering_for_pi() {
     local _agent_dir="${1:-${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}}"
     local _skills_dir="${_agent_dir}/skills"
     # shellcheck disable=SC2016
     local _perl_expr='
 s/^[ \t]*-[ \t]*AskUserQuestion\r?\n//mg;
-s/`AskUserQuestion` in Claude Code with `ToolSearch select:AskUserQuestion` pre-loaded if needed,[ \t]*//g;
-s/`AskUserQuestion` in Claude Code — call `ToolSearch` with `select:AskUserQuestion`[^;]*;[ \t]*//g;
-s/`AskUserQuestion` in Claude Code \(call `ToolSearch` with `select:AskUserQuestion`[^)]*\),[ \t]*//g;
-s/`AskUserQuestion` in Claude Code,[ \t]*//g;
-s/`AskUserQuestion` in Claude Code[ \t]*//g;
-s/[ \t]*\*\*Claude Code only:\*\* if `AskUserQuestion`[^\n.]*\.[ \t]*/ /g;
-s/[ \t]*In Claude Code,? call `ToolSearch` with `select:AskUserQuestion`[^\n.]*\.[ \t]*/ /g;
-s/[ \t]*In Claude Code,? the tool should already be loaded[^\n.]*`ToolSearch`[^\n.]*\.[ \t]*/ /g;
-s/[ \t]*In Claude Code the tool should already be loaded[^\n.]*`ToolSearch`[^\n.]*\.[ \t]*/ /g;
-s/[ \t]*In Claude Code[^\n.]*`select:AskUserQuestion`[^\n.]*\.[ \t]*/ /g;
+s/`AskUserQuestion` in [^,;.]* with `ToolSearch select:AskUserQuestion` pre-loaded if needed,[ \t]*//g;
+s/`AskUserQuestion` in [^,;.]* — call `ToolSearch` with `select:AskUserQuestion`[^;]*;[ \t]*//g;
+s/`AskUserQuestion` in [^,;.]* \(call `ToolSearch` with `select:AskUserQuestion`[^)]*\),[ \t]*//g;
+s/`AskUserQuestion` in [^,;.]*,[ \t]*//g;
+s/`AskUserQuestion` in [^,;.]*[ \t]*//g;
+s/[ \t]*\*\*[^*]* only:\*\* if `AskUserQuestion`[^\n.]*\.[ \t]*/ /g;
+s/[ \t]*In [^,\n.]*,? call `ToolSearch` with `select:AskUserQuestion`[^\n.]*\.[ \t]*/ /g;
+s/[ \t]*In [^,\n.]*,? the tool should already be loaded[^\n.]*`ToolSearch`[^\n.]*\.[ \t]*/ /g;
+s/[ \t]*In [^,\n.]* the tool should already be loaded[^\n.]*`ToolSearch`[^\n.]*\.[ \t]*/ /g;
+s/[ \t]*In [^\n.]*`select:AskUserQuestion`[^\n.]*\.[ \t]*/ /g;
 s/[ \t]*At the start of Interactive-mode work[^\n.]*`select:AskUserQuestion`[^\n.]*\.[ \t]*/ /g;
 s/[ \t]*Load it \*\*once[^\n.]*\.[ \t]*/ /g;
 s/`ToolSearch` returns no match, the tool call explicitly fails, or/the tool call is unavailable, errors, or/g;
@@ -1474,16 +1373,6 @@ install_ccgram() {
     else
         print_error "Failed to install ccgram."
         return 1
-    fi
-
-    # Register Claude Code hooks for auto-detection and interactive UI
-    if command -v ccgram &> /dev/null && command -v claude &> /dev/null; then
-        print_message "Installing ccgram hooks..."
-        if ccgram hook --install; then
-            print_success "ccgram hooks installed."
-        else
-            print_warning "Failed to install ccgram hooks."
-        fi
     fi
 
     # Enable and manage ccgram systemd service
@@ -2003,65 +1892,6 @@ upgrade_npm_global_packages() {
     fi
 }
 
-# Setup shared /tmp/claude directory for multi-user Claude Code access
-setup_claude_shared_directory() {
-    local claude_tmp="/tmp/claude"
-
-    print_message "Setting up shared Claude Code temp directory..."
-
-    if [[ -d "${claude_tmp}" ]]; then
-        # Check current permissions (Linux stat syntax)
-        local current_perms
-        current_perms=$(stat -c "%a" "${claude_tmp}" 2>/dev/null)
-
-        if [[ "${current_perms}" == "1777" ]]; then
-            print_debug "Claude temp directory already has correct permissions."
-            return 0
-        fi
-
-        # Try to fix permissions
-        print_message "Fixing permissions on ${claude_tmp}..."
-
-        local owner_uid
-        owner_uid=$(stat -c "%u" "${claude_tmp}" 2>/dev/null)
-
-        local current_uid
-        current_uid=$(id -u)
-        if [[ "${owner_uid}" == "${current_uid}" ]]; then
-            if chmod 1777 "${claude_tmp}"; then
-                print_success "Fixed permissions on Claude temp directory."
-                return 0
-            fi
-        fi
-
-        if can_sudo; then
-            if sudo chmod 1777 "${claude_tmp}"; then
-                print_success "Fixed permissions on Claude temp directory (with sudo)."
-                return 0
-            fi
-        fi
-
-        print_warning "Cannot fix permissions on ${claude_tmp}."
-        print_debug "Ask an admin to run: sudo chmod 1777 ${claude_tmp}"
-        return 0
-    else
-        if mkdir -p "${claude_tmp}" && chmod 1777 "${claude_tmp}"; then
-            print_success "Created shared Claude temp directory."
-            return 0
-        fi
-
-        if can_sudo; then
-            if sudo mkdir -p "${claude_tmp}" && sudo chmod 1777 "${claude_tmp}"; then
-                print_success "Created shared Claude temp directory (with sudo)."
-                return 0
-            fi
-        fi
-
-        print_warning "Cannot create ${claude_tmp}."
-        print_debug "Ask an admin to run: sudo mkdir -p ${claude_tmp} && sudo chmod 1777 ${claude_tmp}"
-        return 0
-    fi
-}
 
 # Setup ~/Code directory
 setup_code_directory() {
@@ -2102,7 +1932,7 @@ main() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 136 | Last changed: Install and initialize RTK CLI${NC}"
+    echo -e "${GRAY}Version 137 | Last changed: Remove retired AI agent setup${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -2153,8 +1983,6 @@ main() {
     setup_unattended_upgrades
 
     print_section "Shared Directories"
-    setup_claude_shared_directory
-
     print_section "Dotfiles Management"
 
     # Check if we have access (via SSH or deploy key)
@@ -2183,8 +2011,6 @@ main() {
     install_iterm2_shell_integration
 
     print_section "Additional Development Tools"
-    install_claude_code
-    setup_compound_plugin
     install_gemini_cli
     install_codex_cli
     install_rtk_cli
