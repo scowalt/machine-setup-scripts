@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI coding agents working with code in this repository.
 
 ## Repository Overview
 
@@ -73,8 +73,8 @@ All scripts follow a consistent pattern:
 - Dotfiles: Chezmoi (with auto-sync)
 - Terminal: Starship prompt
 - CI/CD: act (local GitHub Actions)
-- AI agents: Claude Code, Gemini CLI, Codex CLI, Pi coding agent, RTK token optimizer
-- Agent skills/plugins: Compound Engineering is installed for Claude Code and Pi on personal machines; Matt Pocock engineering skills are installed for Pi on personal machines. RTK is installed for all machines and initialized for supported agents when available. Work machines install Google Cloud CLI and update its components when the component manager is available. Skip Compound with `WORK_MACHINE=1` or `BAN_COMPOUND_PLUGIN=1`; skip Matt Pocock skills with `WORK_MACHINE=1` or `BAN_MATT_POCOCK_SKILLS=1`; skip RTK with `BAN_RTK=1` in `~/.env.local`
+- AI agents: Gemini CLI, Codex CLI, Pi coding agent, RTK token optimizer
+- Agent skills/plugins: Compound Engineering and Matt Pocock engineering skills are installed for Pi on personal machines. RTK is installed for all machines and initialized for supported agents when available. Work machines install Google Cloud CLI and update its components when the component manager is available. Skip Compound with `WORK_MACHINE=1` or `BAN_COMPOUND_PLUGIN=1`; skip Matt Pocock skills with `WORK_MACHINE=1` or `BAN_MATT_POCOCK_SKILLS=1`; skip RTK with `BAN_RTK=1` in `~/.env.local`
 
 ### Important Notes
 
@@ -146,7 +146,7 @@ Nerd Fonts are patched fonts that include thousands of icons from popular icon s
 
 ### Working with Nerd Font Symbols as an LLM
 
-**IMPORTANT UPDATE**: Claude Code CAN successfully edit files containing Nerd Font symbols and preserve them correctly. The symbols are essential to the visual design.
+**IMPORTANT UPDATE**: AI coding agents can successfully edit files containing Nerd Font symbols and preserve them correctly. The symbols are essential to the visual design.
 
 #### How to handle them
 
@@ -231,7 +231,7 @@ When installing tools that depend on package managers or shell configuration:
 1. **Install package managers first** (Homebrew, fnm, pyenv)
 2. **Apply dotfiles configuration** (chezmoi apply)
 3. **Configure shell** (set default shell, install plugins)
-4. **Install tools that require the configured environment** (e.g., Claude Code via npm)
+4. **Install tools that require the configured environment**
 
 This is critical because tools like fnm are initialized in shell configuration files deployed by chezmoi. Installing npm packages before the shell is configured will fail.
 
@@ -270,7 +270,7 @@ When setup scripts need to use tools installed during the setup process:
 2. **Provide fallback instructions** if the tool isn't available
 3. **Check tool availability** before attempting to use it
 
-Example from Claude Code installation:
+Example pattern for runtime-dependent installs:
 
 ```bash
 # Try to initialize fnm for current session
@@ -278,10 +278,9 @@ if [ -f ~/.config/fish/config.fish ]; then
     eval "$(fnm env --use-on-cd)"
 fi
 
-# Check if npm is now available
+# Check if npm is now available before installing Node-based tools
 if ! command -v npm &> /dev/null; then
-    print_warning "npm not found. Install manually with:"
-    print_message "  npm install -g @anthropic-ai/claude-code"
+    print_warning "npm not found. Install Node-based tools after fnm is ready."
     return
 fi
 ```
@@ -427,52 +426,6 @@ chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"
 4. Script tests the key with retry loop
 5. Chezmoi initializes using the `github-dotfiles` alias
 
-### Claude Remote Control Sessions
-
-The scripts set up persistent Claude Code remote-control sessions that automatically start on boot and watch for configuration changes.
-
-**Architecture**:
-
-1. **Config file**: `~/.claude-remote-projects` - lists project directories (relative to `~/Code/`)
-2. **Helper script**: `~/.local/bin/claude-remote-start` - long-running watcher that manages tmux sessions
-3. **Auto-start**: systemd user service (Linux/WSL) or LaunchAgent (macOS)
-
-**File Watching (Reconciliation Model)**:
-
-The `claude-remote-start` script is a long-running process, not a one-shot script. It:
-
-1. Performs initial reconciliation on startup (starts sessions for config entries, stops orphaned sessions)
-2. Watches `~/.claude-remote-projects` for changes using `inotifywait` (Linux) or `fswatch` (macOS)
-3. On any config change, reconciles again - only starting/stopping sessions that changed
-4. Falls back to 30-second polling if neither file watcher is available
-
-**Reconciliation vs Kill-All-Recreate**:
-
-- Adding a project to the config starts only that project's session (existing sessions are untouched)
-- Removing a project from the config stops only that project's session
-- Existing sessions are never disrupted during reconciliation
-
-**Systemd Service (Linux)**:
-
-```ini
-[Service]
-Type=simple
-ExecStart=%h/.local/bin/claude-remote-start
-Restart=on-failure
-RestartSec=30
-KillMode=process
-```
-
-- `Type=simple` - the watcher stays running (not oneshot)
-- `KillMode=process` - only kills the watcher on stop, tmux sessions survive
-- `Restart=on-failure` - auto-restart if the watcher crashes
-- Service is always restarted on setup script rerun to pick up script changes
-
-**Dependencies**:
-
-- Linux: `inotify-tools` (provides `inotifywait`) - installed via core packages
-- macOS: `fswatch` - installed via Homebrew
-
 ## Development Practices
 
 ### Code Quality Tools
@@ -517,7 +470,7 @@ This repository is configured for maximum error detection with shellcheck:
 - Always run shellcheck on modified shell scripts before committing
 - **IMPORTANT**: Update script version numbers whenever making changes to any script
 - Use descriptive commit messages that explain the "why" not just the "what"
-- Include the robot emoji and Claude Code attribution for AI-assisted commits
+- Include the robot emoji and AI attribution for AI-assisted commits
 
 ### Version Number Management
 
