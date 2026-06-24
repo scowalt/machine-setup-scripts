@@ -1724,40 +1724,6 @@ setup_pi_compound_engineering() {
     fi
 }
 
-# Install/update ccgram (Telegram-to-tmux bridge for AI coding agents)
-install_ccgram() {
-    if ! command -v uv &> /dev/null; then
-        print_warning "uv not found. Cannot install ccgram."
-        return
-    fi
-
-    local old_version=""
-    if command -v ccgram &> /dev/null; then
-        old_version=$(ccgram --version 2>/dev/null || echo "")
-    fi
-
-    print_message "Installing/updating ccgram..."
-    # GIT_SSL_NO_VERIFY: Socket Firewall (sfw) intercepts TLS with its own CA
-    # that isn't in the system CA bundle. Since this fetches from our own GitHub
-    # repo, disabling SSL verification here is an acceptable tradeoff.
-    # UV_NATIVE_TLS: use system TLS instead of uv's bundled OpenSSL
-    if GIT_SSL_NO_VERIFY=1 UV_NATIVE_TLS=true uv tool install --force --upgrade --python 3.14 --allow-insecure-host github.com ccgram --from "git+https://github.com/scowalt/ccgram.git@main"; then
-        print_success "ccgram installed/updated."
-    else
-        print_error "Failed to install ccgram."
-        return 1
-    fi
-
-    # Restart ccgram if version changed (macOS: kill process, runloop will restart it)
-    local new_version=""
-    new_version=$(ccgram --version 2>/dev/null || echo "")
-    if [[ -n "${old_version}" && "${old_version}" != "${new_version}" ]]; then
-        print_message "ccgram upgraded (${old_version} -> ${new_version}), restarting..."
-        pkill -f "ccgram" 2>/dev/null || true
-        print_success "ccgram process signaled to restart."
-    fi
-}
-
 # Install Bun JavaScript runtime
 install_bun() {
     if [[ -d "${HOME}/.bun" ]]; then
@@ -1835,7 +1801,7 @@ install_tmux_plugins() {
 update_brew() {
     print_message "Updating Homebrew..."
     brew update > /dev/null
-    # Pin tmux during upgrades to prevent killing existing sessions (ccgram, etc.)
+    # Pin tmux during upgrades to prevent killing existing sessions.
     brew pin tmux 2>/dev/null || true
     print_message "Upgrading outdated packages..."
     brew upgrade > /dev/null
@@ -2030,7 +1996,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 167 | Last changed: Remove retired AI agent setup${NC}"
+    echo -e "${GRAY}Version 168 | Last changed: Remove default ccgram setup${NC}"
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
@@ -2205,7 +2171,6 @@ HELPER_EOF
     else
         print_warning "Skipping Pi extension setup because Pi migration failed."
     fi
-    install_ccgram
 
     if is_main_user; then
         print_section "Final Updates"
