@@ -15,6 +15,9 @@ print_message() { printf "${CYAN} %s${NC}\n" "$1"; }
 print_success() { printf "${GREEN} %s${NC}\n" "$1"; }
 print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
 print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
+
+SETUP_ORIGINAL_PATH="${PATH}"
+SETUP_ORIGINAL_CLAUDE_COMMAND=$(command -v claude 2>/dev/null || true)
 print_error() { printf "${RED} %s${NC}\n" "$1"; }
 
 # Migrate old token files (~/.gh_token, ~/.op_token) into ~/.env.local
@@ -73,6 +76,7 @@ create_env_local() {
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
 # BAN_RTK=1
+# BAN_CLAUDE_CODE=1
 EOF
         chmod 600 "${HOME}/.env.local"
         print_debug "Created placeholder ~/.env.local"
@@ -1341,6 +1345,337 @@ install_codex_cli() {
 }
 
 
+# Install/update Claude Code CLI (Anthropic's AI coding agent)
+claude_code_native_path() {
+    printf '%s/.local/bin/claude' "${HOME}"
+}
+
+claude_code_path_looks_package_managed() {
+    local path="$1"
+    local target="${path}"
+    local path_details
+
+    if [[ -L "${path}" ]]; then
+        target=$(readlink "${path}" 2>/dev/null || printf '%s' "${path}")
+    fi
+    path_details="${path} ${target}"
+
+    if [[ -f "${path}" ]] && [[ ! -L "${path}" ]]; then
+        path_details="${path_details} $(LC_ALL=C head -c 512 "${path}" 2>/dev/null || true)"
+    fi
+
+    case "${path_details}" in
+        *node_modules*|*pnpm*|*mise*|*asdf*|*volta*|*yarn*|*fnm*|*nvm*|*npm*|*"${HOME}/.bun"*|*Homebrew*|*Cellar*|*Caskroom*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+claude_code_canonical_path() {
+    local path="$1"
+    local target
+    local dir
+    local base
+    local canonical_dir
+
+    if command -v realpath > /dev/null 2>&1; then
+        realpath "${path}"
+        return
+    fi
+
+    if command -v python3 > /dev/null 2>&1; then
+        python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${path}"
+        return
+    fi
+
+    if [[ -L "${path}" ]]; then
+        target=$(readlink "${path}" 2>/dev/null || printf '%s' "${path}")
+        case "${target}" in
+            /*) path="${target}" ;;
+            *) path="$(dirname "${path}")/${target}" ;;
+        esac
+    fi
+
+    dir=$(dirname "${path}")
+    base=$(basename "${path}")
+    canonical_dir=$(cd -P "${dir}" 2>/dev/null && pwd -P) || return 1
+    printf '%s/%s\n' "${canonical_dir}" "${base}"
+}
+
+claude_code_path_has_native_provenance() {
+    local path="$1"
+    local resolved_path
+    local native_root
+
+    [[ -x "${path}" ]] || return 1
+
+    if claude_code_path_looks_package_managed "${path}"; then
+        return 1
+    fi
+
+    resolved_path=$(claude_code_canonical_path "${path}") || return 1
+    native_root=$(claude_code_canonical_path "${HOME}/.local/share/claude" 2>/dev/null || printf '%s' "${HOME}/.local/share/claude")
+
+    case "${resolved_path}" in
+        "${native_root}/"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+claude_code_supported_platform() {
+    local os
+    local arch
+    os=$(uname -s 2>/dev/null || true)
+    arch=$(uname -m 2>/dev/null || true)
+
+    case "${os}" in
+        Darwin|Linux) ;;
+        *)
+            print_warning "Claude Code native installer does not support ${os:-unknown}."
+            return 1
+            ;;
+    esac
+
+    case "${arch}" in
+        x86_64|amd64|arm64|aarch64) return 0 ;;
+        *)
+            print_warning "Claude Code native installer does not support architecture ${arch:-unknown}."
+            return 1
+            ;;
+    esac
+}
+
+claude_code_trusted_curl() {
+    local candidate
+
+    for candidate in /usr/bin/curl /bin/curl /usr/local/bin/curl /opt/homebrew/bin/curl; do
+        if [[ -x "${candidate}" ]]; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+claude_code_kill_process_tree() {
+    local signal="$1"
+    local pid="$2"
+    local children=""
+    local child
+
+    if command -v pgrep > /dev/null 2>&1; then
+        children=$(pgrep -P "${pid}" 2>/dev/null || true)
+        while IFS= read -r child; do
+            if [[ -n "${child}" ]]; then
+                claude_code_kill_process_tree "${signal}" "${child}"
+            fi
+        done <<< "${children}"
+    fi
+
+    kill "-${signal}" "${pid}" 2>/dev/null || true
+}
+
+claude_code_run_safely() {
+    local -a env_args=()
+    local safe_path="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
+    local env_bin="/usr/bin/env"
+    local timeout_seconds="${CLAUDE_CODE_COMMAND_TIMEOUT_SECONDS:-300}"
+    local timeout_flag
+    local command_status=0
+    local pid
+    local watchdog
+    local use_process_group=0
+
+    if [[ ! -x "${env_bin}" ]]; then
+        env_bin="/bin/env"
+    fi
+
+    env_args=(
+        "HOME=${HOME}"
+        "USER=${USER:-}"
+        "LOGNAME=${LOGNAME:-${USER:-}}"
+        "SHELL=${SHELL:-/bin/bash}"
+        "PATH=${safe_path}"
+        "TMPDIR=${TMPDIR:-/tmp}"
+        "TMP=${TMP:-/tmp}"
+        "TEMP=${TEMP:-/tmp}"
+        "LANG=${LANG:-C}"
+        "HTTP_PROXY=${HTTP_PROXY:-}"
+        "HTTPS_PROXY=${HTTPS_PROXY:-}"
+        "ALL_PROXY=${ALL_PROXY:-}"
+        "NO_PROXY=${NO_PROXY:-}"
+        "http_proxy=${http_proxy:-}"
+        "https_proxy=${https_proxy:-}"
+        "all_proxy=${all_proxy:-}"
+        "no_proxy=${no_proxy:-}"
+        "SSL_CERT_FILE=${SSL_CERT_FILE:-}"
+        "SSL_CERT_DIR=${SSL_CERT_DIR:-}"
+        "CURL_CA_BUNDLE=${CURL_CA_BUNDLE:-}"
+    )
+
+    timeout_flag=$(mktemp)
+    rm -f "${timeout_flag}"
+
+    if command -v setsid > /dev/null 2>&1; then
+        "${env_bin}" -i "${env_args[@]}" setsid "$@" < /dev/null &
+        use_process_group=1
+    elif command -v perl > /dev/null 2>&1; then
+        "${env_bin}" -i "${env_args[@]}" perl -MPOSIX=setsid -e 'setsid() or die "setsid failed"; exec @ARGV' "$@" < /dev/null &
+        use_process_group=1
+    else
+        "${env_bin}" -i "${env_args[@]}" "$@" < /dev/null &
+    fi
+    pid=$!
+    (
+        sleep "${timeout_seconds}"
+        if [[ "${use_process_group}" -eq 1 ]]; then
+            if kill -- "-${pid}" 2>/dev/null; then
+                : > "${timeout_flag}"
+                for _ in 1 2 3 4 5; do
+                    sleep 1
+                    if ! kill -0 -- "-${pid}" 2>/dev/null; then
+                        exit 0
+                    fi
+                done
+                kill -KILL -- "-${pid}" 2>/dev/null || true
+            fi
+        elif kill -0 "${pid}" 2>/dev/null; then
+            : > "${timeout_flag}"
+            claude_code_kill_process_tree TERM "${pid}"
+            for _ in 1 2 3 4 5; do
+                sleep 1
+                if ! kill -0 "${pid}" 2>/dev/null; then
+                    exit 0
+                fi
+            done
+            claude_code_kill_process_tree KILL "${pid}"
+        fi
+    ) > /dev/null 2>&1 &
+    watchdog=$!
+
+    wait "${pid}" 2>/dev/null || command_status=$?
+    if [[ -f "${timeout_flag}" ]]; then
+        wait "${watchdog}" 2>/dev/null || true
+        rm -f "${timeout_flag}"
+        return 124
+    fi
+
+    kill "${watchdog}" 2>/dev/null || true
+    wait "${watchdog}" 2>/dev/null || true
+
+    rm -f "${timeout_flag}"
+    return "${command_status}"
+}
+
+claude_code_run_installer() {
+    local installer
+    local installer_output
+    local install_status=0
+    local curl_bin
+
+    installer=$(mktemp)
+    installer_output=$(mktemp)
+
+    if ! curl_bin=$(claude_code_trusted_curl); then
+        rm -f "${installer}" "${installer_output}"
+        print_warning "Trusted system curl not found. Cannot download Claude Code installer."
+        return 1
+    fi
+
+    if ! claude_code_run_safely "${curl_bin}" -fsSL --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 2 -o "${installer}" "https://claude.ai/install.sh"; then
+        rm -f "${installer}" "${installer_output}"
+        print_warning "Failed to download Claude Code installer."
+        return 1
+    fi
+
+    chmod 700 "${installer}"
+    claude_code_run_safely /bin/bash "${installer}" latest > "${installer_output}" 2>&1
+    install_status=$?
+
+    rm -f "${installer}" "${installer_output}"
+
+    if [[ "${install_status}" -ne 0 ]]; then
+        print_warning "Claude Code installer failed with exit code ${install_status}."
+        return 1
+    fi
+
+    return 0
+}
+
+claude_code_warn_if_shadowed() {
+    local original_command="$1"
+    local native_path="$2"
+
+    if [[ -z "${original_command}" ]] || [[ "${original_command}" == "${native_path}" ]]; then
+        return
+    fi
+
+    print_warning "The 'claude' command currently resolves to ${original_command}, not ${native_path}."
+    print_warning "Do not use bare 'claude' for Fable login until PATH/package shadowing is resolved; use ${native_path} directly."
+}
+
+install_claude_code() {
+    if [[ "${BAN_CLAUDE_CODE:-}" == "1" ]]; then
+        print_debug "BAN_CLAUDE_CODE=1, skipping Claude Code CLI setup."
+        return
+    fi
+
+    if ! claude_code_supported_platform; then
+        return
+    fi
+
+    local native_path
+    local native_dir
+    local original_command
+    local original_path
+    local before_version=""
+    local after_version=""
+    local needs_install=1
+
+    native_path=$(claude_code_native_path)
+    native_dir=$(dirname "${native_path}")
+    original_path="${SETUP_ORIGINAL_PATH:-${PATH}}"
+    original_command="${SETUP_ORIGINAL_CLAUDE_COMMAND:-}"
+    if [[ -z "${original_command}" ]]; then
+        original_command=$(PATH="${original_path}" command -v claude 2>/dev/null || true)
+    fi
+
+    print_message "Installing/updating Claude Code CLI..."
+    mkdir -p "${native_dir}"
+
+    if claude_code_path_has_native_provenance "${native_path}"; then
+        if before_version=$(claude_code_run_safely "${native_path}" --version 2>/dev/null) && [[ -n "${before_version}" ]]; then
+            needs_install=0
+            print_debug "Current Claude Code version: ${before_version}"
+            if claude_code_run_safely "${native_path}" update > /dev/null 2>&1; then
+                print_debug "Claude Code update completed."
+            else
+                print_warning "Claude Code update failed; keeping existing install."
+            fi
+        else
+            print_warning "Claude Code native binary exists but did not run; reinstalling."
+        fi
+    elif [[ -e "${native_path}" ]]; then
+        print_warning "Claude Code native path appears to be package-managed or invalid; reinstalling native Claude Code."
+    fi
+
+    if [[ "${needs_install}" -eq 1 ]]; then
+        claude_code_run_installer || return
+    fi
+
+    export PATH="${native_dir}:${PATH}"
+    if after_version=$(claude_code_run_safely "${native_path}" --version 2>/dev/null) && [[ -n "${after_version}" ]]; then
+        print_success "Claude Code CLI installed/updated (${after_version})."
+        claude_code_warn_if_shadowed "${original_command}" "${native_path}"
+        if [[ -z "${original_command}" ]] && [[ ":${original_path}:" != *":${native_dir}:"* ]]; then
+            print_warning "${native_dir} was not on PATH before setup; restart your shell after dotfiles apply or run ${native_path} directly."
+        fi
+    else
+        print_warning "Claude Code CLI install completed, but ${native_path} did not verify."
+    fi
+}
+
+
 # Verify the installed rtk is Rust Token Killer, not the unrelated Rust Type Kit.
 rtk_cli_ready() {
     command -v rtk &> /dev/null && rtk gain > /dev/null 2>&1
@@ -2316,7 +2651,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 147 | Last changed: Remove default ccgram setup${NC}"
+    echo -e "${GRAY}Version 148 | Last changed: Install/update Claude Code CLI${NC}"
 
     # Create placeholder env file early
     create_env_local
@@ -2370,6 +2705,7 @@ main() {
     print_section "Additional Development Tools"
     install_bun
     install_sfw
+    install_claude_code
     install_gemini_cli
     install_codex_cli
     install_rtk_cli
