@@ -36,6 +36,16 @@ $warnIcon = [char]0xf071   # Warning icon for warnings
 $failIcon = [char]0xf00d   # Cross icon for errors
 $sparkles = [char]0x2728   # Sparkles for completion
 
+$script:SetupOriginalPath = $env:PATH
+$script:SetupOriginalClaudeCommand = $null
+try {
+    $setupOriginalClaude = Get-Command claude -ErrorAction SilentlyContinue
+    if ($setupOriginalClaude) {
+        $script:SetupOriginalClaudeCommand = $setupOriginalClaude.Source
+    }
+}
+catch {}
+
 # Define print functions for consistency
 function Write-Section($message) {
     Write-Host "`n=== $message ===" -ForegroundColor White -BackgroundColor DarkBlue
@@ -106,6 +116,7 @@ function New-TokenPlaceholders {
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
 # BAN_RTK=1
+# BAN_CLAUDE_CODE=1
 "@ | Set-Content -Path $envLocalPath
         Write-Debug "Created placeholder ~/.env.local"
     }
@@ -484,6 +495,427 @@ function Install-TursoCli {
     }
     catch {
         Write-Host "$failIcon Failed to download Turso CLI: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# Function to install/update Claude Code CLI (Anthropic's AI coding agent)
+function Get-ClaudeCodeNativePath {
+    return (Join-Path (Join-Path $env:USERPROFILE ".local\bin") "claude.exe")
+}
+
+function Test-ClaudeCodeSamePath {
+    param(
+        [Parameter(Mandatory=$true)][string]$First,
+        [Parameter(Mandatory=$true)][string]$Second
+    )
+
+    try {
+        $expandedFirst = [Environment]::ExpandEnvironmentVariables($First)
+        $expandedSecond = [Environment]::ExpandEnvironmentVariables($Second)
+        $firstFull = [System.IO.Path]::GetFullPath($expandedFirst).TrimEnd('\')
+        $secondFull = [System.IO.Path]::GetFullPath($expandedSecond).TrimEnd('\')
+        return ($firstFull -ieq $secondFull)
+    }
+    catch {
+        return ($First -ieq $Second)
+    }
+}
+
+function Test-ClaudeCodeSupportedPlatform {
+    if (-not [Environment]::Is64BitProcess) {
+        Write-Warning "Claude Code native installer does not support 32-bit Windows."
+        return $false
+    }
+
+    if ($env:PROCESSOR_ARCHITECTURE -notin @("AMD64", "ARM64")) {
+        Write-Warning "Claude Code native installer may not support architecture $env:PROCESSOR_ARCHITECTURE."
+        return $false
+    }
+
+    return $true
+}
+
+function Test-ClaudeCodePackageManagedPath {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    return ($Path -match '(?i)(node_modules|pnpm|mise|asdf|volta|yarn|fnm|nvm|npm|\\.bun|AppData\\Roaming\\npm|scoop|chocolatey|Homebrew|Caskroom|WinGet)')
+}
+
+function Test-ClaudeCodeNativeProvenance {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return $false
+    }
+
+    if (Test-ClaudeCodePackageManagedPath $Path) {
+        return $false
+    }
+
+    try {
+        $signature = Get-AuthenticodeSignature -FilePath $Path
+        if ($signature.Status -eq "Valid" -and $signature.SignerCertificate.Subject -like "*Anthropic*") {
+            return $true
+        }
+
+        return $false
+    }
+    catch {
+        return $false
+    }
+}
+
+function Test-ClaudeCodeTrustedPowerShellHost {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return $false
+    }
+
+    try {
+        $signature = Get-AuthenticodeSignature -FilePath $Path
+        return ($signature.Status -eq "Valid" -and $signature.SignerCertificate.Subject -like "*Microsoft*")
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-ClaudeCodePowerShellHost {
+    $currentProcessPath = $null
+    try {
+        $currentProcessPath = (Get-Process -Id $PID).Path
+    }
+    catch {}
+
+    if (-not [string]::IsNullOrWhiteSpace($currentProcessPath) -and (Test-Path $currentProcessPath)) {
+        return $currentProcessPath
+    }
+
+    $systemRoot = [Environment]::GetEnvironmentVariable("SystemRoot", "Process")
+    if ([string]::IsNullOrWhiteSpace($systemRoot)) {
+        $systemRoot = "C:\Windows"
+    }
+    return (Join-Path $systemRoot "System32\WindowsPowerShell\v1.0\powershell.exe")
+}
+
+function Get-ClaudeCodeCandidates {
+    $commands = @(Get-Command claude -All -ErrorAction SilentlyContinue)
+    return @($commands | ForEach-Object {
+        if ($_.Source) {
+            $_.Source
+        }
+        elseif ($_.Path) {
+            $_.Path
+        }
+        else {
+            $_.Name
+        }
+    } | Where-Object { $_ })
+}
+
+function Format-ClaudeCodeArgument {
+    param([Parameter(Mandatory=$true)][string]$Argument)
+
+    if ($Argument -match '[\s"]') {
+        return ('"' + ($Argument -replace '"', '\\"') + '"')
+    }
+
+    return $Argument
+}
+
+function Invoke-ClaudeCodeCommandSafely {
+    param(
+        [Parameter(Mandatory=$true)][string]$FilePath,
+        [string[]]$Arguments = @()
+    )
+
+    $allowedEnvNames = @(
+        "ALLUSERSPROFILE",
+        "APPDATA",
+        "COMSPEC",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROCESSOR_ARCHITECTURE",
+        "PROCESSOR_ARCHITEW6432",
+        "ProgramData",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "PSModulePath",
+        "SystemDrive",
+        "SystemRoot",
+        "TEMP",
+        "TMP",
+        "USERDOMAIN",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "CURL_CA_BUNDLE"
+    )
+    $allowedEnvLookup = @{}
+    foreach ($allowedName in $allowedEnvNames) {
+        $allowedEnvLookup[$allowedName.ToUpperInvariant()] = $true
+    }
+    $savedEnv = @{}
+    $allEnvNames = @(Get-ChildItem Env: | ForEach-Object { $_.Name })
+    $stdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) "claude-code-stdout-$([guid]::NewGuid()).log"
+    $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) "claude-code-stderr-$([guid]::NewGuid()).log"
+    $timeoutSeconds = 300
+    $timeoutValue = [Environment]::GetEnvironmentVariable("CLAUDE_CODE_COMMAND_TIMEOUT_SECONDS")
+    if ($timeoutValue -match '^\d+$') {
+        $timeoutSeconds = [int]$timeoutValue
+    }
+
+    foreach ($name in $allEnvNames) {
+        $savedEnv[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+        if (-not $allowedEnvLookup.ContainsKey($name.ToUpperInvariant())) {
+            Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+        }
+    }
+
+    $systemRoot = [Environment]::GetEnvironmentVariable("SystemRoot", "Process")
+    if ([string]::IsNullOrWhiteSpace($systemRoot)) {
+        $systemRoot = "C:\Windows"
+        [Environment]::SetEnvironmentVariable("SystemRoot", $systemRoot, "Process")
+    }
+    $safePath = "$systemRoot\System32;$systemRoot;$systemRoot\System32\WindowsPowerShell\v1.0"
+    [Environment]::SetEnvironmentVariable("PATH", $safePath, "Process")
+
+    try {
+        $argumentLine = ($Arguments | ForEach-Object { Format-ClaudeCodeArgument $_ }) -join ' '
+        $process = Start-Process -FilePath $FilePath `
+            -ArgumentList $argumentLine `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
+
+        if (-not $process.WaitForExit($timeoutSeconds * 1000)) {
+            try {
+                $process.Kill($true)
+            }
+            catch {
+                try {
+                    & taskkill.exe /PID $process.Id /T /F *> $null
+                }
+                catch {
+                    try {
+                        $process.Kill()
+                    }
+                    catch {}
+                }
+            }
+            try {
+                $process.WaitForExit(5000) | Out-Null
+            }
+            catch {}
+            $exitCode = 124
+        }
+        else {
+            $exitCode = $process.ExitCode
+        }
+
+        $stdout = ""
+        $stderr = ""
+        if (Test-Path $stdoutPath) {
+            $stdout = Get-Content -Path $stdoutPath -Raw -ErrorAction SilentlyContinue
+        }
+        if (Test-Path $stderrPath) {
+            $stderr = Get-Content -Path $stderrPath -Raw -ErrorAction SilentlyContinue
+        }
+        $output = (($stdout, $stderr) | Where-Object { $_ }) -join "`n"
+    }
+    catch {
+        $output = $_.Exception.Message
+        $exitCode = 1
+    }
+    finally {
+        foreach ($name in $savedEnv.Keys) {
+            if ($null -ne $savedEnv[$name]) {
+                [Environment]::SetEnvironmentVariable($name, $savedEnv[$name], "Process")
+            }
+            else {
+                Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+            }
+        }
+        Remove-Item -Path $stdoutPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output = $output
+    }
+}
+
+function Invoke-ClaudeCodeInstaller {
+    $installerPath = Join-Path ([System.IO.Path]::GetTempPath()) "claude-code-install-$([guid]::NewGuid()).ps1"
+
+    try {
+        Microsoft.PowerShell.Utility\Invoke-WebRequest -Uri "https://claude.ai/install.ps1" -OutFile $installerPath -TimeoutSec 120 -ErrorAction Stop
+    }
+    catch {
+        Write-Warning "Failed to download Claude Code installer."
+        Remove-Item -Path $installerPath -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+
+    $powerShellHost = Get-ClaudeCodePowerShellHost
+    if (-not (Test-ClaudeCodeTrustedPowerShellHost $powerShellHost)) {
+        Write-Warning "Trusted Microsoft-signed PowerShell executable not found for Claude Code installer."
+        Remove-Item -Path $installerPath -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+
+    $result = Invoke-ClaudeCodeCommandSafely -FilePath $powerShellHost -Arguments @(
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        $installerPath,
+        "latest"
+    )
+    Remove-Item -Path $installerPath -Force -ErrorAction SilentlyContinue
+
+    if ($result.ExitCode -ne 0) {
+        Write-Warning "Claude Code installer failed with exit code $($result.ExitCode)."
+        return $false
+    }
+
+    return $true
+}
+
+function Add-ClaudeCodeNativePath {
+    param([Parameter(Mandatory=$true)][string]$NativeDir)
+
+    $processEntries = @($env:PATH -split ';' | Where-Object { $_ })
+    $processHasPath = $processEntries | Where-Object { Test-ClaudeCodeSamePath $_ $NativeDir }
+    if (-not $processHasPath) {
+        $env:PATH = "$NativeDir;$env:PATH"
+    }
+
+    $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+    $userEntries = @()
+    if ($userPath) {
+        $userEntries = @($userPath -split ';' | Where-Object { $_ })
+    }
+    $userHasPath = $userEntries | Where-Object { Test-ClaudeCodeSamePath $_ $NativeDir }
+    if (-not $userHasPath) {
+        try {
+            if ($userPath) {
+                [Environment]::SetEnvironmentVariable("PATH", "$userPath;$NativeDir", "User")
+            }
+            else {
+                [Environment]::SetEnvironmentVariable("PATH", $NativeDir, "User")
+            }
+            Write-Success "Added Claude Code CLI to PATH."
+        }
+        catch {
+            Write-Warning "Failed to add Claude Code CLI to user PATH; use $NativeDir directly or add it manually."
+        }
+    }
+}
+
+function Warn-ClaudeCodeShadowing {
+    param(
+        [string]$OriginalCommand,
+        [Parameter(Mandatory=$true)][string]$NativePath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($OriginalCommand)) {
+        return
+    }
+
+    if (Test-ClaudeCodeSamePath $OriginalCommand $NativePath) {
+        return
+    }
+
+    Write-Warning "The 'claude' command currently resolves to $OriginalCommand, not $NativePath."
+    Write-Warning "Do not use bare 'claude' for Fable login until PATH/package shadowing is resolved; use $NativePath directly."
+}
+
+function Install-ClaudeCode {
+    if (Test-EnvLocalFlag "BAN_CLAUDE_CODE") {
+        Write-Debug "BAN_CLAUDE_CODE=1, skipping Claude Code CLI setup."
+        return
+    }
+
+    if (-not (Test-ClaudeCodeSupportedPlatform)) {
+        return
+    }
+
+    $nativePath = Get-ClaudeCodeNativePath
+    $nativeDir = Split-Path $nativePath -Parent
+    $originalCommand = $script:SetupOriginalClaudeCommand
+    if ([string]::IsNullOrWhiteSpace($originalCommand)) {
+        $savedPath = $env:PATH
+        try {
+            $env:PATH = $script:SetupOriginalPath
+            $originalCandidates = @(Get-ClaudeCodeCandidates)
+            if ($originalCandidates.Count -gt 0) {
+                $originalCommand = $originalCandidates[0]
+            }
+        }
+        finally {
+            $env:PATH = $savedPath
+        }
+    }
+    $needsInstall = $true
+
+    Write-Message "Installing/updating Claude Code CLI..."
+    New-Item -ItemType Directory -Force -Path $nativeDir | Out-Null
+
+    if (Test-ClaudeCodeNativeProvenance $nativePath) {
+        $versionResult = Invoke-ClaudeCodeCommandSafely -FilePath $nativePath -Arguments @("--version")
+        if ($versionResult.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($versionResult.Output)) {
+            $needsInstall = $false
+            $currentVersion = (($versionResult.Output -split '\r?\n') | Select-Object -First 1).Trim()
+            Write-Debug "Current Claude Code version: $currentVersion"
+            $updateResult = Invoke-ClaudeCodeCommandSafely -FilePath $nativePath -Arguments @("update")
+            if ($updateResult.ExitCode -eq 0) {
+                Write-Debug "Claude Code update completed."
+            }
+            else {
+                Write-Warning "Claude Code update failed; keeping existing install."
+            }
+        }
+        else {
+            Write-Warning "Claude Code native binary exists but did not run; reinstalling."
+        }
+    }
+    elseif (Test-Path $nativePath) {
+        Write-Warning "Claude Code native path appears to be package-managed or invalid; reinstalling native Claude Code."
+    }
+
+    if ($needsInstall) {
+        if (-not (Invoke-ClaudeCodeInstaller)) {
+            return
+        }
+    }
+
+    Add-ClaudeCodeNativePath -NativeDir $nativeDir
+    $verifyResult = Invoke-ClaudeCodeCommandSafely -FilePath $nativePath -Arguments @("--version")
+    if ($verifyResult.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($verifyResult.Output)) {
+        $versionText = (($verifyResult.Output -split '\r?\n') | Select-Object -First 1).Trim()
+        Write-Success "Claude Code CLI installed/updated ($versionText)."
+        Warn-ClaudeCodeShadowing -OriginalCommand $originalCommand -NativePath $nativePath
+    }
+    else {
+        Write-Warning "Claude Code CLI install completed, but $nativePath did not verify."
     }
 }
 
@@ -1588,7 +2020,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 98 | Last changed: Remove retired AI agent setup" -ForegroundColor DarkGray
+    Write-Host "Version 99 | Last changed: Install/update Claude Code CLI" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -1626,6 +2058,7 @@ function Initialize-WindowsEnvironment {
     
     Write-Section "Additional Development Tools"
     Install-SocketFirewall
+    Install-ClaudeCode
     Install-GeminiCli
     Install-CodexCli
     Install-RtkCli
