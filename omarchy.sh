@@ -73,6 +73,7 @@ create_env_local() {
 # WORK_MACHINE=1
 # BAN_COMPOUND_PLUGIN=1
 # BAN_PI_SUBAGENTS=1
+# BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
 # BAN_RTK=1
@@ -1933,7 +1934,7 @@ ensure_pi_node_runtime() {
     fi
 
     local _mise_env=""
-    if ! _mise_env=$(mise env -s bash "${_runtime}"); then
+    if ! _mise_env=$(mise env -C "${HOME}" -s bash "${_runtime}"); then
         print_warning "Failed to generate mise environment for ${_runtime}."
         return 1
     fi
@@ -1987,25 +1988,92 @@ pi_command_target() {
     fi
 }
 
+# Remove stale Pi installs from Bun-managed global locations.
+cleanup_noncanonical_pi_installs() {
+    local _new_package="${1}"
+    local _old_package="${2}"
+    local _bun_cmd=""
+    local _global_packages=""
+    local _package=""
+    local _path=""
+    local _removed=0
+
+    if command -v bun &> /dev/null; then
+        _bun_cmd=$(command -v bun)
+    elif [[ -x "${HOME}/.bun/bin/bun" ]]; then
+        _bun_cmd="${HOME}/.bun/bin/bun"
+    elif [[ -x "${HOME}/.cache/.bun/bin/bun" ]]; then
+        _bun_cmd="${HOME}/.cache/.bun/bin/bun"
+    fi
+
+    if [[ -n "${_bun_cmd}" ]]; then
+        _global_packages=$("${_bun_cmd}" pm ls -g 2>/dev/null || true)
+        for _package in "${_new_package}" "${_old_package}"; do
+            if grep -Fq "${_package}" <<< "${_global_packages}"; then
+                print_message "Removing non-canonical Bun Pi package ${_package}..."
+                if "${_bun_cmd}" remove -g "${_package}" > /dev/null 2>&1; then
+                    _removed=1
+                else
+                    print_warning "Failed to remove Bun Pi package ${_package}."
+                fi
+            fi
+        done
+    fi
+
+    for _path in \
+        "${HOME}/.bun/bin/pi" \
+        "${HOME}/.cache/.bun/bin/pi" \
+        "${HOME}/.bun/install/global/node_modules/@earendil-works/pi-coding-agent" \
+        "${HOME}/.bun/install/global/node_modules/@earendil-works/pi-agent-core" \
+        "${HOME}/.bun/install/global/node_modules/@earendil-works/pi-ai" \
+        "${HOME}/.bun/install/global/node_modules/@earendil-works/pi-tui" \
+        "${HOME}/.bun/install/global/node_modules/@mariozechner/pi-coding-agent" \
+        "${HOME}/.bun/install/global/node_modules/@mariozechner/pi-agent-core" \
+        "${HOME}/.bun/install/global/node_modules/@mariozechner/pi-ai" \
+        "${HOME}/.bun/install/global/node_modules/@mariozechner/pi-tui" \
+        "${HOME}/.cache/.bun/install/global/node_modules/@earendil-works/pi-coding-agent" \
+        "${HOME}/.cache/.bun/install/global/node_modules/@earendil-works/pi-agent-core" \
+        "${HOME}/.cache/.bun/install/global/node_modules/@earendil-works/pi-ai" \
+        "${HOME}/.cache/.bun/install/global/node_modules/@earendil-works/pi-tui" \
+        "${HOME}/.cache/.bun/install/global/node_modules/@mariozechner/pi-coding-agent" \
+        "${HOME}/.cache/.bun/install/global/node_modules/@mariozechner/pi-agent-core" \
+        "${HOME}/.cache/.bun/install/global/node_modules/@mariozechner/pi-ai" \
+        "${HOME}/.cache/.bun/install/global/node_modules/@mariozechner/pi-tui"; do
+        if [[ -e "${_path}" || -L "${_path}" ]]; then
+            if rm -rf -- "${_path}"; then
+                _removed=1
+            else
+                print_warning "Failed to remove non-canonical Pi path: ${_path}"
+            fi
+        fi
+    done
+
+    if [[ "${_removed}" -eq 1 ]]; then
+        hash -r 2>/dev/null || true
+        print_success "Removed non-canonical Bun Pi installs."
+    else
+        print_debug "No non-canonical Bun Pi installs found."
+    fi
+}
+
 # Install/update Pi coding agent
 install_pi_cli() {
     local _new_package="@earendil-works/pi-coding-agent"
     local _old_package="@mariozechner/pi-coding-agent"
-    local _global_packages=""
+    local _local_prefix="${HOME}/.local"
+    local _canonical_bin="${_local_prefix}/bin"
+    local _canonical_pi="${_canonical_bin}/pi"
+    local _pi_cmd=""
     local _pi_target=""
-    local _needs_reinstall=0
+    local _pi_version=""
+    local _path_entry=""
 
     print_message "Installing/updating Pi coding agent..."
 
-    # Ensure bun is available
-    if [[ -d "${HOME}/.bun" ]]; then
-        export PATH="${HOME}/.bun/bin:${PATH}"
-    fi
-
-    if ! command -v bun &> /dev/null; then
-        print_warning "Bun not found. Cannot install Pi coding agent."
-        print_debug "Install Bun first, then run: bun install -g ${_new_package}"
-        return 1
+    mkdir -p "${_canonical_bin}"
+    export PATH="${_canonical_bin}:${PATH}"
+    if command -v fish &> /dev/null; then
+        fish -lc "fish_add_path -m \"${HOME}/.local/bin\"" > /dev/null 2>&1 || print_debug "Could not persist ~/.local/bin path preference with fish_add_path."
     fi
 
     if ! ensure_pi_node_runtime; then
@@ -2013,65 +2081,67 @@ install_pi_cli() {
         return 1
     fi
 
-    if ! bun install -g "${_new_package}"; then
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Cannot install Pi coding agent."
+        print_debug "Install Node.js/npm, then run: npm install -g --ignore-scripts --prefix \"${_local_prefix}\" ${_new_package}@latest"
+        return 1
+    fi
+
+    # Remove old npm-package ownership before installing so npm can claim ~/.local/bin/pi.
+    npm uninstall -g --prefix "${_local_prefix}" "${_old_package}" > /dev/null 2>&1 || true
+    if [[ -L "${_canonical_pi}" ]]; then
+        _pi_target=$(pi_command_target 2>/dev/null || true)
+        if [[ "${_pi_target}" == *"/.bun/"* || "${_pi_target}" == *"/.cache/.bun/"* || "${_pi_target}" == *"${_old_package}"* ]]; then
+            rm -f -- "${_canonical_pi}" || true
+            hash -r 2>/dev/null || true
+        fi
+    fi
+
+    print_message "Installing Pi with npm into ${_canonical_pi}..."
+    if ! npm install -g --ignore-scripts --prefix "${_local_prefix}" "${_new_package}@latest"; then
         print_error "Failed to install Pi coding agent."
         return 1
     fi
 
+    npm uninstall -g --prefix "${_local_prefix}" "${_old_package}" > /dev/null 2>&1 || true
+    cleanup_noncanonical_pi_installs "${_new_package}" "${_old_package}"
     hash -r 2>/dev/null || true
 
-    if { bun pm ls -g 2>/dev/null || true; } | grep -Fq "${_old_package}"; then
-        print_message "Removing deprecated Pi package ${_old_package}..."
-        if bun remove -g "${_old_package}"; then
-            hash -r 2>/dev/null || true
-            print_success "Deprecated Pi package removed."
-        else
-            print_warning "Failed to remove old ${_old_package} package."
-        fi
-    fi
-
-    _pi_target=$(pi_command_target 2>/dev/null || true)
-    if [[ -z "${_pi_target}" ]]; then
-        print_warning "Pi command was not found after migration. Reinstalling ${_new_package}."
-        _needs_reinstall=1
-    elif [[ "${_pi_target}" == *"${_old_package}"* ]]; then
-        print_warning "Pi still points to old @mariozechner install path: ${_pi_target}"
-        print_message "Reinstalling ${_new_package} to refresh the Pi shim..."
-        _needs_reinstall=1
-    fi
-
-    if [[ "${_needs_reinstall}" -eq 1 ]]; then
-        if bun install -g "${_new_package}"; then
-            hash -r 2>/dev/null || true
-        else
-            print_warning "Failed to reinstall ${_new_package} after cleanup."
-        fi
-    fi
-
-    _global_packages=$(bun pm ls -g 2>/dev/null || true)
+    _pi_cmd=$(command -v pi 2>/dev/null || true)
     _pi_target=$(pi_command_target 2>/dev/null || true)
 
-    if ! grep -Fq "${_new_package}" <<< "${_global_packages}"; then
-        print_warning "Pi migration incomplete: ${_new_package} is not listed in Bun global packages."
+    if [[ ! -x "${_canonical_pi}" ]]; then
+        print_warning "Pi migration incomplete: canonical Pi command is missing at ${_canonical_pi}."
         return 1
     fi
 
-    if grep -Fq "${_old_package}" <<< "${_global_packages}"; then
-        print_warning "Pi migration incomplete: deprecated ${_old_package} is still listed in Bun global packages."
+    if [[ "${_pi_cmd}" != "${_canonical_pi}" ]]; then
+        print_warning "Pi migration incomplete: PATH resolves pi to ${_pi_cmd:-<missing>} instead of ${_canonical_pi}."
+        if type -P -a pi > /dev/null 2>&1; then
+            print_debug "pi commands on PATH: $(type -P -a pi 2>/dev/null | awk '!seen[$0]++' | paste -sd ' ' -)"
+        fi
         return 1
     fi
 
-    if [[ -z "${_pi_target}" ]]; then
-        print_warning "Pi migration incomplete: pi command is not available after installing ${_new_package}."
+    if [[ "${_pi_target}" == *"/.bun/"* || "${_pi_target}" == *"/.cache/.bun/"* || "${_pi_target}" == *"${_old_package}"* ]]; then
+        print_warning "Pi migration incomplete: canonical pi resolves to non-canonical target ${_pi_target}."
         return 1
     fi
 
-    if [[ "${_pi_target}" == *"${_old_package}"* ]]; then
-        print_warning "Pi migration incomplete: pi still points to old @mariozechner install path after reinstall: ${_pi_target}"
-        return 1
+    if [[ "${_pi_target}" != "${_local_prefix}/"* ]]; then
+        print_warning "Pi is first on PATH, but resolves outside ${_local_prefix}: ${_pi_target}"
     fi
 
-    print_success "Pi coding agent installed/updated."
+    if type -P -a pi > /dev/null 2>&1; then
+        while IFS= read -r _path_entry; do
+            if [[ -n "${_path_entry}" && "${_path_entry}" != "${_canonical_pi}" ]]; then
+                print_warning "Additional pi command remains on PATH: ${_path_entry}"
+            fi
+        done < <(type -P -a pi 2>/dev/null | awk '!seen[$0]++')
+    fi
+
+    _pi_version=$(pi --version 2>/dev/null || true)
+    print_success "Pi coding agent ${_pi_version} installed/updated at ${_canonical_pi}."
 }
 
 # Update Pi settings for the tintinweb subagents extension
@@ -2136,11 +2206,6 @@ setup_pi_subagents() {
     local _package="npm:@tintinweb/pi-subagents"
     local _output=""
 
-    # Ensure bun is available
-    if [[ -d "${HOME}/.bun" ]]; then
-        export PATH="${HOME}/.bun/bin:${PATH}"
-    fi
-
     if [[ "${BAN_PI_SUBAGENTS:-}" == "1" ]]; then
         if update_pi_subagents_settings remove; then
             print_success "Pi subagents extension disabled in Pi settings."
@@ -2148,9 +2213,9 @@ setup_pi_subagents() {
         return 0
     fi
 
-    if ! command -v bun &> /dev/null; then
-        print_warning "Bun not found. Cannot install Pi subagents."
-        print_debug "Install Bun first, then run: pi install npm:@tintinweb/pi-subagents"
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Cannot install Pi subagents."
+        print_debug "Install Node.js/npm, then run: pi install npm:@tintinweb/pi-subagents"
         return 0
     fi
 
@@ -2172,6 +2237,80 @@ setup_pi_subagents() {
         fi
     else
         print_warning "Failed to install tintinweb Pi subagents: ${_output}"
+    fi
+}
+
+# Remove Pi MCP adapter package source from settings when disabled
+remove_pi_mcp_adapter_settings() {
+    local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _settings_file="${_settings_dir}/settings.json"
+    local _tmp=""
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot update Pi MCP adapter settings."
+        return 1
+    fi
+
+    mkdir -p "${_settings_dir}"
+
+    if [[ ! -f "${_settings_file}" ]]; then
+        printf '{}
+' > "${_settings_file}"
+    fi
+
+    _tmp=$(mktemp)
+    if jq '
+        def package_source:
+            if type == "string" then .
+            elif type == "object" then (.source // "")
+            else ""
+            end;
+        def packages_array:
+            if (.packages | type) == "array" then .packages else [] end;
+        .packages = (packages_array | map(select(package_source != "npm:pi-mcp-adapter")))
+        | if (.packages | length) == 0 then del(.packages) else . end
+    ' "${_settings_file}" > "${_tmp}"; then
+        mv "${_tmp}" "${_settings_file}"
+    else
+        rm -f "${_tmp}"
+        print_warning "Failed to update Pi settings at ${_settings_file}."
+        return 1
+    fi
+}
+
+# Install/update Pi MCP adapter extension
+setup_pi_mcp_adapter() {
+    local _package="npm:pi-mcp-adapter"
+    local _output=""
+    local _list_output=""
+
+    if [[ "${BAN_PI_MCP_ADAPTER:-}" == "1" ]]; then
+        if remove_pi_mcp_adapter_settings; then
+            print_success "Pi MCP adapter extension disabled in Pi settings."
+        fi
+        return 0
+    fi
+
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Cannot install Pi MCP adapter."
+        print_debug "Install Node.js/npm, then run: pi install npm:pi-mcp-adapter"
+        return 0
+    fi
+
+    if ! command -v pi &> /dev/null; then
+        print_warning "Pi coding agent not found. Cannot install Pi MCP adapter."
+        return 0
+    fi
+
+    print_message "Installing/updating Pi MCP adapter..."
+    if _output=$(pi install "${_package}" 2>&1); then
+        if _list_output=$(pi list 2>&1) && grep -q "npm:pi-mcp-adapter" <<< "${_list_output}"; then
+            print_success "Pi MCP adapter installed/updated."
+        else
+            print_warning "Pi MCP adapter install completed, but package validation was inconclusive: ${_list_output}"
+        fi
+    else
+        print_warning "Failed to install Pi MCP adapter: ${_output}"
     fi
 }
 
@@ -2734,7 +2873,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 153 | Last changed: Install/update Claude Code CLI${NC}"
+    echo -e "${GRAY}Version 154 | Last changed: Canonicalize Pi and install MCP adapter${NC}"
 
     # Ensure CWD is readable (non-admin users may start in restricted directories)
     cd "${HOME}" || true
@@ -2871,12 +3010,22 @@ if matt_pocock_pi_skills_disabled; then
 fi
 if install_pi_cli; then
     setup_pi_subagents
+    setup_pi_mcp_adapter
     setup_pi_goal_autoresearch
     if ! matt_pocock_pi_skills_disabled; then
         setup_matt_pocock_pi_skills
     fi
     setup_pi_compound_engineering
 else
+    if [[ "${BAN_PI_SUBAGENTS:-}" == "1" ]]; then
+        setup_pi_subagents
+    fi
+    if [[ "${BAN_PI_MCP_ADAPTER:-}" == "1" ]]; then
+        setup_pi_mcp_adapter
+    fi
+    if [[ "${BAN_PI_GOAL_AUTORESEARCH:-}" == "1" ]]; then
+        setup_pi_goal_autoresearch
+    fi
     print_warning "Skipping Pi extension setup because Pi migration failed."
 fi
 

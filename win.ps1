@@ -113,6 +113,7 @@ function New-TokenPlaceholders {
 # WORK_MACHINE=1
 # BAN_COMPOUND_PLUGIN=1
 # BAN_PI_SUBAGENTS=1
+# BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
 # BAN_RTK=1
@@ -1166,7 +1167,7 @@ function Enable-PiNodeRuntime {
         return $false
     }
 
-    $miseEnv = & mise env -s pwsh $runtime 2>$null
+    $miseEnv = & mise env -C $env:USERPROFILE -s pwsh $runtime 2>$null
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "Failed to activate $runtime with mise."
         return $false
@@ -1184,23 +1185,111 @@ function Enable-PiNodeRuntime {
     return $false
 }
 
+# Remove stale Pi installs from Bun-managed global locations.
+function Remove-NonCanonicalPiInstalls {
+    param(
+        [Parameter(Mandatory=$true)][string]$NewPackage,
+        [Parameter(Mandatory=$true)][string]$OldPackage
+    )
+
+    $removed = $false
+    $bunCandidates = @()
+    $bunCommand = Get-Command bun -ErrorAction SilentlyContinue
+    if ($bunCommand) {
+        $bunCandidates += $bunCommand.Source
+    }
+    $bunCandidates += @(
+        (Join-Path $env:USERPROFILE ".bun\bin\bun.exe"),
+        (Join-Path $env:USERPROFILE ".bun\bin\bun"),
+        (Join-Path $env:USERPROFILE ".cache\.bun\bin\bun.exe"),
+        (Join-Path $env:USERPROFILE ".cache\.bun\bin\bun")
+    )
+    $bunCandidates = $bunCandidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+
+    foreach ($bun in $bunCandidates) {
+        $globalPackages = (& $bun pm ls -g 2>$null | Out-String)
+        foreach ($package in @($NewPackage, $OldPackage)) {
+            if ($globalPackages.Contains($package)) {
+                Write-Message "Removing non-canonical Bun Pi package $package..."
+                & $bun remove -g $package *> $null
+                if ($LASTEXITCODE -eq 0) {
+                    $removed = $true
+                }
+                else {
+                    Write-Warning "Failed to remove Bun Pi package $package."
+                }
+            }
+        }
+        break
+    }
+
+    $paths = @(
+        (Join-Path $env:USERPROFILE ".bun\bin\pi"),
+        (Join-Path $env:USERPROFILE ".bun\bin\pi.cmd"),
+        (Join-Path $env:USERPROFILE ".bun\bin\pi.ps1"),
+        (Join-Path $env:USERPROFILE ".cache\.bun\bin\pi"),
+        (Join-Path $env:USERPROFILE ".cache\.bun\bin\pi.cmd"),
+        (Join-Path $env:USERPROFILE ".cache\.bun\bin\pi.ps1"),
+        (Join-Path $env:USERPROFILE ".bun\install\global\node_modules\@earendil-works\pi-coding-agent"),
+        (Join-Path $env:USERPROFILE ".bun\install\global\node_modules\@earendil-works\pi-agent-core"),
+        (Join-Path $env:USERPROFILE ".bun\install\global\node_modules\@earendil-works\pi-ai"),
+        (Join-Path $env:USERPROFILE ".bun\install\global\node_modules\@earendil-works\pi-tui"),
+        (Join-Path $env:USERPROFILE ".bun\install\global\node_modules\@mariozechner\pi-coding-agent"),
+        (Join-Path $env:USERPROFILE ".bun\install\global\node_modules\@mariozechner\pi-agent-core"),
+        (Join-Path $env:USERPROFILE ".bun\install\global\node_modules\@mariozechner\pi-ai"),
+        (Join-Path $env:USERPROFILE ".bun\install\global\node_modules\@mariozechner\pi-tui"),
+        (Join-Path $env:USERPROFILE ".cache\.bun\install\global\node_modules\@earendil-works\pi-coding-agent"),
+        (Join-Path $env:USERPROFILE ".cache\.bun\install\global\node_modules\@earendil-works\pi-agent-core"),
+        (Join-Path $env:USERPROFILE ".cache\.bun\install\global\node_modules\@earendil-works\pi-ai"),
+        (Join-Path $env:USERPROFILE ".cache\.bun\install\global\node_modules\@earendil-works\pi-tui"),
+        (Join-Path $env:USERPROFILE ".cache\.bun\install\global\node_modules\@mariozechner\pi-coding-agent"),
+        (Join-Path $env:USERPROFILE ".cache\.bun\install\global\node_modules\@mariozechner\pi-agent-core"),
+        (Join-Path $env:USERPROFILE ".cache\.bun\install\global\node_modules\@mariozechner\pi-ai"),
+        (Join-Path $env:USERPROFILE ".cache\.bun\install\global\node_modules\@mariozechner\pi-tui")
+    )
+
+    foreach ($path in $paths) {
+        if (Test-Path $path) {
+            try {
+                Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+                $removed = $true
+            }
+            catch {
+                Write-Warning "Failed to remove non-canonical Pi path: $path"
+            }
+        }
+    }
+
+    if ($removed) {
+        Write-Success "Removed non-canonical Bun Pi installs."
+    }
+    else {
+        Write-Debug "No non-canonical Bun Pi installs found."
+    }
+}
+
 # Function to install/update Pi coding agent
 function Install-PiCli {
     $newPackage = "@earendil-works/pi-coding-agent"
     $oldPackage = "@mariozechner/pi-coding-agent"
+    $localPrefix = Join-Path $env:USERPROFILE ".local"
+    # npm places Windows global command shims directly in the prefix directory.
+    $canonicalCandidates = @(
+        (Join-Path $localPrefix "pi.ps1"),
+        (Join-Path $localPrefix "pi.cmd"),
+        (Join-Path $localPrefix "pi")
+    )
 
     Write-Host "$arrow Installing/updating Pi coding agent..." -ForegroundColor Cyan
 
-    # Ensure bun is available
-    $bunPath = "$env:USERPROFILE\.bun\bin"
-    if (Test-Path $bunPath) {
-        $env:PATH = "$bunPath;$env:PATH"
+    if (-not (Test-Path $localPrefix)) {
+        New-Item -ItemType Directory -Force -Path $localPrefix | Out-Null
     }
+    $env:PATH = "$localPrefix;$env:PATH"
 
-    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
-        Write-Host "$warnIcon Bun not found. Cannot install Pi coding agent." -ForegroundColor Yellow
-        Write-Host "  Install Bun first, then run: bun install -g $newPackage" -ForegroundColor DarkGray
-        return $false
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if (-not ($userPath -split ';' | Where-Object { $_ -eq $localPrefix })) {
+        [Environment]::SetEnvironmentVariable("Path", "$localPrefix;$userPath", "User")
     }
 
     try {
@@ -1209,76 +1298,68 @@ function Install-PiCli {
             return $false
         }
 
-        & bun install -g $newPackage
+        if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+            Write-Warning "npm not found. Cannot install Pi coding agent."
+            Write-Debug "Install Node.js/npm, then run: npm install -g --ignore-scripts --prefix `"$localPrefix`" $newPackage@latest"
+            return $false
+        }
+
+        # Remove old npm-package ownership before installing so npm can claim the canonical shim.
+        & npm uninstall -g --prefix $localPrefix $oldPackage *> $null
+        foreach ($candidate in $canonicalCandidates) {
+            if (Test-Path $candidate) {
+                $candidateText = Get-Content -LiteralPath $candidate -Raw -ErrorAction SilentlyContinue
+                if ($candidateText -match "\\.bun" -or $candidateText -match "@mariozechner") {
+                    Remove-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+
+        Write-Message "Installing Pi with npm into $localPrefix..."
+        & npm install -g --ignore-scripts --prefix $localPrefix "$newPackage@latest"
         if ($LASTEXITCODE -ne 0) {
             Write-Host "$failIcon Failed to install Pi coding agent." -ForegroundColor Red
             return $false
         }
 
-        $globalPackages = & bun pm ls -g 2>$null | Out-String
-        if ($globalPackages.Contains($oldPackage)) {
-            Write-Host "$arrow Removing deprecated Pi package $oldPackage..." -ForegroundColor Cyan
-            & bun remove -g $oldPackage
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "$success Deprecated Pi package removed." -ForegroundColor Green
-            }
-            else {
-                Write-Host "$warnIcon Failed to remove old $oldPackage package." -ForegroundColor Yellow
-            }
-        }
+        & npm uninstall -g --prefix $localPrefix $oldPackage *> $null
+        Remove-NonCanonicalPiInstalls -NewPackage $newPackage -OldPackage $oldPackage
 
         $piCommand = Get-Command pi -ErrorAction SilentlyContinue
-        $piTarget = ""
-        $needsReinstall = $false
-        if ($piCommand) {
-            $piTarget = $piCommand.Source
-        }
-
-        if (-not $piCommand) {
-            Write-Host "$warnIcon Pi command was not found after migration. Reinstalling $newPackage." -ForegroundColor Yellow
-            $needsReinstall = $true
-        }
-        elseif ($piTarget.Contains($oldPackage)) {
-            Write-Host "$warnIcon Pi still points to old @mariozechner install path: $piTarget" -ForegroundColor Yellow
-            Write-Host "$arrow Reinstalling $newPackage to refresh the Pi shim..." -ForegroundColor Cyan
-            $needsReinstall = $true
-        }
-
-        if ($needsReinstall) {
-            & bun install -g $newPackage
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "$warnIcon Failed to reinstall $newPackage after cleanup." -ForegroundColor Yellow
-            }
-        }
-
-        $globalPackages = & bun pm ls -g 2>$null | Out-String
-        $piCommand = Get-Command pi -ErrorAction SilentlyContinue
-        $piTarget = ""
-        if ($piCommand) {
-            $piTarget = $piCommand.Source
-        }
-
-        if (-not $globalPackages.Contains($newPackage)) {
-            Write-Host "$warnIcon Pi migration incomplete: $newPackage is not listed in Bun global packages." -ForegroundColor Yellow
-            return $false
-        }
-
-        if ($globalPackages.Contains($oldPackage)) {
-            Write-Host "$warnIcon Pi migration incomplete: deprecated $oldPackage is still listed in Bun global packages." -ForegroundColor Yellow
-            return $false
-        }
-
         if (-not $piCommand) {
             Write-Host "$warnIcon Pi migration incomplete: pi command is not available after installing $newPackage." -ForegroundColor Yellow
             return $false
         }
 
-        if ($piTarget.Contains($oldPackage)) {
-            Write-Host "$warnIcon Pi migration incomplete: pi still points to old @mariozechner install path after reinstall: $piTarget" -ForegroundColor Yellow
+        $canonicalPi = $canonicalCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $canonicalPi) {
+            Write-Host "$warnIcon Pi migration incomplete: canonical npm Pi shim is missing in $localPrefix." -ForegroundColor Yellow
             return $false
         }
 
-        Write-Host "$success Pi coding agent installed/updated." -ForegroundColor Green
+        if ($piCommand.Source -ne $canonicalPi) {
+            Write-Host "$warnIcon Pi migration incomplete: PATH resolves pi to $($piCommand.Source) instead of $canonicalPi." -ForegroundColor Yellow
+            $allPi = Get-Command pi -All -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -Unique
+            if ($allPi) {
+                Write-Debug "pi commands on PATH: $($allPi -join ' ')"
+            }
+            return $false
+        }
+
+        if ($piCommand.Source.Contains("\.bun\") -or $piCommand.Source.Contains("\.cache\.bun\") -or $piCommand.Source.Contains($oldPackage)) {
+            Write-Host "$warnIcon Pi migration incomplete: pi resolves to non-canonical path $($piCommand.Source)." -ForegroundColor Yellow
+            return $false
+        }
+
+        $allPiCommands = Get-Command pi -All -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -Unique
+        foreach ($piPath in $allPiCommands) {
+            if ($piPath -ne $canonicalPi) {
+                Write-Warning "Additional pi command remains on PATH: $piPath"
+            }
+        }
+
+        $piVersion = (& pi --version 2>$null | Out-String).Trim()
+        Write-Host "$success Pi coding agent $piVersion installed/updated at $canonicalPi." -ForegroundColor Green
         return $true
     }
     catch {
@@ -1407,12 +1488,6 @@ function Update-PiSubagentsSettings {
 function Setup-PiSubagents {
     $package = "npm:@tintinweb/pi-subagents"
 
-    # Ensure bun is available
-    $bunPath = "$env:USERPROFILE\.bun\bin"
-    if (Test-Path $bunPath) {
-        $env:PATH = "$bunPath;$env:PATH"
-    }
-
     if (Test-EnvLocalFlag "BAN_PI_SUBAGENTS") {
         if (Update-PiSubagentsSettings -Mode "Remove") {
             Write-Success "Pi subagents extension disabled in Pi settings."
@@ -1420,9 +1495,9 @@ function Setup-PiSubagents {
         return
     }
 
-    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
-        Write-Warning "Bun not found. Cannot install Pi subagents."
-        Write-Debug "Install Bun first, then run: pi install npm:@tintinweb/pi-subagents"
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Warning "npm not found. Cannot install Pi subagents."
+        Write-Debug "Install Node.js/npm, then run: pi install npm:@tintinweb/pi-subagents"
         return
     }
 
@@ -1452,6 +1527,117 @@ function Setup-PiSubagents {
     }
     else {
         Write-Warning "Failed to install tintinweb Pi subagents: $output"
+    }
+}
+
+# Function to remove Pi MCP adapter package source from settings when disabled
+function Remove-PiMcpAdapterSettings {
+    if ($env:PI_CODING_AGENT_DIR) {
+        $agentDir = $env:PI_CODING_AGENT_DIR
+    }
+    else {
+        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    }
+
+    $settingsPath = Join-Path $agentDir "settings.json"
+
+    if (-not (Test-Path $agentDir)) {
+        New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
+    }
+
+    $settingsJson = "{}"
+    if (Test-Path $settingsPath) {
+        $settingsJson = Get-Content -Path $settingsPath -Raw
+        if ([string]::IsNullOrWhiteSpace($settingsJson)) {
+            $settingsJson = "{}"
+        }
+    }
+
+    try {
+        $settings = $settingsJson | ConvertFrom-Json
+        if ($null -eq $settings) {
+            $settings = New-Object PSObject
+        }
+    }
+    catch {
+        Write-Warning "Failed to parse Pi settings at $settingsPath. Leaving settings unchanged."
+        return $false
+    }
+
+    $packages = @()
+    if ($settings.PSObject.Properties["packages"]) {
+        $packages = @($settings.packages)
+    }
+
+    $filteredPackages = @()
+    foreach ($package in $packages) {
+        $source = ""
+        if ($package -is [string]) {
+            $source = $package
+        }
+        elseif ($null -ne $package -and $package.PSObject.Properties["source"]) {
+            $source = [string]$package.source
+        }
+
+        if ($source -ne "npm:pi-mcp-adapter") {
+            $filteredPackages += $package
+        }
+    }
+
+    if ($filteredPackages.Count -eq 0) {
+        Remove-JsonProperty -Object $settings -Name "packages"
+    }
+    else {
+        Set-JsonProperty -Object $settings -Name "packages" -Value ([object[]]$filteredPackages)
+    }
+
+    try {
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsPath -Encoding UTF8
+    }
+    catch {
+        Write-Warning "Failed to write Pi settings at $settingsPath."
+        return $false
+    }
+
+    return $true
+}
+
+# Function to install/update Pi MCP adapter extension
+function Setup-PiMcpAdapter {
+    $package = "npm:pi-mcp-adapter"
+
+    if (Test-EnvLocalFlag "BAN_PI_MCP_ADAPTER") {
+        if (Remove-PiMcpAdapterSettings) {
+            Write-Success "Pi MCP adapter extension disabled in Pi settings."
+        }
+        return
+    }
+
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Warning "npm not found. Cannot install Pi MCP adapter."
+        Write-Debug "Install Node.js/npm, then run: pi install npm:pi-mcp-adapter"
+        return
+    }
+
+    if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
+        Write-Warning "Pi coding agent not found. Cannot install Pi MCP adapter."
+        return
+    }
+
+    Write-Message "Installing/updating Pi MCP adapter..."
+    $output = & pi install $package 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $listOutput = & pi list 2>&1
+        $listText = ($listOutput | Out-String)
+        if ($LASTEXITCODE -eq 0 -and $listText.Contains($package)) {
+            Write-Success "Pi MCP adapter installed/updated."
+        }
+        else {
+            Write-Warning "Pi MCP adapter install completed, but package validation was inconclusive: $listText"
+        }
+    }
+    else {
+        Write-Warning "Failed to install Pi MCP adapter: $output"
     }
 }
 
@@ -2020,7 +2206,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 99 | Last changed: Install/update Claude Code CLI" -ForegroundColor DarkGray
+    Write-Host "Version 100 | Last changed: Canonicalize Pi and install MCP adapter" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -2068,6 +2254,7 @@ function Initialize-WindowsEnvironment {
     }
     if (Install-PiCli) {
         Setup-PiSubagents
+        Setup-PiMcpAdapter
         Setup-PiGoalAutoresearch
         if (-not (Test-MattPocockPiSkillsDisabled)) {
             Setup-MattPocockPiSkills
@@ -2075,6 +2262,15 @@ function Initialize-WindowsEnvironment {
         Setup-PiCompoundEngineering
     }
     else {
+        if (Test-EnvLocalFlag "BAN_PI_SUBAGENTS") {
+            Setup-PiSubagents
+        }
+        if (Test-EnvLocalFlag "BAN_PI_MCP_ADAPTER") {
+            Setup-PiMcpAdapter
+        }
+        if (Test-EnvLocalFlag "BAN_PI_GOAL_AUTORESEARCH") {
+            Setup-PiGoalAutoresearch
+        }
         Write-Warning "Skipping Pi extension setup because Pi migration failed."
     }
     Install-TursoCli
