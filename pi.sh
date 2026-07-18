@@ -18,6 +18,42 @@ print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 
 SETUP_ORIGINAL_PATH="${PATH}"
 SETUP_ORIGINAL_CLAUDE_COMMAND=$(command -v claude 2>/dev/null || true)
+
+# Acquire a non-blocking per-user setup lock so overlapping setup runs don't
+# corrupt shared global package directories (npm, Bun, Homebrew, etc.). The lock
+# is held by file descriptor 9 until the script exits.
+acquire_setup_lock() {
+    local _lock_root="${XDG_RUNTIME_DIR:-${HOME}/.local/state}"
+    local _lock_file="${_lock_root}/machine-setup.lock"
+
+    if [[ "${MACHINE_SETUP_ALLOW_CONCURRENT:-}" == "1" ]]; then
+        print_warning "MACHINE_SETUP_ALLOW_CONCURRENT=1, skipping concurrent setup guard."
+        return 0
+    fi
+
+    if ! command -v flock &> /dev/null; then
+        print_debug "flock not found; concurrent setup guard disabled."
+        return 0
+    fi
+
+    if ! mkdir -p "${_lock_root}"; then
+        print_warning "Could not create setup lock directory at ${_lock_root}; continuing without a lock."
+        return 0
+    fi
+
+    if ! exec 9>"${_lock_file}"; then
+        print_warning "Could not open setup lock at ${_lock_file}; continuing without a lock."
+        return 0
+    fi
+
+    if ! flock -n 9; then
+        print_warning "Another machine setup run is already in progress; exiting before making changes."
+        print_debug "Lock file: ${_lock_file}"
+        return 1
+    fi
+
+    print_debug "Acquired setup lock at ${_lock_file}."
+}
 print_error() { printf "${RED} %s${NC}\n" "$1"; }
 
 # Migrate old token files (~/.gh_token, ~/.op_token) into ~/.env.local
@@ -1940,7 +1976,11 @@ install_pi_cli() {
     local _local_prefix="${HOME}/.local"
     local _canonical_bin="${_local_prefix}/bin"
     local _canonical_pi="${_canonical_bin}/pi"
+    local _canonical_package_dir="${_local_prefix}/lib/node_modules/${_new_package}"
     local _pi_cmd=""
+    local _pi_link_target=""
+    local _pi_commands=""
+    local _pi_commands_inline=""
     local _pi_target=""
     local _pi_version=""
     local _path_entry=""
@@ -1974,6 +2014,30 @@ install_pi_cli() {
         fi
     fi
 
+    if [[ -e "${_canonical_pi}" || -L "${_canonical_pi}" ]]; then
+        if ! "${_canonical_pi}" --version > /dev/null 2>&1; then
+            print_warning "Existing Pi install at ${_canonical_pi} is broken; removing before reinstall."
+            if [[ -L "${_canonical_pi}" ]]; then
+                _pi_link_target=$(readlink "${_canonical_pi}" 2>/dev/null || true)
+                if [[ "${_pi_link_target}" == *"${_new_package}"* || "${_pi_link_target}" == *"${_old_package}"* ]]; then
+                    rm -f -- "${_canonical_pi}" || true
+                fi
+            fi
+            if [[ -e "${_canonical_package_dir}" || -L "${_canonical_package_dir}" ]]; then
+                if ! rm -rf -- "${_canonical_package_dir}"; then
+                    print_error "Failed to remove existing Pi package directory at ${_canonical_package_dir}."
+                    return 1
+                fi
+            fi
+        fi
+    elif [[ -e "${_canonical_package_dir}" || -L "${_canonical_package_dir}" ]]; then
+        print_warning "Found Pi package directory without canonical command; removing before reinstall."
+        if ! rm -rf -- "${_canonical_package_dir}"; then
+            print_error "Failed to remove existing Pi package directory at ${_canonical_package_dir}."
+            return 1
+        fi
+    fi
+
     print_message "Installing Pi with npm into ${_canonical_pi}..."
     if ! npm install -g --ignore-scripts --prefix "${_local_prefix}" "${_new_package}@latest"; then
         print_error "Failed to install Pi coding agent."
@@ -1995,7 +2059,9 @@ install_pi_cli() {
     if [[ "${_pi_cmd}" != "${_canonical_pi}" ]]; then
         print_warning "Pi migration incomplete: PATH resolves pi to ${_pi_cmd:-<missing>} instead of ${_canonical_pi}."
         if type -P -a pi > /dev/null 2>&1; then
-            print_debug "pi commands on PATH: $(type -P -a pi 2>/dev/null | awk '!seen[$0]++' | paste -sd ' ' -)"
+            _pi_commands=$(type -P -a pi 2>/dev/null | awk '!seen[$0]++' || true)
+            _pi_commands_inline=${_pi_commands//$'\n'/ }
+            print_debug "pi commands on PATH: ${_pi_commands_inline}"
         fi
         return 1
     fi
@@ -2010,14 +2076,19 @@ install_pi_cli() {
     fi
 
     if type -P -a pi > /dev/null 2>&1; then
+        _pi_commands=$(type -P -a pi 2>/dev/null | awk '!seen[$0]++' || true)
         while IFS= read -r _path_entry; do
             if [[ -n "${_path_entry}" && "${_path_entry}" != "${_canonical_pi}" ]]; then
                 print_warning "Additional pi command remains on PATH: ${_path_entry}"
             fi
-        done < <(type -P -a pi 2>/dev/null | awk '!seen[$0]++')
+        done <<< "${_pi_commands}"
     fi
 
-    _pi_version=$(pi --version 2>/dev/null || true)
+    if ! _pi_version=$(pi --version 2>/dev/null) || [[ -z "${_pi_version}" ]]; then
+        print_warning "Pi migration incomplete: pi command failed after installing ${_new_package}."
+        return 1
+    fi
+
     print_success "Pi coding agent ${_pi_version} installed/updated at ${_canonical_pi}."
 }
 
@@ -2790,7 +2861,13 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 149 | Last changed: Canonicalize Pi and install MCP adapter${NC}"
+    echo -e "${GRAY}Version 150 | Last changed: Guard Pi setup against concurrent runs${NC}"
+
+    if ! acquire_setup_lock; then
+        echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
+        upload_log
+        return 1
+    fi
 
     # Create placeholder env file early
     create_env_local
