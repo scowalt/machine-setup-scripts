@@ -107,6 +107,7 @@ create_env_local() {
 
 # Machine/setup guards
 # WORK_MACHINE=1
+# BAN_COMPOUND=1
 # BAN_COMPOUND_PLUGIN=1
 # BAN_PI_SUBAGENTS=1
 # BAN_PI_MCP_ADAPTER=1
@@ -2222,19 +2223,8 @@ s/AskUserQuestion/blocking question tool/g;
 
 # Install Compound Engineering prompts/skills for Pi
 setup_pi_compound_engineering() {
-    local _helper="${HOME}/.local/bin/setup-pi-compound-engineering"
-    if [[ -x "${_helper}" ]]; then
-        "${_helper}"
-        return 0
-    fi
-
-    if [[ "${WORK_MACHINE:-}" == "1" ]]; then
-        print_debug "WORK_MACHINE=1, skipping Compound Engineering for Pi."
-        return 0
-    fi
-
-    if [[ "${BAN_COMPOUND_PLUGIN:-}" == "1" ]]; then
-        print_debug "BAN_COMPOUND_PLUGIN=1, skipping Compound Engineering for Pi."
+    if [[ "${BAN_COMPOUND:-}" == "1" || "${BAN_COMPOUND_PLUGIN:-}" == "1" ]]; then
+        print_debug "BAN_COMPOUND=1 or BAN_COMPOUND_PLUGIN=1, skipping Compound Engineering for Pi."
         return 0
     fi
 
@@ -2966,7 +2956,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 185 | Last changed: Guard Pi setup against concurrent runs${NC}"
+    echo -e "${GRAY}Version 186 | Last changed: Install Compound Engineering on work machines${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
@@ -2977,7 +2967,7 @@ main() {
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
 
-    # Source env vars early so BAN_COMPOUND_PLUGIN etc. are available
+    # Source env vars early so BAN_COMPOUND/BAN_COMPOUND_PLUGIN etc. are available
     if [[ -f "${HOME}/.env.local" ]]; then
         set -a
         # shellcheck source=/dev/null
