@@ -111,6 +111,7 @@ function New-TokenPlaceholders {
 
 # Machine/setup guards
 # WORK_MACHINE=1
+# BAN_COMPOUND=1
 # BAN_COMPOUND_PLUGIN=1
 # BAN_PI_SUBAGENTS=1
 # BAN_PI_MCP_ADAPTER=1
@@ -1997,13 +1998,8 @@ function Sanitize-PiCompoundEngineeringForPi {
 
 # Function to install Compound Engineering prompts/skills for Pi
 function Setup-PiCompoundEngineering {
-    if (Test-EnvLocalFlag "WORK_MACHINE") {
-        Write-Debug "WORK_MACHINE=1, skipping Compound Engineering for Pi."
-        return
-    }
-
-    if (Test-EnvLocalFlag "BAN_COMPOUND_PLUGIN") {
-        Write-Debug "BAN_COMPOUND_PLUGIN=1, skipping Compound Engineering for Pi."
+    if ((Test-EnvLocalFlag "BAN_COMPOUND") -or (Test-EnvLocalFlag "BAN_COMPOUND_PLUGIN")) {
+        Write-Debug "BAN_COMPOUND=1 or BAN_COMPOUND_PLUGIN=1, skipping Compound Engineering for Pi."
         return
     }
 
@@ -2206,7 +2202,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 100 | Last changed: Canonicalize Pi and install MCP adapter" -ForegroundColor DarkGray
+    Write-Host "Version 101 | Last changed: Install Compound Engineering on work machines" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
