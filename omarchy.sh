@@ -823,14 +823,65 @@ run_omarchy_update() {
     export OMARCHY_PATH="${OMARCHY_PATH:-${HOME}/.local/share/omarchy}"
 
     print_message "Running Omarchy system update..."
-    # Run omarchy-update under sudo directly so its internal sudo calls are
-    # already elevated and never prompt. When run via curl|bash, a second sudo
-    # prompt causes the password to echo in plaintext because tty handling breaks.
+
+    # Intentionally do NOT run omarchy-update with sudo. Omarchy's AUR phase
+    # invokes yay/makepkg, and makepkg refuses to run as root because building
+    # PKGBUILDs as root can damage the system. Sudo was requested up front, so
+    # Omarchy's own sudo calls can elevate only the pacman/system-package steps
+    # that need it while keeping AUR builds under the regular user.
+    if ! sudo -n true 2>/dev/null; then
+        print_message "Refreshing sudo credentials for Omarchy update..."
+        # shellcheck disable=SC2024
+        if ! sudo -v < /dev/tty; then
+            print_error "Could not refresh sudo credentials for Omarchy update."
+            return 1
+        fi
+    fi
+
     local omarchy_update_path
     omarchy_update_path="$(command -v omarchy-update)"
-    # sudo's secure_path resets PATH even with -E, so pass it explicitly
-    # so omarchy-snapshot, omarchy-update-git, etc. are discoverable.
-    if sudo -E PATH="${PATH}" "${omarchy_update_path}" -y; then
+
+    # Omarchy wraps updates in script(1) for its own PTY/logging. In curl|bash
+    # setup runs, that PTY can make later prompts impossible to answer. This
+    # setup script already logs the full run, so skip the script(1) wrapper and
+    # tee Omarchy's output to the log file that its analyzer expects.
+    local update_log="/tmp/omarchy-update.log"
+    : > "${update_log}" 2>/dev/null || true
+
+    # Never reboot from the setup script. Omarchy asks via `gum confirm`; put a
+    # temporary gum wrapper first on PATH that answers reboot prompts with No.
+    local real_gum=""
+    local gum_wrapper_dir=""
+    if real_gum="$(command -v gum 2>/dev/null)" && [[ -n "${real_gum}" ]]; then
+        gum_wrapper_dir="$(mktemp -d)"
+        cat > "${gum_wrapper_dir}/gum" <<EOF
+#!/bin/bash
+if [[ "\${1:-}" == "confirm" ]]; then
+    prompt="\${*:2}"
+    if [[ "\${prompt}" =~ [Rr]eboot ]]; then
+        echo "No"
+        echo "Setup script never reboots automatically; skipping Omarchy reboot prompt."
+        exit 1
+    fi
+fi
+exec "${real_gum}" "\$@"
+EOF
+        chmod +x "${gum_wrapper_dir}/gum"
+    fi
+
+    local update_status
+    # shellcheck disable=SC2312 # tee failure should not mask omarchy-update's status.
+    env \
+        OMARCHY_UPDATE_LOGGED=1 \
+        PATH="${gum_wrapper_dir:+${gum_wrapper_dir}:}${PATH}" \
+        "${omarchy_update_path}" -y > >(tee "${update_log}") 2>&1
+    update_status=$?
+
+    if [[ -n "${gum_wrapper_dir}" ]]; then
+        rm -rf "${gum_wrapper_dir}"
+    fi
+
+    if [[ "${update_status}" -eq 0 ]]; then
         print_success "Omarchy system update completed."
     else
         print_error "Omarchy system update failed."
@@ -2934,7 +2985,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🏛️ Omarchy/Arch Linux Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 156 | Last changed: Install Compound Engineering on work machines${NC}"
+    echo -e "${GRAY}Version 158 | Last changed: Document Omarchy update sudo behavior${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
