@@ -1832,7 +1832,7 @@ paseo_path_is_group_or_world_writable() {
         return 0
     fi
 
-    _unsafe=$(find "${_path}" -prune -perm -022 -print -quit 2>/dev/null || true)
+    _unsafe=$(find "${_path}" -prune \( -perm -020 -o -perm -002 \) -print -quit 2>/dev/null || true)
     if [[ -n "${_unsafe}" ]]; then
         return 0
     fi
@@ -1846,15 +1846,121 @@ paseo_path_is_group_or_world_writable() {
     [[ -d "${_dir}" ]] || return 0
 
     while [[ -n "${_dir}" && "${_dir}" != "/" ]]; do
-        _unsafe=$(find "${_dir}" -prune -perm -022 -print -quit 2>/dev/null || true)
+        _unsafe=$(find "${_dir}" -prune \( -perm -020 -o -perm -002 \) -print -quit 2>/dev/null || true)
         if [[ -n "${_unsafe}" ]]; then
             return 0
         fi
         _dir=$(dirname "${_dir}")
     done
 
-    _unsafe=$(find / -prune -perm -022 -print -quit 2>/dev/null || true)
+    _unsafe=$(find / -prune \( -perm -020 -o -perm -002 \) -print -quit 2>/dev/null || true)
     [[ -n "${_unsafe}" ]]
+}
+
+paseo_harden_user_path_chain() {
+    local _path="$1"
+    local _label="$2"
+    local _home_real=""
+    local _target=""
+    local _dir=""
+    local _owner=""
+    local _target_under_home=0
+    local _user=""
+
+    [[ -n "${_path}" && -e "${_path}" ]] || return 0
+    [[ -n "${HOME}" && -d "${HOME}" ]] || return 0
+
+    _user=$(whoami || true)
+    [[ -n "${_user}" ]] || return 0
+
+    if command -v realpath &> /dev/null; then
+        _home_real=$(realpath "${HOME}" 2>/dev/null || true)
+        _target=$(realpath "${_path}" 2>/dev/null || true)
+    elif readlink -f "${HOME}" > /dev/null 2>&1 && readlink -f "${_path}" > /dev/null 2>&1; then
+        _home_real=$(readlink -f "${HOME}" 2>/dev/null || true)
+        _target=$(readlink -f "${_path}" 2>/dev/null || true)
+    else
+        _home_real=$(cd "${HOME}" && pwd -P) || return 0
+        if [[ -d "${_path}" ]]; then
+            _target=$(cd "${_path}" && pwd -P) || return 0
+        else
+            _dir=$(cd "$(dirname "${_path}")" && pwd -P) || return 0
+            _target="${_dir}/$(basename "${_path}")"
+        fi
+    fi
+
+    [[ -n "${_home_real}" && -n "${_target}" ]] || return 0
+
+    case "${_target}" in
+        "${_home_real}"|"${_home_real}/"*) _target_under_home=1 ;;
+        *) ;;
+    esac
+
+    _owner=$(paseo_path_owner "${_target}")
+    if [[ "${_owner}" == "${_user}" ]] && ! chmod go-w "${_target}"; then
+        print_error "Failed to harden Paseo ${_label} path permissions: ${_target}"
+        return 1
+    fi
+
+    if [[ -d "${_target}" ]]; then
+        _dir="${_target}"
+    else
+        _dir=$(dirname "${_target}")
+    fi
+
+    while [[ -n "${_dir}" && "${_dir}" != "/" ]]; do
+        if [[ "${_target_under_home}" == "1" ]]; then
+            case "${_dir}" in
+                "${_home_real}"|"${_home_real}/"*) ;;
+                *) break ;;
+            esac
+        fi
+
+        _owner=$(paseo_path_owner "${_dir}")
+        if [[ "${_owner}" == "${_user}" ]] && ! chmod go-w "${_dir}"; then
+            print_error "Failed to harden Paseo ${_label} parent permissions: ${_dir}"
+            return 1
+        elif [[ "${_owner}" != "${_user}" && "${_target_under_home}" != "1" ]]; then
+            break
+        fi
+
+        [[ "${_dir}" == "${_home_real}" ]] && break
+        _dir=$(dirname "${_dir}")
+    done
+}
+
+paseo_harden_service_path_components() {
+    local _path_value="$1"
+    local _component=""
+
+    while IFS= read -r _component; do
+        [[ -n "${_component}" ]] || continue
+
+        if [[ -L "${_component}" ]]; then
+            paseo_harden_user_path_chain "$(dirname "${_component}")" "service PATH component parent" || return 1
+        fi
+
+        [[ -e "${_component}" ]] || continue
+        paseo_harden_user_path_chain "${_component}" "service PATH component" || return 1
+    done < <(printf '%s\n' "${_path_value}" | tr ':' '\n' || true)
+}
+
+paseo_existing_service_path() {
+    local _path_value="$1"
+    local _component=""
+    local _result=""
+
+    while IFS= read -r _component; do
+        [[ -n "${_component}" && -d "${_component}" ]] || continue
+
+        if [[ -z "${_result}" ]]; then
+            _result="${_component}"
+        else
+            _result="${_result}:${_component}"
+        fi
+    done < <(printf '%s\n' "${_path_value}" | tr ':' '\n' || true)
+
+    printf '%s\n' "${_result}"
 }
 
 paseo_path_owner_is_trusted() {
@@ -1947,13 +2053,14 @@ paseo_validate_service_path_components() {
         fi
 
         paseo_validate_trusted_path "${_resolved_component}" "service PATH component" || return 1
-    done < <(printf '%s' "${_path_value}" | tr ':' '\n' || true)
+    done < <(printf '%s\n' "${_path_value}" | tr ':' '\n' || true)
 }
 
 install_paseo_cli() {
     local _global_packages=""
     local _paseo_target=""
     local _node_target=""
+    local _node_dir=""
     local _version_output=""
     local _service_path=""
     local _bun_global_bin=""
@@ -2015,6 +2122,7 @@ install_paseo_cli() {
         return 1
     fi
 
+    paseo_harden_user_path_chain "${_paseo_target}" "executable" || return 1
     paseo_validate_trusted_path "${_paseo_target}" "executable" || return 1
 
     _node_target=$(paseo_runtime_target 2>/dev/null || true)
@@ -2022,11 +2130,20 @@ install_paseo_cli() {
         print_error "Paseo runtime validation failed: node is not available for the service wrapper."
         return 1
     fi
+    paseo_harden_user_path_chain "${_node_target}" "runtime" || return 1
     paseo_validate_trusted_path "${_node_target}" "runtime" || return 1
 
     PASEO_VALIDATED_CMD="${_paseo_target}"
     PASEO_VALIDATED_NODE="${_node_target}"
-    PASEO_SERVICE_PATH="$(dirname "${_node_target}"):$(paseo_service_path)"
+    _node_dir=$(dirname "${_node_target}")
+    _service_path=$(paseo_service_path)
+    _service_path="${_node_dir}:${_service_path}"
+    PASEO_SERVICE_PATH=$(paseo_existing_service_path "${_service_path}")
+    if [[ -z "${PASEO_SERVICE_PATH}" ]]; then
+        print_error "Paseo service PATH validation failed: no existing PATH components remain."
+        return 1
+    fi
+    paseo_harden_service_path_components "${PASEO_SERVICE_PATH}" || return 1
     paseo_validate_service_path_components "${PASEO_SERVICE_PATH}" || return 1
 
     if ! _version_output=$(HOME="${HOME}" PATH="${PASEO_SERVICE_PATH}:${PATH}" "${_paseo_target}" --version 2>/dev/null); then
@@ -3385,7 +3502,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 53 | Last changed: Configure headless Paseo daemon${NC}"
+    echo -e "${GRAY}Version 54 | Last changed: Harden Paseo trust path permissions${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
