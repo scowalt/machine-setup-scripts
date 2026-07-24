@@ -107,8 +107,6 @@ create_env_local() {
 
 # Machine/setup guards
 # WORK_MACHINE=1
-# BAN_COMPOUND=1
-# BAN_COMPOUND_PLUGIN=1
 # BAN_PI_SUBAGENTS=1
 # BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
@@ -2168,100 +2166,349 @@ setup_matt_pocock_pi_skills() {
 }
 
 
-# Remove unsupported AskUserQuestion references from Compound Engineering files installed for Pi.
-sanitize_pi_compound_engineering_for_pi() {
-    local _agent_dir="${1:-${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}}"
-    local _skills_dir="${_agent_dir}/skills"
-    # shellcheck disable=SC2016
-    local _perl_expr='
-s/^[ \t]*-[ \t]*AskUserQuestion\r?\n//mg;
-s/`AskUserQuestion` in [^,;.]* with `ToolSearch select:AskUserQuestion` pre-loaded if needed,[ \t]*//g;
-s/`AskUserQuestion` in [^,;.]* — call `ToolSearch` with `select:AskUserQuestion`[^;]*;[ \t]*//g;
-s/`AskUserQuestion` in [^,;.]* \(call `ToolSearch` with `select:AskUserQuestion`[^)]*\),[ \t]*//g;
-s/`AskUserQuestion` in [^,;.]*,[ \t]*//g;
-s/`AskUserQuestion` in [^,;.]*[ \t]*//g;
-s/[ \t]*\*\*[^*]* only:\*\* if `AskUserQuestion`[^\n.]*\.[ \t]*/ /g;
-s/[ \t]*In [^,\n.]*,? call `ToolSearch` with `select:AskUserQuestion`[^\n.]*\.[ \t]*/ /g;
-s/[ \t]*In [^,\n.]*,? the tool should already be loaded[^\n.]*`ToolSearch`[^\n.]*\.[ \t]*/ /g;
-s/[ \t]*In [^,\n.]* the tool should already be loaded[^\n.]*`ToolSearch`[^\n.]*\.[ \t]*/ /g;
-s/[ \t]*In [^\n.]*`select:AskUserQuestion`[^\n.]*\.[ \t]*/ /g;
-s/[ \t]*At the start of Interactive-mode work[^\n.]*`select:AskUserQuestion`[^\n.]*\.[ \t]*/ /g;
-s/[ \t]*Load it \*\*once[^\n.]*\.[ \t]*/ /g;
-s/`ToolSearch` returns no match, the tool call explicitly fails, or/the tool call is unavailable, errors, or/g;
-s/Only when `ToolSearch` explicitly returns no match or the tool call errors — or on a platform with no blocking question tool —/Only when no blocking question tool exists or the tool call errors,/g;
-s/A pending schema load is not a fallback trigger; call `ToolSearch` first per the pre-load rule\. //g;
-s/A pending schema load is not a fallback trigger\. //g;
-s/ — not because a schema load is required//g;
-s/no `AskUserQuestion` menu/no formal question menu/g;
-s/`AskUserQuestion` menu/formal question menu/g;
-s/AskUserQuestion/blocking question tool/g;
-'
+# Remove legacy Compound Engineering resources without affecting unrelated agent tooling.
+compound_path_is_within() {
+    local _path="$1"
+    local _root="$2"
+    local _canonical_path=""
+    local _canonical_root=""
 
-    if [[ ! -d "${_skills_dir}" && ! -f "${_agent_dir}/AGENTS.md" ]]; then
-        return 0
-    fi
-
-    if ! command -v perl &> /dev/null; then
-        print_warning "perl not found. Cannot sanitize Compound Engineering Pi skill files."
-        return 0
-    fi
-
-    if [[ -d "${_skills_dir}" ]]; then
-        find "${_skills_dir}" -type f -name '*.md' -exec perl -0pi -e "${_perl_expr}" {} +
-    fi
-
-    if [[ -f "${_agent_dir}/AGENTS.md" ]]; then
-        perl -0pi -e "${_perl_expr}" "${_agent_dir}/AGENTS.md"
-    fi
-
-    if { [[ -d "${_skills_dir}" ]] && grep -R "AskUserQuestion" "${_skills_dir}" &> /dev/null; } || { [[ -f "${_agent_dir}/AGENTS.md" ]] && grep -q "AskUserQuestion" "${_agent_dir}/AGENTS.md"; }; then
-        print_warning "Compound Engineering Pi files still mention AskUserQuestion after sanitizing."
-    else
-        print_success "Compound Engineering Pi files sanitized for Pi."
-    fi
+    _canonical_root=$(cd -P "${_root}" 2>/dev/null && pwd -P) || return 1
+    _canonical_path=$(cd -P "${_path}" 2>/dev/null && pwd -P) || return 1
+    case "${_canonical_path}" in
+        "${_canonical_root}"/*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
-# Install Compound Engineering prompts/skills for Pi
-setup_pi_compound_engineering() {
-    if [[ "${BAN_COMPOUND:-}" == "1" || "${BAN_COMPOUND_PLUGIN:-}" == "1" ]]; then
-        print_debug "BAN_COMPOUND=1 or BAN_COMPOUND_PLUGIN=1, skipping Compound Engineering for Pi."
+compound_link_target_is_within() {
+    local _link_path="$1"
+    local _root_path="$2"
+    local _link_target=""
+
+    [[ -L "${_link_path}" ]] || return 1
+    _link_target=$(readlink "${_link_path}") || return 1
+    case "${_link_target}" in
+        /*) ;;
+        *) _link_target="$(dirname "${_link_path}")/${_link_target}" ;;
+    esac
+
+    if compound_path_is_within "${_link_target}" "${_root_path}"; then
         return 0
     fi
 
-    # Ensure bun is available
-    if [[ -d "${HOME}/.bun" ]]; then
-        export PATH="${HOME}/.bun/bin:${PATH}"
+    # Legacy installer links use an absolute target. This lexical check also
+    # removes a dangling link after a previous partial cleanup, while keeping
+    # the trailing slash boundary from matching sibling directories. Do not
+    # trust an unresolved target with traversal segments.
+    case "${_link_target}" in
+        */../*|*/..) return 1 ;;
+        "${_root_path}"/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+compound_pi_skill_names() {
+    printf '%s
+' \
+        ce-agent-native-architecture \
+        ce-agent-native-audit \
+        ce-brainstorm \
+        ce-clean-gone-branches \
+        ce-code-review \
+        ce-commit \
+        ce-commit-push-pr \
+        ce-compound \
+        ce-compound-refresh \
+        ce-debug \
+        ce-demo-reel \
+        ce-dhh-rails-style \
+        ce-doc-review \
+        ce-frontend-design \
+        ce-gemini-imagegen \
+        ce-ideate \
+        ce-optimize \
+        ce-plan \
+        ce-polish-beta \
+        ce-product-pulse \
+        ce-proof \
+        ce-release-notes \
+        ce-report-bug \
+        ce-resolve-pr-feedback \
+        ce-riffrec-feedback-analysis \
+        ce-sessions \
+        ce-setup \
+        ce-simplify-code \
+        ce-slack-research \
+        ce-strategy \
+        ce-test-browser \
+        ce-test-xcode \
+        ce-work \
+        ce-work-beta \
+        ce-worktree
+}
+
+compound_pi_agent_names() {
+    printf '%s
+' \
+        ce-adversarial-document-reviewer \
+        ce-adversarial-reviewer \
+        ce-agent-native-reviewer \
+        ce-ankane-readme-writer \
+        ce-api-contract-reviewer \
+        ce-architecture-strategist \
+        ce-best-practices-researcher \
+        ce-code-simplicity-reviewer \
+        ce-coherence-reviewer \
+        ce-correctness-reviewer \
+        ce-data-integrity-guardian \
+        ce-data-migration-expert \
+        ce-data-migrations-reviewer \
+        ce-deployment-verification-agent \
+        ce-design-implementation-reviewer \
+        ce-design-iterator \
+        ce-design-lens-reviewer \
+        ce-dhh-rails-reviewer \
+        ce-feasibility-reviewer \
+        ce-figma-design-sync \
+        ce-framework-docs-researcher \
+        ce-git-history-analyzer \
+        ce-issue-intelligence-analyst \
+        ce-julik-frontend-races-reviewer \
+        ce-kieran-python-reviewer \
+        ce-kieran-rails-reviewer \
+        ce-kieran-typescript-reviewer \
+        ce-learnings-researcher \
+        ce-maintainability-reviewer \
+        ce-pattern-recognition-specialist \
+        ce-performance-oracle \
+        ce-performance-reviewer \
+        ce-pr-comment-resolver \
+        ce-previous-comments-reviewer \
+        ce-product-lens-reviewer \
+        ce-project-standards-reviewer \
+        ce-reliability-reviewer \
+        ce-repo-research-analyst \
+        ce-schema-drift-detector \
+        ce-scope-guardian-reviewer \
+        ce-security-lens-reviewer \
+        ce-security-reviewer \
+        ce-security-sentinel \
+        ce-session-historian \
+        ce-slack-researcher \
+        ce-spec-flow-analyzer \
+        ce-swift-ios-reviewer \
+        ce-testing-reviewer \
+        ce-web-researcher
+}
+
+remove_pi_compound_settings() {
+    local _agent_dir="$1"
+    local _settings_file="${_agent_dir}/settings.json"
+    local _tmp=""
+
+    [[ -f "${_settings_file}" && ! -L "${_settings_file}" ]] || return 1
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot remove Compound Engineering entries from Pi settings at ${_settings_file}."
+        return 1
     fi
 
-    if ! command -v bun &> /dev/null; then
-        print_warning "Bun not found. Cannot install Compound Engineering for Pi."
-        print_debug "Install Bun first, then run: bunx @every-env/compound-plugin install compound-engineering --to pi"
-        return 0
+    if ! jq -e '
+        def package_source:
+            if type == "string" then .
+            elif type == "object" then (.source // "")
+            else ""
+            end;
+        def compound_source:
+            package_source | ascii_downcase as $source |
+            ($source == "npm:@every-env/compound-plugin"
+                or $source == "npm:@every-env/compound-engineering-plugin"
+                or $source == "https://github.com/everyinc/compound-engineering-plugin.git");
+        (.packages | type) == "array" and any(.packages[]; compound_source)
+    ' "${_settings_file}" > /dev/null; then
+        return 1
     fi
 
-    if ! command -v bunx &> /dev/null; then
-        print_warning "bunx not found. Cannot install Compound Engineering for Pi."
-        return 0
+    if ! _tmp=$(mktemp); then
+        print_warning "Could not create a temporary file for Pi settings cleanup at ${_settings_file}."
+        return 1
     fi
 
-    if ! command -v pi &> /dev/null; then
-        print_warning "Pi coding agent not found. Cannot install Compound Engineering for Pi."
-        return 0
-    fi
-
-    print_message "Installing/updating Compound Engineering for Pi..."
-    local _output
-    if _output=$(bunx @every-env/compound-plugin install compound-engineering --to pi 2>&1); then
-        local _agent_dir="${HOME}/.pi/agent"
-        if [[ -f "${_agent_dir}/extensions/compound-engineering-compat.ts" ]] || grep -q "BEGIN COMPOUND PI TOOL MAP" "${_agent_dir}/AGENTS.md" 2>/dev/null; then
-            print_success "Compound Engineering installed for Pi."
-        else
-            print_warning "Compound Engineering Pi install completed, but expected artifacts were not found."
+    if jq '
+        def package_source:
+            if type == "string" then .
+            elif type == "object" then (.source // "")
+            else ""
+            end;
+        def compound_source:
+            package_source | ascii_downcase as $source |
+            ($source == "npm:@every-env/compound-plugin"
+                or $source == "npm:@every-env/compound-engineering-plugin"
+                or $source == "https://github.com/everyinc/compound-engineering-plugin.git");
+        .packages = (.packages | map(select(compound_source | not)))
+        | if (.packages | length) == 0 then del(.packages) else . end
+    ' "${_settings_file}" > "${_tmp}"; then
+        if mv "${_tmp}" "${_settings_file}"; then
+            return 0
         fi
-        sanitize_pi_compound_engineering_for_pi "${_agent_dir}"
+        rm -f "${_tmp}"
+        print_warning "Failed to replace Pi settings after Compound Engineering cleanup at ${_settings_file}."
     else
-        print_warning "Failed to install Compound Engineering for Pi: ${_output}"
+        rm -f "${_tmp}"
+        print_warning "Failed to parse Pi settings at ${_settings_file}; leaving it unchanged."
     fi
+
+    return 1
+}
+
+remove_compound_engineering_resources() {
+    local _default_agent_dir="${HOME}/.pi/agent"
+    local _active_agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
+    local _compound_repo="${HOME}/.local/share/compound-engineering-plugin"
+    local _skills_dir="${HOME}/.agents/skills"
+    local _agent_dir=""
+    local _resource_dir=""
+    local _resource_path=""
+    local _resource_name=""
+    local _extension_path=""
+    local _agents_path=""
+    local _tmp=""
+    local _begin_marker="<!-- BEGIN COMPOUND PI TOOL MAP -->"
+    local _end_marker="<!-- END COMPOUND PI TOOL MAP -->"
+    local _begin_count=0
+    local _end_count=0
+    local _removed=0
+    local _failed=()
+    local _agent_dirs=()
+
+    if [[ -d "${_default_agent_dir}" ]]; then
+        if compound_path_is_within "${_default_agent_dir}" "${HOME}"; then
+            _agent_dirs+=("${_default_agent_dir}")
+        else
+            print_warning "Skipping Pi cleanup outside ${HOME}: ${_default_agent_dir}"
+        fi
+    fi
+
+    if [[ "${_active_agent_dir}" != "${_default_agent_dir}" && -d "${_active_agent_dir}" ]]; then
+        if compound_path_is_within "${_active_agent_dir}" "${HOME}"; then
+            _agent_dirs+=("${_active_agent_dir}")
+        else
+            print_warning "Skipping Pi cleanup outside ${HOME}: ${_active_agent_dir}"
+        fi
+    fi
+
+    if [[ -d "${_skills_dir}" ]] && compound_path_is_within "${_skills_dir}" "${HOME}"; then
+        for _resource_path in "${_skills_dir}"/*; do
+            [[ -L "${_resource_path}" ]] || continue
+            if compound_link_target_is_within "${_resource_path}" "${_compound_repo}"; then
+                if rm -f -- "${_resource_path}" && [[ ! -e "${_resource_path}" && ! -L "${_resource_path}" ]]; then
+                    _removed=1
+                else
+                    _failed+=("${_resource_path}")
+                fi
+            fi
+        done
+    fi
+
+    for _agent_dir in "${_agent_dirs[@]}"; do
+        if remove_pi_compound_settings "${_agent_dir}"; then
+            _removed=1
+        fi
+
+        _resource_dir="${_agent_dir}/extensions"
+        if [[ -d "${_resource_dir}" ]] && compound_path_is_within "${_resource_dir}" "${HOME}"; then
+            for _extension_path in "${_resource_dir}"/compound-engineering*; do
+                [[ -e "${_extension_path}" || -L "${_extension_path}" ]] || continue
+                if rm -rf -- "${_extension_path}" && [[ ! -e "${_extension_path}" && ! -L "${_extension_path}" ]]; then
+                    _removed=1
+                else
+                    _failed+=("${_extension_path}")
+                fi
+            done
+        fi
+
+        _resource_dir="${_agent_dir}/skills"
+        if [[ -d "${_resource_dir}" ]] && compound_path_is_within "${_resource_dir}" "${HOME}"; then
+            while IFS= read -r _resource_name; do
+                _resource_path="${_resource_dir}/${_resource_name}"
+                [[ -d "${_resource_path}" || -L "${_resource_path}" ]] || continue
+                if rm -rf -- "${_resource_path}" && [[ ! -e "${_resource_path}" && ! -L "${_resource_path}" ]]; then
+                    _removed=1
+                else
+                    _failed+=("${_resource_path}")
+                fi
+            done < <(compound_pi_skill_names || true)
+        fi
+
+        _resource_dir="${_agent_dir}/agents"
+        if [[ -d "${_resource_dir}" ]] && compound_path_is_within "${_resource_dir}" "${HOME}"; then
+            while IFS= read -r _resource_name; do
+                for _resource_path in "${_resource_dir}/${_resource_name}" "${_resource_dir}/${_resource_name}.md"; do
+                    [[ -e "${_resource_path}" || -L "${_resource_path}" ]] || continue
+                    if [[ -d "${_resource_path}" || -L "${_resource_path}" ]]; then
+                        rm -rf -- "${_resource_path}"
+                    else
+                        rm -f -- "${_resource_path}"
+                    fi
+                    if [[ ! -e "${_resource_path}" && ! -L "${_resource_path}" ]]; then
+                        _removed=1
+                    else
+                        _failed+=("${_resource_path}")
+                    fi
+                done
+            done < <(compound_pi_agent_names || true)
+        fi
+
+        _agents_path="${_agent_dir}/AGENTS.md"
+        if [[ -f "${_agents_path}" && ! -L "${_agents_path}" ]]; then
+            _begin_count=$(grep -Fxc "${_begin_marker}" "${_agents_path}" || true)
+            _end_count=$(grep -Fxc "${_end_marker}" "${_agents_path}" || true)
+            if [[ "${_begin_count}" -eq 1 && "${_end_count}" -eq 1 ]]; then
+                if ! _tmp=$(mktemp "${_agents_path}.XXXXXX"); then
+                    print_warning "Could not create a temporary file to remove the Compound Engineering block from ${_agents_path}."
+                elif awk -v begin="${_begin_marker}" -v end="${_end_marker}" '
+                    $0 == begin { in_block = 1; next }
+                    $0 == end && in_block { in_block = 0; next }
+                    !in_block { print }
+                    END { exit in_block ? 1 : 0 }
+                ' "${_agents_path}" > "${_tmp}" && mv "${_tmp}" "${_agents_path}"; then
+                    _removed=1
+                else
+                    rm -f "${_tmp}"
+                    print_warning "Failed to safely remove the Compound Engineering block from ${_agents_path}."
+                fi
+            elif [[ "${_begin_count}" -ne 0 || "${_end_count}" -ne 0 ]]; then
+                print_warning "Compound Engineering markers are malformed in ${_agents_path}; leaving it unchanged."
+            fi
+        elif [[ -L "${_agents_path}" ]]; then
+            print_warning "Skipping Compound Engineering block cleanup in symlinked ${_agents_path}."
+        fi
+    done
+
+    if [[ -L "${_compound_repo}" ]]; then
+        if rm -f -- "${_compound_repo}" && [[ ! -e "${_compound_repo}" && ! -L "${_compound_repo}" ]]; then
+            _removed=1
+        else
+            _failed+=("${_compound_repo}")
+        fi
+    elif [[ -d "${_compound_repo}" ]] && compound_path_is_within "${_compound_repo}" "${HOME}"; then
+        if rm -rf -- "${_compound_repo}" && [[ ! -e "${_compound_repo}" && ! -L "${_compound_repo}" ]]; then
+            _removed=1
+        else
+            _failed+=("${_compound_repo}")
+        fi
+    fi
+
+    if [[ "${#_failed[@]}" -gt 0 ]]; then
+        print_warning "Failed to remove legacy Compound Engineering resources: ${_failed[*]}"
+    elif [[ "${_removed}" -eq 1 ]]; then
+        print_success "Legacy Compound Engineering resources removed."
+    else
+        print_debug "No legacy Compound Engineering resources found."
+    fi
+
+    return 0
 }
 
 # Install mise (polyglot runtime manager)
@@ -2956,7 +3203,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 186 | Last changed: Install Compound Engineering on work machines${NC}"
+    echo -e "${GRAY}Version 187 | Last changed: Remove Compound Engineering setup and clean legacy artifacts${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
@@ -2967,7 +3214,7 @@ main() {
     # Create placeholder env file early (migrates old token files if present)
     create_env_local
 
-    # Source env vars early so BAN_COMPOUND/BAN_COMPOUND_PLUGIN etc. are available
+    # Source env vars early so optional setup flags are available
     if [[ -f "${HOME}/.env.local" ]]; then
         set -a
         # shellcheck source=/dev/null
@@ -3105,7 +3352,6 @@ HELPER_EOF
         if ! matt_pocock_pi_skills_disabled; then
             setup_matt_pocock_pi_skills
         fi
-        setup_pi_compound_engineering
     else
         if [[ "${BAN_PI_SUBAGENTS:-}" == "1" ]]; then
             setup_pi_subagents
@@ -3118,6 +3364,8 @@ HELPER_EOF
         fi
         print_warning "Skipping Pi extension setup because Pi migration failed."
     fi
+
+    remove_compound_engineering_resources
 
     print_section "Final Updates"
     upgrade_npm_global_packages

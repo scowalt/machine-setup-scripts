@@ -111,8 +111,6 @@ function New-TokenPlaceholders {
 
 # Machine/setup guards
 # WORK_MACHINE=1
-# BAN_COMPOUND=1
-# BAN_COMPOUND_PLUGIN=1
 # BAN_PI_SUBAGENTS=1
 # BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
@@ -1918,131 +1916,306 @@ function Setup-MattPocockPiSkills {
 }
 
 
-# Function to remove unsupported AskUserQuestion references from Compound Engineering files installed for Pi
-function Sanitize-PiCompoundEngineeringForPi {
-    param([string]$AgentDir)
+# Remove legacy Compound Engineering resources without affecting unrelated Windows agent tooling.
+function Test-PathWithin {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$Root
+    )
 
-    if (-not $AgentDir) {
-        if ($env:PI_CODING_AGENT_DIR) {
-            $AgentDir = $env:PI_CODING_AGENT_DIR
-        }
-        else {
-            $AgentDir = Join-Path $env:USERPROFILE ".pi\agent"
-        }
+    try {
+        $trimCharacters = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+        $canonicalRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd($trimCharacters)
+        $canonicalPath = [System.IO.Path]::GetFullPath($Path)
+        return $canonicalPath.StartsWith("${canonicalRoot}$([System.IO.Path]::DirectorySeparatorChar)", [System.StringComparison]::OrdinalIgnoreCase)
     }
-
-    $paths = @()
-    $skillsDir = Join-Path $AgentDir "skills"
-    if (Test-Path $skillsDir) {
-        $paths += Get-ChildItem -Path $skillsDir -Recurse -File -Filter "*.md"
-    }
-
-    $agentsPath = Join-Path $AgentDir "AGENTS.md"
-    if (Test-Path $agentsPath) {
-        $paths += Get-Item $agentsPath
-    }
-
-    if (@($paths).Count -eq 0) {
-        return
-    }
-
-    foreach ($path in $paths) {
-        $text = Get-Content -Path $path.FullName -Raw
-        if ($null -eq $text) {
-            continue
-        }
-
-        $original = $text
-        $text = $text -replace '(?m)^[ \t]*-[ \t]*AskUserQuestion\r?\n', ''
-        $text = $text -replace '`AskUserQuestion` in [^,;.]* with `ToolSearch select:AskUserQuestion` pre-loaded if needed,\s*', ''
-        $text = $text -replace '`AskUserQuestion` in [^,;.]* — call `ToolSearch` with `select:AskUserQuestion`[^;]*;\s*', ''
-        $text = $text -replace '`AskUserQuestion` in [^,;.]* \(call `ToolSearch` with `select:AskUserQuestion`[^)]*\),\s*', ''
-        $text = $text -replace '`AskUserQuestion` in [^,;.]*,\s*', ''
-        $text = $text -replace '`AskUserQuestion` in [^,;.]*\s*', ''
-        $text = $text -replace '\s*\*\*[^*]* only:\*\* if `AskUserQuestion`[^\r\n.]*\.[ \t]*', ' '
-        $text = $text -replace '\s*In [^,\r\n.]*,? call `ToolSearch` with `select:AskUserQuestion`[^\r\n.]*\.[ \t]*', ' '
-        $text = $text -replace '\s*In [^,\r\n.]*,? the tool should already be loaded[^\r\n.]*`ToolSearch`[^\r\n.]*\.[ \t]*', ' '
-        $text = $text -replace '\s*In [^\r\n.]* the tool should already be loaded[^\r\n.]*`ToolSearch`[^\r\n.]*\.[ \t]*', ' '
-        $text = $text -replace '\s*In [^\r\n.]*`select:AskUserQuestion`[^\r\n.]*\.[ \t]*', ' '
-        $text = $text -replace '\s*At the start of Interactive-mode work[^\r\n.]*`select:AskUserQuestion`[^\r\n.]*\.[ \t]*', ' '
-        $text = $text -replace '\s*Load it \*\*once[^\r\n.]*\.[ \t]*', ' '
-        $text = $text -replace '`ToolSearch` returns no match, the tool call explicitly fails, or', 'the tool call is unavailable, errors, or'
-        $text = $text -replace 'Only when `ToolSearch` explicitly returns no match or the tool call errors — or on a platform with no blocking question tool —', 'Only when no blocking question tool exists or the tool call errors,'
-        $text = $text -replace 'A pending schema load is not a fallback trigger; call `ToolSearch` first per the pre-load rule\. ', ''
-        $text = $text -replace 'A pending schema load is not a fallback trigger\. ', ''
-        $text = $text -replace ' — not because a schema load is required', ''
-        $text = $text -replace 'no `AskUserQuestion` menu', 'no formal question menu'
-        $text = $text -replace '`AskUserQuestion` menu', 'formal question menu'
-        $text = $text -replace 'AskUserQuestion', 'blocking question tool'
-
-        if ($text -ne $original) {
-            Set-Content -Path $path.FullName -Value $text -Encoding UTF8 -NoNewline
-        }
-    }
-
-    $remaining = $false
-    foreach ($path in $paths) {
-        if (Select-String -Path $path.FullName -Pattern "AskUserQuestion" -Quiet) {
-            $remaining = $true
-            break
-        }
-    }
-
-    if ($remaining) {
-        Write-Warning "Compound Engineering Pi files still mention AskUserQuestion after sanitizing."
-    }
-    else {
-        Write-Success "Compound Engineering Pi files sanitized for Pi."
+    catch {
+        return $false
     }
 }
 
-# Function to install Compound Engineering prompts/skills for Pi
-function Setup-PiCompoundEngineering {
-    if ((Test-EnvLocalFlag "BAN_COMPOUND") -or (Test-EnvLocalFlag "BAN_COMPOUND_PLUGIN")) {
-        Write-Debug "BAN_COMPOUND=1 or BAN_COMPOUND_PLUGIN=1, skipping Compound Engineering for Pi."
-        return
+function Test-SafeProfileDirectory {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$ProfileRoot
+    )
+
+    if (-not (Test-PathWithin -Path $Path -Root $ProfileRoot)) {
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        return $true
     }
 
-    # Ensure bun is available
-    $bunPath = "$env:USERPROFILE\.bun\bin"
-    if (Test-Path $bunPath) {
-        $env:PATH = "$bunPath;$env:PATH"
+    try {
+        $canonicalRoot = [System.IO.Path]::GetFullPath($ProfileRoot).TrimEnd([char[]]@([char]92, [char]47))
+        $canonicalPath = [System.IO.Path]::GetFullPath($Path)
+        $relativePath = $canonicalPath.Substring($canonicalRoot.Length).TrimStart([char[]]@([char]92, [char]47))
+        $currentPath = $canonicalRoot
+        foreach ($segment in ($relativePath -split '[\\/]')) {
+            if ([string]::IsNullOrWhiteSpace($segment)) {
+                continue
+            }
+            $currentPath = Join-Path $currentPath $segment
+            $item = Get-Item -LiteralPath $currentPath -Force -ErrorAction Stop
+            if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                return $false
+            }
+        }
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Remove-PiCompoundSettings {
+    param([Parameter(Mandatory=$true)][string]$AgentDir)
+
+    $settingsPath = Join-Path $AgentDir "settings.json"
+    if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) {
+        return $false
     }
 
-    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
-        Write-Host "$warnIcon Bun not found. Cannot install Compound Engineering for Pi." -ForegroundColor Yellow
-        Write-Host "  Install Bun first, then run: bunx @every-env/compound-plugin install compound-engineering --to pi" -ForegroundColor DarkGray
-        return
+    try {
+        $settingsItem = Get-Item -LiteralPath $settingsPath -Force -ErrorAction Stop
+        if ($settingsItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+            Write-Warning "Skipping Compound Engineering settings cleanup in symlinked $settingsPath."
+            return $false
+        }
+        $settingsJson = Get-Content -LiteralPath $settingsPath -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($settingsJson)) {
+            return $false
+        }
+        $settings = $settingsJson | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        Write-Warning "Failed to parse Pi settings at $settingsPath; leaving it unchanged."
+        return $false
     }
 
-    if (-not (Get-Command bunx -ErrorAction SilentlyContinue)) {
-        Write-Host "$warnIcon bunx not found. Cannot install Compound Engineering for Pi." -ForegroundColor Yellow
-        return
+    if ($null -eq $settings -or -not $settings.PSObject.Properties["packages"] -or $settings.packages -is [string] -or $settings.packages -isnot [System.Collections.IEnumerable]) {
+        return $false
     }
 
-    if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
-        Write-Host "$warnIcon Pi coding agent not found. Cannot install Compound Engineering for Pi." -ForegroundColor Yellow
-        return
-    }
-
-    Write-Host "$arrow Installing/updating Compound Engineering for Pi..." -ForegroundColor Cyan
-    $output = & bunx "@every-env/compound-plugin" install compound-engineering --to pi 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
-        $extensionPath = Join-Path $agentDir "extensions\compound-engineering-compat.ts"
-        $agentsPath = Join-Path $agentDir "AGENTS.md"
-        $hasAgentsBlock = (Test-Path $agentsPath) -and (Select-String -Path $agentsPath -Pattern "BEGIN COMPOUND PI TOOL MAP" -Quiet)
-
-        if ((Test-Path $extensionPath) -or $hasAgentsBlock) {
-            Write-Host "$success Compound Engineering installed for Pi." -ForegroundColor Green
+    $filteredPackages = @()
+    $changed = $false
+    foreach ($package in @($settings.packages)) {
+        $source = if ($package -is [string]) { $package } elseif ($null -ne $package -and $package.PSObject.Properties["source"]) { [string]$package.source } else { "" }
+        $normalizedSource = $source.ToLowerInvariant()
+        if ($normalizedSource -in @("npm:@every-env/compound-plugin", "npm:@every-env/compound-engineering-plugin", "https://github.com/everyinc/compound-engineering-plugin.git")) {
+            $changed = $true
         }
         else {
-            Write-Host "$warnIcon Compound Engineering Pi install completed, but expected artifacts were not found." -ForegroundColor Yellow
+            $filteredPackages += $package
         }
-        Sanitize-PiCompoundEngineeringForPi -AgentDir $agentDir
+    }
+
+    if (-not $changed) {
+        return $false
+    }
+
+    if ($filteredPackages.Count -eq 0) {
+        Remove-JsonProperty -Object $settings -Name "packages"
     }
     else {
-        Write-Host "$warnIcon Failed to install Compound Engineering for Pi: $output" -ForegroundColor Yellow
+        Set-JsonProperty -Object $settings -Name "packages" -Value ([object[]]$filteredPackages)
+    }
+
+    try {
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $settingsPath -Encoding UTF8 -ErrorAction Stop
+        return $true
+    }
+    catch {
+        Write-Warning "Failed to write Pi settings after Compound Engineering cleanup at $settingsPath."
+        return $false
+    }
+}
+
+function Get-CompoundSkillLinkTarget {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    try {
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if (-not ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+            return $null
+        }
+        $target = $item.Target
+        if ($target -is [System.Array]) {
+            $target = $target | Select-Object -First 1
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$target)) {
+            return $null
+        }
+        if (-not [System.IO.Path]::IsPathRooted($target)) {
+            $target = Join-Path $item.DirectoryName $target
+        }
+        return [System.IO.Path]::GetFullPath($target)
+    }
+    catch {
+        return $null
+    }
+}
+
+function Remove-CompoundEngineeringResources {
+    $profileRoot = [System.IO.Path]::GetFullPath($env:USERPROFILE)
+    $defaultAgentDir = Join-Path $profileRoot ".pi\agent"
+    $agentDirs = @()
+    $compoundSkillPattern = '^(ce-agent-native-architecture|ce-agent-native-audit|ce-brainstorm|ce-clean-gone-branches|ce-code-review|ce-commit|ce-commit-push-pr|ce-compound|ce-compound-refresh|ce-debug|ce-demo-reel|ce-dhh-rails-style|ce-doc-review|ce-frontend-design|ce-gemini-imagegen|ce-ideate|ce-optimize|ce-plan|ce-polish-beta|ce-product-pulse|ce-proof|ce-release-notes|ce-report-bug|ce-resolve-pr-feedback|ce-riffrec-feedback-analysis|ce-sessions|ce-setup|ce-simplify-code|ce-slack-research|ce-strategy|ce-test-browser|ce-test-xcode|ce-work|ce-work-beta|ce-worktree)$'
+    $compoundAgentPattern = '^(ce-adversarial-document-reviewer|ce-adversarial-reviewer|ce-agent-native-reviewer|ce-ankane-readme-writer|ce-api-contract-reviewer|ce-architecture-strategist|ce-best-practices-researcher|ce-code-simplicity-reviewer|ce-coherence-reviewer|ce-correctness-reviewer|ce-data-integrity-guardian|ce-data-migration-expert|ce-data-migrations-reviewer|ce-deployment-verification-agent|ce-design-implementation-reviewer|ce-design-iterator|ce-design-lens-reviewer|ce-dhh-rails-reviewer|ce-feasibility-reviewer|ce-figma-design-sync|ce-framework-docs-researcher|ce-git-history-analyzer|ce-issue-intelligence-analyst|ce-julik-frontend-races-reviewer|ce-kieran-python-reviewer|ce-kieran-rails-reviewer|ce-kieran-typescript-reviewer|ce-learnings-researcher|ce-maintainability-reviewer|ce-pattern-recognition-specialist|ce-performance-oracle|ce-performance-reviewer|ce-pr-comment-resolver|ce-previous-comments-reviewer|ce-product-lens-reviewer|ce-project-standards-reviewer|ce-reliability-reviewer|ce-repo-research-analyst|ce-schema-drift-detector|ce-scope-guardian-reviewer|ce-security-lens-reviewer|ce-security-reviewer|ce-security-sentinel|ce-session-historian|ce-slack-researcher|ce-spec-flow-analyzer|ce-swift-ios-reviewer|ce-testing-reviewer|ce-web-researcher)$'
+    $compoundRepo = Join-Path $profileRoot ".local\share\compound-engineering-plugin"
+    $sharedSkillsDir = Join-Path $profileRoot ".agents\skills"
+    $removed = $false
+    $failed = @()
+
+    foreach ($candidate in @($defaultAgentDir, $env:PI_CODING_AGENT_DIR)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+        try {
+            $agentDir = [System.IO.Path]::GetFullPath($candidate)
+            if ($agentDirs -contains $agentDir -or -not (Test-Path -LiteralPath $agentDir -PathType Container)) {
+                continue
+            }
+            if (Test-SafeProfileDirectory -Path $agentDir -ProfileRoot $profileRoot) {
+                $agentDirs += $agentDir
+            }
+            else {
+                Write-Debug "Skipping Pi cleanup through a reparse point or outside the Windows user profile: $agentDir"
+            }
+        }
+        catch {
+            Write-Warning "Could not safely resolve PI_CODING_AGENT_DIR; leaving it unchanged."
+        }
+    }
+
+    if ((Test-Path -LiteralPath $sharedSkillsDir -PathType Container) -and (Test-SafeProfileDirectory -Path $sharedSkillsDir -ProfileRoot $profileRoot) -and (Test-SafeProfileDirectory -Path $compoundRepo -ProfileRoot $profileRoot)) {
+        try {
+            $canonicalRepo = [System.IO.Path]::GetFullPath($compoundRepo).TrimEnd([char[]]@([char]92, [char]47))
+            foreach ($skill in Get-ChildItem -LiteralPath $sharedSkillsDir -Force -ErrorAction Stop) {
+                $target = Get-CompoundSkillLinkTarget -Path $skill.FullName
+                if ($null -ne $target -and (Test-PathWithin -Path $target -Root $canonicalRepo)) {
+                    try {
+                        Remove-Item -LiteralPath $skill.FullName -Force -ErrorAction Stop
+                        $removed = $true
+                    }
+                    catch {
+                        $failed += $skill.FullName
+                    }
+                }
+            }
+        }
+        catch {
+            Write-Warning "Could not safely inspect shared skills for Compound Engineering links."
+        }
+    }
+
+    foreach ($agentDir in $agentDirs) {
+        if (Remove-PiCompoundSettings -AgentDir $agentDir) {
+            $removed = $true
+        }
+
+        foreach ($entry in @(@{ Name = "extensions"; Pattern = '^compound-engineering' }, @{ Name = "skills"; Pattern = $compoundSkillPattern }, @{ Name = "agents"; Pattern = $compoundAgentPattern })) {
+            $resourceDir = Join-Path $agentDir $entry.Name
+            if (-not (Test-Path -LiteralPath $resourceDir -PathType Container) -or -not (Test-SafeProfileDirectory -Path $resourceDir -ProfileRoot $profileRoot)) {
+                continue
+            }
+            foreach ($resource in Get-ChildItem -LiteralPath $resourceDir -Force -ErrorAction SilentlyContinue) {
+                if ($entry.Name -eq "agents") {
+                    if ($resource.PSIsContainer -or ($resource.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                        $resourceName = $resource.Name
+                    }
+                    elseif ($resource.Extension -eq ".md") {
+                        $resourceName = [System.IO.Path]::GetFileNameWithoutExtension($resource.Name)
+                    }
+                    else {
+                        continue
+                    }
+                }
+                else {
+                    $resourceName = $resource.Name
+                }
+                if ($resourceName -notmatch $entry.Pattern) {
+                    continue
+                }
+                if ($entry.Name -eq "skills" -and -not ($resource.PSIsContainer -or ($resource.Attributes -band [System.IO.FileAttributes]::ReparsePoint))) {
+                    continue
+                }
+                try {
+                    Remove-Item -LiteralPath $resource.FullName -Recurse -Force -ErrorAction Stop
+                    $removed = $true
+                }
+                catch {
+                    $failed += $resource.FullName
+                }
+            }
+        }
+
+        $agentsPath = Join-Path $agentDir "AGENTS.md"
+        if (Test-Path -LiteralPath $agentsPath -PathType Leaf) {
+            try {
+                $agentsItem = Get-Item -LiteralPath $agentsPath -Force -ErrorAction Stop
+                if ($agentsItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                    Write-Warning "Skipping Compound Engineering block cleanup in symlinked $agentsPath."
+                    continue
+                }
+                $lines = @(Get-Content -LiteralPath $agentsPath -ErrorAction Stop)
+                $beginMarker = "<!-- BEGIN COMPOUND PI TOOL MAP -->"
+                $endMarker = "<!-- END COMPOUND PI TOOL MAP -->"
+                $beginIndexes = @($lines | ForEach-Object -Begin { $index = 0 } -Process { $current = $index; $index++; if ($_ -ceq $beginMarker) { $current } })
+                $endIndexes = @($lines | ForEach-Object -Begin { $index = 0 } -Process { $current = $index; $index++; if ($_ -ceq $endMarker) { $current } })
+                if ($beginIndexes.Count -eq 1 -and $endIndexes.Count -eq 1) {
+                    if ($beginIndexes[0] -gt $endIndexes[0]) {
+                        Write-Warning "Compound Engineering markers are malformed in $agentsPath; leaving it unchanged."
+                    }
+                    else {
+                        $updatedLines = for ($index = 0; $index -lt $lines.Count; $index++) {
+                            if ($index -lt $beginIndexes[0] -or $index -gt $endIndexes[0]) {
+                                $lines[$index]
+                            }
+                        }
+                        Set-Content -LiteralPath $agentsPath -Value $updatedLines -Encoding UTF8 -ErrorAction Stop
+                        $removed = $true
+                    }
+                }
+                elseif ($beginIndexes.Count -ne 0 -or $endIndexes.Count -ne 0) {
+                    Write-Warning "Compound Engineering markers are malformed in $agentsPath; leaving it unchanged."
+                }
+            }
+            catch {
+                Write-Warning "Failed to safely remove the Compound Engineering block from $agentsPath."
+            }
+        }
+    }
+
+    if (Test-Path -LiteralPath $compoundRepo) {
+        try {
+            $repoItem = Get-Item -LiteralPath $compoundRepo -Force -ErrorAction Stop
+            if ($repoItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                Remove-Item -LiteralPath $compoundRepo -Force -ErrorAction Stop
+                $removed = $true
+            }
+            elseif (Test-SafeProfileDirectory -Path $compoundRepo -ProfileRoot $profileRoot) {
+                Remove-Item -LiteralPath $compoundRepo -Recurse -Force -ErrorAction Stop
+                $removed = $true
+            }
+            else {
+                Write-Warning "Skipping Compound Engineering checkout cleanup through a reparse point or outside the Windows user profile: $compoundRepo"
+            }
+        }
+        catch {
+            $failed += $compoundRepo
+        }
+    }
+
+    if ($failed.Count -gt 0) {
+        Write-Warning "Failed to remove legacy Compound Engineering resources: $($failed -join ', ')"
+    }
+    elseif ($removed) {
+        Write-Success "Legacy Compound Engineering resources removed."
+    }
+    else {
+        Write-Debug "No legacy Compound Engineering resources found."
     }
 }
 
@@ -2202,7 +2375,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 101 | Last changed: Install Compound Engineering on work machines" -ForegroundColor DarkGray
+    Write-Host "Version 102 | Last changed: Remove Compound Engineering setup and clean legacy artifacts" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -2255,7 +2428,6 @@ function Initialize-WindowsEnvironment {
         if (-not (Test-MattPocockPiSkillsDisabled)) {
             Setup-MattPocockPiSkills
         }
-        Setup-PiCompoundEngineering
     }
     else {
         if (Test-EnvLocalFlag "BAN_PI_SUBAGENTS") {
@@ -2269,6 +2441,7 @@ function Initialize-WindowsEnvironment {
         }
         Write-Warning "Skipping Pi extension setup because Pi migration failed."
     }
+    Remove-CompoundEngineeringResources
     Install-TursoCli
 
     Write-Section "System Updates"
