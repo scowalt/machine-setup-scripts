@@ -76,6 +76,10 @@ for file in "${supported_bash[@]}"; do
     assert_contains "${file}" 'cannot audit listeners' 'fail-closed listener audit'
     assert_contains "${file}" 'cannot verify managed service ownership' 'fail-closed owner check'
     assert_contains "${file}" 'group/world-writable' 'unsafe executable path guard'
+    assert_contains "${file}" 'paseo_harden_user_path_chain' 'user-owned install path permission hardening'
+    assert_contains "${file}" 'paseo_existing_service_path' 'service PATH filters missing components'
+    assert_contains "${file}" 'chmod go-w' 'permission hardening removes group/world write bits'
+    assert_contains "${file}" 'perm -020.*perm -002|perm -002.*perm -020' 'group-or-world writable detection'
 
     paseo_block=$(extract_paseo_block "${file}")
     if grep -Eq 'paseo daemon pair|daemon pair' <<< "${paseo_block}"; then
