@@ -2472,20 +2472,6 @@ install_uv() {
     fi
 }
 
-install_whisper() {
-    if pip3 show openai-whisper &> /dev/null; then
-        print_debug "openai-whisper is already installed."
-        return
-    fi
-
-    print_message "Installing openai-whisper..."
-    if pip3 install --user --break-system-packages openai-whisper; then
-        print_success "openai-whisper installed."
-    else
-        print_error "Failed to install openai-whisper."
-    fi
-}
-
 # Install Bun JavaScript runtime and package manager
 install_bun() {
     if command -v bun &> /dev/null; then
@@ -2664,7 +2650,7 @@ main() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 143 | Last changed: Remove Compound Engineering setup and clean legacy artifacts${NC}"
+    echo -e "${GRAY}Version 144 | Last changed: Stop installing Whisper${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
@@ -2706,7 +2692,6 @@ main() {
     install_lefthook
     install_mise
     install_uv
-    install_whisper
     install_bun
     install_sfw
     install_opentofu

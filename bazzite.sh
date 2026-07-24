@@ -2522,20 +2522,6 @@ install_brew_packages() {
 }
 
 
-install_whisper() {
-    if pip3 show openai-whisper &> /dev/null; then
-        print_debug "openai-whisper is already installed."
-        return
-    fi
-
-    print_message "Installing openai-whisper..."
-    if pip3 install --user --break-system-packages openai-whisper; then
-        print_success "openai-whisper installed."
-    else
-        print_error "Failed to install openai-whisper."
-    fi
-}
-
 # Upload log to centralized collector (non-fatal)
 upload_log() {
     if [[ -n "${log_file:-}" ]] && [[ -f "${log_file:-}" ]]; then
@@ -2559,7 +2545,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 51 | Last changed: Remove Compound Engineering setup and clean legacy artifacts${NC}"
+    echo -e "${GRAY}Version 52 | Last changed: Stop installing Whisper${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
@@ -2700,7 +2686,6 @@ HELPER_EOF
     fi
 
     remove_compound_engineering_resources
-    install_whisper
 
     print_section "Final Updates"
     update_brew

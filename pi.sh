@@ -3021,21 +3021,6 @@ install_uv() {
     fi
 }
 
-install_whisper() {
-    if pip3 show openai-whisper &> /dev/null; then
-        print_debug "openai-whisper is already installed."
-        return
-    fi
-
-    print_message "Installing openai-whisper..."
-    if pip3 install --user --break-system-packages openai-whisper; then
-        print_success "openai-whisper installed."
-    else
-        print_error "Failed to install openai-whisper."
-    fi
-}
-
-
 # Upgrade global npm packages
 upgrade_npm_global_packages() {
     # Initialize mise for current session (provides npm if Node.js is installed)
@@ -3098,7 +3083,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 152 | Last changed: Remove Compound Engineering setup and clean legacy artifacts${NC}"
+    echo -e "${GRAY}Version 153 | Last changed: Stop installing Whisper${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
@@ -3136,7 +3121,6 @@ main() {
     install_lefthook
     install_mise
     install_uv
-    install_whisper
     install_opentofu
     install_cloudflared
     install_turso
