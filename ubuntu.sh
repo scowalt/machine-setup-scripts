@@ -108,6 +108,7 @@ create_env_local() {
 # Machine/setup guards
 # HEADLESS=1
 # HEADLESS_PASSWORDLESS_SUDO=1
+# MACHINE_TYPE=physical  # Override VPS/physical detection when needed
 # WORK_MACHINE=1
 # BAN_PI_SUBAGENTS=1
 # BAN_PI_MCP_ADAPTER=1
@@ -163,12 +164,8 @@ detect_machine_type() {
         return 0
     fi
 
-    # Headless machines are treated as VPS for SSH purposes (deploy key only, no full auth key)
-    if [[ "${HEADLESS:-}" == "1" ]]; then
-        print_debug "Headless machine detected: treating as VPS for SSH key setup" >&2
-        echo "vps"
-        return 0
-    fi
+    # HEADLESS controls headless-machine conveniences, not the machine trust model.
+    # Physical mini PCs/servers can be headless, so continue with normal VPS detection.
 
     local vps_score=0
     local signals=""
@@ -606,7 +603,7 @@ update_and_install_core() {
     print_message "Checking core packages..."
 
     # Define an array of required packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "fonts-firacode" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "unzip" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks" "poppler-utils" "bubblewrap")
+    local packages=("git" "curl" "jq" "fish" "tmux" "fonts-firacode" "fontconfig" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "unzip" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks" "poppler-utils" "bubblewrap")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
@@ -634,6 +631,103 @@ update_and_install_core() {
     else
         print_success "All core packages are already installed."
     fi
+}
+
+# Configure GNOME Terminal to use the installed Nerd Font when a graphical session is available.
+configure_gnome_terminal_nerd_font() {
+    local font_setting="JetBrainsMono Nerd Font Mono 12"
+
+    if [[ -z "${DISPLAY:-}" ]] && [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+        print_debug "No graphical session detected; installed Nerd Font is available to terminal emulators, but the raw Linux console cannot use TTF Nerd Fonts."
+        return 0
+    fi
+
+    if ! command -v gsettings &> /dev/null; then
+        print_debug "gsettings not found; skipping GNOME Terminal font configuration."
+        return 0
+    fi
+
+    local gsettings_schemas
+    gsettings_schemas=$(gsettings list-schemas 2>/dev/null || true)
+    if ! grep -qx "org.gnome.Terminal.ProfilesList" <<< "${gsettings_schemas}"; then
+        print_debug "GNOME Terminal settings not found; skipping terminal font configuration."
+        return 0
+    fi
+
+    local default_profile
+    default_profile=$(gsettings get org.gnome.Terminal.ProfilesList default 2>/dev/null || true)
+    default_profile="${default_profile//\'/}"
+    if [[ -z "${default_profile}" ]]; then
+        print_debug "GNOME Terminal default profile not found; skipping terminal font configuration."
+        return 0
+    fi
+
+    local profile_schema="org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:${default_profile}/"
+    local current_font
+    local current_use_system_font
+    current_font=$(gsettings get "${profile_schema}" font 2>/dev/null || true)
+    current_font="${current_font//\'/}"
+    current_use_system_font=$(gsettings get "${profile_schema}" use-system-font 2>/dev/null || true)
+
+    if [[ "${current_use_system_font}" == "false" ]] && [[ "${current_font}" == "${font_setting}" ]]; then
+        print_debug "GNOME Terminal already uses JetBrains Mono Nerd Font."
+        return 0
+    fi
+
+    if gsettings set "${profile_schema}" use-system-font false 2>/dev/null && \
+        gsettings set "${profile_schema}" font "${font_setting}" 2>/dev/null; then
+        print_success "GNOME Terminal font set to JetBrains Mono Nerd Font."
+    else
+        print_warning "Installed Nerd Font, but could not update GNOME Terminal settings."
+    fi
+}
+
+# Install a Nerd Font for local terminal icons (Starship, tmux, etc.).
+install_nerd_font() {
+    local font_dir="${HOME}/.local/share/fonts/JetBrainsMonoNerdFont"
+
+    local matched_font=""
+    if command -v fc-match &> /dev/null; then
+        matched_font=$(fc-match "JetBrainsMono Nerd Font" 2>/dev/null || true)
+    fi
+
+    if [[ "${matched_font}" == *"Nerd Font"* ]] || [[ "${matched_font}" == *NerdFont* ]]; then
+        print_debug "JetBrains Mono Nerd Font is already installed."
+        configure_gnome_terminal_nerd_font
+        return 0
+    fi
+
+    print_message "Installing JetBrains Mono Nerd Font..."
+    mkdir -p "${font_dir}"
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d) || {
+        print_warning "Could not create temporary directory for Nerd Font download."
+        return 0
+    }
+
+    local font_zip="${tmp_dir}/JetBrainsMono.zip"
+    if ! curl -fsSL "https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip" -o "${font_zip}"; then
+        print_warning "Failed to download JetBrains Mono Nerd Font."
+        rm -rf "${tmp_dir}"
+        return 0
+    fi
+
+    if ! unzip -oq "${font_zip}" -d "${font_dir}" "*.ttf"; then
+        print_warning "Failed to extract JetBrains Mono Nerd Font."
+        rm -rf "${tmp_dir}"
+        return 0
+    fi
+    rm -rf "${tmp_dir}"
+
+    if command -v fc-cache &> /dev/null; then
+        fc-cache -f "${font_dir}" >/dev/null 2>&1 || print_warning "Font installed, but font cache refresh failed."
+    else
+        print_warning "fontconfig is not available; font installed but cache was not refreshed."
+    fi
+
+    print_success "JetBrains Mono Nerd Font installed."
+    configure_gnome_terminal_nerd_font
 }
 
 # Install and enable SSH server
@@ -4029,7 +4123,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 189 | Last changed: Configure headless Paseo daemon${NC}"
+    echo -e "${GRAY}Version 191 | Last changed: Configure headless Paseo daemon${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
@@ -4059,6 +4153,7 @@ main() {
     print_section "System Updates"
     update_dependencies # I do this first b/c on raspberry pi, it's slow
     update_and_install_core
+    install_nerd_font
 
     print_section "SSH Configuration"
     setup_ssh_server
