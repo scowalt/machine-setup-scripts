@@ -38,12 +38,6 @@ curl -sL https://scripts.scowalt.com/setup/ubuntu.sh | bash
 curl -sL https://scripts.scowalt.com/setup/pi.sh | bash
 ```
 
-## Arch Linux / Omarchy
-
-```bash
-curl -sL https://scripts.scowalt.com/setup/omarchy.sh | bash
-```
-
 ## Bazzite
 
 ```bash

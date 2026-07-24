@@ -13,7 +13,6 @@ This repository contains idempotent machine setup scripts for automating the con
 - **win.ps1** - Windows setup using WinGet and PowerShell
 - **wsl.sh** - Windows Subsystem for Linux setup
 - **pi.sh** - Raspberry Pi specific setup with ARM optimizations
-- **omarchy.sh** - Arch Linux / Omarchy setup using pacman and yay
 - **bazzite.sh** - Bazzite OS setup using Homebrew (Lenovo Legion Go)
 
 ## Common Development Tasks
@@ -24,8 +23,8 @@ This repository contains idempotent machine setup scripts for automating the con
 # macOS
 ./mac.sh
 
-# Ubuntu/WSL/Pi/Arch/Bazzite
-sudo ./ubuntu.sh  # or ./wsl.sh, ./pi.sh, ./omarchy.sh, ./bazzite.sh
+# Ubuntu/WSL/Pi/Bazzite
+sudo ./ubuntu.sh  # or ./wsl.sh, ./pi.sh, ./bazzite.sh
 
 # Windows (PowerShell as Administrator)
 ./win.ps1
@@ -122,7 +121,7 @@ The scripts use a weighted scoring system with multiple heuristic signals:
 Enable debug output to see detection decisions:
 
 ```bash
-DEBUG=1 ./ubuntu.sh  # or ./omarchy.sh
+DEBUG=1 ./ubuntu.sh
 ```
 
 This will show:
@@ -480,7 +479,7 @@ This repository is configured for maximum error detection with shellcheck:
 Each script has a version number in its header that follows this pattern:
 
 ```bash
-# Bash scripts (mac.sh, ubuntu.sh, wsl.sh, pi.sh, omarchy.sh)
+# Bash scripts (mac.sh, ubuntu.sh, wsl.sh, pi.sh, bazzite.sh)
 echo -e "${GRAY}Version XX | Last changed: Description of change${NC}"
 ```
 
