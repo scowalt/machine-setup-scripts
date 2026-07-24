@@ -106,6 +106,8 @@ create_env_local() {
 # OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
 
 # Machine/setup guards
+# HEADLESS=1
+# HEADLESS_PASSWORDLESS_SUDO=1
 # WORK_MACHINE=1
 # BAN_PI_SUBAGENTS=1
 # BAN_PI_MCP_ADAPTER=1
@@ -1788,6 +1790,845 @@ install_pi_cli() {
     print_success "Pi coding agent ${_pi_version} installed/updated at ${_canonical_pi}."
 }
 
+
+# shellcheck disable=SC2312
+# Managed marker used to distinguish setup-owned Paseo service artifacts from user-managed ones.
+PASEO_MANAGED_MARKER="Managed by scowalt machine setup: headless-paseo-daemon"
+PASEO_PACKAGE="@getpaseo/cli"
+PASEO_SERVICE_NAME="paseo.service"
+PASEO_VALIDATED_CMD=""
+PASEO_VALIDATED_NODE=""
+PASEO_SERVICE_PATH=""
+PASEO_MANAGED_SERVICE_TOUCHED=0
+PASEO_PACKAGE_VERSION="unknown"
+PASEO_LAST_HEALTH_ERROR=""
+PASEO_LAST_HEALTH_SUMMARY=""
+
+paseo_service_path() {
+    printf '%s:%s:%s:%s:%s:%s:%s:%s:%s
+' \
+        "${HOME}/.local/bin" \
+        "${HOME}/.bun/bin" \
+        "${HOME}/.local/share/mise/shims" \
+        "${HOME}/.mise/shims" \
+        "${HOME}/.mise/bin" \
+        "/opt/homebrew/bin" \
+        "/home/linuxbrew/.linuxbrew/bin" \
+        "/usr/local/bin" \
+        "/usr/bin:/bin:/usr/sbin:/sbin"
+}
+
+paseo_effective_service_path() {
+    if [[ -n "${PASEO_SERVICE_PATH}" ]]; then
+        printf '%s
+' "${PASEO_SERVICE_PATH}"
+    else
+        paseo_service_path
+    fi
+}
+
+paseo_shell_quote() {
+    local _escaped=""
+
+    _escaped=$(printf '%s' "$1" | sed "s/'/'\\''/g") || return 1
+    printf "'%s'" "${_escaped}"
+}
+
+paseo_command_target() {
+    local _cmd=""
+    local _link_target=""
+    local _link_dir=""
+
+    if ! command -v paseo &> /dev/null; then
+        return 1
+    fi
+
+    _cmd=$(command -v paseo)
+
+    if command -v realpath &> /dev/null; then
+        realpath "${_cmd}" 2>/dev/null && return 0
+    fi
+
+    if readlink -f "${_cmd}" > /dev/null 2>&1; then
+        readlink -f "${_cmd}" 2>/dev/null && return 0
+    fi
+
+    if [[ -L "${_cmd}" ]]; then
+        _link_target=$(readlink "${_cmd}" 2>/dev/null || true)
+        if [[ "${_link_target}" == /* ]]; then
+            printf '%s\n' "${_link_target}"
+        elif [[ -n "${_link_target}" ]]; then
+            _link_dir=$(cd "$(dirname "${_cmd}")" && pwd -P)
+            printf '%s\n' "${_link_dir}/${_link_target}"
+        else
+            printf '%s\n' "${_cmd}"
+        fi
+    else
+        printf '%s\n' "${_cmd}"
+    fi
+}
+
+paseo_runtime_target() {
+    local _cmd=""
+
+    if ! command -v node &> /dev/null; then
+        return 1
+    fi
+
+    _cmd=$(command -v node)
+    if command -v realpath &> /dev/null; then
+        realpath "${_cmd}" 2>/dev/null && return 0
+    fi
+    if readlink -f "${_cmd}" > /dev/null 2>&1; then
+        readlink -f "${_cmd}" 2>/dev/null && return 0
+    fi
+    printf '%s\n' "${_cmd}"
+}
+
+paseo_path_owner() {
+    local _path="$1"
+
+    if stat -c '%U' "${_path}" >/dev/null 2>&1; then
+        stat -c '%U' "${_path}" 2>/dev/null
+    else
+        stat -f '%Su' "${_path}" 2>/dev/null || true
+    fi
+}
+
+paseo_path_is_group_or_world_writable() {
+    local _path="$1"
+    local _dir=""
+    local _unsafe=""
+
+    if [[ -z "${_path}" ]]; then
+        return 0
+    fi
+
+    _unsafe=$(find "${_path}" -prune -perm -022 -print -quit 2>/dev/null || true)
+    if [[ -n "${_unsafe}" ]]; then
+        return 0
+    fi
+
+    if [[ -d "${_path}" ]]; then
+        _dir="${_path}"
+    else
+        _dir=$(dirname "${_path}")
+    fi
+
+    [[ -d "${_dir}" ]] || return 0
+
+    while [[ -n "${_dir}" && "${_dir}" != "/" ]]; do
+        _unsafe=$(find "${_dir}" -prune -perm -022 -print -quit 2>/dev/null || true)
+        if [[ -n "${_unsafe}" ]]; then
+            return 0
+        fi
+        _dir=$(dirname "${_dir}")
+    done
+
+    _unsafe=$(find / -prune -perm -022 -print -quit 2>/dev/null || true)
+    [[ -n "${_unsafe}" ]]
+}
+
+paseo_path_owner_is_trusted() {
+    local _path="$1"
+    local _dir=""
+    local _owner=""
+    local _user=""
+
+    _user=$(whoami || true)
+    _owner=$(paseo_path_owner "${_path}")
+    case "${_owner}" in
+        root|"${_user}"|linuxbrew|homebrew) ;;
+        *) return 1 ;;
+    esac
+
+    if [[ -d "${_path}" ]]; then
+        _dir="${_path}"
+    else
+        _dir=$(dirname "${_path}")
+    fi
+
+    [[ -d "${_dir}" ]] || return 1
+
+    while [[ -n "${_dir}" && "${_dir}" != "/" ]]; do
+        _owner=$(paseo_path_owner "${_dir}")
+        case "${_owner}" in
+            root|"${_user}"|linuxbrew|homebrew) ;;
+            *) return 1 ;;
+        esac
+        _dir=$(dirname "${_dir}")
+    done
+
+    return 0
+}
+
+paseo_validate_trusted_path() {
+    local _path="$1"
+    local _label="$2"
+
+    if [[ -z "${_path}" || ! -e "${_path}" ]]; then
+        print_error "Paseo ${_label} path is missing."
+        return 1
+    fi
+
+    if paseo_path_is_group_or_world_writable "${_path}"; then
+        print_error "Paseo ${_label} path is under a group/world-writable directory; refusing to trust it."
+        return 1
+    fi
+
+    if ! paseo_path_owner_is_trusted "${_path}"; then
+        print_error "Paseo ${_label} path has an untrusted owner in its parent chain; refusing to trust it."
+        return 1
+    fi
+}
+
+paseo_validate_service_path_components() {
+    local _path_value="$1"
+    local _component=""
+    local _resolved_component=""
+    local _link_target=""
+    local _link_dir=""
+
+    while IFS= read -r _component; do
+        [[ -n "${_component}" && -d "${_component}" ]] || continue
+
+        _resolved_component="${_component}"
+        if [[ -L "${_component}" ]]; then
+            if command -v realpath &> /dev/null; then
+                _resolved_component=$(realpath "${_component}" 2>/dev/null || true)
+            elif readlink -f "${_component}" > /dev/null 2>&1; then
+                _resolved_component=$(readlink -f "${_component}" 2>/dev/null || true)
+            else
+                _link_target=$(readlink "${_component}" 2>/dev/null || true)
+                if [[ "${_link_target}" == /* ]]; then
+                    _resolved_component="${_link_target}"
+                elif [[ -n "${_link_target}" ]]; then
+                    _link_dir=$(cd "$(dirname "${_component}")" && pwd -P)
+                    _resolved_component="${_link_dir}/${_link_target}"
+                fi
+            fi
+
+            if [[ -z "${_resolved_component}" || ! -d "${_resolved_component}" ]]; then
+                print_error "Paseo service PATH component ${_component} resolves to a missing target."
+                return 1
+            fi
+
+            # Symlink mode bits are commonly 0777 and not security-relevant; validate
+            # the trusted parent plus the resolved target instead.
+            paseo_validate_trusted_path "$(dirname "${_component}")" "service PATH component parent" || return 1
+        fi
+
+        paseo_validate_trusted_path "${_resolved_component}" "service PATH component" || return 1
+    done < <(printf '%s' "${_path_value}" | tr ':' '\n' || true)
+}
+
+install_paseo_cli() {
+    local _global_packages=""
+    local _paseo_target=""
+    local _node_target=""
+    local _version_output=""
+    local _service_path=""
+    local _bun_global_bin=""
+
+    if [[ "${HEADLESS:-}" != "1" ]]; then
+        return 0
+    fi
+
+    print_message "Installing/updating Paseo CLI for headless daemon setup..."
+
+    _service_path=$(paseo_service_path)
+    export PATH="${HOME}/.bun/bin:${_service_path}:${PATH}"
+
+    if ! command -v bun &> /dev/null; then
+        print_error "Bun not found. Cannot install ${PASEO_PACKAGE} for HEADLESS=1."
+        return 1
+    fi
+
+    if ! ensure_pi_node_runtime; then
+        print_error "Node.js >=20.6 is required before installing ${PASEO_PACKAGE}."
+        return 1
+    fi
+
+    if ! bun install -g "${PASEO_PACKAGE}"; then
+        print_error "Failed to install ${PASEO_PACKAGE}."
+        return 1
+    fi
+
+    hash -r 2>/dev/null || true
+    _global_packages=$(bun pm ls -g 2>/dev/null || true)
+    if ! grep -Fq "${PASEO_PACKAGE}" <<< "${_global_packages}"; then
+        print_error "Paseo install validation failed: ${PASEO_PACKAGE} is not listed in Bun global packages."
+        return 1
+    fi
+
+    _paseo_target=$(paseo_command_target 2>/dev/null || true)
+    if [[ -z "${_paseo_target}" ]]; then
+        print_error "Paseo install validation failed: paseo command is not available after installing ${PASEO_PACKAGE}."
+        return 1
+    fi
+
+    if [[ "${_paseo_target}" == *"/node_modules/paseo/"* ]] || [[ "${_paseo_target}" == *"/node_modules/paseo/bin"* ]]; then
+        print_error "Paseo command resolves to the unrelated unscoped paseo package: ${_paseo_target}"
+        return 1
+    fi
+
+    if [[ "${_paseo_target}" == *"/node_modules/"* && "${_paseo_target}" != *"${PASEO_PACKAGE}"* ]]; then
+        print_error "Paseo command resolves to an unexpected package target: ${_paseo_target}"
+        return 1
+    fi
+
+    _bun_global_bin=$(bun pm bin -g 2>/dev/null || true)
+    if [[ -z "${_bun_global_bin}" ]]; then
+        print_error "Paseo install validation failed: Bun global bin path could not be resolved."
+        return 1
+    fi
+    if [[ "${_paseo_target}" != *"${PASEO_PACKAGE}"* && "${_paseo_target}" != "${_bun_global_bin}/"* ]]; then
+        print_error "Paseo command resolves outside Bun's global bin and scoped package target: ${_paseo_target}"
+        return 1
+    fi
+
+    paseo_validate_trusted_path "${_paseo_target}" "executable" || return 1
+
+    _node_target=$(paseo_runtime_target 2>/dev/null || true)
+    if [[ -z "${_node_target}" ]]; then
+        print_error "Paseo runtime validation failed: node is not available for the service wrapper."
+        return 1
+    fi
+    paseo_validate_trusted_path "${_node_target}" "runtime" || return 1
+
+    PASEO_VALIDATED_CMD="${_paseo_target}"
+    PASEO_VALIDATED_NODE="${_node_target}"
+    PASEO_SERVICE_PATH="$(dirname "${_node_target}"):$(paseo_service_path)"
+    paseo_validate_service_path_components "${PASEO_SERVICE_PATH}" || return 1
+
+    if ! _version_output=$(HOME="${HOME}" PATH="${PASEO_SERVICE_PATH}:${PATH}" "${_paseo_target}" --version 2>/dev/null); then
+        print_error "Paseo install validation failed: validated paseo command did not run successfully with the service PATH."
+        return 1
+    fi
+
+    PASEO_PACKAGE_VERSION=$(printf '%s' "${_version_output}" | head -n 1 || true)
+    PASEO_PACKAGE_VERSION=$(printf '%s' "${PASEO_PACKAGE_VERSION}" | tr -cd '[:alnum:].:_/@ -' | cut -c1-80 || true)
+    [[ -n "${PASEO_PACKAGE_VERSION}" ]] || PASEO_PACKAGE_VERSION="unknown"
+
+    print_success "Paseo CLI ready (${PASEO_PACKAGE}, ${PASEO_PACKAGE_VERSION})."
+}
+
+write_paseo_daemon_wrapper() {
+    local _wrapper="${HOME}/.local/bin/paseo-daemon-start"
+    local _log_dir="${HOME}/.local/log/paseo-daemon"
+    local _tmp=""
+    local _home_q=""
+    local _path_q=""
+    local _cmd_q=""
+    local _node_q=""
+    local _service_path=""
+
+    if [[ -z "${PASEO_VALIDATED_CMD}" ]]; then
+        print_error "Cannot write Paseo daemon wrapper before validating the paseo command."
+        return 1
+    fi
+
+    mkdir -p "${HOME}/.local/bin" "${_log_dir}"
+    chmod 700 "${HOME}/.local/bin" "${_log_dir}"
+
+    _service_path=$(paseo_effective_service_path)
+    _home_q=$(paseo_shell_quote "${HOME}")
+    _path_q=$(paseo_shell_quote "${_service_path}")
+    _cmd_q=$(paseo_shell_quote "${PASEO_VALIDATED_CMD}")
+    _node_q=$(paseo_shell_quote "${PASEO_VALIDATED_NODE}")
+    _tmp=$(mktemp)
+    if ! cat > "${_tmp}" << EOF
+#!/bin/bash
+# ${PASEO_MANAGED_MARKER}
+set -euo pipefail
+export HOME=${_home_q}
+export PATH=${_path_q}
+[[ -x ${_node_q} ]] || exit 127
+[[ -x ${_cmd_q} ]] || exit 127
+exec ${_cmd_q} daemon start --foreground
+EOF
+    then
+        rm -f "${_tmp}"
+        print_error "Failed to write Paseo daemon wrapper."
+        return 1
+    fi
+    if ! chmod 700 "${_tmp}" || ! mv "${_tmp}" "${_wrapper}"; then
+        rm -f "${_tmp}"
+        print_error "Failed to install Paseo daemon wrapper."
+        return 1
+    fi
+    print_success "Paseo daemon wrapper installed at ${_wrapper}."
+}
+
+stop_existing_paseo_daemon() {
+    local _service_path=""
+    local _state=""
+
+    if [[ -z "${PASEO_VALIDATED_CMD}" ]]; then
+        return 0
+    fi
+
+    _state=$(paseo_local_daemon_state 2>/dev/null || true)
+    if [[ "${_state}" != "running" ]]; then
+        print_debug "No running unmanaged Paseo daemon detected before service start."
+        return 0
+    fi
+
+    print_message "Stopping existing unmanaged Paseo daemon before service start..."
+    _service_path=$(paseo_effective_service_path)
+    if ! HOME="${HOME}" PATH="${_service_path}:${PATH}" paseo_run_with_timeout "${PASEO_STATUS_TIMEOUT_SECONDS:-10}" "${PASEO_VALIDATED_CMD}" daemon stop >/dev/null 2>&1; then
+        print_error "Failed to stop existing Paseo daemon before installing the managed service."
+        return 1
+    fi
+
+    sleep 1
+    _state=$(paseo_local_daemon_state 2>/dev/null || true)
+    if [[ "${_state}" == "running" ]]; then
+        print_error "Existing Paseo daemon is still running after stop; refusing to let it mask managed-service health."
+        return 1
+    fi
+}
+
+paseo_sanitize_status_value() {
+    printf '%s' "${1:-unknown}" | tr -cd '[:alnum:]_.:-' | cut -c1-64 || true
+}
+
+paseo_json_string_field() {
+    local _json="$1"
+    local _field="$2"
+
+    printf '%s\n' "${_json}" | sed -n "s/.*\"${_field}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n 1 || true
+}
+
+paseo_status_relay_disabled() {
+    local _json="$1"
+
+    printf '%s\n' "${_json}" | grep -Eqi '\"relayDisabled\"[[:space:]]*:[[:space:]]*true|\"relayEnabled\"[[:space:]]*:[[:space:]]*false|\"relay\"[[:space:]]*:[[:space:]]*\"disabled\"|\"relayStatus\"[[:space:]]*:[[:space:]]*\"disabled\"'
+}
+
+
+paseo_run_with_timeout() {
+    local _seconds="$1"
+    shift
+
+    if command -v timeout &> /dev/null; then
+        timeout "${_seconds}" "$@"
+    elif command -v perl &> /dev/null; then
+        perl -e 'alarm shift; exec @ARGV' "${_seconds}" "$@"
+    else
+        print_error "No timeout helper (timeout or perl) is available for Paseo health checks."
+        return 124
+    fi
+}
+
+paseo_local_daemon_state() {
+    local _status_json=""
+    local _service_path=""
+
+    _service_path=$(paseo_effective_service_path)
+    if ! _status_json=$(HOME="${HOME}" PATH="${_service_path}:${PATH}" paseo_run_with_timeout "${PASEO_STATUS_TIMEOUT_SECONDS:-10}" "${PASEO_VALIDATED_CMD}" daemon status --json 2>/dev/null); then
+        return 1
+    fi
+
+    paseo_json_string_field "${_status_json}" "localDaemon"
+}
+
+paseo_check_status_once() {
+    local _status_json=""
+    local _local_daemon=""
+    local _connected_daemon=""
+    local _field_value=""
+    local _service_path=""
+
+    _service_path=$(paseo_effective_service_path)
+    if ! _status_json=$(HOME="${HOME}" PATH="${_service_path}:${PATH}" paseo_run_with_timeout "${PASEO_STATUS_TIMEOUT_SECONDS:-10}" "${PASEO_VALIDATED_CMD}" daemon status --json 2>/dev/null); then
+        PASEO_LAST_HEALTH_ERROR="status command failed or timed out"
+        return 1
+    fi
+
+    if ! printf '%s' "${_status_json}" | grep -q '^{'; then
+        PASEO_LAST_HEALTH_ERROR="status command did not return JSON"
+        return 1
+    fi
+
+    _field_value=$(paseo_json_string_field "${_status_json}" "localDaemon")
+    _local_daemon=$(paseo_sanitize_status_value "${_field_value}")
+    _field_value=$(paseo_json_string_field "${_status_json}" "connectedDaemon")
+    _connected_daemon=$(paseo_sanitize_status_value "${_field_value}")
+    PASEO_LAST_HEALTH_SUMMARY="localDaemon=${_local_daemon:-unknown}, connectedDaemon=${_connected_daemon:-unknown}"
+
+    if [[ "${_local_daemon}" != "running" ]]; then
+        PASEO_LAST_HEALTH_ERROR="${PASEO_LAST_HEALTH_SUMMARY}"
+        return 1
+    fi
+
+    case "${_connected_daemon}" in
+        reachable|auth_required) ;;
+        auth_failed)
+            PASEO_LAST_HEALTH_ERROR="${PASEO_LAST_HEALTH_SUMMARY}"
+            return 1
+            ;;
+        *)
+            PASEO_LAST_HEALTH_ERROR="${PASEO_LAST_HEALTH_SUMMARY}"
+            return 1
+            ;;
+    esac
+
+    if paseo_status_relay_disabled "${_status_json}"; then
+        PASEO_LAST_HEALTH_ERROR="${PASEO_LAST_HEALTH_SUMMARY}, relay=disabled"
+        return 1
+    fi
+
+    PASEO_LAST_HEALTH_ERROR=""
+    return 0
+}
+
+wait_for_paseo_health() {
+    local _attempt=1
+    local _max_attempts="${PASEO_HEALTH_ATTEMPTS:-12}"
+    local _interval="${PASEO_HEALTH_INTERVAL_SECONDS:-5}"
+
+    while [[ "${_attempt}" -le "${_max_attempts}" ]]; do
+        if paseo_check_status_once; then
+            print_success "Paseo daemon health verified (${PASEO_LAST_HEALTH_SUMMARY})."
+            return 0
+        fi
+
+        print_debug "Waiting for Paseo daemon health (${_attempt}/${_max_attempts}): ${PASEO_LAST_HEALTH_ERROR}"
+        sleep "${_interval}"
+        _attempt=$((_attempt + 1))
+    done
+
+    print_error "Paseo daemon health check failed after ${_max_attempts} attempts: ${PASEO_LAST_HEALTH_ERROR}"
+    print_debug "Diagnostics: package=${PASEO_PACKAGE} version=${PASEO_PACKAGE_VERSION} node=${PASEO_VALIDATED_NODE:-unknown} user=$(whoami || true) home=${HOME} logs=${HOME}/.local/log/paseo-daemon"
+    return 1
+}
+
+paseo_listener_audit() {
+    local _pid="$1"
+    local _bad_listener=""
+    local _addr=""
+    local _listeners=""
+    local _listener_source=""
+
+    if [[ -z "${_pid}" || "${_pid}" == "0" ]]; then
+        print_error "Paseo service PID unavailable; cannot audit listeners for HEADLESS=1."
+        return 1
+    fi
+
+    if command -v ss &> /dev/null; then
+        if ! _listener_source=$(ss -H -ltnp 2>/dev/null); then
+            print_error "Failed to inspect Paseo listeners with ss."
+            return 1
+        fi
+        if ! _listeners=$(printf '%s
+' "${_listener_source}" | awk -v pid="${_pid}" '$0 ~ "pid=" pid "," {print $4}'); then
+            print_error "Failed to parse Paseo listeners from ss output."
+            return 1
+        fi
+    elif command -v lsof &> /dev/null; then
+        if ! _listener_source=$(lsof -nP -a -p "${_pid}" -iTCP -sTCP:LISTEN 2>/dev/null); then
+            print_error "Failed to inspect Paseo listeners with lsof."
+            return 1
+        fi
+        if ! _listeners=$(printf '%s
+' "${_listener_source}" | awk 'NR > 1 {print $9}'); then
+            print_error "Failed to parse Paseo listeners from lsof output."
+            return 1
+        fi
+    else
+        print_error "No listener-audit tool found (ss/lsof); cannot verify Paseo is loopback-only."
+        return 1
+    fi
+
+    if [[ -z "${_listeners}" ]]; then
+        print_error "No TCP listeners could be associated with the managed Paseo service PID; refusing to let another daemon satisfy health checks."
+        return 1
+    fi
+
+    while IFS= read -r _addr; do
+        [[ -n "${_addr}" ]] || continue
+        case "${_addr}" in
+            127.*|"[::1]:"*|"::1:"*|localhost:*|"[::ffff:127."*) ;;
+            *)
+                _bad_listener="${_addr}"
+                break
+                ;;
+        esac
+    done <<< "${_listeners}"
+
+    if [[ -n "${_bad_listener}" ]]; then
+        print_error "Paseo daemon appears to listen on a non-loopback address (${_bad_listener}); refusing HEADLESS=1 setup."
+        return 1
+    fi
+
+    print_debug "Paseo listener audit passed."
+}
+
+paseo_service_owner_check() {
+    local _pid="$1"
+    local _expected_user=""
+    local _actual_user=""
+
+    if [[ -z "${_pid}" || "${_pid}" == "0" ]]; then
+        print_error "Paseo service PID unavailable; cannot verify managed service ownership."
+        return 1
+    fi
+
+    _expected_user=$(whoami || true)
+    _actual_user=$(ps -o user= -p "${_pid}" 2>/dev/null | awk '{print $1}' || true)
+    if [[ -z "${_actual_user}" ]]; then
+        print_error "Could not verify owner for Paseo service PID ${_pid}."
+        return 1
+    fi
+    if [[ "${_actual_user}" != "${_expected_user}" ]]; then
+        print_error "Paseo daemon is running as ${_actual_user}, expected ${_expected_user}."
+        return 1
+    fi
+}
+
+paseo_is_wsl_environment() {
+    grep -qiE '(microsoft|wsl)' /proc/version /proc/sys/kernel/osrelease 2>/dev/null || [[ -n "${WSL_DISTRO_NAME:-}" ]] || [[ -f /proc/sys/fs/binfmt_misc/WSLInterop ]]
+}
+
+paseo_is_container_environment() {
+    [[ -f /.dockerenv ]] || { command -v systemd-detect-virt &> /dev/null && systemd-detect-virt --container --quiet 2>/dev/null; }
+}
+
+paseo_headless_platform_gate() {
+    if [[ "${HEADLESS:-}" != "1" ]]; then
+        return 0
+    fi
+
+    if [[ "$(uname -s 2>/dev/null || true)" != "Linux" ]]; then
+        return 0
+    fi
+
+    if paseo_is_wsl_environment; then
+        print_error "HEADLESS=1 Paseo daemon setup is unsupported in WSL because WSL cannot guarantee startup after Windows host reboot without login."
+        return 1
+    fi
+
+    if paseo_is_container_environment; then
+        print_error "HEADLESS=1 Paseo daemon setup requires a booting native Linux user manager; container environments are unsupported."
+        return 1
+    fi
+}
+
+paseo_native_linux_preflight() {
+    local _user=""
+
+    if [[ "$(uname -s 2>/dev/null || true)" != "Linux" ]]; then
+        print_error "Native Linux Paseo headless service setup requires Linux."
+        return 1
+    fi
+
+    if paseo_is_wsl_environment; then
+        print_error "HEADLESS=1 Paseo daemon setup is unsupported in WSL because WSL cannot guarantee startup after Windows host reboot without login."
+        return 1
+    fi
+
+    if paseo_is_container_environment; then
+        print_error "HEADLESS=1 Paseo daemon setup requires a booting native Linux user manager; container environments are unsupported."
+        return 1
+    fi
+
+    _user=$(whoami || true)
+    if [[ -z "${_user}" || -z "${HOME}" || ! -d "${HOME}" ]]; then
+        print_error "Cannot resolve target user/home for Paseo daemon setup."
+        return 1
+    fi
+
+    if ! command -v loginctl &> /dev/null; then
+        print_error "loginctl is required to enable lingering for the Paseo user service."
+        return 1
+    fi
+
+    if ! command -v systemctl &> /dev/null; then
+        print_error "systemctl is required to manage the Paseo user service."
+        return 1
+    fi
+
+    if ! can_sudo; then
+        print_error "sudo access is required to enable lingering for HEADLESS=1 Paseo daemon setup."
+        return 1
+    fi
+
+    if ! loginctl show-user "${_user}" >/dev/null 2>&1; then
+        print_error "loginctl cannot inspect user ${_user}; cannot guarantee no-login Paseo startup."
+        return 1
+    fi
+
+    if ! systemctl --user show-environment >/dev/null 2>&1; then
+        print_error "systemctl --user is unavailable in this session; cannot configure the Paseo user service safely."
+        return 1
+    fi
+}
+
+paseo_enable_lingering_strict() {
+    local _user=""
+
+    _user=$(whoami || true)
+    print_message "Enabling lingering for Paseo systemd user service..."
+    if ! sudo loginctl enable-linger "${_user}"; then
+        print_error "Failed to enable lingering for ${_user}."
+        return 1
+    fi
+
+    if ! { loginctl show-user "${_user}" --property=Linger 2>/dev/null || true; } | grep -q 'Linger=yes'; then
+        print_error "Lingering verification failed for ${_user}."
+        return 1
+    fi
+    print_success "User lingering enabled for Paseo daemon."
+}
+
+paseo_existing_managed_service_check() {
+    local _service_file="${HOME}/.config/systemd/user/${PASEO_SERVICE_NAME}"
+    local _wrapper="${HOME}/.local/bin/paseo-daemon-start"
+
+    if [[ -f "${_service_file}" ]] && ! grep -qF "${PASEO_MANAGED_MARKER}" "${_service_file}"; then
+        print_error "Existing unmanaged ${_service_file} found. Remove or rename it before rerunning HEADLESS=1 setup."
+        return 1
+    fi
+
+    if [[ -f "${_wrapper}" ]] && ! grep -qF "${PASEO_MANAGED_MARKER}" "${_wrapper}"; then
+        print_error "Existing unmanaged ${_wrapper} found. Remove or rename it before rerunning HEADLESS=1 setup."
+        return 1
+    fi
+}
+
+paseo_linux_service_pid() {
+    systemctl --user show "${PASEO_SERVICE_NAME}" --property=MainPID --value 2>/dev/null | head -n 1 || true
+}
+
+install_paseo_systemd_user_service() {
+    local _service_dir="${HOME}/.config/systemd/user"
+    local _service_file="${_service_dir}/${PASEO_SERVICE_NAME}"
+    local _service_path=""
+    local _tmp=""
+
+    _service_path=$(paseo_effective_service_path)
+    mkdir -p "${_service_dir}"
+    chmod 700 "${_service_dir}"
+
+    if [[ -f "${_service_file}" ]] && ! grep -qF "${PASEO_MANAGED_MARKER}" "${_service_file}"; then
+        print_error "Existing unmanaged ${_service_file} found. Remove or rename it before rerunning HEADLESS=1 setup."
+        return 1
+    fi
+
+    _tmp=$(mktemp)
+    if ! cat > "${_tmp}" << EOF
+# ${PASEO_MANAGED_MARKER}
+[Unit]
+Description=Paseo headless daemon
+Documentation=https://www.getpaseo.com/
+
+[Service]
+Type=simple
+ExecStart=${HOME}/.local/bin/paseo-daemon-start
+WorkingDirectory=${HOME}
+Environment=HOME=${HOME}
+Environment=PATH=${_service_path}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+    then
+        rm -f "${_tmp}"
+        print_error "Failed to write Paseo systemd user service."
+        return 1
+    fi
+    if ! chmod 600 "${_tmp}" || ! mv "${_tmp}" "${_service_file}"; then
+        rm -f "${_tmp}"
+        print_error "Failed to install Paseo systemd user service."
+        return 1
+    fi
+    PASEO_MANAGED_SERVICE_TOUCHED=1
+
+    paseo_enable_lingering_strict || return 1
+
+    if ! systemctl --user daemon-reload; then
+        print_error "Failed to reload systemd user units for Paseo."
+        return 1
+    fi
+
+    if ! systemctl --user enable "${PASEO_SERVICE_NAME}"; then
+        print_error "Failed to enable ${PASEO_SERVICE_NAME}."
+        return 1
+    fi
+
+    if ! systemctl --user restart "${PASEO_SERVICE_NAME}"; then
+        print_error "Failed to start ${PASEO_SERVICE_NAME}."
+        return 1
+    fi
+
+    if ! systemctl --user is-enabled "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
+        print_error "${PASEO_SERVICE_NAME} is not enabled after setup."
+        return 1
+    fi
+
+    if ! systemctl --user is-active "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
+        print_error "${PASEO_SERVICE_NAME} is not active after setup."
+        print_debug "Inspect privately with: journalctl --user -u ${PASEO_SERVICE_NAME} --no-pager"
+        return 1
+    fi
+
+    print_success "Paseo systemd user service enabled and active."
+}
+
+cleanup_paseo_managed_service() {
+    local _platform="$1"
+
+    if [[ "${PASEO_MANAGED_SERVICE_TOUCHED}" != "1" ]]; then
+        return 0
+    fi
+
+    case "${_platform}" in
+        Linux)
+            systemctl --user stop "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
+            systemctl --user disable "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
+            ;;
+        *) ;;
+    esac
+    print_debug "Stopped managed Paseo service after failed verification; managed files and logs remain for inspection."
+}
+
+setup_headless_paseo_daemon() {
+    local _platform=""
+    local _service_pid=""
+
+    if [[ "${HEADLESS:-}" != "1" ]]; then
+        return 0
+    fi
+
+    _platform=$(uname -s 2>/dev/null || true)
+    if [[ "${_platform}" != "Linux" ]]; then
+        print_error "HEADLESS=1 Paseo daemon setup is unsupported on ${_platform:-this platform}."
+        return 1
+    fi
+    paseo_native_linux_preflight || return 1
+    paseo_existing_managed_service_check || return 1
+
+    install_paseo_cli || return 1
+    write_paseo_daemon_wrapper || return 1
+    stop_existing_paseo_daemon || return 1
+
+    if ! install_paseo_systemd_user_service; then
+        cleanup_paseo_managed_service "${_platform}"
+        return 1
+    fi
+    _service_pid=$(paseo_linux_service_pid || true)
+
+    if ! paseo_service_owner_check "${_service_pid}" || ! wait_for_paseo_health || ! paseo_listener_audit "${_service_pid}"; then
+        cleanup_paseo_managed_service "${_platform}"
+        return 1
+    fi
+
+    print_success "Headless Paseo daemon is service-managed and locally reachable. Use Paseo's normal pairing flow later if needed."
+}
+
 # Update Pi settings for the tintinweb subagents extension
 update_pi_subagents_settings() {
     local _mode="${1:-install}"
@@ -3154,7 +3995,7 @@ upload_log() {
 }
 
 setup_headless_sudo() {
-    if [[ "${HEADLESS:-}" != "1" ]]; then
+    if [[ "${HEADLESS:-}" != "1" || "${HEADLESS_PASSWORDLESS_SUDO:-}" != "1" ]]; then
         return
     fi
 
@@ -3188,7 +4029,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 188 | Last changed: Stop installing Whisper${NC}"
+    echo -e "${GRAY}Version 189 | Last changed: Configure headless Paseo daemon${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
@@ -3207,6 +4048,7 @@ main() {
         set +a
     fi
 
+    paseo_headless_platform_gate || return 1
     setup_headless_sudo
 
     print_section "User & System Setup"
@@ -3320,6 +4162,7 @@ HELPER_EOF
 
     print_section "Additional Development Tools"
     install_bun
+    setup_headless_paseo_daemon || return 1
     install_sfw
     install_claude_code
     install_gemini_cli

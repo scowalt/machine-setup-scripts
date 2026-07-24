@@ -110,6 +110,7 @@ function New-TokenPlaceholders {
 # OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
 
 # Machine/setup guards
+# HEADLESS=1
 # WORK_MACHINE=1
 # BAN_PI_SUBAGENTS=1
 # BAN_PI_MCP_ADAPTER=1
@@ -148,6 +149,17 @@ function Test-EnvLocalFlag {
     }
 
     return $false
+}
+
+
+function Assert-HeadlessPaseoUnsupported {
+    if (-not (Test-EnvLocalFlag "HEADLESS")) {
+        return
+    }
+
+    Write-Error "HEADLESS=1 requested, but native Windows cannot guarantee a no-login Paseo daemon with the foreground CLI."
+    Write-Error "Use a supported native Linux setup script for strict Paseo headless support, or unset HEADLESS for Windows setup."
+    throw "Unsupported HEADLESS=1 Paseo daemon setup on Windows"
 }
 
 # Install the appropriate secrets manager based on machine type
@@ -2375,7 +2387,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 102 | Last changed: Remove Compound Engineering setup and clean legacy artifacts" -ForegroundColor DarkGray
+    Write-Host "Version 103 | Last changed: Configure headless Paseo daemon" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -2385,6 +2397,8 @@ function Initialize-WindowsEnvironment {
     $logFile = Join-Path $logDir "$(Get-Date -Format 'yyyy-MM-dd-HHmmss').log"
     Start-Transcript -Path $logFile -Append
     Write-Debug "Logging to $logFile"
+
+    Assert-HeadlessPaseoUnsupported
 
     # Create placeholder token files early
     New-TokenPlaceholders
