@@ -106,6 +106,7 @@ create_env_local() {
 # OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
 
 # Machine/setup guards
+# HEADLESS=1
 # WORK_MACHINE=1
 # BAN_PI_SUBAGENTS=1
 # BAN_PI_MCP_ADAPTER=1
@@ -117,6 +118,46 @@ EOF
         chmod 600 "${HOME}/.env.local"
         print_debug "Created placeholder ~/.env.local"
     fi
+}
+
+
+# Read KEY=1 guards from the process environment or an existing ~/.env.local without mutating it.
+env_local_flag_is_one() {
+    local _name="$1"
+    local _line=""
+    local _key=""
+    local _value=""
+
+    if [[ "${!_name:-}" == "1" ]]; then
+        return 0
+    fi
+
+    [[ -f "${HOME}/.env.local" ]] || return 1
+    while IFS= read -r _line; do
+        _line="${_line#export }"
+        [[ "${_line}" == \#* || "${_line}" != *=* ]] && continue
+        _key="${_line%%=*}"
+        _value="${_line#*=}"
+        _value="${_value%\"}"
+        _value="${_value#\"}"
+        _value="${_value%\'}"
+        _value="${_value#\'}"
+        if [[ "${_key}" == "${_name}" && "${_value}" == "1" ]]; then
+            return 0
+        fi
+    done < "${HOME}/.env.local"
+
+    return 1
+}
+
+fail_unsupported_headless_paseo_daemon() {
+    if ! env_local_flag_is_one "HEADLESS"; then
+        return 0
+    fi
+
+    print_error "HEADLESS=1 requested, but WSL cannot guarantee a no-login Paseo daemon after Windows host reboot."
+    print_error "Use a native Linux setup script on a booting system for strict Paseo headless support, or unset HEADLESS for WSL setup."
+    return 1
 }
 
 # Check if user has sudo access (cached result)
@@ -2650,13 +2691,15 @@ main() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 144 | Last changed: Stop installing Whisper${NC}"
+    echo -e "${GRAY}Version 145 | Last changed: Configure headless Paseo daemon${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
         upload_log
         return 1
     fi
+
+    fail_unsupported_headless_paseo_daemon || return 1
 
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
