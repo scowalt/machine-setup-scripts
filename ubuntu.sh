@@ -106,6 +106,8 @@ create_env_local() {
 # OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
 
 # Machine/setup guards
+# HEADLESS=1
+# MACHINE_TYPE=physical  # Override VPS/physical detection when needed
 # WORK_MACHINE=1
 # BAN_PI_SUBAGENTS=1
 # BAN_PI_MCP_ADAPTER=1
@@ -161,12 +163,8 @@ detect_machine_type() {
         return 0
     fi
 
-    # Headless machines are treated as VPS for SSH purposes (deploy key only, no full auth key)
-    if [[ "${HEADLESS:-}" == "1" ]]; then
-        print_debug "Headless machine detected: treating as VPS for SSH key setup" >&2
-        echo "vps"
-        return 0
-    fi
+    # HEADLESS controls headless-machine conveniences, not the machine trust model.
+    # Physical mini PCs/servers can be headless, so continue with normal VPS detection.
 
     local vps_score=0
     local signals=""
@@ -3285,7 +3283,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 189 | Last changed: Install JetBrains Mono Nerd Font${NC}"
+    echo -e "${GRAY}Version 190 | Last changed: Decouple HEADLESS from VPS detection${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
