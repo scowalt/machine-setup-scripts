@@ -4101,7 +4101,7 @@ setup_headless_sudo() {
     local sudoers_file="/etc/sudoers.d/${USER}"
     local sudoers_line="${USER} ALL=(ALL) NOPASSWD:ALL"
 
-    if [[ -f "${sudoers_file}" ]] && grep -qF "${sudoers_line}" "${sudoers_file}"; then
+    if [[ -f "${sudoers_file}" ]] && sudo grep -qF "${sudoers_line}" "${sudoers_file}" 2>/dev/null; then
         print_debug "Passwordless sudo already configured for ${USER}."
         return
     fi
@@ -4123,7 +4123,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 191 | Last changed: Configure headless Paseo daemon${NC}"
+    echo -e "${GRAY}Version 192 | Last changed: Read sudoers file with sudo${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
