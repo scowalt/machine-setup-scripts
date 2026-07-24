@@ -2515,8 +2515,50 @@ wait_for_paseo_health() {
     return 1
 }
 
+paseo_service_process_pids() {
+    local _root_pid="$1"
+    local _process_rows=""
+
+    [[ -n "${_root_pid}" && "${_root_pid}" != "0" ]] || return 0
+    printf '%s\n' "${_root_pid}"
+
+    if ! _process_rows=$(ps -eo pid=,ppid= 2>/dev/null); then
+        return 0
+    fi
+
+    printf '%s\n' "${_process_rows}" | awk -v root="${_root_pid}" '
+        $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {
+            _pid = $1
+            _ppid = $2
+            children[_ppid] = children[_ppid] " " _pid
+        }
+        END {
+            if (root !~ /^[0-9]+$/) {
+                exit
+            }
+            seen[root] = 1
+            queue[1] = root
+            head = 1
+            tail = 1
+            while (head <= tail) {
+                _pid = queue[head++]
+                split(children[_pid], child, " ")
+                for (i in child) {
+                    if (child[i] != "" && !seen[child[i]]) {
+                        seen[child[i]] = 1
+                        queue[++tail] = child[i]
+                        print child[i]
+                    }
+                }
+            }
+        }
+    ' || true
+}
+
 paseo_listener_audit() {
     local _pid="$1"
+    local _pid_list=""
+    local _listener_pid=""
     local _bad_listener=""
     local _addr=""
     local _listeners=""
@@ -2527,23 +2569,47 @@ paseo_listener_audit() {
         return 1
     fi
 
+    _pid_list=$(paseo_service_process_pids "${_pid}" | awk 'NF && !seen[$0]++' || true)
+    if [[ -z "${_pid_list}" ]]; then
+        _pid_list="${_pid}"
+    fi
+
     if command -v ss &> /dev/null; then
         if ! _listener_source=$(ss -H -ltnp 2>/dev/null); then
             print_error "Failed to inspect Paseo listeners with ss."
             return 1
         fi
         if ! _listeners=$(printf '%s
-' "${_listener_source}" | awk -v pid="${_pid}" '$0 ~ "pid=" pid "," {print $4}'); then
+' "${_listener_source}" | awk -v pids="${_pid_list}" '
+            BEGIN {
+                split(pids, pid_values, /[[:space:]]+/)
+                for (i in pid_values) {
+                    if (pid_values[i] ~ /^[0-9]+$/) {
+                        wanted[pid_values[i]] = 1
+                    }
+                }
+            }
+            {
+                for (pid in wanted) {
+                    if ($0 ~ "pid=" pid ",") {
+                        print $4
+                        next
+                    }
+                }
+            }
+        '); then
             print_error "Failed to parse Paseo listeners from ss output."
             return 1
         fi
     elif command -v lsof &> /dev/null; then
-        if ! _listener_source=$(lsof -nP -a -p "${_pid}" -iTCP -sTCP:LISTEN 2>/dev/null); then
-            print_error "Failed to inspect Paseo listeners with lsof."
-            return 1
-        fi
+        _listener_source=$(
+            while IFS= read -r _listener_pid; do
+                [[ -n "${_listener_pid}" ]] || continue
+                lsof -nP -a -p "${_listener_pid}" -iTCP -sTCP:LISTEN 2>/dev/null || true
+            done <<< "${_pid_list}"
+        )
         if ! _listeners=$(printf '%s
-' "${_listener_source}" | awk 'NR > 1 {print $9}'); then
+' "${_listener_source}" | awk '$1 != "COMMAND" && $9 != "" {print $9}'); then
             print_error "Failed to parse Paseo listeners from lsof output."
             return 1
         fi
@@ -2553,7 +2619,7 @@ paseo_listener_audit() {
     fi
 
     if [[ -z "${_listeners}" ]]; then
-        print_error "No TCP listeners could be associated with the managed Paseo service PID; refusing to let another daemon satisfy health checks."
+        print_error "No TCP listeners could be associated with the managed Paseo service process tree; refusing to let another daemon satisfy health checks."
         return 1
     fi
 
