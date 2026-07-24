@@ -74,7 +74,7 @@ All scripts follow a consistent pattern:
 - Terminal: Starship prompt
 - CI/CD: act (local GitHub Actions)
 - AI agents: Claude Code CLI, Gemini CLI, Codex CLI, Pi coding agent, RTK token optimizer
-- Agent skills/plugins: Compound Engineering is installed for Pi on all machines unless banned; Matt Pocock engineering skills are installed for Pi on personal machines. Claude Code CLI is installed with Anthropic's native installer, not npm/Bun, so it does not depend on a global Node runtime. RTK is installed for all machines and initialized for supported agents when available. Work machines install Google Cloud CLI and update its components when the component manager is available. Skip Claude Code CLI with `BAN_CLAUDE_CODE=1`; skip Compound with `BAN_COMPOUND=1` or `BAN_COMPOUND_PLUGIN=1`; skip Matt Pocock skills with `WORK_MACHINE=1` or `BAN_MATT_POCOCK_SKILLS=1`; skip RTK with `BAN_RTK=1` in `~/.env.local`
+- Agent skills/plugins: Matt Pocock engineering skills are installed for Pi on personal machines. Claude Code CLI is installed with Anthropic's native installer, not npm/Bun, so it does not depend on a global Node runtime. RTK is installed for all machines and initialized for supported agents when available. Work machines install Google Cloud CLI and update its components when the component manager is available. Skip Claude Code CLI with `BAN_CLAUDE_CODE=1`; skip Matt Pocock skills with `WORK_MACHINE=1` or `BAN_MATT_POCOCK_SKILLS=1`; skip RTK with `BAN_RTK=1` in `~/.env.local`
 - If Claude Code setup warns that another `claude` command shadows the native binary, do not authenticate Fable with bare `claude` until PATH/package cleanup is done; use the native path printed by the script.
 
 ### Important Notes
