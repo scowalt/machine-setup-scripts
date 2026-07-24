@@ -52,6 +52,45 @@ extract_paseo_block() {
     awk '/PASEO_MANAGED_MARKER=/{in_block=1} /# Update Pi settings for the tintinweb subagents extension/{in_block=0} in_block {print}' "${file}"
 }
 
+assert_child_listener_audit() {
+    local tmp_dir
+    local pid_tree
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+
+    cat > "${tmp_dir}/ps" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == "-eo pid=,ppid=" ]]; then
+    cat <<'ROWS'
+100 1
+101 100
+102 101
+ROWS
+    exit 0
+fi
+exit 1
+EOF
+
+    cat > "${tmp_dir}/ss" <<'EOF'
+#!/usr/bin/env bash
+cat <<'ROWS'
+LISTEN 0 511 127.0.0.1:6767 0.0.0.0:* users:(("Paseo Daemon",pid=102,fd=23))
+ROWS
+EOF
+
+    chmod 700 "${tmp_dir}/ps" "${tmp_dir}/ss"
+
+    (
+        PATH="${tmp_dir}:${PATH}"
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        pid_tree=$(paseo_service_process_pids 100 | paste -sd, -)
+        [[ "${pid_tree}" == "100,101,102" ]] || fail "ubuntu.sh: listener audit process tree was ${pid_tree}, expected 100,101,102"
+        paseo_listener_audit 100 >/dev/null
+    )
+}
+
 for file in "${all_setup_bash[@]}"; do
     bash -n "${file}"
     assert_contains "${file}" '# HEADLESS=1' 'HEADLESS env-local placeholder'
@@ -71,6 +110,8 @@ for file in "${supported_bash[@]}"; do
     assert_contains "${file}" 'connectedDaemon.*reachable\|auth_required|reachable\|auth_required' 'local reachability acceptance contract'
     assert_contains "${file}" 'relayDisabled|relayEnabled|relayStatus' 'relay-not-disabled health guard'
     assert_contains "${file}" 'paseo_listener_audit' 'non-loopback listener audit'
+    assert_contains "${file}" 'paseo_service_process_pids' 'listener audit checks service process tree'
+    assert_contains "${file}" 'children\[_ppid\]' 'listener audit discovers child processes'
     assert_contains "${file}" 'paseo_effective_service_path\(\)' 'defined effective service PATH helper'
     assert_contains "${file}" 'paseo_run_with_timeout' 'bounded Paseo health checks'
     assert_contains "${file}" 'cannot audit listeners' 'fail-closed listener audit'
@@ -131,5 +172,7 @@ assert_contains README.md 'ubuntu\.sh.*pi\.sh.*bazzite\.sh' 'README supported na
 assert_contains README.md 'macOS.*PASEO_MACOS_HEADLESS_CANARY=1' 'README macOS canary status'
 assert_contains README.md 'WSL.*native Windows fail early' 'README unsupported WSL/Windows status'
 assert_contains README.md 'does not run or print pairing material' 'README no-pairing contract'
+
+assert_child_listener_audit
 
 printf '✓ headless Paseo daemon contract checks passed\n'
