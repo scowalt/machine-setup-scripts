@@ -3914,7 +3914,19 @@ APT::Periodic::AutocleanInterval "7";'
 
 # Install Turso CLI (libSQL database platform)
 install_turso() {
+    local turso_dir="${HOME}/.turso"
+    local turso_bin="${turso_dir}/turso"
+
     if command -v turso &> /dev/null; then
+        print_debug "Turso CLI is already installed."
+        return
+    fi
+
+    if [[ -x "${turso_bin}" ]]; then
+        case ":${PATH}:" in
+            *":${turso_dir}:"*) ;;
+            *) export PATH="${turso_dir}:${PATH}" ;;
+        esac
         print_debug "Turso CLI is already installed."
         return
     fi
@@ -4240,7 +4252,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 193 | Last changed: Harden Paseo trust path permissions${NC}"
+    echo -e "${GRAY}Version 194 | Last changed: Skip existing Turso CLI binary${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
