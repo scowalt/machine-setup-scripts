@@ -4,9 +4,11 @@ Idempotent scripts I use to set up my machines.
 
 ## AI Coding Agents
 
-Every machine setup script (macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows) installs/updates Claude Code CLI and Codex CLI, along with Gemini CLI, Pi, RTK, tintinweb Pi subagents, Pi MCP adapter, and Pi goal/autoresearch extensions. Personal machines also install Matt Pocock Pi skills; work machines also install Google Cloud CLI. Set `WORK_MACHINE=1` in `~/.env.local` for work machines. Set `BAN_CLAUDE_CODE=1` to skip Claude Code CLI setup. Set `BAN_RTK=1` to skip RTK setup. Set `BAN_PI_SUBAGENTS=1` to keep the tintinweb Pi subagents extension inactive. Set `BAN_PI_MCP_ADAPTER=1` to keep the Pi MCP adapter inactive. Set `BAN_PI_GOAL_AUTORESEARCH=1` to keep the Pi goal/autoresearch extensions inactive. Set `BAN_MATT_POCOCK_SKILLS=1` to keep Matt Pocock Pi skills inactive.
+Every machine setup script (macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows) installs/updates Claude Code CLI and Codex CLI, Notion CLI (`ntn`), Gemini CLI, Pi, RTK, tintinweb Pi subagents, Pi MCP adapter, and Pi goal/autoresearch extensions. Personal machines also install Matt Pocock Pi skills; work machines also install Google Cloud CLI. Set `WORK_MACHINE=1` in `~/.env.local` for work machines. Set `BAN_CLAUDE_CODE=1` to skip Claude Code CLI setup. Set `BAN_RTK=1` to skip RTK setup. Set `BAN_PI_SUBAGENTS=1` to keep the tintinweb Pi subagents extension inactive. Set `BAN_PI_MCP_ADAPTER=1` to keep the Pi MCP adapter inactive. Set `BAN_PI_GOAL_AUTORESEARCH=1` to keep the Pi goal/autoresearch extensions inactive. Set `BAN_MATT_POCOCK_SKILLS=1` to keep Matt Pocock Pi skills inactive.
 
 Claude Code is installed with Anthropic's native installer rather than npm/Bun. Setup only ensures the `claude` CLI exists; run Claude Code's normal login/account flow before using Fable. If setup warns that another `claude` command shadows the native binary, resolve PATH/package shadowing or use the native path shown in the warning before authenticating.
+
+Notion CLI is installed with Notion's native installer on macOS and Linux and with WinGet on Windows. The native installer supports x64 and ARM64, while the Windows package supports x64 only; unsupported architectures warn and continue setup. Setup does not authenticate Notion CLI or configure shell completions. Run `ntn login` manually when you are ready to connect a workspace.
 
 ## Connectivity tools
 

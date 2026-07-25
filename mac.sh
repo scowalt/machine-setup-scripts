@@ -1073,6 +1073,54 @@ install_codex_cli() {
     fi
 }
 
+# Install/update Notion CLI.
+install_ntn_cli() {
+    local os
+    local arch
+    os=$(uname -s 2>/dev/null || true)
+    arch=$(uname -m 2>/dev/null || true)
+
+    case "${os}:${arch}" in
+        Darwin:x86_64|Darwin:arm64|Darwin:aarch64|Linux:x86_64|Linux:amd64|Linux:arm64|Linux:aarch64) ;;
+        *)
+            print_warning "Notion CLI does not support ${os:-unknown} ${arch:-unknown}; skipping."
+            return
+            ;;
+    esac
+
+    print_message "Installing/updating Notion CLI..."
+
+    local install_dir="${HOME}/.local/bin"
+    local installer_path
+    if ! installer_path=$(mktemp "${TMPDIR:-/tmp}/ntn-install.XXXXXX"); then
+        print_warning "Failed to create a temporary file for the Notion CLI installer."
+        return
+    fi
+
+    local install_output
+    if ! install_output=$(curl -fsSL https://ntn.dev -o "${installer_path}" 2>&1); then
+        rm -f "${installer_path}"
+        print_warning "Failed to download the Notion CLI installer."
+        print_debug "${install_output}"
+        return
+    fi
+
+    if install_output=$(NTN_INSTALL_DIR="${install_dir}" bash "${installer_path}" 2>&1); then
+        rm -f "${installer_path}"
+        export PATH="${install_dir}:${PATH}"
+        if "${install_dir}/ntn" --version > /dev/null 2>&1; then
+            print_success "Notion CLI installed/updated."
+        else
+            print_warning "Notion CLI installer completed, but ${install_dir}/ntn did not verify."
+            print_debug "${install_output}"
+        fi
+    else
+        rm -f "${installer_path}"
+        print_warning "Failed to install/update Notion CLI."
+        print_debug "${install_output}"
+    fi
+}
+
 
 
 # Install Portless CLI (Tailscale HTTPS tunnel helper)
@@ -3768,7 +3816,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 177 | Last changed: Install Portless CLI${NC}"
+    echo -e "${GRAY}Version 178 | Last changed: Install/update Notion CLI${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
@@ -3937,6 +3985,7 @@ HELPER_EOF
     install_gemini_cli
     install_codex_cli
     install_portless_cli
+    install_ntn_cli
     install_rtk_cli
     setup_rtk_integrations
     if matt_pocock_pi_skills_disabled; then

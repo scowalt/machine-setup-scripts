@@ -27,7 +27,8 @@ $wingetPackages = (
     "jqlang.jq",
     "GoLang.Go",
     "Cloudflare.cloudflared",
-    "Kubernetes.kubectl"
+    "Kubernetes.kubectl",
+    "Notion.ntn"
 )
 
 # Define Nerd Font symbols using Unicode code points
@@ -2297,6 +2298,11 @@ function Install-WingetPackages {
 
     # Install missing packages
     foreach ($package in $wingetPackages) {
+        if ($package -eq "Notion.ntn" -and $env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
+            Write-Warning "Notion CLI supports Windows x64 only; skipping on $env:PROCESSOR_ARCHITECTURE."
+            continue
+        }
+
         $isInstalled = $false
         
         # First check our cached list
@@ -2428,7 +2434,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 105 | Last changed: Install Portless CLI" -ForegroundColor DarkGray
+    Write-Host "Version 106 | Last changed: Install/update Notion CLI" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
