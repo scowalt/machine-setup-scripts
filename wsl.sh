@@ -651,7 +651,7 @@ install_brew_packages() {
         return 0
     fi
 
-    local packages=("ffmpeg")
+    local packages=("ffmpeg" "kubernetes-cli")
     local to_install=()
 
     for package in "${packages[@]}"; do
@@ -2691,7 +2691,7 @@ main() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 145 | Last changed: Configure headless Paseo daemon${NC}"
+    echo -e "${GRAY}Version 146 | Last changed: Install kubectl${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"

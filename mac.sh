@@ -394,7 +394,7 @@ install_core_packages() {
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
     # NOTE: tailscale installed as a cask (GUI app) separately by setup_tailscale()
-    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "mise" "act" "terminal-notifier" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook" "poppler" "ffmpeg")
+    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "mise" "act" "terminal-notifier" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook" "poppler" "ffmpeg" "kubernetes-cli")
     local to_install=()
 
     # Get all installed packages at once (much faster than checking individually)
@@ -3736,7 +3736,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 175 | Last changed: Harden Paseo trust path permissions${NC}"
+    echo -e "${GRAY}Version 176 | Last changed: Install kubectl${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"

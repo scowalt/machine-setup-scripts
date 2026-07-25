@@ -1106,7 +1106,7 @@ install_brew_packages() {
         return 0
     fi
 
-    local packages=("ffmpeg")
+    local packages=("ffmpeg" "kubernetes-cli")
     local to_install=()
 
     for package in "${packages[@]}"; do
@@ -4318,7 +4318,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 194 | Last changed: Skip existing Turso CLI binary${NC}"
+    echo -e "${GRAY}Version 195 | Last changed: Install kubectl${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
