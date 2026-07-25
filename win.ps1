@@ -998,6 +998,46 @@ function Install-CodexCli {
 }
 
 
+
+# Function to install Portless CLI (Tailscale HTTPS tunnel helper)
+function Install-PortlessCli {
+    if (Get-Command portless -ErrorAction SilentlyContinue) {
+        Write-Debug "Portless CLI is already installed."
+        return
+    }
+
+    Write-Host "$arrow Installing Portless CLI..." -ForegroundColor Cyan
+
+    # Ensure bun is available
+    $bunPath = "$env:USERPROFILE\.bun\bin"
+    if (Test-Path $bunPath) {
+        $env:PATH = "$bunPath;$env:PATH"
+    }
+
+    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
+        Write-Host "$warnIcon Bun not found. Cannot install Portless CLI." -ForegroundColor Yellow
+        Write-Host "  Install Bun first, then run: bun install -g portless" -ForegroundColor DarkGray
+        return
+    }
+
+    if (-not (Get-Command tailscale -ErrorAction SilentlyContinue)) {
+        Write-Host "$warnIcon Tailscale not found. Portless requires Tailscale to create tunnels." -ForegroundColor Yellow
+    }
+
+    try {
+        bun install -g portless
+        if ($?) {
+            Write-Host "$success Portless CLI installed." -ForegroundColor Green
+        }
+        else {
+            Write-Host "$failIcon Failed to install Portless CLI." -ForegroundColor Red
+        }
+    }
+    catch {
+        Write-Host "$failIcon Failed to install Portless CLI: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
 # Check whether the installed rtk is Rust Token Killer, not the unrelated Rust Type Kit.
 function Test-RtkCliReady {
     $rtkCommand = Get-Command rtk -ErrorAction SilentlyContinue
@@ -2388,7 +2428,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 104 | Last changed: Install kubectl" -ForegroundColor DarkGray
+    Write-Host "Version 105 | Last changed: Install Portless CLI" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -2431,6 +2471,7 @@ function Initialize-WindowsEnvironment {
     Install-ClaudeCode
     Install-GeminiCli
     Install-CodexCli
+    Install-PortlessCli
     Install-RtkCli
     Setup-RtkIntegrations
     if (Test-MattPocockPiSkillsDisabled) {
