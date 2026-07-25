@@ -26,7 +26,8 @@ $wingetPackages = (
     "astral-sh.uv",
     "jqlang.jq",
     "GoLang.Go",
-    "Cloudflare.cloudflared"
+    "Cloudflare.cloudflared",
+    "Kubernetes.kubectl"
 )
 
 # Define Nerd Font symbols using Unicode code points
@@ -2387,7 +2388,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 103 | Last changed: Configure headless Paseo daemon" -ForegroundColor DarkGray
+    Write-Host "Version 104 | Last changed: Install kubectl" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
