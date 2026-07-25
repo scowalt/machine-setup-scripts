@@ -1809,6 +1809,9 @@ PASEO_VALIDATED_NODE=""
 PASEO_SERVICE_PATH=""
 PASEO_MANAGED_SERVICE_TOUCHED=0
 PASEO_PACKAGE_VERSION="unknown"
+PASEO_PACKAGE_CHANGED=0
+PASEO_DAEMON_WRAPPER_CHANGED=0
+PASEO_SYSTEMD_SERVICE_CHANGED=0
 PASEO_LAST_HEALTH_ERROR=""
 PASEO_LAST_HEALTH_SUMMARY=""
 
@@ -2139,6 +2142,8 @@ paseo_validate_service_path_components() {
 install_paseo_cli() {
     local _global_packages=""
     local _paseo_target=""
+    local _previous_paseo_target=""
+    local _previous_version_output=""
     local _node_target=""
     local _node_dir=""
     local _version_output=""
@@ -2149,11 +2154,16 @@ install_paseo_cli() {
         return 0
     fi
 
+    PASEO_PACKAGE_CHANGED=0
     print_message "Installing/updating Paseo CLI for headless daemon setup..."
 
     _service_path=$(paseo_service_path)
     export PATH="${HOME}/.bun/bin:${_service_path}:${PATH}"
 
+    _previous_paseo_target=$(paseo_command_target 2>/dev/null || true)
+    if [[ -n "${_previous_paseo_target}" ]]; then
+        _previous_version_output=$(HOME="${HOME}" PATH="${PATH}" "${_previous_paseo_target}" --version 2>/dev/null || true)
+    fi
     if ! command -v bun &> /dev/null; then
         print_error "Bun not found. Cannot install ${PASEO_PACKAGE} for HEADLESS=1."
         return 1
@@ -2235,6 +2245,10 @@ install_paseo_cli() {
     PASEO_PACKAGE_VERSION=$(printf '%s' "${PASEO_PACKAGE_VERSION}" | tr -cd '[:alnum:].:_/@ -' | cut -c1-80 || true)
     [[ -n "${PASEO_PACKAGE_VERSION}" ]] || PASEO_PACKAGE_VERSION="unknown"
 
+    if [[ "${_previous_paseo_target}" != "${_paseo_target}" || "${_previous_version_output}" != "${_version_output}" ]]; then
+        PASEO_PACKAGE_CHANGED=1
+    fi
+
     print_success "Paseo CLI ready (${PASEO_PACKAGE}, ${PASEO_PACKAGE_VERSION})."
 }
 
@@ -2253,6 +2267,7 @@ write_paseo_daemon_wrapper() {
         return 1
     fi
 
+    PASEO_DAEMON_WRAPPER_CHANGED=0
     mkdir -p "${HOME}/.local/bin" "${_log_dir}"
     chmod 700 "${HOME}/.local/bin" "${_log_dir}"
 
@@ -2277,12 +2292,32 @@ EOF
         print_error "Failed to write Paseo daemon wrapper."
         return 1
     fi
-    if ! chmod 700 "${_tmp}" || ! mv "${_tmp}" "${_wrapper}"; then
+    if ! chmod 700 "${_tmp}"; then
         rm -f "${_tmp}"
         print_error "Failed to install Paseo daemon wrapper."
         return 1
     fi
-    print_success "Paseo daemon wrapper installed at ${_wrapper}."
+
+    if [[ -f "${_wrapper}" ]] && cmp -s "${_tmp}" "${_wrapper}"; then
+        rm -f "${_tmp}"
+        if ! chmod 700 "${_wrapper}"; then
+            print_error "Failed to secure Paseo daemon wrapper."
+            return 1
+        fi
+        print_debug "Paseo daemon wrapper is unchanged."
+    else
+        if ! mv "${_tmp}" "${_wrapper}"; then
+            rm -f "${_tmp}"
+            print_error "Failed to install Paseo daemon wrapper."
+            return 1
+        fi
+        PASEO_DAEMON_WRAPPER_CHANGED=1
+        print_success "Paseo daemon wrapper installed at ${_wrapper}."
+    fi
+}
+
+paseo_managed_service_is_active() {
+    systemctl --user is-active "${PASEO_SERVICE_NAME}" >/dev/null 2>&1
 }
 
 stop_existing_paseo_daemon() {
@@ -2290,6 +2325,11 @@ stop_existing_paseo_daemon() {
     local _state=""
 
     if [[ -z "${PASEO_VALIDATED_CMD}" ]]; then
+        return 0
+    fi
+
+    if paseo_managed_service_is_active; then
+        print_debug "Existing Paseo daemon is already managed by ${PASEO_SERVICE_NAME}; leaving it running until change detection completes."
         return 0
     fi
 
@@ -2699,6 +2739,7 @@ install_paseo_systemd_user_service() {
     local _tmp=""
 
     _service_path=$(paseo_effective_service_path)
+    PASEO_SYSTEMD_SERVICE_CHANGED=0
     mkdir -p "${_service_dir}"
     chmod 700 "${_service_dir}"
 
@@ -2731,18 +2772,35 @@ EOF
         print_error "Failed to write Paseo systemd user service."
         return 1
     fi
-    if ! chmod 600 "${_tmp}" || ! mv "${_tmp}" "${_service_file}"; then
+    if ! chmod 600 "${_tmp}"; then
         rm -f "${_tmp}"
         print_error "Failed to install Paseo systemd user service."
         return 1
     fi
-    PASEO_MANAGED_SERVICE_TOUCHED=1
+
+    if [[ -f "${_service_file}" ]] && cmp -s "${_tmp}" "${_service_file}"; then
+        rm -f "${_tmp}"
+        if ! chmod 600 "${_service_file}"; then
+            print_error "Failed to secure Paseo systemd user service."
+            return 1
+        fi
+        print_debug "Paseo systemd user service definition is unchanged."
+    else
+        if ! mv "${_tmp}" "${_service_file}"; then
+            rm -f "${_tmp}"
+            print_error "Failed to install Paseo systemd user service."
+            return 1
+        fi
+        PASEO_SYSTEMD_SERVICE_CHANGED=1
+    fi
 
     paseo_enable_lingering_strict || return 1
 
-    if ! systemctl --user daemon-reload; then
-        print_error "Failed to reload systemd user units for Paseo."
-        return 1
+    if [[ "${PASEO_SYSTEMD_SERVICE_CHANGED}" == "1" ]]; then
+        if ! systemctl --user daemon-reload; then
+            print_error "Failed to reload systemd user units for Paseo."
+            return 1
+        fi
     fi
 
     if ! systemctl --user enable "${PASEO_SERVICE_NAME}"; then
@@ -2750,9 +2808,20 @@ EOF
         return 1
     fi
 
-    if ! systemctl --user restart "${PASEO_SERVICE_NAME}"; then
-        print_error "Failed to start ${PASEO_SERVICE_NAME}."
-        return 1
+    if ! paseo_managed_service_is_active; then
+        PASEO_MANAGED_SERVICE_TOUCHED=1
+        if ! systemctl --user start "${PASEO_SERVICE_NAME}"; then
+            print_error "Failed to start ${PASEO_SERVICE_NAME}."
+            return 1
+        fi
+    elif [[ "${PASEO_PACKAGE_CHANGED}" == "1" || "${PASEO_DAEMON_WRAPPER_CHANGED}" == "1" || "${PASEO_SYSTEMD_SERVICE_CHANGED}" == "1" ]]; then
+        PASEO_MANAGED_SERVICE_TOUCHED=1
+        if ! systemctl --user restart "${PASEO_SERVICE_NAME}"; then
+            print_error "Failed to restart ${PASEO_SERVICE_NAME} after a Paseo package or service change."
+            return 1
+        fi
+    else
+        print_debug "Paseo package, wrapper, and service definition are unchanged; leaving the active daemon running."
     fi
 
     if ! systemctl --user is-enabled "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
@@ -3648,7 +3717,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 56 | Last changed: Install/update Notion CLI${NC}"
+    echo -e "${GRAY}Version 57 | Last changed: Avoid unnecessary Paseo daemon restarts${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"

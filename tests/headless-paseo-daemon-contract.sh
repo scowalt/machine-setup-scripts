@@ -91,6 +91,193 @@ EOF
     )
 }
 
+assert_managed_daemon_is_preserved() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        PASEO_VALIDATED_CMD=/bin/true
+
+        paseo_managed_service_is_active() {
+            return 0
+        }
+        paseo_local_daemon_state() {
+            fail "ubuntu.sh: queried daemon state even though the managed service was active"
+        }
+        paseo_run_with_timeout() {
+            touch "${tmp_dir}/daemon-stopped"
+        }
+
+        stop_existing_paseo_daemon
+        [[ ! -e "${tmp_dir}/daemon-stopped" ]] || fail "ubuntu.sh: stopped an already managed Paseo daemon"
+    )
+}
+
+assert_unchanged_service_is_not_restarted() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        HOME="${tmp_dir}/home"
+        PASEO_SERVICE_PATH=/usr/bin
+        PASEO_TEST_ACTIVE=0
+        PASEO_TEST_SYSTEMCTL_LOG="${tmp_dir}/systemctl.log"
+
+        paseo_enable_lingering_strict() {
+            return 0
+        }
+        systemctl() {
+            printf '%s\n' "$*" >> "${PASEO_TEST_SYSTEMCTL_LOG}"
+            case "$*" in
+                "--user is-active ${PASEO_SERVICE_NAME}") [[ "${PASEO_TEST_ACTIVE}" == "1" ]] ;;
+                "--user start ${PASEO_SERVICE_NAME}") PASEO_TEST_ACTIVE=1 ;;
+                "--user is-enabled ${PASEO_SERVICE_NAME}") return 0 ;;
+                *) return 0 ;;
+            esac
+        }
+
+        install_paseo_systemd_user_service
+        : > "${PASEO_TEST_SYSTEMCTL_LOG}"
+        PASEO_MANAGED_SERVICE_TOUCHED=0
+        PASEO_PACKAGE_CHANGED=0
+        PASEO_DAEMON_WRAPPER_CHANGED=0
+        PASEO_SYSTEMD_SERVICE_CHANGED=0
+
+        install_paseo_systemd_user_service
+
+        if grep -Eq -- '--user (daemon-reload|start|restart)' "${PASEO_TEST_SYSTEMCTL_LOG}"; then
+            fail "ubuntu.sh: reloaded or restarted an unchanged active Paseo service"
+        fi
+        [[ "${PASEO_MANAGED_SERVICE_TOUCHED}" == "0" ]] || fail "ubuntu.sh: marked an unchanged active Paseo service as touched"
+
+        : > "${PASEO_TEST_SYSTEMCTL_LOG}"
+        PASEO_PACKAGE_CHANGED=1
+        install_paseo_systemd_user_service
+        grep -qF -- "--user restart ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}" || fail "ubuntu.sh: did not restart Paseo after a package change"
+    )
+}
+
+assert_managed_launchdaemon_is_preserved() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+
+    (
+        # Source only the Paseo definitions because mac.sh invokes main unconditionally.
+        source <(extract_paseo_block mac.sh)
+        PASEO_VALIDATED_CMD=/bin/true
+
+        print_debug() { :; }
+
+        paseo_managed_service_is_loaded() {
+            return 0
+        }
+        paseo_local_daemon_state() {
+            fail "mac.sh: queried daemon state even though the managed LaunchDaemon was loaded"
+        }
+        paseo_run_with_timeout() {
+            touch "${tmp_dir}/daemon-stopped"
+        }
+
+        stop_existing_paseo_daemon
+        [[ ! -e "${tmp_dir}/daemon-stopped" ]] || fail "mac.sh: stopped an already managed Paseo LaunchDaemon"
+    )
+}
+
+assert_unchanged_launchdaemon_is_not_restarted() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+
+    (
+        # Source only the Paseo definitions because mac.sh invokes main unconditionally.
+        source <(extract_paseo_block mac.sh)
+        HOME="${tmp_dir}/home"
+        PASEO_SERVICE_PATH=/usr/bin
+        PASEO_TEST_LOADED=0
+        PASEO_TEST_LAUNCHCTL_LOG="${tmp_dir}/launchctl.log"
+        PASEO_TEST_PLIST="${tmp_dir}/paseo.plist"
+
+        print_debug() { :; }
+        print_success() { :; }
+        print_error() { fail "$*"; }
+        paseo_launchd_plist_path() {
+            printf '%s\n' "${PASEO_TEST_PLIST}"
+        }
+        launchctl() {
+            printf '%s\n' "$*" >> "${PASEO_TEST_LAUNCHCTL_LOG}"
+            case "$*" in
+                "print system/${PASEO_LAUNCHD_LABEL}") [[ "${PASEO_TEST_LOADED}" == "1" ]] ;;
+                "bootstrap system ${PASEO_TEST_PLIST}") PASEO_TEST_LOADED=1 ;;
+                "bootout system/${PASEO_LAUNCHD_LABEL}") PASEO_TEST_LOADED=0 ;;
+                *) return 0 ;;
+            esac
+        }
+        sudo() {
+            local source_path=""
+            local target_path=""
+
+            case "$1" in
+                launchctl)
+                    shift
+                    launchctl "$@"
+                    ;;
+                grep|cmp|chmod)
+                    command "$@"
+                    ;;
+                chown)
+                    return 0
+                    ;;
+                install)
+                    source_path="${*: -2:1}"
+                    target_path="${*: -1}"
+                    command cp "${source_path}" "${target_path}"
+                    command chmod 0644 "${target_path}"
+                    ;;
+                *)
+                    fail "mac.sh test: unexpected sudo command: $*"
+                    ;;
+            esac
+        }
+
+        install_paseo_launchdaemon
+        : > "${PASEO_TEST_LAUNCHCTL_LOG}"
+        PASEO_MANAGED_SERVICE_TOUCHED=0
+        PASEO_PACKAGE_CHANGED=0
+        PASEO_DAEMON_WRAPPER_CHANGED=0
+        PASEO_LAUNCHD_SERVICE_CHANGED=0
+
+        install_paseo_launchdaemon
+
+        if grep -Eq '^(bootout|bootstrap|kickstart)' "${PASEO_TEST_LAUNCHCTL_LOG}"; then
+            fail "mac.sh: restarted an unchanged loaded Paseo LaunchDaemon"
+        fi
+        [[ "${PASEO_MANAGED_SERVICE_TOUCHED}" == "0" ]] || fail "mac.sh: marked an unchanged loaded Paseo LaunchDaemon as touched"
+
+        : > "${PASEO_TEST_LAUNCHCTL_LOG}"
+        PASEO_PACKAGE_CHANGED=1
+        install_paseo_launchdaemon
+        grep -qF "kickstart -k system/${PASEO_LAUNCHD_LABEL}" "${PASEO_TEST_LAUNCHCTL_LOG}" || fail "mac.sh: did not restart Paseo after a package change"
+
+        : > "${PASEO_TEST_LAUNCHCTL_LOG}"
+        PASEO_PACKAGE_CHANGED=0
+        PASEO_SERVICE_PATH=/bin
+        install_paseo_launchdaemon
+        grep -qF "bootout system/${PASEO_LAUNCHD_LABEL}" "${PASEO_TEST_LAUNCHCTL_LOG}" || fail "mac.sh: did not unload Paseo after a plist change"
+        grep -qF "bootstrap system ${PASEO_TEST_PLIST}" "${PASEO_TEST_LAUNCHCTL_LOG}" || fail "mac.sh: did not reload Paseo after a plist change"
+    )
+}
+
 for file in "${all_setup_bash[@]}"; do
     bash -n "${file}"
     assert_contains "${file}" '# HEADLESS=1' 'HEADLESS env-local placeholder'
@@ -146,6 +333,9 @@ for file in "${supported_linux[@]}"; do
     assert_contains "${file}" 'systemctl --user daemon-reload' 'strict systemd reload'
     assert_contains "${file}" 'systemctl --user enable' 'systemd service enablement'
     assert_contains "${file}" 'systemctl --user restart' 'systemd service start/restart'
+    assert_contains "${file}" 'paseo_managed_service_is_active' 'managed service activity detection'
+    assert_contains "${file}" 'cmp -s.*_service_file' 'idempotent service definition comparison'
+    assert_contains "${file}" 'leaving the active daemon running' 'unchanged active daemon preservation'
     assert_contains "${file}" 'WantedBy=default.target' 'systemd user-service boot target'
     assert_not_contains "${file}" 'network-online\.target' 'invalid user-unit dependency on system network target'
 done
@@ -155,6 +345,9 @@ assert_contains mac.sh '/Library/LaunchDaemons/\$\{PASEO_LAUNCHD_LABEL\}\.plist'
 assert_contains mac.sh '<key>UserName</key>' 'LaunchDaemon target user'
 assert_contains mac.sh 'launchctl bootstrap system' 'LaunchDaemon bootstrap'
 assert_contains mac.sh 'launchctl kickstart -k' 'LaunchDaemon kickstart'
+assert_contains mac.sh 'paseo_managed_service_is_loaded' 'managed LaunchDaemon activity detection'
+assert_contains mac.sh 'cmp -s.*_plist' 'idempotent LaunchDaemon plist comparison'
+assert_contains mac.sh 'leaving the loaded daemon running' 'unchanged loaded LaunchDaemon preservation'
 assert_not_contains mac.sh 'StandardOutPath|StandardErrorPath' 'root-domain LaunchDaemon logs in user-writable paths'
 
 assert_contains ubuntu.sh 'HEADLESS_PASSWORDLESS_SUDO' 'explicit Ubuntu passwordless sudo opt-in'
@@ -174,5 +367,9 @@ assert_contains README.md 'WSL.*native Windows fail early' 'README unsupported W
 assert_contains README.md 'does not run or print pairing material' 'README no-pairing contract'
 
 assert_child_listener_audit
+assert_managed_daemon_is_preserved
+assert_unchanged_service_is_not_restarted
+assert_managed_launchdaemon_is_preserved
+assert_unchanged_launchdaemon_is_not_restarted
 
 printf '✓ headless Paseo daemon contract checks passed\n'

@@ -1875,6 +1875,9 @@ PASEO_VALIDATED_NODE=""
 PASEO_SERVICE_PATH=""
 PASEO_MANAGED_SERVICE_TOUCHED=0
 PASEO_PACKAGE_VERSION="unknown"
+PASEO_PACKAGE_CHANGED=0
+PASEO_DAEMON_WRAPPER_CHANGED=0
+PASEO_LAUNCHD_SERVICE_CHANGED=0
 PASEO_LAST_HEALTH_ERROR=""
 PASEO_LAST_HEALTH_SUMMARY=""
 
@@ -2205,6 +2208,8 @@ paseo_validate_service_path_components() {
 install_paseo_cli() {
     local _global_packages=""
     local _paseo_target=""
+    local _previous_paseo_target=""
+    local _previous_version_output=""
     local _node_target=""
     local _node_dir=""
     local _version_output=""
@@ -2215,10 +2220,16 @@ install_paseo_cli() {
         return 0
     fi
 
+    PASEO_PACKAGE_CHANGED=0
     print_message "Installing/updating Paseo CLI for headless daemon setup..."
 
     _service_path=$(paseo_service_path)
     export PATH="${HOME}/.bun/bin:${_service_path}:${PATH}"
+
+    _previous_paseo_target=$(paseo_command_target 2>/dev/null || true)
+    if [[ -n "${_previous_paseo_target}" ]]; then
+        _previous_version_output=$(HOME="${HOME}" PATH="${PATH}" "${_previous_paseo_target}" --version 2>/dev/null || true)
+    fi
 
     if ! command -v bun &> /dev/null; then
         print_error "Bun not found. Cannot install ${PASEO_PACKAGE} for HEADLESS=1."
@@ -2301,6 +2312,10 @@ install_paseo_cli() {
     PASEO_PACKAGE_VERSION=$(printf '%s' "${PASEO_PACKAGE_VERSION}" | tr -cd '[:alnum:].:_/@ -' | cut -c1-80 || true)
     [[ -n "${PASEO_PACKAGE_VERSION}" ]] || PASEO_PACKAGE_VERSION="unknown"
 
+    if [[ "${_previous_paseo_target}" != "${_paseo_target}" || "${_previous_version_output}" != "${_version_output}" ]]; then
+        PASEO_PACKAGE_CHANGED=1
+    fi
+
     print_success "Paseo CLI ready (${PASEO_PACKAGE}, ${PASEO_PACKAGE_VERSION})."
 }
 
@@ -2319,6 +2334,7 @@ write_paseo_daemon_wrapper() {
         return 1
     fi
 
+    PASEO_DAEMON_WRAPPER_CHANGED=0
     mkdir -p "${HOME}/.local/bin" "${_log_dir}"
     chmod 700 "${HOME}/.local/bin" "${_log_dir}"
 
@@ -2343,12 +2359,32 @@ EOF
         print_error "Failed to write Paseo daemon wrapper."
         return 1
     fi
-    if ! chmod 700 "${_tmp}" || ! mv "${_tmp}" "${_wrapper}"; then
+    if ! chmod 700 "${_tmp}"; then
         rm -f "${_tmp}"
         print_error "Failed to install Paseo daemon wrapper."
         return 1
     fi
-    print_success "Paseo daemon wrapper installed at ${_wrapper}."
+
+    if [[ -f "${_wrapper}" ]] && cmp -s "${_tmp}" "${_wrapper}"; then
+        rm -f "${_tmp}"
+        if ! chmod 700 "${_wrapper}"; then
+            print_error "Failed to secure Paseo daemon wrapper."
+            return 1
+        fi
+        print_debug "Paseo daemon wrapper is unchanged."
+    else
+        if ! mv "${_tmp}" "${_wrapper}"; then
+            rm -f "${_tmp}"
+            print_error "Failed to install Paseo daemon wrapper."
+            return 1
+        fi
+        PASEO_DAEMON_WRAPPER_CHANGED=1
+        print_success "Paseo daemon wrapper installed at ${_wrapper}."
+    fi
+}
+
+paseo_managed_service_is_loaded() {
+    sudo launchctl print "system/${PASEO_LAUNCHD_LABEL}" >/dev/null 2>&1
 }
 
 stop_existing_paseo_daemon() {
@@ -2356,6 +2392,11 @@ stop_existing_paseo_daemon() {
     local _state=""
 
     if [[ -z "${PASEO_VALIDATED_CMD}" ]]; then
+        return 0
+    fi
+
+    if paseo_managed_service_is_loaded; then
+        print_debug "Existing Paseo daemon is already managed by ${PASEO_LAUNCHD_LABEL}; leaving it running until change detection completes."
         return 0
     fi
 
@@ -2671,9 +2712,15 @@ paseo_macos_preflight() {
     fi
 }
 
+paseo_launchd_plist_path() {
+    printf '%s\n' "/Library/LaunchDaemons/${PASEO_LAUNCHD_LABEL}.plist"
+}
+
 paseo_existing_managed_service_check() {
-    local _plist="/Library/LaunchDaemons/${PASEO_LAUNCHD_LABEL}.plist"
+    local _plist=""
     local _wrapper="${HOME}/.local/bin/paseo-daemon-start"
+
+    _plist=$(paseo_launchd_plist_path)
 
     if [[ -f "${_plist}" ]] && ! sudo grep -qF "${PASEO_MANAGED_MARKER}" "${_plist}"; then
         print_error "Existing unmanaged ${_plist} found. Remove or rename it before rerunning the macOS Paseo canary."
@@ -2708,13 +2755,15 @@ cleanup_paseo_managed_service() {
 }
 
 install_paseo_launchdaemon() {
-    local _plist="/Library/LaunchDaemons/${PASEO_LAUNCHD_LABEL}.plist"
+    local _plist=""
     local _tmp=""
     local _user=""
     local _wrapper="${HOME}/.local/bin/paseo-daemon-start"
     local _service_path=""
 
+    _plist=$(paseo_launchd_plist_path)
     _service_path=$(paseo_effective_service_path)
+    PASEO_LAUNCHD_SERVICE_CHANGED=0
     _user=$(whoami || true)
     if [[ -f "${_plist}" ]] && ! sudo grep -qF "${PASEO_MANAGED_MARKER}" "${_plist}"; then
         print_error "Existing unmanaged ${_plist} found. Remove or rename it before rerunning the macOS Paseo canary."
@@ -2758,29 +2807,57 @@ EOF
         return 1
     fi
 
-    if ! sudo install -o root -g wheel -m 0644 "${_tmp}" "${_plist}"; then
+    if [[ -f "${_plist}" ]] && sudo cmp -s "${_tmp}" "${_plist}"; then
         rm -f "${_tmp}"
-        print_error "Failed to install Paseo LaunchDaemon plist."
-        return 1
+        if ! sudo chown root:wheel "${_plist}" || ! sudo chmod 0644 "${_plist}"; then
+            print_error "Failed to secure Paseo LaunchDaemon plist."
+            return 1
+        fi
+        print_debug "Paseo LaunchDaemon plist is unchanged."
+    else
+        if ! sudo install -o root -g wheel -m 0644 "${_tmp}" "${_plist}"; then
+            rm -f "${_tmp}"
+            print_error "Failed to install Paseo LaunchDaemon plist."
+            return 1
+        fi
+        rm -f "${_tmp}"
+        PASEO_LAUNCHD_SERVICE_CHANGED=1
     fi
-    rm -f "${_tmp}"
-    PASEO_MANAGED_SERVICE_TOUCHED=1
 
-    sudo launchctl bootout "system/${PASEO_LAUNCHD_LABEL}" >/dev/null 2>&1 || true
-    if ! sudo launchctl bootstrap system "${_plist}"; then
-        print_error "Failed to bootstrap ${PASEO_LAUNCHD_LABEL}."
-        return 1
-    fi
     if ! sudo launchctl enable "system/${PASEO_LAUNCHD_LABEL}"; then
         print_error "Failed to enable ${PASEO_LAUNCHD_LABEL}."
         return 1
     fi
-    if ! sudo launchctl kickstart -k "system/${PASEO_LAUNCHD_LABEL}"; then
-        print_error "Failed to start ${PASEO_LAUNCHD_LABEL}."
-        return 1
+
+    if ! paseo_managed_service_is_loaded; then
+        PASEO_MANAGED_SERVICE_TOUCHED=1
+        if ! sudo launchctl bootstrap system "${_plist}"; then
+            print_error "Failed to bootstrap ${PASEO_LAUNCHD_LABEL}."
+            return 1
+        fi
+    elif [[ "${PASEO_LAUNCHD_SERVICE_CHANGED}" == "1" ]]; then
+        PASEO_MANAGED_SERVICE_TOUCHED=1
+        if ! sudo launchctl bootout "system/${PASEO_LAUNCHD_LABEL}"; then
+            if paseo_managed_service_is_loaded; then
+                print_error "Failed to unload ${PASEO_LAUNCHD_LABEL} before applying its changed plist."
+                return 1
+            fi
+        fi
+        if ! sudo launchctl bootstrap system "${_plist}"; then
+            print_error "Failed to bootstrap changed ${PASEO_LAUNCHD_LABEL}."
+            return 1
+        fi
+    elif [[ "${PASEO_PACKAGE_CHANGED}" == "1" || "${PASEO_DAEMON_WRAPPER_CHANGED}" == "1" ]]; then
+        PASEO_MANAGED_SERVICE_TOUCHED=1
+        if ! sudo launchctl kickstart -k "system/${PASEO_LAUNCHD_LABEL}"; then
+            print_error "Failed to restart ${PASEO_LAUNCHD_LABEL} after a Paseo package or wrapper change."
+            return 1
+        fi
+    else
+        print_debug "Paseo package, wrapper, and LaunchDaemon plist are unchanged; leaving the loaded daemon running."
     fi
     if ! sudo launchctl print "system/${PASEO_LAUNCHD_LABEL}" >/dev/null 2>&1; then
-        print_error "${PASEO_LAUNCHD_LABEL} is not loaded after bootstrap."
+        print_error "${PASEO_LAUNCHD_LABEL} is not loaded after setup."
         return 1
     fi
 
@@ -3816,7 +3893,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 178 | Last changed: Install/update Notion CLI${NC}"
+    echo -e "${GRAY}Version 179 | Last changed: Avoid unnecessary Paseo daemon restarts${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
