@@ -8,6 +8,10 @@ Every machine setup script (macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windo
 
 Claude Code is installed with Anthropic's native installer rather than npm/Bun. Setup only ensures the `claude` CLI exists; run Claude Code's normal login/account flow before using Fable. If setup warns that another `claude` command shadows the native binary, resolve PATH/package shadowing or use the native path shown in the warning before authenticating.
 
+## Connectivity tools
+
+Every machine setup script installs Portless CLI for Tailscale HTTPS tunnel helpers.
+
 ## Headless Paseo daemon
 
 Set `HEADLESS=1` only when provisioning a machine that must remain remotely operable after logout or reboot. On native Linux setup scripts (`ubuntu.sh`, `pi.sh`, and `bazzite.sh`), this installs `@getpaseo/cli`, creates a managed `paseo.service` systemd user service with lingering enabled, starts it, and verifies local daemon health before setup succeeds. Ubuntu only configures unrestricted passwordless sudo when `HEADLESS_PASSWORDLESS_SUDO=1` is also set.

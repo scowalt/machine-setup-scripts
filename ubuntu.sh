@@ -1174,6 +1174,38 @@ install_codex_cli() {
 }
 
 
+
+# Install Portless CLI (Tailscale HTTPS tunnel helper)
+install_portless_cli() {
+    if command -v portless &> /dev/null; then
+        print_debug "Portless CLI is already installed."
+        return
+    fi
+
+    print_message "Installing Portless CLI..."
+
+    # Ensure bun is available
+    if [[ -d "${HOME}/.bun" ]]; then
+        export PATH="${HOME}/.bun/bin:${PATH}"
+    fi
+
+    if ! command -v bun &> /dev/null; then
+        print_warning "Bun not found. Cannot install Portless CLI."
+        print_debug "Install Bun first, then run: bun install -g portless"
+        return
+    fi
+
+    if ! command -v tailscale &> /dev/null; then
+        print_warning "Tailscale not found. Portless requires Tailscale to create tunnels."
+    fi
+
+    if bun install -g portless; then
+        print_success "Portless CLI installed."
+    else
+        print_error "Failed to install Portless CLI."
+    fi
+}
+
 # Install/update Claude Code CLI (Anthropic's AI coding agent)
 claude_code_native_path() {
     printf '%s/.local/bin/claude' "${HOME}"
@@ -4318,7 +4350,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 195 | Last changed: Install kubectl${NC}"
+    echo -e "${GRAY}Version 196 | Last changed: Install Portless CLI${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
@@ -4457,6 +4489,7 @@ HELPER_EOF
     install_claude_code
     install_gemini_cli
     install_codex_cli
+    install_portless_cli
     install_rtk_cli
     setup_rtk_integrations
     if matt_pocock_pi_skills_disabled; then
