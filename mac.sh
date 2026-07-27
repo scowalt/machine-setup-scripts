@@ -440,6 +440,39 @@ install_core_packages() {
     fi
 }
 
+# Install SessionWatcher from its trusted third-party Homebrew tap.
+install_sessionwatcher() {
+    local tap="soren-starck/tap"
+
+    if ! { brew tap || true; } | grep -q "^${tap}$"; then
+        print_message "Adding SessionWatcher Homebrew tap..."
+        if ! brew tap "${tap}"; then
+            print_warning "Failed to tap ${tap}; skipping SessionWatcher."
+            return
+        fi
+    else
+        print_debug "SessionWatcher Homebrew tap is already configured."
+    fi
+
+    print_message "Trusting SessionWatcher Homebrew tap..."
+    if ! brew trust "${tap}"; then
+        print_warning "Failed to trust ${tap}; skipping SessionWatcher."
+        return
+    fi
+
+    if brew list --cask sessionwatcher &>/dev/null 2>&1; then
+        print_debug "SessionWatcher is already installed."
+        return
+    fi
+
+    print_message "Installing SessionWatcher..."
+    if brew install --cask sessionwatcher; then
+        print_success "SessionWatcher installed."
+    else
+        print_warning "Failed to install SessionWatcher."
+    fi
+}
+
 # Ensure Tailscale is installed as the cask (GUI app), not the formula (CLI-only).
 # The formula's daemon management is broken on macOS — brew services can't handle
 # privileged network daemons properly. The cask installs the same app as a direct
@@ -3893,7 +3926,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 179 | Last changed: Avoid unnecessary Paseo daemon restarts${NC}"
+    echo -e "${GRAY}Version 180 | Last changed: Install SessionWatcher${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
@@ -3923,6 +3956,7 @@ main() {
 
         print_section "Core Packages"
         install_core_packages
+        install_sessionwatcher
         install_secrets_manager
         install_gcloud_cli
 
