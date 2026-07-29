@@ -3225,6 +3225,35 @@ setup_pi_mcp_adapter() {
     fi
 }
 
+# Install/update Pi Claude bridge extension
+setup_pi_claude_bridge() {
+    local _package="npm:pi-claude-bridge"
+    local _output=""
+    local _list_output=""
+
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Cannot install Pi Claude bridge."
+        print_debug "Install Node.js/npm, then run: pi install npm:pi-claude-bridge"
+        return 0
+    fi
+
+    if ! command -v pi &> /dev/null; then
+        print_warning "Pi coding agent not found. Cannot install Pi Claude bridge."
+        return 0
+    fi
+
+    print_message "Installing/updating Pi Claude bridge..."
+    if _output=$(pi install "${_package}" 2>&1); then
+        if _list_output=$(pi list 2>&1) && grep -q "npm:pi-claude-bridge" <<< "${_list_output}"; then
+            print_success "Pi Claude bridge installed/updated."
+        else
+            print_warning "Pi Claude bridge install completed, but package validation was inconclusive: ${_list_output}"
+        fi
+    else
+        print_warning "Failed to install Pi Claude bridge: ${_output}"
+    fi
+}
+
 # Remove Pi goal/autoresearch package sources from settings when disabled
 remove_pi_goal_autoresearch_settings() {
     local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
@@ -4467,7 +4496,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 198 | Last changed: Avoid unnecessary Paseo daemon restarts${NC}"
+    echo -e "${GRAY}Version 199 | Last changed: Install/update Pi Claude bridge${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
@@ -4616,6 +4645,7 @@ HELPER_EOF
     if install_pi_cli; then
         setup_pi_subagents
         setup_pi_mcp_adapter
+        setup_pi_claude_bridge
         setup_pi_goal_autoresearch
         if ! matt_pocock_pi_skills_disabled; then
             setup_matt_pocock_pi_skills

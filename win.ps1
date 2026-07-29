@@ -1694,6 +1694,38 @@ function Setup-PiMcpAdapter {
     }
 }
 
+# Function to install/update Pi Claude bridge extension
+function Setup-PiClaudeBridge {
+    $package = "npm:pi-claude-bridge"
+
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Warning "npm not found. Cannot install Pi Claude bridge."
+        Write-Debug "Install Node.js/npm, then run: pi install npm:pi-claude-bridge"
+        return
+    }
+
+    if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
+        Write-Warning "Pi coding agent not found. Cannot install Pi Claude bridge."
+        return
+    }
+
+    Write-Message "Installing/updating Pi Claude bridge..."
+    $output = & pi install $package 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $listOutput = & pi list 2>&1
+        $listText = ($listOutput | Out-String)
+        if ($LASTEXITCODE -eq 0 -and $listText.Contains($package)) {
+            Write-Success "Pi Claude bridge installed/updated."
+        }
+        else {
+            Write-Warning "Pi Claude bridge install completed, but package validation was inconclusive: $listText"
+        }
+    }
+    else {
+        Write-Warning "Failed to install Pi Claude bridge: $output"
+    }
+}
+
 # Function to remove Pi goal/autoresearch package sources from settings when disabled
 function Remove-PiGoalAutoresearchSettings {
     if ($env:PI_CODING_AGENT_DIR) {
@@ -2434,7 +2466,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 106 | Last changed: Install/update Notion CLI" -ForegroundColor DarkGray
+    Write-Host "Version 107 | Last changed: Install/update Pi Claude bridge" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -2486,6 +2518,7 @@ function Initialize-WindowsEnvironment {
     if (Install-PiCli) {
         Setup-PiSubagents
         Setup-PiMcpAdapter
+        Setup-PiClaudeBridge
         Setup-PiGoalAutoresearch
         if (-not (Test-MattPocockPiSkillsDisabled)) {
             Setup-MattPocockPiSkills
