@@ -2680,13 +2680,13 @@ paseo_native_linux_preflight() {
         return 1
     fi
 
-    if ! can_sudo; then
-        print_error "sudo access is required to enable lingering for HEADLESS=1 Paseo daemon setup."
+    if ! loginctl show-user "${_user}" >/dev/null 2>&1; then
+        print_error "loginctl cannot inspect user ${_user}; cannot guarantee no-login Paseo startup."
         return 1
     fi
 
-    if ! loginctl show-user "${_user}" >/dev/null 2>&1; then
-        print_error "loginctl cannot inspect user ${_user}; cannot guarantee no-login Paseo startup."
+    if ! paseo_user_lingering_enabled "${_user}" && ! can_sudo; then
+        print_error "sudo access is required to enable lingering for HEADLESS=1 Paseo daemon setup."
         return 1
     fi
 
@@ -2696,17 +2696,33 @@ paseo_native_linux_preflight() {
     fi
 }
 
+paseo_user_lingering_enabled() {
+    local _user="$1"
+
+    { loginctl show-user "${_user}" --property=Linger 2>/dev/null || true; } | grep -q 'Linger=yes'
+}
+
 paseo_enable_lingering_strict() {
     local _user=""
 
     _user=$(whoami || true)
+    if paseo_user_lingering_enabled "${_user}"; then
+        print_debug "User lingering already enabled for Paseo daemon."
+        return 0
+    fi
+
+    if ! can_sudo; then
+        print_error "sudo access is required to enable lingering for HEADLESS=1 Paseo daemon setup."
+        return 1
+    fi
+
     print_message "Enabling lingering for Paseo systemd user service..."
     if ! sudo loginctl enable-linger "${_user}"; then
         print_error "Failed to enable lingering for ${_user}."
         return 1
     fi
 
-    if ! { loginctl show-user "${_user}" --property=Linger 2>/dev/null || true; } | grep -q 'Linger=yes'; then
+    if ! paseo_user_lingering_enabled "${_user}"; then
         print_error "Lingering verification failed for ${_user}."
         return 1
     fi
@@ -3746,7 +3762,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 58 | Last changed: Install/update Pi Claude bridge${NC}"
+    echo -e "${GRAY}Version 59 | Last changed: Skip sudo when Paseo lingering is enabled${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"

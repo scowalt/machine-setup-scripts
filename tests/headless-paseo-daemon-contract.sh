@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Dynamic source-based harnesses intentionally override functions and globals.
+# shellcheck disable=SC1090,SC1091,SC2034,SC2154,SC2312,SC2317
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -88,6 +90,97 @@ EOF
         pid_tree=$(paseo_service_process_pids 100 | paste -sd, -)
         [[ "${pid_tree}" == "100,101,102" ]] || fail "ubuntu.sh: listener audit process tree was ${pid_tree}, expected 100,101,102"
         paseo_listener_audit 100 >/dev/null
+    )
+}
+
+assert_lingering_sudo_gate() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+    mkdir -p "${tmp_dir}/home"
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        HOME="${tmp_dir}/home"
+
+        whoami() { printf 'ScoBot\n'; }
+        uname() { printf 'Linux\n'; }
+        paseo_is_wsl_environment() { return 1; }
+        paseo_is_container_environment() { return 1; }
+        can_sudo() {
+            touch "${tmp_dir}/sudo-checked"
+            return 1
+        }
+        loginctl() {
+            if [[ "$*" == *"--property=Linger"* ]]; then
+                printf 'Linger=yes\n'
+            fi
+            return 0
+        }
+        systemctl() { return 0; }
+        sudo() { fail "ubuntu.sh: invoked sudo when ScoBot lingering was already enabled"; }
+
+        paseo_native_linux_preflight
+        paseo_enable_lingering_strict
+        [[ ! -e "${tmp_dir}/sudo-checked" ]] || fail "ubuntu.sh: checked sudo when ScoBot lingering was already enabled"
+    )
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        HOME="${tmp_dir}/home"
+
+        whoami() { printf 'ScoBot\n'; }
+        uname() { printf 'Linux\n'; }
+        paseo_is_wsl_environment() { return 1; }
+        paseo_is_container_environment() { return 1; }
+        can_sudo() {
+            touch "${tmp_dir}/sudo-required"
+            return 1
+        }
+        loginctl() {
+            if [[ "$*" == *"--property=Linger"* ]]; then
+                printf 'Linger=no\n'
+            fi
+            return 0
+        }
+        systemctl() { return 0; }
+        print_error() { :; }
+
+        if paseo_native_linux_preflight; then
+            fail "ubuntu.sh: accepted disabled lingering without sudo"
+        fi
+        [[ -e "${tmp_dir}/sudo-required" ]] || fail "ubuntu.sh: did not check sudo when lingering needed enablement"
+    )
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        HOME="${tmp_dir}/home"
+        PASEO_TEST_LINGER=no
+
+        whoami() { printf 'ScoBot\n'; }
+        uname() { printf 'Linux\n'; }
+        paseo_is_wsl_environment() { return 1; }
+        paseo_is_container_environment() { return 1; }
+        can_sudo() { return 0; }
+        loginctl() {
+            if [[ "$*" == *"--property=Linger"* ]]; then
+                printf 'Linger=%s\n' "${PASEO_TEST_LINGER}"
+            fi
+            return 0
+        }
+        systemctl() { return 0; }
+        sudo() {
+            [[ "$*" == "loginctl enable-linger ScoBot" ]] || fail "ubuntu.sh: unexpected lingering sudo command: $*"
+            PASEO_TEST_LINGER=yes
+        }
+
+        paseo_native_linux_preflight
+        paseo_enable_lingering_strict
+        [[ "${PASEO_TEST_LINGER}" == "yes" ]] || fail "ubuntu.sh: did not enable lingering when sudo was available"
     )
 }
 
@@ -329,6 +422,7 @@ for file in "${supported_linux[@]}"; do
     assert_contains "${file}" 'paseo_headless_platform_gate \|\| return 1' 'early native Linux WSL/container gate'
     assert_contains "${file}" 'paseo_is_wsl_environment' 'WSL rejection for native Linux scripts'
     assert_contains "${file}" 'paseo_is_container_environment' 'container rejection for native Linux scripts'
+    assert_contains "${file}" 'paseo_user_lingering_enabled' 'existing lingering detection'
     assert_contains "${file}" 'loginctl enable-linger' 'strict linger enablement'
     assert_contains "${file}" 'systemctl --user daemon-reload' 'strict systemd reload'
     assert_contains "${file}" 'systemctl --user enable' 'systemd service enablement'
@@ -367,6 +461,7 @@ assert_contains README.md 'WSL.*native Windows fail early' 'README unsupported W
 assert_contains README.md 'does not run or print pairing material' 'README no-pairing contract'
 
 assert_child_listener_audit
+assert_lingering_sudo_gate
 assert_managed_daemon_is_preserved
 assert_unchanged_service_is_not_restarted
 assert_managed_launchdaemon_is_preserved
