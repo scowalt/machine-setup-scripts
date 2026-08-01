@@ -361,15 +361,19 @@ update_gcloud_components() {
     fi
 
     local update_output
+    local normalized_output
     print_message "Updating Google Cloud CLI components..."
     if update_output=$(gcloud components update --quiet < /dev/null 2>&1); then
         print_success "Google Cloud CLI components updated."
-    elif grep -qiE "component manager is disabled|managed by an external package manager" <<< "${update_output}"; then
-        print_debug "Google Cloud CLI components are managed by the package manager; skipping component update."
     else
-        print_warning "Failed to update Google Cloud CLI components."
-        if [[ -n "${update_output}" ]]; then
-            print_debug "${update_output}"
+        normalized_output=$(printf '%s' "${update_output}" | tr '\r\n\t' '   ')
+        if grep -qiE "component[[:space:]]+manager[[:space:]]+is[[:space:]]+disabled|managed[[:space:]]+by[[:space:]]+an[[:space:]]+external[[:space:]]+package[[:space:]]+manager" <<< "${normalized_output}"; then
+            print_debug "Google Cloud CLI components are managed by the package manager; skipping component update."
+        else
+            print_warning "Failed to update Google Cloud CLI components."
+            if [[ -n "${update_output}" ]]; then
+                print_debug "${update_output}"
+            fi
         fi
     fi
 }
@@ -3775,7 +3779,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 60 | Last changed: Reach Paseo user manager outside login sessions${NC}"
+    echo -e "${GRAY}Version 61 | Last changed: Fix multiline gcloud component-manager detection${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
