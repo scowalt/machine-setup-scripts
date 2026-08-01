@@ -204,11 +204,12 @@ function Update-GcloudComponents {
     $updateOutput = & gcloud components update --quiet 2>&1
     $updateExitCode = $LASTEXITCODE
     $updateText = $updateOutput -join "`n"
+    $normalizedUpdateText = (($updateOutput -join " ") -replace "\s+", " ").Trim()
 
     if ($updateExitCode -eq 0) {
         Write-Success "Google Cloud CLI components updated."
     }
-    elseif ($updateText -match "component manager is disabled|managed by an external package manager") {
+    elseif ($normalizedUpdateText -match "component manager is disabled|managed by an external package manager") {
         Write-Debug "Google Cloud CLI components are managed by the package manager; skipping component update."
     }
     else {
@@ -2466,7 +2467,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 107 | Last changed: Install/update Pi Claude bridge" -ForegroundColor DarkGray
+    Write-Host "Version 108 | Last changed: Fix multiline gcloud component-manager detection" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"

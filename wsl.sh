@@ -364,7 +364,7 @@ update_and_install_core() {
     print_message "Checking and installing core packages as needed..."
 
     # Define an array of required packages
-    local packages=("git" "curl" "jq" "fish" "tmux" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "llvm" "libncurses5-dev" "libncursesw5-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks" "poppler-utils" "bubblewrap")
+    local packages=("git" "curl" "jq" "fish" "tmux" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "llvm" "libncurses-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks" "poppler-utils" "bubblewrap")
     local to_install=()
 
     # Check each package and add missing ones to the to_install array
@@ -2425,15 +2425,19 @@ update_gcloud_components() {
     fi
 
     local update_output
+    local normalized_output
     print_message "Updating Google Cloud CLI components..."
     if update_output=$(gcloud components update --quiet < /dev/null 2>&1); then
         print_success "Google Cloud CLI components updated."
-    elif grep -qiE "component manager is disabled|managed by an external package manager" <<< "${update_output}"; then
-        print_debug "Google Cloud CLI components are managed by the package manager; skipping component update."
     else
-        print_warning "Failed to update Google Cloud CLI components."
-        if [[ -n "${update_output}" ]]; then
-            print_debug "${update_output}"
+        normalized_output=$(printf '%s' "${update_output}" | tr '\r\n\t' '   ')
+        if grep -qiE "component[[:space:]]+manager[[:space:]]+is[[:space:]]+disabled|managed[[:space:]]+by[[:space:]]+an[[:space:]]+external[[:space:]]+package[[:space:]]+manager" <<< "${normalized_output}"; then
+            print_debug "Google Cloud CLI components are managed by the package manager; skipping component update."
+        else
+            print_warning "Failed to update Google Cloud CLI components."
+            if [[ -n "${update_output}" ]]; then
+                print_debug "${update_output}"
+            fi
         fi
     fi
 }
@@ -2800,7 +2804,7 @@ main() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 149 | Last changed: Install/update Pi Claude bridge${NC}"
+    echo -e "${GRAY}Version 150 | Last changed: Fix gcloud detection and ncurses package idempotency${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"

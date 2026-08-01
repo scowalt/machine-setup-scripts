@@ -19,21 +19,60 @@ print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 
 SETUP_ORIGINAL_PATH="${PATH}"
 SETUP_ORIGINAL_CLAUDE_COMMAND=$(command -v claude 2>/dev/null || true)
+SETUP_MKDIR_LOCK_DIR=""
+SETUP_LOCK_RECLAIM_DIR=""
+SETUP_TMUX_PINNED=0
+SETUP_BREW_TRUST_FAILURES=0
+
+release_setup_reclaim() {
+    if [[ -n "${SETUP_LOCK_RECLAIM_DIR}" ]]; then
+        rm -f "${SETUP_LOCK_RECLAIM_DIR}/pid" "${SETUP_LOCK_RECLAIM_DIR}/process-start"
+        rmdir "${SETUP_LOCK_RECLAIM_DIR}" 2>/dev/null || true
+        SETUP_LOCK_RECLAIM_DIR=""
+    fi
+}
+
+release_setup_lock() {
+    if [[ -n "${SETUP_MKDIR_LOCK_DIR}" ]] && [[ -d "${SETUP_MKDIR_LOCK_DIR}" ]]; then
+        local _owner_pid=""
+        if [[ -f "${SETUP_MKDIR_LOCK_DIR}/pid" ]]; then
+            _owner_pid=$(cat "${SETUP_MKDIR_LOCK_DIR}/pid" 2>/dev/null || true)
+        fi
+        if [[ -z "${_owner_pid}" ]] || [[ "${_owner_pid}" == "$$" ]]; then
+            rm -f "${SETUP_MKDIR_LOCK_DIR}/pid" "${SETUP_MKDIR_LOCK_DIR}/process-start"
+            rmdir "${SETUP_MKDIR_LOCK_DIR}" 2>/dev/null || true
+        fi
+    fi
+    SETUP_MKDIR_LOCK_DIR=""
+    release_setup_reclaim
+}
+
+setup_cleanup() {
+    if [[ "${SETUP_TMUX_PINNED}" == "1" ]] && command -v brew &>/dev/null; then
+        if brew unpin tmux > /dev/null 2>&1; then
+            SETUP_TMUX_PINNED=0
+        fi
+    fi
+    release_setup_lock
+}
+
+install_setup_cleanup_traps() {
+    trap setup_cleanup EXIT
+    trap 'setup_cleanup; exit 129' HUP
+    trap 'setup_cleanup; exit 130' INT
+    trap 'setup_cleanup; exit 143' TERM
+}
 
 # Acquire a non-blocking per-user setup lock so overlapping setup runs don't
-# corrupt shared global package directories (npm, Bun, Homebrew, etc.). The lock
-# is held by file descriptor 9 until the script exits.
+# corrupt shared global package directories (npm, Bun, Homebrew, etc.). Always
+# use the same atomic mkdir namespace so PATH differences cannot split the lock.
 acquire_setup_lock() {
     local _lock_root="${XDG_RUNTIME_DIR:-${HOME}/.local/state}"
-    local _lock_file="${_lock_root}/machine-setup.lock"
+    local _lock_dir="${_lock_root}/machine-setup.lock.d"
+    local _reclaim_dir="${_lock_dir}.reclaim"
 
     if [[ "${MACHINE_SETUP_ALLOW_CONCURRENT:-}" == "1" ]]; then
         print_warning "MACHINE_SETUP_ALLOW_CONCURRENT=1, skipping concurrent setup guard."
-        return 0
-    fi
-
-    if ! command -v flock &> /dev/null; then
-        print_debug "flock not found; concurrent setup guard disabled."
         return 0
     fi
 
@@ -42,18 +81,117 @@ acquire_setup_lock() {
         return 0
     fi
 
-    if ! exec 9>"${_lock_file}"; then
-        print_warning "Could not open setup lock at ${_lock_file}; continuing without a lock."
-        return 0
-    fi
+    if [[ -d "${_reclaim_dir}" ]]; then
+        local _reclaim_pid=""
+        local _reclaim_start=""
+        local _reclaim_current_start=""
+        local _reclaim_alive=0
+        local _reclaim_mtime=""
+        local _reclaim_age=0
+        if [[ -f "${_reclaim_dir}/pid" ]]; then
+            _reclaim_pid=$(cat "${_reclaim_dir}/pid" 2>/dev/null || true)
+        fi
+        if [[ -f "${_reclaim_dir}/process-start" ]]; then
+            _reclaim_start=$(cat "${_reclaim_dir}/process-start" 2>/dev/null || true)
+        fi
+        if [[ "${_reclaim_pid}" =~ ^[0-9]+$ ]] && kill -0 "${_reclaim_pid}" 2>/dev/null; then
+            _reclaim_alive=1
+            _reclaim_current_start=$(LC_ALL=C TZ=UTC ps -p "${_reclaim_pid}" -o lstart= 2>/dev/null || true)
+            if [[ -n "${_reclaim_start}" ]] && [[ "${_reclaim_start}" == "${_reclaim_current_start}" ]]; then
+                print_warning "Another machine setup run is recovering a stale lock; exiting before making changes."
+                print_debug "Recovery directory: ${_reclaim_dir} (PID ${_reclaim_pid})"
+                return 1
+            fi
+        fi
+        if [[ -z "${_reclaim_pid}" ]] || { [[ "${_reclaim_alive}" -eq 1 ]] && [[ -z "${_reclaim_start}" ]]; }; then
+            _reclaim_mtime=$(stat -f '%m' "${_reclaim_dir}" 2>/dev/null || stat -c '%Y' "${_reclaim_dir}" 2>/dev/null || true)
+            if [[ "${_reclaim_mtime}" =~ ^[0-9]+$ ]]; then
+                _reclaim_age=$(( $(date +%s) - _reclaim_mtime ))
+            fi
+            if [[ "${_reclaim_age}" -lt 300 ]]; then
+                print_warning "Another machine setup run may be starting stale-lock recovery; exiting before making changes."
+                print_debug "Recovery directory: ${_reclaim_dir}"
+                return 1
+            fi
+        fi
 
-    if ! flock -n 9; then
-        print_warning "Another machine setup run is already in progress; exiting before making changes."
-        print_debug "Lock file: ${_lock_file}"
+        rm -rf "${_reclaim_dir}"
+        print_warning "Removed a stale setup-lock recovery marker; rerun setup to acquire the lock safely."
         return 1
     fi
 
-    print_debug "Acquired setup lock at ${_lock_file}."
+    if ! mkdir "${_lock_dir}" 2>/dev/null; then
+        if ! mkdir "${_reclaim_dir}" 2>/dev/null; then
+            print_warning "Another machine setup run is already in progress; exiting before making changes."
+            print_debug "Lock directory: ${_lock_dir}"
+            return 1
+        fi
+        SETUP_LOCK_RECLAIM_DIR="${_reclaim_dir}"
+        install_setup_cleanup_traps
+        if ! LC_ALL=C TZ=UTC ps -p "$$" -o lstart= > "${_reclaim_dir}/process-start" || ! printf '%s\n' "$$" > "${_reclaim_dir}/pid"; then
+            release_setup_reclaim
+            print_warning "Could not record stale-lock recovery ownership; exiting before making changes."
+            return 1
+        fi
+
+        local _owner_pid=""
+        local _owner_start=""
+        local _current_start=""
+        local _owner_alive=0
+        local _lock_mtime=""
+        local _lock_age=0
+        if [[ -f "${_lock_dir}/pid" ]]; then
+            _owner_pid=$(cat "${_lock_dir}/pid" 2>/dev/null || true)
+        fi
+        if [[ -f "${_lock_dir}/process-start" ]]; then
+            _owner_start=$(cat "${_lock_dir}/process-start" 2>/dev/null || true)
+        fi
+
+        if [[ "${_owner_pid}" =~ ^[0-9]+$ ]] && kill -0 "${_owner_pid}" 2>/dev/null; then
+            _owner_alive=1
+            _current_start=$(LC_ALL=C TZ=UTC ps -p "${_owner_pid}" -o lstart= 2>/dev/null || true)
+            if [[ -n "${_owner_start}" ]] && [[ "${_owner_start}" == "${_current_start}" ]]; then
+                release_setup_reclaim
+                print_warning "Another machine setup run is already in progress; exiting before making changes."
+                print_debug "Lock directory: ${_lock_dir} (PID ${_owner_pid})"
+                return 1
+            fi
+        fi
+
+        if [[ -z "${_owner_pid}" ]] || { [[ "${_owner_alive}" -eq 1 ]] && [[ -z "${_owner_start}" ]]; }; then
+            _lock_mtime=$(stat -f '%m' "${_lock_dir}" 2>/dev/null || stat -c '%Y' "${_lock_dir}" 2>/dev/null || true)
+            if [[ "${_lock_mtime}" =~ ^[0-9]+$ ]]; then
+                _lock_age=$(( $(date +%s) - _lock_mtime ))
+            fi
+            if [[ "${_lock_age}" -lt 300 ]]; then
+                release_setup_reclaim
+                print_warning "Another machine setup run may be starting; exiting before making changes."
+                print_debug "Lock directory: ${_lock_dir}"
+                return 1
+            fi
+        fi
+
+        print_debug "Removing stale setup lock at ${_lock_dir}${_owner_pid:+ (PID ${_owner_pid})}."
+        rm -rf "${_lock_dir}"
+        if ! mkdir "${_lock_dir}" 2>/dev/null; then
+            release_setup_reclaim
+            print_warning "Another machine setup run acquired the lock first; exiting before making changes."
+            return 1
+        fi
+        SETUP_MKDIR_LOCK_DIR="${_lock_dir}"
+        release_setup_reclaim
+    else
+        SETUP_MKDIR_LOCK_DIR="${_lock_dir}"
+        install_setup_cleanup_traps
+    fi
+
+    if ! LC_ALL=C TZ=UTC ps -p "$$" -o lstart= > "${_lock_dir}/process-start" || ! printf '%s\n' "$$" > "${_lock_dir}/pid"; then
+        release_setup_lock
+        print_warning "Could not record setup lock ownership at ${_lock_dir}; continuing without a lock."
+        return 0
+    fi
+
+    print_debug "Acquired portable setup lock at ${_lock_dir}."
 }
 
 # Migrate old token files (~/.gh_token, ~/.op_token) into ~/.env.local
@@ -378,18 +516,108 @@ fix_zsh_compaudit() {
     print_success "zsh directory permissions fixed."
 }
 
+# Trust only Homebrew items that this setup script explicitly manages.
+ensure_brew_item_trusted() {
+    local _type=$1
+    local _item=$2
+    local _tap=$3
+    local _trust_flag
+
+    case "${_type}" in
+        formula) _trust_flag="--formula" ;;
+        cask) _trust_flag="--cask" ;;
+        *)
+            SETUP_BREW_TRUST_FAILURES=1
+            print_warning "Unsupported Homebrew trust type: ${_type}"
+            return 1
+            ;;
+    esac
+
+    if ! { brew tap || true; } | grep -q "^${_tap}$"; then
+        print_message "Adding Homebrew tap ${_tap}..."
+        if ! brew tap "${_tap}"; then
+            SETUP_BREW_TRUST_FAILURES=1
+            print_warning "Failed to tap ${_tap}; cannot manage ${_item}."
+            return 1
+        fi
+    fi
+
+    if brew trust "${_trust_flag}" "${_item}" > /dev/null; then
+        print_debug "Trusted managed Homebrew ${_type}: ${_item}"
+        return 0
+    fi
+
+    SETUP_BREW_TRUST_FAILURES=1
+    print_warning "Failed to trust managed Homebrew ${_type} ${_item}; Homebrew may skip it."
+    return 1
+}
+
+report_unmanaged_untrusted_brew_items() {
+    local _untrusted_output
+    local _installed_formulae
+    local _installed_casks
+    local _section=""
+    local _item
+    local _short_name
+    local _tap
+    local _unmanaged_count=0
+
+    _untrusted_output=$(brew untrust 2>/dev/null) || return
+    _installed_formulae=$(brew list --formula --full-name 2>/dev/null || true)
+    _installed_casks=$(brew list --cask -1 2>/dev/null || true)
+
+    while IFS= read -r _item; do
+        case "${_item}" in
+            "Untrusted formulae:")
+                _section="formula"
+                continue
+                ;;
+            "Untrusted casks:")
+                _section="cask"
+                continue
+                ;;
+            "Untrusted "*)
+                _section=""
+                continue
+                ;;
+            *) ;;
+        esac
+        if [[ -z "${_section}" ]] || [[ "${_item}" != "  "* ]]; then
+            continue
+        fi
+        _item=${_item#  }
+
+        case "${_item}" in
+            libsql/sqld/sqld|tursodatabase/tap/turso|infisical/get-cli/infisical|dopplerhq/cli/doppler|soren-starck/tap/sessionwatcher)
+                continue
+                ;;
+            *) ;;
+        esac
+
+        if [[ "${_section}" == "formula" ]]; then
+            grep -Fxq "${_item}" <<< "${_installed_formulae}" || continue
+        else
+            _short_name=${_item##*/}
+            if ! grep -Fxq "${_item}" <<< "${_installed_casks}" && ! grep -Fxq "${_short_name}" <<< "${_installed_casks}"; then
+                continue
+            fi
+        fi
+
+        _tap=${_item%/*}
+        print_warning "Unmanaged Homebrew ${_section} ${_item} remains untrusted and may be skipped; run brew trust --${_section} ${_item}, or uninstall it and run brew untap ${_tap}."
+        ((_unmanaged_count++))
+    done <<< "${_untrusted_output}"
+
+    [[ "${_unmanaged_count}" -eq 0 ]]
+}
+
 # Install core packages with Homebrew if missing
 install_core_packages() {
     print_message "Checking and installing core packages as needed..."
 
-    # Ensure required taps are available (some packages have cross-tap dependencies)
-    local taps=("libsql/sqld" "tursodatabase/tap")
-    for tap in "${taps[@]}"; do
-        if ! { brew tap || true; } | grep -q "^${tap}$"; then
-            print_debug "Tapping ${tap}..."
-            brew tap "${tap}" 2>/dev/null || true
-        fi
-    done
+    # Turso has a cross-tap sqld dependency. Trust only these two formulae.
+    ensure_brew_item_trusted formula "libsql/sqld/sqld" "libsql/sqld" || true
+    ensure_brew_item_trusted formula "tursodatabase/tap/turso" "tursodatabase/tap" || true
 
     # Define an array of required packages
     # NOTE: starship installed via Homebrew for consistent macOS binary management
@@ -440,23 +668,10 @@ install_core_packages() {
     fi
 }
 
-# Install SessionWatcher from its trusted third-party Homebrew tap.
+# Install SessionWatcher while trusting only its managed cask.
 install_sessionwatcher() {
-    local tap="soren-starck/tap"
-
-    if ! { brew tap || true; } | grep -q "^${tap}$"; then
-        print_message "Adding SessionWatcher Homebrew tap..."
-        if ! brew tap "${tap}"; then
-            print_warning "Failed to tap ${tap}; skipping SessionWatcher."
-            return
-        fi
-    else
-        print_debug "SessionWatcher Homebrew tap is already configured."
-    fi
-
-    print_message "Trusting SessionWatcher Homebrew tap..."
-    if ! brew trust "${tap}"; then
-        print_warning "Failed to trust ${tap}; skipping SessionWatcher."
+    if ! ensure_brew_item_trusted cask "soren-starck/tap/sessionwatcher" "soren-starck/tap"; then
+        print_warning "SessionWatcher cask is not trusted; skipping SessionWatcher."
         return
     fi
 
@@ -466,7 +681,7 @@ install_sessionwatcher() {
     fi
 
     print_message "Installing SessionWatcher..."
-    if brew install --cask sessionwatcher; then
+    if brew install --cask soren-starck/tap/sessionwatcher; then
         print_success "SessionWatcher installed."
     else
         print_warning "Failed to install SessionWatcher."
@@ -510,28 +725,30 @@ setup_tailscale() {
 # Install the appropriate secrets manager based on machine type
 install_secrets_manager() {
     if [[ "${WORK_MACHINE:-}" == "1" ]]; then
+        if ! ensure_brew_item_trusted formula "infisical/get-cli/infisical" "infisical/get-cli"; then
+            print_warning "Infisical formula is not trusted; skipping Infisical CLI."
+            return
+        fi
         if command -v infisical &>/dev/null; then
             print_debug "Infisical CLI already installed."
             return
         fi
         print_message "Installing Infisical CLI..."
-        if ! { brew tap || true; } | grep -q "^infisical/get-cli$"; then
-            brew tap infisical/get-cli 2>/dev/null || true
-        fi
         if brew install infisical/get-cli/infisical; then
             print_success "Infisical CLI installed."
         else
             print_error "Failed to install Infisical CLI."
         fi
     else
+        if ! ensure_brew_item_trusted formula "dopplerhq/cli/doppler" "dopplerhq/cli"; then
+            print_warning "Doppler formula is not trusted; skipping Doppler CLI."
+            return
+        fi
         if command -v doppler &>/dev/null; then
             print_debug "Doppler CLI already installed."
             return
         fi
         print_message "Installing Doppler CLI..."
-        if ! { brew tap || true; } | grep -q "^dopplerhq/cli$"; then
-            brew tap dopplerhq/cli 2>/dev/null || true
-        fi
         if brew install dopplerhq/cli/doppler; then
             print_success "Doppler CLI installed."
         else
@@ -548,15 +765,19 @@ update_gcloud_components() {
     fi
 
     local update_output
+    local normalized_output
     print_message "Updating Google Cloud CLI components..."
     if update_output=$(gcloud components update --quiet < /dev/null 2>&1); then
         print_success "Google Cloud CLI components updated."
-    elif grep -qiE "component manager is disabled|managed by an external package manager" <<< "${update_output}"; then
-        print_debug "Google Cloud CLI components are managed by the package manager; skipping component update."
     else
-        print_warning "Failed to update Google Cloud CLI components."
-        if [[ -n "${update_output}" ]]; then
-            print_debug "${update_output}"
+        normalized_output=$(printf '%s' "${update_output}" | tr '\r\n\t' '   ')
+        if grep -qiE "component[[:space:]]+manager[[:space:]]+is[[:space:]]+disabled|managed[[:space:]]+by[[:space:]]+an[[:space:]]+external[[:space:]]+package[[:space:]]+manager" <<< "${normalized_output}"; then
+            print_debug "Google Cloud CLI components are managed by the package manager; skipping component update."
+        else
+            print_warning "Failed to update Google Cloud CLI components."
+            if [[ -n "${update_output}" ]]; then
+                print_debug "${update_output}"
+            fi
         fi
     fi
 }
@@ -3758,14 +3979,48 @@ install_tmux_plugins() {
 }
 
 update_brew() {
+    local update_status
+    local upgrade_status
+    local unpin_status=0
+    local unmanaged_taps_status=0
+
     print_message "Updating Homebrew..."
-    brew update > /dev/null
-    # Pin tmux during upgrades to prevent killing existing sessions.
+    if brew update > /dev/null; then
+        update_status=0
+    else
+        update_status=$?
+    fi
+
+    # Pin tmux during upgrades to prevent killing existing sessions. The cleanup
+    # trap also unpins it if the script is interrupted during brew upgrade.
+    SETUP_TMUX_PINNED=1
+    install_setup_cleanup_traps
     brew pin tmux 2>/dev/null || true
     print_message "Upgrading outdated packages..."
-    brew upgrade > /dev/null
-    brew unpin tmux 2>/dev/null || true
-    print_success "Homebrew updated."
+    if brew upgrade > /dev/null; then
+        upgrade_status=0
+    else
+        upgrade_status=$?
+    fi
+    if brew unpin tmux 2>/dev/null; then
+        SETUP_TMUX_PINNED=0
+    else
+        unpin_status=$?
+        print_warning "Could not unpin tmux; retry with: brew unpin tmux"
+    fi
+
+    if ! report_unmanaged_untrusted_brew_items; then
+        unmanaged_taps_status=1
+    fi
+
+    if [[ "${update_status}" -eq 0 ]] && [[ "${upgrade_status}" -eq 0 ]] && [[ "${unpin_status}" -eq 0 ]] && [[ "${unmanaged_taps_status}" -eq 0 ]] && [[ "${SETUP_BREW_TRUST_FAILURES}" -eq 0 ]]; then
+        print_success "Homebrew updated."
+    elif [[ "${update_status}" -eq 0 ]] && [[ "${upgrade_status}" -eq 0 ]] && [[ "${unpin_status}" -eq 0 ]]; then
+        print_warning "Homebrew commands completed, but tap-trust warnings may have skipped packages; resolve the warnings above."
+    else
+        print_warning "Homebrew update/upgrade incomplete (update=${update_status}, upgrade=${upgrade_status}, unpin=${unpin_status}); fix the errors above, then run: brew update && brew upgrade"
+        print_warning "For a missing Bartender app, run: brew reinstall --cask --force bartender"
+    fi
 }
 
 # Upgrade global npm packages
@@ -3955,7 +4210,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 181 | Last changed: Install/update Pi Claude bridge${NC}"
+    echo -e "${GRAY}Version 182 | Last changed: Harden package updates, tap trust, and setup locking${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
