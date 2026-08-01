@@ -184,6 +184,26 @@ assert_lingering_sudo_gate() {
     )
 }
 
+assert_systemctl_user_environment() {
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        unset XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
+
+        id() {
+            [[ "${1:-}" == "-u" ]] || fail "ubuntu.sh: unexpected id invocation: $*"
+            printf '4242\n'
+        }
+        systemctl() {
+            [[ "${XDG_RUNTIME_DIR:-}" == "/run/user/4242" ]] || fail "ubuntu.sh: did not set the canonical user runtime directory"
+            [[ "${DBUS_SESSION_BUS_ADDRESS:-}" == "unix:path=/run/user/4242/bus" ]] || fail "ubuntu.sh: did not set the canonical user bus address"
+            [[ "$*" == "--user show-environment" ]] || fail "ubuntu.sh: unexpected systemctl invocation: $*"
+        }
+
+        paseo_systemctl_user show-environment
+    )
+}
+
 assert_managed_daemon_is_preserved() {
     local tmp_dir
 
@@ -424,9 +444,12 @@ for file in "${supported_linux[@]}"; do
     assert_contains "${file}" 'paseo_is_container_environment' 'container rejection for native Linux scripts'
     assert_contains "${file}" 'paseo_user_lingering_enabled' 'existing lingering detection'
     assert_contains "${file}" 'loginctl enable-linger' 'strict linger enablement'
-    assert_contains "${file}" 'systemctl --user daemon-reload' 'strict systemd reload'
-    assert_contains "${file}" 'systemctl --user enable' 'systemd service enablement'
-    assert_contains "${file}" 'systemctl --user restart' 'systemd service start/restart'
+    assert_contains "${file}" 'paseo_systemctl_user\(\)' 'session-independent systemd user manager helper'
+    assert_contains "${file}" 'DBUS_SESSION_BUS_ADDRESS="unix:path=\$\{_runtime_dir\}/bus"' 'canonical systemd user bus address'
+    assert_contains "${file}" 'paseo_systemctl_user show-environment' 'systemd user manager preflight'
+    assert_contains "${file}" 'paseo_systemctl_user daemon-reload' 'strict systemd reload'
+    assert_contains "${file}" 'paseo_systemctl_user enable' 'systemd service enablement'
+    assert_contains "${file}" 'paseo_systemctl_user restart' 'systemd service start/restart'
     assert_contains "${file}" 'paseo_managed_service_is_active' 'managed service activity detection'
     assert_contains "${file}" 'cmp -s.*_service_file' 'idempotent service definition comparison'
     assert_contains "${file}" 'leaving the active daemon running' 'unchanged active daemon preservation'
@@ -462,6 +485,7 @@ assert_contains README.md 'does not run or print pairing material' 'README no-pa
 
 assert_child_listener_audit
 assert_lingering_sudo_gate
+assert_systemctl_user_environment
 assert_managed_daemon_is_preserved
 assert_unchanged_service_is_not_restarted
 assert_managed_launchdaemon_is_preserved

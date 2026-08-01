@@ -2483,7 +2483,20 @@ EOF
 }
 
 paseo_managed_service_is_active() {
-    systemctl --user is-active "${PASEO_SERVICE_NAME}" >/dev/null 2>&1
+    paseo_systemctl_user is-active "${PASEO_SERVICE_NAME}" >/dev/null 2>&1
+}
+
+paseo_systemctl_user() {
+    local _uid=""
+    local _runtime_dir=""
+
+    _uid=$(id -u 2>/dev/null || true)
+    [[ "${_uid}" =~ ^[0-9]+$ ]] || return 1
+    _runtime_dir="/run/user/${_uid}"
+
+    XDG_RUNTIME_DIR="${_runtime_dir}" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=${_runtime_dir}/bus" \
+        systemctl --user "$@"
 }
 
 stop_existing_paseo_daemon() {
@@ -2856,8 +2869,8 @@ paseo_native_linux_preflight() {
         return 1
     fi
 
-    if ! systemctl --user show-environment >/dev/null 2>&1; then
-        print_error "systemctl --user is unavailable in this session; cannot configure the Paseo user service safely."
+    if ! paseo_systemctl_user show-environment >/dev/null 2>&1; then
+        print_error "The systemd user manager is unavailable; cannot configure the Paseo user service safely."
         return 1
     fi
 }
@@ -2911,7 +2924,7 @@ paseo_existing_managed_service_check() {
 }
 
 paseo_linux_service_pid() {
-    systemctl --user show "${PASEO_SERVICE_NAME}" --property=MainPID --value 2>/dev/null | head -n 1 || true
+    paseo_systemctl_user show "${PASEO_SERVICE_NAME}" --property=MainPID --value 2>/dev/null | head -n 1 || true
 }
 
 install_paseo_systemd_user_service() {
@@ -2979,26 +2992,26 @@ EOF
     paseo_enable_lingering_strict || return 1
 
     if [[ "${PASEO_SYSTEMD_SERVICE_CHANGED}" == "1" ]]; then
-        if ! systemctl --user daemon-reload; then
+        if ! paseo_systemctl_user daemon-reload; then
             print_error "Failed to reload systemd user units for Paseo."
             return 1
         fi
     fi
 
-    if ! systemctl --user enable "${PASEO_SERVICE_NAME}"; then
+    if ! paseo_systemctl_user enable "${PASEO_SERVICE_NAME}"; then
         print_error "Failed to enable ${PASEO_SERVICE_NAME}."
         return 1
     fi
 
     if ! paseo_managed_service_is_active; then
         PASEO_MANAGED_SERVICE_TOUCHED=1
-        if ! systemctl --user start "${PASEO_SERVICE_NAME}"; then
+        if ! paseo_systemctl_user start "${PASEO_SERVICE_NAME}"; then
             print_error "Failed to start ${PASEO_SERVICE_NAME}."
             return 1
         fi
     elif [[ "${PASEO_PACKAGE_CHANGED}" == "1" || "${PASEO_DAEMON_WRAPPER_CHANGED}" == "1" || "${PASEO_SYSTEMD_SERVICE_CHANGED}" == "1" ]]; then
         PASEO_MANAGED_SERVICE_TOUCHED=1
-        if ! systemctl --user restart "${PASEO_SERVICE_NAME}"; then
+        if ! paseo_systemctl_user restart "${PASEO_SERVICE_NAME}"; then
             print_error "Failed to restart ${PASEO_SERVICE_NAME} after a Paseo package or service change."
             return 1
         fi
@@ -3006,12 +3019,12 @@ EOF
         print_debug "Paseo package, wrapper, and service definition are unchanged; leaving the active daemon running."
     fi
 
-    if ! systemctl --user is-enabled "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
+    if ! paseo_systemctl_user is-enabled "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
         print_error "${PASEO_SERVICE_NAME} is not enabled after setup."
         return 1
     fi
 
-    if ! systemctl --user is-active "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
+    if ! paseo_systemctl_user is-active "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
         print_error "${PASEO_SERVICE_NAME} is not active after setup."
         print_debug "Inspect privately with: journalctl --user -u ${PASEO_SERVICE_NAME} --no-pager"
         return 1
@@ -3029,8 +3042,8 @@ cleanup_paseo_managed_service() {
 
     case "${_platform}" in
         Linux)
-            systemctl --user stop "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
-            systemctl --user disable "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
+            paseo_systemctl_user stop "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
+            paseo_systemctl_user disable "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
             ;;
         *) ;;
     esac
@@ -4512,7 +4525,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 200 | Last changed: Skip sudo when Paseo lingering is enabled${NC}"
+    echo -e "${GRAY}Version 201 | Last changed: Reach Paseo user manager outside login sessions${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
