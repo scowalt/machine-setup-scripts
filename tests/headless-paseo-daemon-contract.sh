@@ -227,6 +227,31 @@ assert_bun_global_paseo_identity_check() {
     )
 }
 
+assert_untrusted_optional_service_path_is_filtered() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+    mkdir -p "${tmp_dir}/trusted-bin" "${tmp_dir}/other-user-brew-bin"
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+
+        paseo_path_is_group_or_world_writable() {
+            return 1
+        }
+        paseo_path_owner_is_trusted() {
+            [[ "$1" != "${tmp_dir}/other-user-brew-bin" ]]
+        }
+
+        filtered_path=$(paseo_trusted_service_path \
+            "${tmp_dir}/trusted-bin:${tmp_dir}/other-user-brew-bin" 2>/dev/null)
+        [[ "${filtered_path}" == "${tmp_dir}/trusted-bin" ]] || \
+            fail "ubuntu.sh: did not filter an optional service PATH component owned by another user"
+    )
+}
+
 assert_managed_daemon_is_preserved() {
     local tmp_dir
 
@@ -443,6 +468,7 @@ for file in "${supported_bash[@]}"; do
     assert_contains "${file}" 'group/world-writable' 'unsafe executable path guard'
     assert_contains "${file}" 'paseo_harden_user_path_chain' 'user-owned install path permission hardening'
     assert_contains "${file}" 'paseo_existing_service_path' 'service PATH filters missing components'
+    assert_contains "${file}" 'paseo_trusted_service_path' 'service PATH filters untrusted optional components'
     assert_contains "${file}" 'chmod go-w' 'permission hardening removes group/world write bits'
     assert_contains "${file}" 'perm -020.*perm -002|perm -002.*perm -020' 'group-or-world writable detection'
 
@@ -511,6 +537,7 @@ assert_child_listener_audit
 assert_lingering_sudo_gate
 assert_systemctl_user_environment
 assert_bun_global_paseo_identity_check
+assert_untrusted_optional_service_path_is_filtered
 assert_managed_daemon_is_preserved
 assert_unchanged_service_is_not_restarted
 assert_managed_launchdaemon_is_preserved

@@ -2526,6 +2526,29 @@ paseo_validate_service_path_components() {
     done < <(printf '%s\n' "${_path_value}" | tr ':' '\n' || true)
 }
 
+paseo_trusted_service_path() {
+    local _path_value="$1"
+    local _component=""
+    local _result=""
+
+    while IFS= read -r _component; do
+        [[ -n "${_component}" && -d "${_component}" ]] || continue
+
+        if ! paseo_validate_service_path_components "${_component}" >/dev/null 2>&1; then
+            print_warning "Skipping untrusted optional Paseo service PATH component: ${_component}" >&2
+            continue
+        fi
+
+        if [[ -z "${_result}" ]]; then
+            _result="${_component}"
+        else
+            _result="${_result}:${_component}"
+        fi
+    done < <(printf '%s\n' "${_path_value}" | tr ':' '\n' || true)
+
+    printf '%s\n' "${_result}"
+}
+
 install_paseo_cli() {
     local _global_packages=""
     local _paseo_target=""
@@ -2608,13 +2631,14 @@ install_paseo_cli() {
     PASEO_VALIDATED_NODE="${_node_target}"
     _node_dir=$(dirname "${_node_target}")
     _service_path=$(paseo_service_path)
-    _service_path="${_node_dir}:${_service_path}"
-    PASEO_SERVICE_PATH=$(paseo_existing_service_path "${_service_path}")
+    _service_path=$(paseo_existing_service_path "${_service_path}")
+    paseo_harden_service_path_components "${_service_path}" || return 1
+    _service_path=$(paseo_trusted_service_path "${_service_path}")
+    PASEO_SERVICE_PATH="${_node_dir}${_service_path:+:${_service_path}}"
     if [[ -z "${PASEO_SERVICE_PATH}" ]]; then
         print_error "Paseo service PATH validation failed: no existing PATH components remain."
         return 1
     fi
-    paseo_harden_service_path_components "${PASEO_SERVICE_PATH}" || return 1
     paseo_validate_service_path_components "${PASEO_SERVICE_PATH}" || return 1
 
     if ! _version_output=$(HOME="${HOME}" PATH="${PASEO_SERVICE_PATH}:${PATH}" "${_paseo_target}" --version 2>/dev/null); then
@@ -4320,7 +4344,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 164 | Last changed: Validate Paseo against Bun command identity${NC}"
+    echo -e "${GRAY}Version 165 | Last changed: Filter untrusted optional Paseo PATH entries${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
