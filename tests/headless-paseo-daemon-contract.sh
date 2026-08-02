@@ -204,6 +204,29 @@ assert_systemctl_user_environment() {
     )
 }
 
+assert_bun_global_paseo_identity_check() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+    mkdir -p "${tmp_dir}/bun-bin" "${tmp_dir}/cache-layout-without-package-name"
+    printf '#!/usr/bin/env bash\n' > "${tmp_dir}/cache-layout-without-package-name/paseo-entry"
+    chmod 700 "${tmp_dir}/cache-layout-without-package-name/paseo-entry"
+    ln -s "../cache-layout-without-package-name/paseo-entry" "${tmp_dir}/bun-bin/paseo"
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        paseo_command_matches_bun_global \
+            "${tmp_dir}/cache-layout-without-package-name/paseo-entry" \
+            "${tmp_dir}/bun-bin" || fail "ubuntu.sh: rejected Bun's Paseo executable when its resolved path omitted the package name"
+
+        if paseo_command_matches_bun_global /bin/true "${tmp_dir}/bun-bin"; then
+            fail "ubuntu.sh: accepted an executable outside Bun's global paseo command"
+        fi
+    )
+}
+
 assert_managed_daemon_is_preserved() {
     local tmp_dir
 
@@ -413,6 +436,7 @@ for file in "${supported_bash[@]}"; do
     assert_contains "${file}" 'paseo_service_process_pids' 'listener audit checks service process tree'
     assert_contains "${file}" 'children\[_ppid\]' 'listener audit discovers child processes'
     assert_contains "${file}" 'paseo_effective_service_path\(\)' 'defined effective service PATH helper'
+    assert_contains "${file}" 'paseo_command_matches_bun_global' 'Bun global command identity validation'
     assert_contains "${file}" 'paseo_run_with_timeout' 'bounded Paseo health checks'
     assert_contains "${file}" 'cannot audit listeners' 'fail-closed listener audit'
     assert_contains "${file}" 'cannot verify managed service ownership' 'fail-closed owner check'
@@ -486,6 +510,7 @@ assert_contains README.md 'does not run or print pairing material' 'README no-pa
 assert_child_listener_audit
 assert_lingering_sudo_gate
 assert_systemctl_user_environment
+assert_bun_global_paseo_identity_check
 assert_managed_daemon_is_preserved
 assert_unchanged_service_is_not_restarted
 assert_managed_launchdaemon_is_preserved
