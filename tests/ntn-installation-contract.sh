@@ -106,11 +106,11 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_order "${file}" '^[[:space:]]+install_ntn_cli$' '^[[:space:]]+install_rtk_cli$' 'Notion CLI before RTK'
 done
 
-assert_contains mac.sh 'Version 182 \| Last changed: Harden package updates, tap trust, and setup locking' 'macOS version banner'
-assert_contains ubuntu.sh 'Version 202 \| Last changed: Fix gcloud detection and ncurses package idempotency' 'Ubuntu version banner'
+assert_contains mac.sh 'Version 183 \| Last changed: Validate Paseo against Bun command identity' 'macOS version banner'
+assert_contains ubuntu.sh 'Version 203 \| Last changed: Validate Paseo against Bun command identity' 'Ubuntu version banner'
 assert_contains wsl.sh 'Version 150 \| Last changed: Fix gcloud detection and ncurses package idempotency' 'WSL version banner'
-assert_contains pi.sh 'Version 163 \| Last changed: Fix gcloud detection and ncurses package idempotency' 'Raspberry Pi version banner'
-assert_contains bazzite.sh 'Version 61 \| Last changed: Fix multiline gcloud component-manager detection' 'Bazzite version banner'
+assert_contains pi.sh 'Version 164 \| Last changed: Validate Paseo against Bun command identity' 'Raspberry Pi version banner'
+assert_contains bazzite.sh 'Version 62 \| Last changed: Validate Paseo against Bun command identity' 'Bazzite version banner'
 
 assert_contains win.ps1 '"Notion\.ntn"' 'official Notion CLI WinGet package'
 # These regexes intentionally use single quotes to preserve literal shell and Markdown syntax.

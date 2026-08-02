@@ -2199,6 +2199,15 @@ paseo_command_target() {
     fi
 }
 
+paseo_command_matches_bun_global() {
+    local _paseo_target="$1"
+    local _bun_global_bin="$2"
+    local _bun_paseo="${_bun_global_bin}/paseo"
+
+    [[ -n "${_paseo_target}" && -n "${_bun_global_bin}" && -e "${_bun_paseo}" ]] || return 1
+    [[ "${_paseo_target}" -ef "${_bun_paseo}" ]]
+}
+
 paseo_runtime_target() {
     local _cmd=""
 
@@ -2513,23 +2522,17 @@ install_paseo_cli() {
         return 1
     fi
 
-    if [[ "${_paseo_target}" == *"/node_modules/paseo/"* ]] || [[ "${_paseo_target}" == *"/node_modules/paseo/bin"* ]]; then
-        print_error "Paseo command resolves to the unrelated unscoped paseo package: ${_paseo_target}"
-        return 1
-    fi
-
-    if [[ "${_paseo_target}" == *"/node_modules/"* && "${_paseo_target}" != *"${PASEO_PACKAGE}"* ]]; then
-        print_error "Paseo command resolves to an unexpected package target: ${_paseo_target}"
-        return 1
-    fi
-
     _bun_global_bin=$(bun pm bin -g 2>/dev/null || true)
     if [[ -z "${_bun_global_bin}" ]]; then
         print_error "Paseo install validation failed: Bun global bin path could not be resolved."
         return 1
     fi
-    if [[ "${_paseo_target}" != *"${PASEO_PACKAGE}"* && "${_paseo_target}" != "${_bun_global_bin}/"* ]]; then
-        print_error "Paseo command resolves outside Bun's global bin and scoped package target: ${_paseo_target}"
+    if ! paseo_command_matches_bun_global "${_paseo_target}" "${_bun_global_bin}"; then
+        if [[ "${_paseo_target}" == *"/node_modules/paseo/"* ]] || [[ "${_paseo_target}" == *"/node_modules/paseo/bin"* ]]; then
+            print_error "Paseo command resolves to the unrelated unscoped paseo package: ${_paseo_target}"
+        else
+            print_error "Paseo command does not match Bun's global paseo executable: ${_paseo_target}"
+        fi
         return 1
     fi
 
@@ -4210,7 +4213,7 @@ main() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 182 | Last changed: Harden package updates, tap trust, and setup locking${NC}"
+    echo -e "${GRAY}Version 183 | Last changed: Validate Paseo against Bun command identity${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
