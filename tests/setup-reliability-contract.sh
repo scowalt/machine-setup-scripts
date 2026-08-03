@@ -117,6 +117,198 @@ assert_contains mac.sh 'ensure_brew_item_trusted cask "soren-starck/tap/sessionw
 assert_not_contains mac.sh 'brew trust "\$\{tap\}"' 'whole-tap trust'
 assert_contains mac.sh 'Unmanaged Homebrew .* remains untrusted and may be skipped' 'actionable unmanaged-tap item warning'
 
+# Bazzite trusts only managed formulae and recognizes casks idempotently.
+assert_contains bazzite.sh 'brew trust --formula "\$\{item\}"' 'Bazzite item-level formula trust'
+assert_contains bazzite.sh 'ensure_brew_formula_trusted "libsql/sqld/sqld"' 'Bazzite libsql trust'
+assert_contains bazzite.sh 'ensure_brew_formula_trusted "tursodatabase/tap/turso"' 'Bazzite Turso trust'
+assert_contains bazzite.sh 'ensure_brew_formula_trusted "dopplerhq/doppler/doppler"' 'Bazzite Doppler trust'
+assert_not_contains bazzite.sh 'brew trust (dopplerhq|libsql|tursodatabase)/' 'Bazzite whole-tap trust'
+assert_contains bazzite.sh 'HOMEBREW_NO_AUTO_UPDATE=1' 'Bazzite install-time auto-update suppression'
+assert_contains bazzite.sh 'HOMEBREW_NO_INSTALL_CLEANUP=1' 'Bazzite install-time cleanup suppression'
+
+bazzite_core_output=$(SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
+    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+    ensure_brew_formula_trusted() { return 0; }
+    brew() {
+        case "$1 $2" in
+            "list --formula")
+                printf "%s\n" git curl wget jq unzip tmux starship gh chezmoi opentofu go uv fswatch tailscale act cloudflared turso shellcheck gitleaks lefthook mise poppler bubblewrap
+                ;;
+            "list --cask") printf "%s\n" 1password-cli ;;
+            install*) printf "unexpected install: %s\n" "$*"; return 1 ;;
+        esac
+    }
+    install_core_packages
+')
+grep -q '1password-cli cask is already installed' <<< "${bazzite_core_output}" || fail 'bazzite.sh: installed 1Password cask was not recognized'
+if grep -q 'unexpected install' <<< "${bazzite_core_output}"; then
+    fail 'bazzite.sh: idempotent core package check attempted an install'
+fi
+
+bazzite_trust_output=$(SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
+    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+    brew() {
+        if [[ "$1" == "tap" && "$#" -eq 1 ]]; then
+            printf "%s\n" dopplerhq/doppler
+        else
+            printf "%s\n" "$*" >> "${BREW_CALL_LOG}"
+        fi
+    }
+    BREW_CALL_LOG=$(mktemp)
+    export BREW_CALL_LOG
+    ensure_brew_formula_trusted dopplerhq/doppler/doppler dopplerhq/doppler
+    cat "${BREW_CALL_LOG}"
+    rm -f "${BREW_CALL_LOG}"
+')
+grep -q '^trust --formula dopplerhq/doppler/doppler$' <<< "${bazzite_trust_output}" || fail 'bazzite.sh: Doppler trust was not formula-scoped'
+
+# The native Codex migration removes Bun ownership, installs the cask, and
+# executes successfully with a PATH that cannot resolve Node.js.
+codex_tmp=$(mktemp -d)
+mkdir -p "${codex_tmp}/bin"
+cat > "${codex_tmp}/bin/codex" <<'EOF'
+#!/bin/sh
+command -v node >/dev/null 2>&1 && exit 42
+printf '%s\n' 'codex-cli 9.9.9'
+EOF
+chmod +x "${codex_tmp}/bin/codex"
+codex_output=$(SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" CODEX_TMP="${codex_tmp}" PATH="${codex_tmp}/bin:${PATH}" bash -c '
+    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+    bun() {
+        printf "%s\n" "$*" >> "${CODEX_TMP}/calls"
+        [[ "$1 $2 $3" == "pm ls -g" ]] && printf "%s\n" "@openai/codex@9.9.9"
+        return 0
+    }
+    brew() {
+        printf "%s\n" "$*" >> "${CODEX_TMP}/calls"
+        case "$1 $2" in
+            "list --cask") return 0 ;;
+            "--prefix ") printf "%s\n" "${CODEX_TMP}" ;;
+        esac
+    }
+    install_codex_cli
+')
+grep -q 'Codex CLI installed/updated (codex-cli 9.9.9)' <<< "${codex_output}" || fail 'bazzite.sh: native Codex smoke test did not succeed'
+grep -q '^remove -g @openai/codex$' "${codex_tmp}/calls" || fail 'bazzite.sh: legacy Bun Codex was not removed'
+grep -q '^install --cask codex$' "${codex_tmp}/calls" || fail 'bazzite.sh: native Codex cask was not installed'
+
+cat > "${codex_tmp}/bin/codex" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "${codex_tmp}/bin/codex"
+if SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" CODEX_TMP="${codex_tmp}" PATH="${codex_tmp}/bin:${PATH}" bash -c '
+    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+    brew() {
+        case "$1 $2" in
+            "list --cask") return 0 ;;
+            "--prefix ") printf "%s\n" "${CODEX_TMP}" ;;
+        esac
+    }
+    install_codex_cli
+' > "${codex_tmp}/failure-output" 2>&1; then
+    fail 'bazzite.sh: failed Codex smoke test returned success'
+fi
+grep -q 'smoke test failed without Node.js' "${codex_tmp}/failure-output" || fail 'bazzite.sh: failed Codex smoke test lacked diagnosis'
+rm -rf "${codex_tmp}"
+
+# Bazzite path aliases are canonicalized before Pi provenance checks.
+path_tmp=$(mktemp -d)
+mkdir -p "${path_tmp}/var/home/tester/.local/bin"
+touch "${path_tmp}/var/home/tester/.local/bin/pi"
+ln -s var/home "${path_tmp}/home"
+SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" PATH_TMP="${path_tmp}" bash -c '
+    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+    path_is_within_prefix "${PATH_TMP}/home/tester/.local/bin/pi" "${PATH_TMP}/home/tester/.local"
+    ! path_is_within_prefix /bin/true "${PATH_TMP}/home/tester/.local"
+' || fail 'bazzite.sh: /home and /var/home aliases were not treated as the same Pi prefix'
+rm -rf "${path_tmp}"
+
+# Tailscale preference parsing accepts formatted JSON and verifies the mutation.
+tailscale_output=$(SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
+    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+    TAILSCALE_ENABLED=false
+    can_sudo() { return 0; }
+    tailscale() {
+        if [[ "$1 $2" == "debug prefs" ]]; then
+            printf "{\n  \"RunSSH\": %s\n}\n" "${TAILSCALE_ENABLED}"
+        elif [[ "$1 $2" == "set --ssh" ]]; then
+            TAILSCALE_ENABLED=true
+        fi
+    }
+    sudo() { shift; tailscale "$@"; }
+    setup_tailscale_ssh
+')
+grep -q 'Tailscale SSH enabled' <<< "${tailscale_output}" || fail 'bazzite.sh: Tailscale SSH was not verified after mutation'
+
+# Failed Bazzite Brew upgrades are fatal, truthful, and still unpin tmux.
+bazzite_brew_output=$(SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
+    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+    brew() {
+        printf "%s\n" "$*" >> "${BREW_CALL_LOG}"
+        [[ "$1" == "upgrade" ]] && return 1
+        return 0
+    }
+    BREW_CALL_LOG=$(mktemp)
+    export BREW_CALL_LOG
+    status=0
+    update_brew || status=$?
+    printf "status=%s\n" "${status}"
+    cat "${BREW_CALL_LOG}"
+    rm -f "${BREW_CALL_LOG}"
+')
+grep -q 'Homebrew update/upgrade incomplete' <<< "${bazzite_brew_output}" || fail 'bazzite.sh: Brew failure lacks truthful error'
+grep -q '^status=1$' <<< "${bazzite_brew_output}" || fail 'bazzite.sh: Brew failure was not fatal'
+grep -q '^unpin tmux$' <<< "${bazzite_brew_output}" || fail 'bazzite.sh: tmux was not unpinned after Brew failure'
+if grep -q 'Homebrew updated\.' <<< "${bazzite_brew_output}"; then
+    fail 'bazzite.sh: failed Brew upgrade was reported as successful'
+fi
+
+assert_contains bazzite.sh 'command -v usermod' 'Bazzite usermod shell fallback'
+assert_contains bazzite.sh 'getent passwd.*user_name' 'Bazzite post-change shell verification'
+assert_contains bazzite.sh 'install_codex_cli \|\| return 1' 'fatal Codex main wiring'
+assert_contains bazzite.sh 'verify_fish_development_tools \|\| return 1' 'fresh Fish toolchain verification'
+assert_contains bazzite.sh 'Fresh Fish login smoke test failed for Node.js, Pi, or Codex' 'fresh-shell smoke diagnosis'
+assert_contains bazzite.sh "printf '\\\\n%b%b✨ Setup complete!%b" 'interpreted ANSI completion output'
+
+shell_tmp=$(mktemp -d)
+cut_command=$(command -v cut)
+grep_command=$(command -v grep)
+ln -s "${cut_command}" "${shell_tmp}/cut"
+ln -s "${grep_command}" "${shell_tmp}/grep"
+shell_output=$(SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" SHELL_TMP="${shell_tmp}" bash -c '
+    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+    SHELL_STATE=/bin/bash
+    PATH="${SHELL_TMP}"
+    whoami() { printf "%s\n" tester; }
+    getent() { printf "tester:x:1000:1000::/home/tester:%s\n" "${SHELL_STATE}"; }
+    can_sudo() { return 0; }
+    usermod() { return 0; }
+    sudo() {
+        printf "%s\n" "$*" >> "${SHELL_TMP}/calls"
+        [[ "$1" == "usermod" ]] && SHELL_STATE=/usr/bin/fish
+        return 0
+    }
+    set_fish_as_default_shell
+')
+grep -q 'Fish shell set as default' <<< "${shell_output}" || fail 'bazzite.sh: usermod shell fallback did not verify successfully'
+grep -q '^usermod --shell /usr/bin/fish tester$' "${shell_tmp}/calls" || fail 'bazzite.sh: missing-chsh path did not use usermod'
+
+if SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" SHELL_TMP="${shell_tmp}" bash -c '
+    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+    PATH="${SHELL_TMP}"
+    whoami() { printf "%s\n" tester; }
+    getent() { printf "%s\n" "tester:x:1000:1000::/home/tester:/bin/bash"; }
+    can_sudo() { return 0; }
+    usermod() { return 0; }
+    sudo() { return 0; }
+    set_fish_as_default_shell
+' > "${shell_tmp}/failure-output" 2>&1; then
+    fail 'bazzite.sh: unverified shell mutation returned success'
+fi
+grep -q 'Login shell verification failed' "${shell_tmp}/failure-output" || fail 'bazzite.sh: shell verification failure lacked diagnosis'
+rm -rf "${shell_tmp}"
+
 # Prove the portable lock uses one namespace and rejects a second process.
 assert_not_contains mac.sh 'command -v flock' 'PATH-dependent split lock namespace'
 lock_root=$(mktemp -d)

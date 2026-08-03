@@ -47,14 +47,19 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '^install_claude_code\(\)' 'Claude Code installer function'
     assert_contains "${file}" '^install_codex_cli\(\)' 'Codex CLI installer function'
     assert_contains "${file}" '^[[:space:]]+install_claude_code$' 'Claude Code main wiring'
-    assert_contains "${file}" '^[[:space:]]+install_codex_cli$' 'Codex CLI main wiring'
+    assert_contains "${file}" '^[[:space:]]+install_codex_cli([[:space:]]+\|\|[[:space:]]+return 1)?$' 'Codex CLI main wiring'
     assert_contains "${file}" 'https://claude\.ai/install\.sh' 'Claude Code native installer download'
-    assert_contains "${file}" 'bun install -g @openai/codex' 'Codex CLI Bun package install'
+    if [[ "${file}" == "bazzite.sh" ]]; then
+        assert_contains "${file}" 'brew (install|upgrade) --cask codex' 'native Codex Homebrew cask install'
+        assert_contains "${file}" 'bun remove -g @openai/codex' 'legacy Bun Codex cleanup'
+    else
+        assert_contains "${file}" 'bun install -g @openai/codex' 'Codex CLI Bun package install'
+    fi
     assert_contains "${file}" '^setup_pi_claude_bridge\(\)' 'Pi Claude bridge setup function'
     assert_contains "${file}" 'npm:pi-claude-bridge' 'Pi Claude bridge package source'
     assert_contains "${file}" '^[[:space:]]+setup_pi_claude_bridge$' 'Pi Claude bridge main wiring'
-    assert_order "${file}" '^[[:space:]]+install_bun$' '^[[:space:]]+install_codex_cli$' 'Bun installed before Codex CLI'
-    assert_order "${file}" '^[[:space:]]+install_codex_cli$' '^[[:space:]]+setup_rtk_integrations$' 'Codex CLI installed before RTK integration'
+    assert_order "${file}" '^[[:space:]]+install_bun([[:space:]]+\|\|[[:space:]]+return 1)?$' '^[[:space:]]+install_codex_cli([[:space:]]+\|\|[[:space:]]+return 1)?$' 'Bun installed before Codex CLI'
+    assert_order "${file}" '^[[:space:]]+install_codex_cli([[:space:]]+\|\|[[:space:]]+return 1)?$' '^[[:space:]]+setup_rtk_integrations$' 'Codex CLI installed before RTK integration'
     assert_order "${file}" '^[[:space:]]+if install_pi_cli; then$' '^[[:space:]]+setup_pi_claude_bridge$' 'Pi installed before Pi Claude bridge'
 done
 

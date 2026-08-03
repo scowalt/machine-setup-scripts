@@ -19,6 +19,7 @@ print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 
 SETUP_ORIGINAL_PATH="${PATH}"
 SETUP_ORIGINAL_CLAUDE_COMMAND=$(command -v claude 2>/dev/null || true)
+SETUP_BREW_TRUST_FAILURES=0
 
 # Acquire a non-blocking per-user setup lock so overlapping setup runs don't
 # corrupt shared global package directories (npm, Bun, Homebrew, etc.). The lock
@@ -268,6 +269,8 @@ verify_bazzite_system() {
 ensure_brew_available() {
     if command -v brew &> /dev/null; then
         print_debug "Homebrew is already in PATH."
+        export HOMEBREW_NO_AUTO_UPDATE=1
+        export HOMEBREW_NO_INSTALL_CLEANUP=1
         return 0
     fi
 
@@ -277,6 +280,8 @@ ensure_brew_available() {
         local brew_env
         brew_env=$(/home/linuxbrew/.linuxbrew/bin/brew shellenv || true)
         eval "${brew_env}"
+        export HOMEBREW_NO_AUTO_UPDATE=1
+        export HOMEBREW_NO_INSTALL_CLEANUP=1
         print_success "Homebrew initialized."
         return 0
     fi
@@ -286,35 +291,83 @@ ensure_brew_available() {
     return 1
 }
 
+# Trust only third-party Homebrew formulae explicitly managed by this script.
+ensure_brew_formula_trusted() {
+    local item=$1
+    local tap=$2
+
+    if ! { brew tap || true; } | grep -Fxq "${tap}"; then
+        print_message "Adding Homebrew tap ${tap}..."
+        if ! brew tap "${tap}"; then
+            SETUP_BREW_TRUST_FAILURES=1
+            print_error "Failed to tap ${tap}; cannot manage ${item}."
+            return 1
+        fi
+    fi
+
+    if brew trust --formula "${item}" > /dev/null; then
+        print_debug "Trusted managed Homebrew formula: ${item}"
+        return 0
+    fi
+
+    SETUP_BREW_TRUST_FAILURES=1
+    print_error "Failed to trust managed Homebrew formula ${item}."
+    return 1
+}
+
 # Install core packages via Homebrew
 install_core_packages() {
     print_message "Checking core packages..."
 
-    # fish is pre-installed on Bazzite, so it's excluded from this list
-    local packages=("git" "curl" "wget" "jq" "unzip" "tmux" "starship" "gh" "chezmoi" "opentofu" "go" "uv" "fswatch" "1password-cli" "tailscale" "act" "cloudflared" "tursodatabase/tap/turso" "shellcheck" "gitleaks" "lefthook" "mise" "poppler" "bubblewrap")
-    local to_install=()
+    ensure_brew_formula_trusted "libsql/sqld/sqld" "libsql/sqld" || return 1
+    ensure_brew_formula_trusted "tursodatabase/tap/turso" "tursodatabase/tap" || return 1
 
-    # Get currently installed formulae
+    # fish is pre-installed on Bazzite, so it is excluded from these lists.
+    local formulae=("git" "curl" "wget" "jq" "unzip" "tmux" "starship" "gh" "chezmoi" "opentofu" "go" "uv" "fswatch" "tailscale" "act" "cloudflared" "tursodatabase/tap/turso" "shellcheck" "gitleaks" "lefthook" "mise" "poppler" "bubblewrap")
+    local casks=("1password-cli")
     local installed_formulae
-    installed_formulae=$(brew list --formula -1 2>/dev/null)
+    local installed_casks
+    local package
+    local short_name
+    local failed=()
+    local installed_count=0
 
-    for package in "${packages[@]}"; do
-        # Extract formula name (strip tap prefix for checking)
-        local check_name="${package##*/}"
-        if echo "${installed_formulae}" | grep -qx "${check_name}"; then
-            print_debug "${check_name} is already installed."
+    installed_formulae=$(brew list --formula -1 2>/dev/null || true)
+    installed_casks=$(brew list --cask -1 2>/dev/null || true)
+
+    for package in "${formulae[@]}"; do
+        short_name="${package##*/}"
+        if grep -Fxq "${short_name}" <<< "${installed_formulae}"; then
+            print_debug "${short_name} is already installed."
+            continue
+        fi
+        print_message "Installing missing formula: ${package}"
+        if brew install "${package}"; then
+            ((installed_count++)) || true
         else
-            to_install+=("${package}")
+            failed+=("${package}")
         fi
     done
 
-    if [[ "${#to_install[@]}" -gt 0 ]]; then
-        print_message "Installing missing packages: ${to_install[*]}"
-        if ! brew install "${to_install[@]}"; then
-            print_warning "Some packages failed to install. Continuing..."
-        else
-            print_success "Core packages installed."
+    for package in "${casks[@]}"; do
+        if grep -Fxq "${package}" <<< "${installed_casks}"; then
+            print_debug "${package} cask is already installed."
+            continue
         fi
+        print_message "Installing missing cask: ${package}"
+        if brew install --cask "${package}"; then
+            ((installed_count++)) || true
+        else
+            failed+=("${package}")
+        fi
+    done
+
+    if [[ "${#failed[@]}" -gt 0 ]]; then
+        print_error "Failed to install required Homebrew packages: ${failed[*]}"
+        return 1
+    fi
+    if [[ "${installed_count}" -gt 0 ]]; then
+        print_success "Core packages installed."
     else
         print_success "All core packages are already installed."
     fi
@@ -335,20 +388,23 @@ install_secrets_manager() {
             print_success "Infisical CLI installed."
         else
             print_error "Failed to install Infisical CLI."
+            return 1
         fi
     else
+        if ! ensure_brew_formula_trusted "dopplerhq/doppler/doppler" "dopplerhq/doppler"; then
+            print_error "Doppler CLI formula is not trusted."
+            return 1
+        fi
         if command -v doppler &>/dev/null; then
             print_debug "Doppler CLI already installed."
             return
         fi
         print_message "Installing Doppler CLI..."
-        if ! { brew tap || true; } | grep -q "^dopplerhq/cli$"; then
-            brew tap dopplerhq/cli 2>/dev/null || true
-        fi
-        if brew install dopplerhq/cli/doppler; then
+        if brew install dopplerhq/doppler/doppler; then
             print_success "Doppler CLI installed."
         else
             print_error "Failed to install Doppler CLI."
+            return 1
         fi
     fi
 }
@@ -406,17 +462,32 @@ install_gcloud_cli() {
 }
 
 # Enable Tailscale SSH for keyless access over Tailscale network
+tailscale_ssh_is_enabled() {
+    local prefs=""
+    prefs=$(tailscale debug prefs 2>/dev/null || true)
+    grep -Eq '"RunSSH"[[:space:]]*:[[:space:]]*true' <<< "${prefs}"
+}
+
 setup_tailscale_ssh() {
     if ! command -v tailscale &>/dev/null; then
         print_debug "Tailscale not installed, skipping SSH setup."
         return
     fi
 
-    local run_ssh
-    run_ssh=$(tailscale debug prefs 2>/dev/null | grep -o '"RunSSH":[a-z]*' | cut -d: -f2 || true)
-    if [[ "${run_ssh}" != "true" ]]; then
+    if ! tailscale_ssh_is_enabled; then
+        if ! can_sudo; then
+            print_error "No sudo access; cannot enable Tailscale SSH."
+            return 1
+        fi
         print_message "Enabling Tailscale SSH..."
-        sudo tailscale set --ssh
+        if ! sudo tailscale set --ssh; then
+            print_error "Failed to enable Tailscale SSH."
+            return 1
+        fi
+        if ! tailscale_ssh_is_enabled; then
+            print_error "Tailscale accepted the SSH setting, but RunSSH is still disabled."
+            return 1
+        fi
         print_success "Tailscale SSH enabled."
     else
         print_debug "Tailscale SSH is already enabled."
@@ -846,22 +917,55 @@ update_chezmoi() {
 
 # Set Fish as the default shell if it isn't already
 set_fish_as_default_shell() {
+    local user_name
     local current_shell
     local passwd_entry
-    passwd_entry=$(getent passwd "${USER}")
+    local shell_change_status=0
+
+    user_name=$(whoami || true)
+    if [[ -z "${user_name}" || ! -x /usr/bin/fish ]]; then
+        print_error "Fish shell is unavailable at /usr/bin/fish."
+        return 1
+    fi
+
+    passwd_entry=$(getent passwd "${user_name}" || true)
     current_shell=$(echo "${passwd_entry}" | cut -d: -f7)
     if [[ "${current_shell}" != "/usr/bin/fish" ]]; then
         if ! can_sudo; then
-            print_warning "No sudo access - cannot change default shell to fish."
-            print_debug "Ask an admin to run: sudo chsh -s /usr/bin/fish ${USER}"
-            return
+            print_error "No sudo access; cannot change the default shell to fish."
+            return 1
         fi
         print_message "Setting Fish as the default shell..."
         if ! grep -Fxq "/usr/bin/fish" /etc/shells; then
-            echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null
+            if ! echo "/usr/bin/fish" | sudo tee -a /etc/shells > /dev/null; then
+                print_error "Failed to add /usr/bin/fish to /etc/shells."
+                return 1
+            fi
         fi
-        # shellcheck disable=SC2024
-        sudo chsh -s /usr/bin/fish "${USER}" < /dev/tty
+
+        if command -v chsh &> /dev/null; then
+            # shellcheck disable=SC2024
+            sudo chsh -s /usr/bin/fish "${user_name}" < /dev/tty || shell_change_status=$?
+        elif command -v usermod &> /dev/null; then
+            sudo usermod --shell /usr/bin/fish "${user_name}" || shell_change_status=$?
+        elif [[ -x /usr/sbin/usermod ]]; then
+            sudo /usr/sbin/usermod --shell /usr/bin/fish "${user_name}" || shell_change_status=$?
+        else
+            print_error "Neither chsh nor usermod is available to change the login shell."
+            return 1
+        fi
+
+        if [[ "${shell_change_status}" -ne 0 ]]; then
+            print_error "Failed to set Fish as the default shell (status ${shell_change_status})."
+            return 1
+        fi
+
+        passwd_entry=$(getent passwd "${user_name}" || true)
+        current_shell=$(echo "${passwd_entry}" | cut -d: -f7)
+        if [[ "${current_shell}" != "/usr/bin/fish" ]]; then
+            print_error "Login shell verification failed; getent reports ${current_shell:-<missing>}."
+            return 1
+        fi
         print_success "Fish shell set as default."
     else
         print_debug "Fish shell is already the default shell."
@@ -989,26 +1093,100 @@ install_gemini_cli() {
     fi
 }
 
-# Install/update Codex CLI (OpenAI's AI coding agent)
+# Install/update Codex CLI using Homebrew's native, zero-Node-dependency cask.
 install_codex_cli() {
+    local bun_packages=""
+    local brew_prefix=""
+    local brew_codex=""
+    local resolved_codex=""
+    local version_output=""
+    local safe_path=""
+    local installed_casks=""
+
     print_message "Installing/updating Codex CLI..."
 
-    # Ensure bun is available
-    if [[ -d "${HOME}/.bun" ]]; then
-        export PATH="${HOME}/.bun/bin:${PATH}"
+    if ! command -v brew &> /dev/null; then
+        print_error "Homebrew not found. Cannot install the native Codex CLI."
+        return 1
     fi
 
-    if ! command -v bun &> /dev/null; then
-        print_warning "Bun not found. Cannot install Codex CLI."
-        print_debug "Install Bun first, then run: bun install -g @openai/codex"
-        return
+    if command -v bun &> /dev/null; then
+        bun_packages=$(bun pm ls -g 2>/dev/null || true)
+        if grep -Fq "@openai/codex" <<< "${bun_packages}"; then
+            print_message "Removing Node-dependent Bun Codex package..."
+            if ! bun remove -g @openai/codex > /dev/null; then
+                print_error "Failed to remove Bun's @openai/codex package."
+                return 1
+            fi
+        fi
+    fi
+    hash -r 2>/dev/null || true
+
+    installed_casks=$(brew list --cask -1 2>/dev/null || true)
+    if grep -Fxq codex <<< "${installed_casks}"; then
+        if ! brew upgrade --cask codex; then
+            print_error "Failed to upgrade the native Codex CLI cask."
+            return 1
+        fi
+    elif ! brew install --cask codex; then
+        print_error "Failed to install the native Codex CLI cask."
+        return 1
     fi
 
-    if bun install -g @openai/codex; then
-        print_success "Codex CLI installed/updated."
-    else
-        print_error "Failed to install Codex CLI."
+    hash -r 2>/dev/null || true
+    brew_prefix=$(brew --prefix 2>/dev/null || true)
+    brew_codex="${brew_prefix}/bin/codex"
+    resolved_codex=$(command -v codex 2>/dev/null || true)
+    if [[ -z "${brew_prefix}" || ! -x "${brew_codex}" ]]; then
+        print_error "Homebrew completed, but its Codex binary is missing."
+        return 1
     fi
+    if [[ -z "${resolved_codex}" || ! "${resolved_codex}" -ef "${brew_codex}" ]]; then
+        print_error "Codex is shadowed by ${resolved_codex:-<missing>}; expected ${brew_codex}."
+        return 1
+    fi
+
+    safe_path="/nonexistent"
+    if ! version_output=$(env -u NODE_PATH -u NODE_OPTIONS HOME="${HOME}" PATH="${safe_path}" "${brew_codex}" --version 2>/dev/null) || [[ -z "${version_output}" ]]; then
+        print_error "Native Codex CLI smoke test failed without Node.js on PATH."
+        return 1
+    fi
+
+    print_success "Codex CLI installed/updated (${version_output})."
+}
+
+# Return success when a resolved executable is within a prefix after resolving
+# Bazzite's /home -> /var/home alias.
+path_is_within_prefix() {
+    local path=$1
+    local prefix=$2
+    local canonical_path=""
+    local canonical_prefix=""
+
+    canonical_path=$(realpath "${path}" 2>/dev/null || true)
+    canonical_prefix=$(realpath "${prefix}" 2>/dev/null || true)
+    if [[ -z "${canonical_path}" || -z "${canonical_prefix}" ]]; then
+        return 1
+    fi
+
+    case "${canonical_path}" in
+        "${canonical_prefix}"|"${canonical_prefix}/"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+verify_fish_development_tools() {
+    if ! command -v fish &> /dev/null; then
+        print_error "Fish is unavailable for the final development-tool smoke test."
+        return 1
+    fi
+
+    if ! fish -lc 'command -q node; and node --version >/dev/null; and command -q pi; and pi --version >/dev/null; and command -q codex; and codex --version >/dev/null'; then
+        print_error "Fresh Fish login smoke test failed for Node.js, Pi, or Codex."
+        return 1
+    fi
+
+    print_success "Node.js, Pi, and Codex verified in a fresh Fish login shell."
 }
 
 # Install/update Notion CLI.
@@ -1781,7 +1959,7 @@ install_pi_cli() {
         return 1
     fi
 
-    if [[ "${_pi_target}" != "${_local_prefix}/"* ]]; then
+    if ! path_is_within_prefix "${_pi_target}" "${_local_prefix}"; then
         print_warning "Pi is first on PATH, but resolves outside ${_local_prefix}: ${_pi_target}"
     fi
 
@@ -3747,14 +3925,30 @@ upgrade_npm_global_packages() {
 
 # Update Homebrew and upgrade packages
 update_brew() {
+    local update_status=0
+    local upgrade_status=0
+    local unpin_status=0
+
     print_message "Updating Homebrew..."
-    brew update > /dev/null
+    brew update > /dev/null || update_status=$?
     # Pin tmux during upgrades to prevent killing existing sessions.
     brew pin tmux 2>/dev/null || true
     print_message "Upgrading outdated packages..."
-    brew upgrade > /dev/null
-    brew unpin tmux 2>/dev/null || true
-    print_success "Homebrew updated."
+    brew upgrade > /dev/null || upgrade_status=$?
+    if brew unpin tmux 2>/dev/null; then
+        :
+    else
+        unpin_status=$?
+        print_warning "Could not unpin tmux; retry with: brew unpin tmux"
+    fi
+
+    if [[ "${update_status}" -eq 0 && "${upgrade_status}" -eq 0 && "${unpin_status}" -eq 0 && "${SETUP_BREW_TRUST_FAILURES}" -eq 0 ]]; then
+        print_success "Homebrew updated."
+        return 0
+    fi
+
+    print_error "Homebrew update/upgrade incomplete (update=${update_status}, upgrade=${upgrade_status}, unpin=${unpin_status}, trust=${SETUP_BREW_TRUST_FAILURES})."
+    return 1
 }
 
 # Install packages via Homebrew (separate from core packages)
@@ -3777,8 +3971,12 @@ install_brew_packages() {
 
     if [[ "${#to_install[@]}" -gt 0 ]]; then
         print_message "Installing brew packages: ${to_install[*]}"
-        brew install "${to_install[@]}" > /dev/null
-        print_success "Brew packages installed."
+        if brew install "${to_install[@]}" > /dev/null; then
+            print_success "Brew packages installed."
+        else
+            print_error "Failed to install required Brew packages: ${to_install[*]}"
+            return 1
+        fi
     fi
 }
 
@@ -3806,7 +4004,7 @@ main() {
     print_debug "Logging to ${log_file}"
 
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 63 | Last changed: Filter untrusted optional Paseo PATH entries${NC}"
+    echo -e "${GRAY}Version 64 | Last changed: Repair Bazzite setup reliability${NC}"
 
     if ! acquire_setup_lock; then
         echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
@@ -3830,16 +4028,20 @@ main() {
     print_section "User & System Setup"
     ensure_not_root
     verify_bazzite_system || return 1
-    request_sudo_upfront
+    request_sudo_upfront || return 1
+    set_fish_as_default_shell || return 1
+    if command -v tailscale &> /dev/null; then
+        setup_tailscale_ssh || return 1
+    fi
     setup_dns64_for_ipv6_only
 
     print_section "Package Manager"
     ensure_brew_available || return 1
-    install_core_packages
-    install_secrets_manager
+    install_core_packages || return 1
+    install_secrets_manager || return 1
     install_gcloud_cli
-    install_brew_packages
-    setup_tailscale_ssh
+    install_brew_packages || return 1
+    setup_tailscale_ssh || return 1
 
     print_section "SSH Configuration"
     setup_ssh_key
@@ -3913,17 +4115,16 @@ HELPER_EOF
     fi
 
     print_section "Shell Configuration"
-    set_fish_as_default_shell
     install_tmux_plugins
     enable_user_lingering
 
     print_section "Development Tools"
-    install_bun
+    install_bun || return 1
     setup_headless_paseo_daemon || return 1
     install_sfw
     install_claude_code
     install_gemini_cli
-    install_codex_cli
+    install_codex_cli || return 1
     install_portless_cli
     install_ntn_cli
     install_rtk_cli
@@ -3950,16 +4151,19 @@ HELPER_EOF
             setup_pi_goal_autoresearch
         fi
         print_warning "Skipping Pi extension setup because Pi migration failed."
+        return 1
     fi
+
+    verify_fish_development_tools || return 1
 
     remove_compound_engineering_resources
 
     print_section "Final Updates"
-    update_brew
+    update_brew || return 1
     upgrade_npm_global_packages
 
     echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
-    printf '\n%s%s✨ Setup complete!%s\n\n' "${GREEN}" "${BOLD}" "${NC}" | tee -a "${log_file}" >&3
+    printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}" | tee -a "${log_file}" >&3
     upload_log
 }
 
