@@ -1422,6 +1422,171 @@ function Install-PiCli {
     }
 }
 
+# Force Pi defaults: Synthetic provider with Kimi K3 as the default model.
+# Chezmoi owns settings.json long-term; this seeds fresh machines and repairs drift.
+function Set-PiDefaults {
+    if ($env:PI_CODING_AGENT_DIR) {
+        $agentDir = $env:PI_CODING_AGENT_DIR
+    }
+    else {
+        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    }
+
+    $settingsPath = Join-Path $agentDir "settings.json"
+
+    if (-not (Test-Path $agentDir)) {
+        New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
+    }
+
+    $settingsJson = "{}"
+    if (Test-Path $settingsPath) {
+        $settingsJson = Get-Content -Path $settingsPath -Raw
+        if ([string]::IsNullOrWhiteSpace($settingsJson)) {
+            $settingsJson = "{}"
+        }
+    }
+
+    try {
+        $settings = $settingsJson | ConvertFrom-Json
+        if ($null -eq $settings) {
+            $settings = New-Object PSObject
+        }
+        Set-JsonProperty -Object $settings -Name "defaultProvider" -Value "synthetic"
+        Set-JsonProperty -Object $settings -Name "defaultModel" -Value "hf:moonshotai/Kimi-K3"
+        Set-JsonProperty -Object $settings -Name "defaultThinkingLevel" -Value "high"
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsPath -Encoding UTF8
+        Write-Host "$success Pi default model set to Kimi K3 (Synthetic) with high thinking." -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "$failIcon Failed to write Pi defaults to $settingsPath : $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+# Read a KEY=VALUE pair from ~/.env.local (strips optional export/quotes).
+function Get-EnvLocalValue {
+    param([Parameter(Mandatory=$true)][string]$Name)
+
+    $envValue = [Environment]::GetEnvironmentVariable($Name)
+    if (-not [string]::IsNullOrWhiteSpace($envValue)) {
+        return $envValue
+    }
+
+    $envLocalFile = Join-Path $env:USERPROFILE ".env.local"
+    if (Test-Path $envLocalFile) {
+        $match = Get-Content $envLocalFile | Where-Object { $_ -match "^\s*(export\s+)?$Name=" } | Select-Object -Last 1
+        if ($match) {
+            $value = ($match -replace "^\s*(export\s+)?$Name=", "").Trim()
+            $value = $value.Trim('"').Trim("'")
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                return $value
+            }
+        }
+    }
+    return $null
+}
+
+# Seed the Synthetic provider block (Kimi K3) into Pi's models.json.
+# The API key comes from SYNTHETIC_API_KEY in ~/.env.local; it is never
+# stored in this repository. Existing synthetic keys are preserved.
+function Seed-PiSyntheticModels {
+    if ($env:PI_CODING_AGENT_DIR) {
+        $agentDir = $env:PI_CODING_AGENT_DIR
+    }
+    else {
+        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    }
+
+    $modelsPath = Join-Path $agentDir "models.json"
+
+    $modelsJson = '{"providers":{}}'
+    if (Test-Path $modelsPath) {
+        $modelsJson = Get-Content -Path $modelsPath -Raw
+        if ([string]::IsNullOrWhiteSpace($modelsJson)) {
+            $modelsJson = '{"providers":{}}'
+        }
+    }
+
+    try {
+        $models = $modelsJson | ConvertFrom-Json
+        if ($null -eq $models) {
+            $models = [PSCustomObject]@{ providers = [PSCustomObject]@{} }
+        }
+        if ($null -eq $models.providers) {
+            $models | Add-Member -NotePropertyName "providers" -NotePropertyValue ([PSCustomObject]@{}) -Force
+        }
+
+        $existingKey = $null
+        if ($models.providers.PSObject.Properties.Name -contains "synthetic") {
+            $existingKey = $models.providers.synthetic.apiKey
+        }
+        if (-not [string]::IsNullOrWhiteSpace($existingKey)) {
+            Write-Debug "Synthetic provider with an API key already configured in $modelsPath."
+            return $true
+        }
+
+        $apiKey = Get-EnvLocalValue "SYNTHETIC_API_KEY"
+        if ([string]::IsNullOrWhiteSpace($apiKey)) {
+            Write-Warning "SYNTHETIC_API_KEY not set in ~/.env.local. Kimi K3 (Synthetic) is the Pi default but has no API key yet; add the key and rerun setup."
+            return $false
+        }
+
+        $syntheticProvider = [PSCustomObject]@{
+            baseUrl = "https://api.synthetic.new/v1"
+            api     = "openai-completions"
+            apiKey  = $apiKey
+            compat  = [PSCustomObject]@{
+                supportsDeveloperRole = $false
+                supportsStore         = $false
+                maxTokensField        = "max_tokens"
+                supportsStrictMode    = $false
+                deferredToolsMode     = "kimi"
+            }
+            models  = @(
+                [PSCustomObject]@{
+                    id               = "hf:moonshotai/Kimi-K3"
+                    name             = "Kimi K3 (Synthetic)"
+                    reasoning        = $true
+                    thinkingLevelMap = [PSCustomObject]@{
+                        off     = $null
+                        minimal = $null
+                        low     = "low"
+                        medium  = $null
+                        high    = "high"
+                        xhigh   = $null
+                        max     = "max"
+                    }
+                    input            = @("text", "image")
+                    contextWindow    = 512000
+                    maxTokens        = 131072
+                    cost             = [PSCustomObject]@{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }
+                    compat           = [PSCustomObject]@{
+                        supportsReasoningEffort                     = $true
+                        thinkingFormat                              = "openai"
+                        requiresReasoningContentOnAssistantMessages = $true
+                    }
+                }
+            )
+        }
+
+        if ($models.providers.PSObject.Properties.Name -contains "synthetic") {
+            $models.providers.synthetic = $syntheticProvider
+        }
+        else {
+            $models.providers | Add-Member -NotePropertyName "synthetic" -NotePropertyValue $syntheticProvider
+        }
+
+        $models | ConvertTo-Json -Depth 20 | Set-Content -Path $modelsPath -Encoding UTF8
+        Write-Host "$success Synthetic provider (Kimi K3) seeded in $modelsPath." -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "$failIcon Failed to seed Synthetic provider in $modelsPath : $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
 # Function to set or remove JSON properties on a PSCustomObject
 function Set-JsonProperty {
     param(
@@ -2467,7 +2632,7 @@ function Upload-Log {
 function Initialize-WindowsEnvironment {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 108 | Last changed: Fix multiline gcloud component-manager detection" -ForegroundColor DarkGray
+    Write-Host "Version 109 | Last changed: Set Pi default model to Kimi K3 (Synthetic)" -ForegroundColor DarkGray
 
     # Log this run
     $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
@@ -2517,6 +2682,8 @@ function Initialize-WindowsEnvironment {
         Setup-MattPocockPiSkills
     }
     if (Install-PiCli) {
+        Set-PiDefaults
+        Seed-PiSyntheticModels
         Setup-PiSubagents
         Setup-PiMcpAdapter
         Setup-PiClaudeBridge
