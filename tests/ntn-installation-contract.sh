@@ -106,18 +106,18 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_order "${file}" '^[[:space:]]+install_ntn_cli$' '^[[:space:]]+install_rtk_cli$' 'Notion CLI before RTK'
 done
 
-assert_contains mac.sh 'Version 184 \| Last changed: Filter untrusted optional Paseo PATH entries' 'macOS version banner'
-assert_contains ubuntu.sh 'Version 204 \| Last changed: Filter untrusted optional Paseo PATH entries' 'Ubuntu version banner'
-assert_contains wsl.sh 'Version 150 \| Last changed: Fix gcloud detection and ncurses package idempotency' 'WSL version banner'
-assert_contains pi.sh 'Version 165 \| Last changed: Filter untrusted optional Paseo PATH entries' 'Raspberry Pi version banner'
-assert_contains bazzite.sh 'Version 64 \| Last changed: Repair Bazzite setup reliability' 'Bazzite version banner'
+assert_contains mac.sh 'Version 185 \| Last changed: Set Pi default model to Kimi K3 \(Synthetic\)' 'macOS version banner'
+assert_contains ubuntu.sh 'Version 205 \| Last changed: Set Pi default model to Kimi K3 \(Synthetic\)' 'Ubuntu version banner'
+assert_contains wsl.sh 'Version 151 \| Last changed: Set Pi default model to Kimi K3 \(Synthetic\)' 'WSL version banner'
+assert_contains pi.sh 'Version 166 \| Last changed: Set Pi default model to Kimi K3 \(Synthetic\)' 'Raspberry Pi version banner'
+assert_contains bazzite.sh 'Version 65 \| Last changed: Set Pi default model to Kimi K3 \(Synthetic\)' 'Bazzite version banner'
 
 assert_contains win.ps1 '"Notion\.ntn"' 'official Notion CLI WinGet package'
 # These regexes intentionally use single quotes to preserve literal shell and Markdown syntax.
 # shellcheck disable=SC2016
 assert_contains win.ps1 '\$package -eq "Notion\.ntn" -and \$env:PROCESSOR_ARCHITECTURE -ne "AMD64"' 'Windows x64 architecture guard'
 assert_contains win.ps1 'Notion CLI supports Windows x64 only; skipping' 'unsupported Windows architecture warning'
-assert_contains win.ps1 'Version 108 \| Last changed: Fix multiline gcloud component-manager detection' 'Windows version banner'
+assert_contains win.ps1 'Version 109 \| Last changed: Set Pi default model to Kimi K3 \(Synthetic\)' 'Windows version banner'
 assert_order win.ps1 '^[[:space:]]+Install-WingetPackages$' '^[[:space:]]+Install-WingetUpdates$' 'WinGet install before update'
 assert_not_contains win.ps1 'npm (install|i).*(--global|-g).*ntn' 'npm-based Notion CLI installation'
 assert_not_contains win.ps1 'ntn (login|completions)' 'Notion authentication or completion automation'
