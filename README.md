@@ -2,6 +2,10 @@
 
 Idempotent scripts I use to set up my machines.
 
+## Setup logs
+
+Every setup run writes a local log under `~/.local/log/machine-setup` and makes one best-effort upload to `logs.scowalt.com` after either success or a detected fatal error. If the upload fails, the setup result is preserved and the script prints the local log path for manual recovery.
+
 ## AI Coding Agents
 
 Every machine setup script (macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows) installs/updates Claude Code CLI and Codex CLI, Notion CLI (`ntn`), Gemini CLI, Pi, RTK, tintinweb Pi subagents, Pi MCP adapter, Pi Claude bridge, and Pi goal/autoresearch extensions. Personal machines also install Matt Pocock Pi skills; work machines also install Google Cloud CLI. Set `WORK_MACHINE=1` in `~/.env.local` for work machines. Set `BAN_CLAUDE_CODE=1` to skip Claude Code CLI setup. Set `BAN_RTK=1` to skip RTK setup. Set `BAN_PI_SUBAGENTS=1` to keep the tintinweb Pi subagents extension inactive. Set `BAN_PI_MCP_ADAPTER=1` to keep the Pi MCP adapter inactive. Set `BAN_PI_GOAL_AUTORESEARCH=1` to keep the Pi goal/autoresearch extensions inactive. Set `BAN_MATT_POCOCK_SKILLS=1` to keep Matt Pocock Pi skills inactive.
