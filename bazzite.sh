@@ -20,6 +20,18 @@ print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 SETUP_ORIGINAL_PATH="${PATH}"
 SETUP_ORIGINAL_CLAUDE_COMMAND=$(command -v claude 2>/dev/null || true)
 SETUP_BREW_TRUST_FAILURES=0
+SETUP_LOG_FILE=""
+SETUP_LOG_TEE_PID=""
+SETUP_LOGGING_ACTIVE=0
+SUDO_KEEPALIVE_PID=""
+
+stop_sudo_keepalive() {
+    if [[ -n "${SUDO_KEEPALIVE_PID}" ]]; then
+        kill "${SUDO_KEEPALIVE_PID}" 2>/dev/null || true
+        wait "${SUDO_KEEPALIVE_PID}" 2>/dev/null || true
+        SUDO_KEEPALIVE_PID=""
+    fi
+}
 
 # Acquire a non-blocking per-user setup lock so overlapping setup runs don't
 # corrupt shared global package directories (npm, Bun, Homebrew, etc.). The lock
@@ -217,11 +229,11 @@ request_sudo_upfront() {
             sleep 50
             sudo -n true 2>/dev/null || exit 0
         done
-    ) &
+    ) > /dev/null 2>&1 &
     SUDO_KEEPALIVE_PID=$!
 
     # Set up trap to kill the background process on exit
-    trap 'kill "${SUDO_KEEPALIVE_PID}" 2>/dev/null' EXIT
+    trap stop_sudo_keepalive EXIT
 
     print_success "Sudo credentials cached for this session."
     return 0
@@ -243,7 +255,7 @@ ensure_not_root() {
         echo "  # Switch to the new user and re-run this script"
         echo "  su - scowalt"
         echo ""
-        exit 1
+        return 1
     fi
 }
 
@@ -4136,32 +4148,68 @@ install_brew_packages() {
 
 # Upload log to centralized collector (non-fatal)
 upload_log() {
-    if [[ -n "${log_file:-}" ]] && [[ -f "${log_file:-}" ]]; then
-        print_debug "Uploading log to logs.scowalt.com..."
-        curl -s -X POST \
-            -F "file=@${log_file}" \
-            "https://logs.scowalt.com/upload?hostname=$(hostname)" \
-            --max-time 10 \
-            > /dev/null 2>&1 || true
+    local setup_hostname=""
+
+    if [[ -z "${SETUP_LOG_FILE}" ]] || [[ ! -f "${SETUP_LOG_FILE}" ]]; then
+        return 0
+    fi
+
+    setup_hostname=$(hostname 2>/dev/null) || setup_hostname="unknown"
+    print_debug "Uploading log to logs.scowalt.com..."
+    if ! curl --fail --silent -X POST \
+        -F "file=@${SETUP_LOG_FILE}" \
+        "https://logs.scowalt.com/upload?hostname=${setup_hostname}" \
+        --max-time 10 \
+        > /dev/null 2>&1; then
+        print_warning "Failed to upload setup log. Local log remains at ${SETUP_LOG_FILE}."
     fi
 }
 
-main() {
-    # Log this run (before banner so version appears in logs)
+start_setup_log() {
     local log_dir="${HOME}/.local/log/machine-setup"
-    mkdir -p "${log_dir}"
-    local log_file
-    log_file="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
-    exec 3>&1
-    exec > >({ tee -a "${log_file}" || true; }) 2>&1
-    print_debug "Logging to ${log_file}"
+    if ! mkdir -p "${log_dir}"; then
+        print_warning "Could not create setup log directory at ${log_dir}; continuing without log upload."
+        return 1
+    fi
 
+    SETUP_LOG_FILE="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
+    if ! touch "${SETUP_LOG_FILE}"; then
+        print_warning "Could not create setup log at ${SETUP_LOG_FILE}; continuing without log upload."
+        SETUP_LOG_FILE=""
+        return 1
+    fi
+
+    exec 3>&1
+    exec > >({ tee -a "${SETUP_LOG_FILE}" || true; }) 2>&1
+    SETUP_LOG_TEE_PID=$!
+    SETUP_LOGGING_ACTIVE=1
+    print_debug "Logging to ${SETUP_LOG_FILE}"
+}
+
+finish_setup_log() {
+    local setup_status="$1"
+
+    if [[ "${SETUP_LOGGING_ACTIVE}" == "1" ]]; then
+        echo -e "${GRAY}Run log saved to: ${SETUP_LOG_FILE}${NC}"
+        stop_sudo_keepalive
+        exec 1>&3 2>&3
+        exec 3>&-
+        if [[ -n "${SETUP_LOG_TEE_PID}" ]]; then
+            wait "${SETUP_LOG_TEE_PID}" 2>/dev/null || true
+        fi
+        SETUP_LOG_TEE_PID=""
+        SETUP_LOGGING_ACTIVE=0
+        upload_log
+    fi
+
+    return "${setup_status}"
+}
+
+run_setup_tasks() {
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 65 | Last changed: Set Pi default model to Kimi K3 (Synthetic)${NC}"
+    echo -e "${GRAY}Version 66 | Last changed: Upload logs after setup failures${NC}"
 
     if ! acquire_setup_lock; then
-        echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
-        upload_log
         return 1
     fi
 
@@ -4179,7 +4227,7 @@ main() {
     paseo_headless_platform_gate || return 1
 
     print_section "User & System Setup"
-    ensure_not_root
+    ensure_not_root || return 1
     verify_bazzite_system || return 1
     request_sudo_upfront || return 1
     set_fish_as_default_shell || return 1
@@ -4317,9 +4365,15 @@ HELPER_EOF
     update_brew || return 1
     upgrade_npm_global_packages
 
-    echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
-    printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}" | tee -a "${log_file}" >&3
-    upload_log
+    printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}"
+}
+
+main() {
+    local setup_status=0
+
+    start_setup_log || true
+    run_setup_tasks "$@" || setup_status=$?
+    finish_setup_log "${setup_status}"
 }
 
 main "$@"

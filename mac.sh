@@ -23,6 +23,9 @@ SETUP_MKDIR_LOCK_DIR=""
 SETUP_LOCK_RECLAIM_DIR=""
 SETUP_TMUX_PINNED=0
 SETUP_BREW_TRUST_FAILURES=0
+SETUP_LOG_FILE=""
+SETUP_LOG_TEE_PID=""
+SETUP_LOGGING_ACTIVE=0
 
 release_setup_reclaim() {
     if [[ -n "${SETUP_LOCK_RECLAIM_DIR}" ]]; then
@@ -4237,14 +4240,60 @@ setup_code_directory() {
 
 # Upload log to centralized collector (non-fatal)
 upload_log() {
-    if [[ -n "${log_file:-}" ]] && [[ -f "${log_file:-}" ]]; then
-        print_debug "Uploading log to logs.scowalt.com..."
-        curl -s -X POST \
-            -F "file=@${log_file}" \
-            "https://logs.scowalt.com/upload?hostname=$(hostname)" \
-            --max-time 10 \
-            > /dev/null 2>&1 || true
+    local setup_hostname=""
+
+    if [[ -z "${SETUP_LOG_FILE}" ]] || [[ ! -f "${SETUP_LOG_FILE}" ]]; then
+        return 0
     fi
+
+    setup_hostname=$(hostname 2>/dev/null) || setup_hostname="unknown"
+    print_debug "Uploading log to logs.scowalt.com..."
+    if ! curl --fail --silent -X POST \
+        -F "file=@${SETUP_LOG_FILE}" \
+        "https://logs.scowalt.com/upload?hostname=${setup_hostname}" \
+        --max-time 10 \
+        > /dev/null 2>&1; then
+        print_warning "Failed to upload setup log. Local log remains at ${SETUP_LOG_FILE}."
+    fi
+}
+
+start_setup_log() {
+    local log_dir="${HOME}/.local/log/machine-setup"
+    if ! mkdir -p "${log_dir}"; then
+        print_warning "Could not create setup log directory at ${log_dir}; continuing without log upload."
+        return 1
+    fi
+
+    SETUP_LOG_FILE="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
+    if ! touch "${SETUP_LOG_FILE}"; then
+        print_warning "Could not create setup log at ${SETUP_LOG_FILE}; continuing without log upload."
+        SETUP_LOG_FILE=""
+        return 1
+    fi
+
+    exec 3>&1
+    exec > >({ tee -a "${SETUP_LOG_FILE}" || true; }) 2>&1
+    SETUP_LOG_TEE_PID=$!
+    SETUP_LOGGING_ACTIVE=1
+    print_debug "Logging to ${SETUP_LOG_FILE}"
+}
+
+finish_setup_log() {
+    local setup_status="$1"
+
+    if [[ "${SETUP_LOGGING_ACTIVE}" == "1" ]]; then
+        echo -e "${GRAY}Run log saved to: ${SETUP_LOG_FILE}${NC}"
+        exec 1>&3 2>&3
+        exec 3>&-
+        if [[ -n "${SETUP_LOG_TEE_PID}" ]]; then
+            wait "${SETUP_LOG_TEE_PID}" 2>/dev/null || true
+        fi
+        SETUP_LOG_TEE_PID=""
+        SETUP_LOGGING_ACTIVE=0
+        upload_log
+    fi
+
+    return "${setup_status}"
 }
 
 install_betterdisplay() {
@@ -4377,24 +4426,13 @@ enable_screen_sharing() {
     print_debug "Screen Sharing is enabled and accepting connections."
 }
 
-main() {
-    # Log this run (before banner so version appears in logs)
-    local log_dir="${HOME}/.local/log/machine-setup"
-    mkdir -p "${log_dir}"
-    local log_file
-    log_file="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
-    exec 3>&1
-    exec > >({ tee -a "${log_file}" || true; }) 2>&1
-    print_debug "Logging to ${log_file}"
-
+run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 185 | Last changed: Set Pi default model to Kimi K3 (Synthetic)${NC}"
+    echo -e "${GRAY}Version 186 | Last changed: Upload logs after setup failures${NC}"
 
     if ! acquire_setup_lock; then
-        echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
-        upload_log
         return 1
     fi
 
@@ -4598,9 +4636,15 @@ HELPER_EOF
 
     upgrade_npm_global_packages
 
-    echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
-    printf '\n%s%s✨ Setup complete!%s\n\n' "${GREEN}" "${BOLD}" "${NC}" | tee -a "${log_file}" >&3
-    upload_log
+    printf '\n%s%s✨ Setup complete!%s\n\n' "${GREEN}" "${BOLD}" "${NC}"
+}
+
+main() {
+    local setup_status=0
+
+    start_setup_log || true
+    run_setup_tasks "$@" || setup_status=$?
+    finish_setup_log "${setup_status}"
 }
 
 main "$@"

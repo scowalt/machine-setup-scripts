@@ -40,6 +40,8 @@ $sparkles = [char]0x2728   # Sparkles for completion
 
 $script:SetupOriginalPath = $env:PATH
 $script:SetupOriginalClaudeCommand = $null
+$script:SetupLogFile = $null
+$script:SetupTranscriptStarted = $false
 try {
     $setupOriginalClaude = Get-Command claude -ErrorAction SilentlyContinue
     if ($setupOriginalClaude) {
@@ -247,7 +249,7 @@ function Install-GcloudCli {
 function Install-Chezmoi {
     if (-not (Get-Command chezmoi -ErrorAction SilentlyContinue)) {
         Write-Host "$failIcon Failed to install chezmoi." -ForegroundColor Red
-        exit 1
+        throw "Failed to install chezmoi"
     }
     else {
         Write-Debug "chezmoi is already installed."
@@ -323,7 +325,7 @@ function Test-GithubSSHKeyAlreadyAdded {
     }
     catch {
         Write-Host "$failIcon Failed to fetch SSH keys from GitHub." -ForegroundColor Red
-        exit 1
+        throw "Failed to fetch SSH keys from GitHub"
     }
 
     $localKeyContent = Get-Content -Path $localKeyPath
@@ -2618,30 +2620,44 @@ function Set-WindowsTerminalConfiguration {
 
 
 function Upload-Log {
-    if ($logFile -and (Test-Path $logFile)) {
+    if ($script:SetupLogFile -and (Test-Path $script:SetupLogFile)) {
         try {
             Write-Debug "Uploading log to logs.scowalt.com..."
             Invoke-RestMethod -Uri "https://logs.scowalt.com/upload?hostname=$env:COMPUTERNAME" `
-                -Method Post -Form @{ file = Get-Item $logFile } `
-                -TimeoutSec 10 -ErrorAction SilentlyContinue | Out-Null
-        } catch {}
+                -Method Post -Form @{ file = Get-Item $script:SetupLogFile } `
+                -TimeoutSec 10 -ErrorAction Stop | Out-Null
+        }
+        catch {
+            Write-Warning "Failed to upload setup log. Local log remains at $script:SetupLogFile."
+        }
     }
 }
 
-# Main setup function to call all necessary steps
-function Initialize-WindowsEnvironment {
+function Complete-SetupLog {
+    if (-not $script:SetupLogFile) {
+        return
+    }
+
+    Write-Host "Run log saved to: $script:SetupLogFile" -ForegroundColor DarkGray
+    if ($script:SetupTranscriptStarted) {
+        try {
+            Stop-Transcript -ErrorAction Stop | Out-Null
+        }
+        catch {
+            Write-Warning "Failed to stop the setup transcript cleanly: $($_.Exception.Message)"
+        }
+        finally {
+            $script:SetupTranscriptStarted = $false
+        }
+    }
+
+    Upload-Log
+}
+
+function Invoke-WindowsSetupTasks {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 109 | Last changed: Set Pi default model to Kimi K3 (Synthetic)" -ForegroundColor DarkGray
-
-    # Log this run
-    $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
-    if (-not (Test-Path $logDir)) {
-        New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-    }
-    $logFile = Join-Path $logDir "$(Get-Date -Format 'yyyy-MM-dd-HHmmss').log"
-    Start-Transcript -Path $logFile -Append
-    Write-Debug "Logging to $logFile"
+    Write-Host "Version 110 | Last changed: Upload logs after setup failures" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -2712,11 +2728,32 @@ function Initialize-WindowsEnvironment {
     Update-NpmGlobalPackages
     Install-WindowsUpdates # this should always be LAST since it may prompt a system reboot
 
-    $logFile = Get-ChildItem "$env:USERPROFILE\.local\log\machine-setup" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    Write-Host "Run log saved to: $($logFile.FullName)" -ForegroundColor DarkGray
     Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen
-    Stop-Transcript
-    Upload-Log
+}
+
+# Main setup function to call all necessary steps
+function Initialize-WindowsEnvironment {
+    $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
+    if (-not (Test-Path $logDir)) {
+        New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    }
+    $script:SetupLogFile = Join-Path $logDir "$(Get-Date -Format 'yyyy-MM-dd-HHmmss').log"
+    Start-Transcript -Path $script:SetupLogFile -Append -ErrorAction Stop | Out-Null
+    $script:SetupTranscriptStarted = $true
+    Write-Debug "Logging to $script:SetupLogFile"
+
+    $setupError = $null
+    try {
+        Invoke-WindowsSetupTasks
+    }
+    catch {
+        $setupError = $_
+    }
+
+    Complete-SetupLog
+    if ($null -ne $setupError) {
+        throw $setupError
+    }
 }
 
 # Run the main setup function

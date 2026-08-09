@@ -32,6 +32,100 @@ assert_not_contains() {
 
 source_without_main='s/^main "\$@"$/:/'
 
+# Every Bash entry point must flush and upload a failed run exactly once while
+# preserving the setup task's original status.
+for file in "${bash_setup_scripts[@]}"; do
+    log_test_root=$(mktemp -d)
+    mkdir -p "${log_test_root}/home"
+    failure_output=$(SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" \
+        HOME="${log_test_root}/home" UPLOAD_CALLS="${log_test_root}/upload-calls" TEST_FILE="${file}" bash -c '
+            source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+            run_setup_tasks() {
+                print_error "simulated setup failure"
+                if [[ "${TEST_FILE}" == "bazzite.sh" ]]; then
+                    (exec sleep 30) &
+                    SUDO_KEEPALIVE_PID=$!
+                    trap stop_sudo_keepalive EXIT
+                fi
+                return 23
+            }
+            curl() {
+                local argument=""
+                local uploaded_log=""
+                for argument in "$@"; do
+                    case "${argument}" in
+                        file=@*) uploaded_log="${argument#file=@}" ;;
+                    esac
+                done
+                [[ -n "${uploaded_log}" ]] || return 90
+                grep -q "simulated setup failure" "${uploaded_log}" || return 91
+                printf "%s\n" "${uploaded_log}" >> "${UPLOAD_CALLS}"
+            }
+            setup_status=0
+            main || setup_status=$?
+            printf "status=%s\n" "${setup_status}"
+        ')
+    grep -q '^status=23$' <<< "${failure_output}" || fail "${file}: log finalization changed the failure status"
+    grep -q 'Run log saved to:' <<< "${failure_output}" || fail "${file}: failed run did not report the local log path"
+    [[ -f "${log_test_root}/upload-calls" ]] || fail "${file}: failed run did not attempt a log upload"
+    upload_count=$(wc -l < "${log_test_root}/upload-calls") || fail "${file}: could not count failed-run uploads"
+    [[ "${upload_count}" -eq 1 ]] || fail "${file}: failed run attempted more than one log upload"
+    rm -rf "${log_test_root}"
+done
+
+# Successful runs use the same single finalization path.
+log_test_root=$(mktemp -d)
+mkdir -p "${log_test_root}/home"
+success_output=$(SETUP_SCRIPT="${repo_root}/wsl.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" \
+    HOME="${log_test_root}/home" UPLOAD_CALLS="${log_test_root}/upload-calls" bash -c '
+        source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+        run_setup_tasks() {
+            print_success "simulated setup success"
+        }
+        curl() {
+            local argument=""
+            local uploaded_log=""
+            for argument in "$@"; do
+                case "${argument}" in
+                    file=@*) uploaded_log="${argument#file=@}" ;;
+                esac
+            done
+            grep -q "simulated setup success" "${uploaded_log}" || return 91
+            printf "%s\n" "${uploaded_log}" >> "${UPLOAD_CALLS}"
+        }
+        setup_status=0
+        main || setup_status=$?
+        printf "status=%s\n" "${setup_status}"
+    ')
+grep -q '^status=0$' <<< "${success_output}" || fail 'wsl.sh: successful log finalization returned failure'
+upload_count=$(wc -l < "${log_test_root}/upload-calls") || fail 'wsl.sh: could not count successful-run uploads'
+[[ "${upload_count}" -eq 1 ]] || fail 'wsl.sh: successful run did not upload exactly once'
+rm -rf "${log_test_root}"
+
+# Collector failures warn with the local fallback without masking setup status.
+log_test_root=$(mktemp -d)
+mkdir -p "${log_test_root}/home"
+upload_failure_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" \
+    HOME="${log_test_root}/home" UPLOAD_CALLS="${log_test_root}/upload-calls" bash -c '
+        source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+        run_setup_tasks() {
+            print_error "simulated setup failure"
+            return 23
+        }
+        curl() {
+            printf "attempt\n" >> "${UPLOAD_CALLS}"
+            return 7
+        }
+        setup_status=0
+        main || setup_status=$?
+        printf "status=%s\n" "${setup_status}"
+    ')
+grep -q '^status=23$' <<< "${upload_failure_output}" || fail 'mac.sh: collector failure masked the setup status'
+grep -q 'Failed to upload setup log. Local log remains at ' <<< "${upload_failure_output}" || fail 'mac.sh: collector failure lacked the local log fallback'
+upload_count=$(wc -l < "${log_test_root}/upload-calls") || fail 'mac.sh: could not count failed upload attempts'
+[[ "${upload_count}" -eq 1 ]] || fail 'mac.sh: collector failure triggered multiple attempts'
+rm -rf "${log_test_root}"
+
 # Reproduce gcloud's wrapped package-manager message at the real function seam.
 for file in "${bash_setup_scripts[@]}"; do
     output=$(SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
@@ -53,6 +147,7 @@ done
 assert_contains win.ps1 '\$normalizedUpdateText[[:space:]]*=' 'normalized gcloud update output'
 # shellcheck disable=SC2016
 assert_contains win.ps1 '\$normalizedUpdateText -match "component manager is disabled\|managed by an external package manager"' 'normalized package-manager detection'
+assert_not_contains win.ps1 '^[[:space:]]*exit 1[[:space:]]*$' 'host-terminating setup failure that bypasses log finalization'
 
 if command -v pwsh &>/dev/null; then
     pwsh -NoLogo -NoProfile -File tests/setup-reliability-powershell.ps1
