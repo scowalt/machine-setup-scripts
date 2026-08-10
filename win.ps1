@@ -121,6 +121,7 @@ function New-TokenPlaceholders {
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
 # BAN_RTK=1
+# BAN_IMPECCABLE=1
 # BAN_CLAUDE_CODE=1
 "@ | Set-Content -Path $envLocalPath
         Write-Debug "Created placeholder ~/.env.local"
@@ -1239,6 +1240,88 @@ function Enable-PiNodeRuntime {
 
     Write-Warning "Node.js >=20.6 is still not active after installing $runtime."
     return $false
+}
+
+# Impeccable requires Node.js 24 or newer.
+function Test-ImpeccableNodeRuntimeReady {
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    & node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)' *> $null
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Enable-ImpeccableNodeRuntime {
+    $runtime = "node@24"
+
+    if (Test-ImpeccableNodeRuntimeReady) {
+        $nodeVersion = (& node --version 2>$null | Out-String).Trim()
+        Write-Debug "Node.js $nodeVersion is ready for Impeccable."
+        return $true
+    }
+
+    if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
+        Write-Warning "Node.js 24+ is required for Impeccable, but mise is not available to install it."
+        return $false
+    }
+
+    Write-Message "Ensuring Node.js 24 runtime for Impeccable..."
+    & mise use -g -y $runtime *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to install/configure $runtime for Impeccable."
+        return $false
+    }
+
+    $miseEnv = & mise env -C $env:USERPROFILE -s pwsh $runtime 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to generate mise environment for $runtime."
+        return $false
+    }
+    $miseEnv | Out-String | Invoke-Expression
+
+    return (Test-ImpeccableNodeRuntimeReady)
+}
+
+# Install/update Impeccable's provider-specific skill globally for every AI harness.
+function Install-ImpeccableSkill {
+    if (Test-EnvLocalFlag "BAN_IMPECCABLE") {
+        Write-Debug "BAN_IMPECCABLE=1, skipping Impeccable skill setup."
+        return
+    }
+
+    if (-not (Enable-ImpeccableNodeRuntime)) {
+        Write-Warning "Skipping Impeccable skill setup because Node.js 24 is not ready."
+        return
+    }
+    if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
+        Write-Warning "npx not found. Cannot install the Impeccable skill."
+        return
+    }
+
+    Write-Message "Installing/updating Impeccable across AI harnesses..."
+    $output = & npx --yes impeccable@latest install --scope=global --providers=claude,codex,cursor,gemini,pi --force --yes --no-hooks 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to install/update the Impeccable skill."
+        if ($output) { Write-Debug ($output | Out-String) }
+        return
+    }
+
+    $skillFiles = @(
+        (Join-Path $env:USERPROFILE ".claude\skills\impeccable\SKILL.md"),
+        (Join-Path $env:USERPROFILE ".agents\skills\impeccable\SKILL.md"),
+        (Join-Path $env:USERPROFILE ".cursor\skills\impeccable\SKILL.md"),
+        (Join-Path $env:USERPROFILE ".gemini\skills\impeccable\SKILL.md"),
+        (Join-Path $env:USERPROFILE ".pi\agent\skills\impeccable\SKILL.md")
+    )
+    $missingSkill = $skillFiles | Where-Object { -not (Test-Path $_) } | Select-Object -First 1
+    if ($missingSkill) {
+        Write-Warning "Impeccable installer completed, but $missingSkill is missing."
+        if ($output) { Write-Debug ($output | Out-String) }
+        return
+    }
+
+    Write-Success "Impeccable installed/updated for Claude, Codex, Cursor, Gemini, and Pi."
 }
 
 # Remove stale Pi installs from Bun-managed global locations.
@@ -2657,7 +2740,7 @@ function Complete-SetupLog {
 function Invoke-WindowsSetupTasks {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 110 | Last changed: Upload logs after setup failures" -ForegroundColor DarkGray
+    Write-Host "Version 111 | Last changed: Install Impeccable across AI harnesses" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -2720,6 +2803,7 @@ function Invoke-WindowsSetupTasks {
         }
         Write-Warning "Skipping Pi extension setup because Pi migration failed."
     }
+    Install-ImpeccableSkill
     Remove-CompoundEngineeringResources
     Install-TursoCli
 
