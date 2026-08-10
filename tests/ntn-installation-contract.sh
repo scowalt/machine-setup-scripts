@@ -106,7 +106,7 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_order "${file}" '^[[:space:]]+install_ntn_cli$' '^[[:space:]]+install_rtk_cli$' 'Notion CLI before RTK'
 done
 
-assert_contains mac.sh 'Version 186 \| Last changed: Upload logs after setup failures' 'macOS version banner'
+assert_contains mac.sh 'Version 187 \| Last changed: Skip macOS headless Paseo daemon instead of aborting setup' 'macOS version banner'
 assert_contains ubuntu.sh 'Version 206 \| Last changed: Upload logs after setup failures' 'Ubuntu version banner'
 assert_contains wsl.sh 'Version 152 \| Last changed: Upload logs after setup failures' 'WSL version banner'
 assert_contains pi.sh 'Version 167 \| Last changed: Upload logs after setup failures' 'Raspberry Pi version banner'

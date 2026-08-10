@@ -508,6 +508,8 @@ for file in "${supported_linux[@]}"; do
 done
 
 assert_contains mac.sh 'PASEO_MACOS_HEADLESS_CANARY' 'macOS canary gate'
+assert_contains mac.sh 'Skipping headless Paseo daemon setup: macOS support is pending no-login validation' 'macOS non-canary HEADLESS=1 skip warning'
+assert_order mac.sh 'Skipping headless Paseo daemon setup: macOS support is pending no-login validation' 'paseo_macos_preflight || return 1' 'canary skip happens before the preflight in setup_headless_paseo_daemon'
 assert_contains mac.sh '/Library/LaunchDaemons/\$\{PASEO_LAUNCHD_LABEL\}\.plist' 'macOS LaunchDaemon path'
 assert_contains mac.sh '<key>UserName</key>' 'LaunchDaemon target user'
 assert_contains mac.sh 'launchctl bootstrap system' 'LaunchDaemon bootstrap'
@@ -527,6 +529,26 @@ assert_contains win.ps1 'Assert-HeadlessPaseoUnsupported' 'Windows unsupported H
 assert_contains win.ps1 'native Windows cannot guarantee a no-login Paseo daemon' 'Windows clear unsupported message'
 assert_order win.ps1 '    Assert-HeadlessPaseoUnsupported' '    New-TokenPlaceholders' 'Windows fails before env placeholder mutation'
 
+assert_macos_headless_noncanary_is_nonfatal() {
+    (
+        # Source mac.sh without invoking its entry point (main "$@").
+        # shellcheck source=../mac.sh
+        source <(sed 's/^main "\$@"$/:/' ./mac.sh)
+
+        HEADLESS=1
+        PASEO_MACOS_HEADLESS_CANARY=0
+        uname() { printf 'Darwin\n'; }
+        paseo_macos_preflight() {
+            fail 'mac.sh: ran the macOS Paseo preflight when the canary gate was not set'
+        }
+        install_paseo_cli() {
+            fail 'mac.sh: mutated the Paseo install when the canary gate was not set'
+        }
+
+        setup_headless_paseo_daemon
+    )
+}
+
 assert_contains README.md 'Headless Paseo daemon' 'README headless Paseo section'
 assert_contains README.md 'ubuntu\.sh.*pi\.sh.*bazzite\.sh' 'README supported native Linux scripts'
 assert_contains README.md 'macOS.*PASEO_MACOS_HEADLESS_CANARY=1' 'README macOS canary status'
@@ -542,5 +564,6 @@ assert_managed_daemon_is_preserved
 assert_unchanged_service_is_not_restarted
 assert_managed_launchdaemon_is_preserved
 assert_unchanged_launchdaemon_is_not_restarted
+assert_macos_headless_noncanary_is_nonfatal
 
 printf '✓ headless Paseo daemon contract checks passed\n'
