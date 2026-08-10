@@ -3129,7 +3129,10 @@ paseo_macos_preflight() {
     fi
 
     if [[ "${PASEO_MACOS_HEADLESS_CANARY:-}" != "1" ]]; then
-        print_error "macOS Paseo headless daemon support is pending no-login validation. Set PASEO_MACOS_HEADLESS_CANARY=1 only for an approved canary run."
+        # Not an error: HEADLESS=1 runs without the canary skip the daemon
+        # entirely (see setup_headless_paseo_daemon). This only fails if a
+        # canary run reaches the preflight without the flag set.
+        print_warning "macOS Paseo headless daemon support is pending no-login validation. Set PASEO_MACOS_HEADLESS_CANARY=1 only for an approved canary run."
         return 1
     fi
 
@@ -3314,6 +3317,12 @@ setup_headless_paseo_daemon() {
         print_error "HEADLESS=1 Paseo daemon setup is unsupported on ${_platform:-this platform}."
         return 1
     fi
+
+    if [[ "${PASEO_MACOS_HEADLESS_CANARY:-}" != "1" ]]; then
+        print_warning "Skipping headless Paseo daemon setup: macOS support is pending no-login validation. Set PASEO_MACOS_HEADLESS_CANARY=1 for an approved canary run."
+        return 0
+    fi
+
     paseo_macos_preflight || return 1
     paseo_existing_managed_service_check || return 1
 
@@ -4430,7 +4439,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 186 | Last changed: Upload logs after setup failures${NC}"
+    echo -e "${GRAY}Version 187 | Last changed: Skip macOS headless Paseo daemon instead of aborting setup${NC}"
 
     if ! acquire_setup_lock; then
         return 1
