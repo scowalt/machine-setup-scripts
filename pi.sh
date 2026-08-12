@@ -3563,6 +3563,13 @@ EOF
         fi
     elif [[ "${PASEO_PACKAGE_CHANGED}" == "1" || "${PASEO_DAEMON_WRAPPER_CHANGED}" == "1" || "${PASEO_SYSTEMD_SERVICE_CHANGED}" == "1" ]]; then
         PASEO_MANAGED_SERVICE_TOUCHED=1
+        if ! paseo_systemctl_user reset-failed "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
+            print_debug "reset-failed reported an error (unit may not be failed); continuing."
+        fi
+        # Kill any leftover orphan processes in the Paseo cgroup before restarting;
+        # otherwise systemd can refuse the new start (exit-code 219/cgroup).
+        paseo_systemctl_user kill "${PASEO_SERVICE_NAME}" --kill-whom=all >/dev/null 2>&1 || true
+        sleep 1
         if ! paseo_systemctl_user restart "${PASEO_SERVICE_NAME}"; then
             print_error "Failed to restart ${PASEO_SERVICE_NAME} after a Paseo package or service change."
             return 1
@@ -3578,7 +3585,19 @@ EOF
     fi
 
     if ! paseo_managed_service_is_active_strict; then
+        # Give the service one last chance: reset failed state, sweep orphan
+        # processes, and start it before declaring failure.
+        paseo_systemctl_user reset-failed "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
+        paseo_systemctl_user kill "${PASEO_SERVICE_NAME}" --kill-whom=all >/dev/null 2>&1 || true
+        sleep 1
+        paseo_systemctl_user start "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
+        PASEO_MANAGED_SERVICE_TOUCHED=1
+    fi
+
+    if ! paseo_managed_service_is_active_strict; then
         print_error "${PASEO_SERVICE_NAME} is not active after setup."
+        print_debug "State captured from systemd:"
+        paseo_systemctl_user status "${PASEO_SERVICE_NAME}" --no-pager 2>&1 | head -10 | sed 's/^/  /' || true
         print_debug "Inspect privately with: journalctl --user -u ${PASEO_SERVICE_NAME} --no-pager"
         return 1
     fi
@@ -3596,7 +3615,6 @@ cleanup_paseo_managed_service() {
     case "${_platform}" in
         Linux)
             paseo_systemctl_user stop "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
-            paseo_systemctl_user disable "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
             ;;
         *) ;;
     esac
@@ -4695,7 +4713,7 @@ finish_setup_log() {
 
 run_setup_tasks() {
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 169 | Last changed: Retry Paseo activity checks via machined fallback"
+    echo -e "${GRAY}Version 170 | Last changed: Harden Paseo systemd recovery from wedged unit state"
 
     if ! acquire_setup_lock; then
         return 1
