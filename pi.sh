@@ -4695,7 +4695,7 @@ finish_setup_log() {
 
 run_setup_tasks() {
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 168 | Last changed: Install Impeccable across AI harnesses${NC}"
+    echo -e "${GRAY}Version 169 | Last changed: Retry Paseo activity checks via machined fallback"
 
     if ! acquire_setup_lock; then
         return 1
