@@ -24,6 +24,75 @@ function global:Write-Message($message) { $script:Messages.Add("MESSAGE: $messag
 function global:Write-Success($message) { $script:Messages.Add("SUCCESS: $message") }
 function global:Write-Warning($message) { $script:Messages.Add("WARNING: $message") }
 function global:Write-Debug($message) { $script:Messages.Add("DEBUG: $message") }
+
+# Legacy Impeccable cleanup removes only setup-owned paths and is idempotent.
+$originalCleanupUserProfile = $env:USERPROFILE
+$cleanupTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "impeccable-cleanup-$([guid]::NewGuid())"
+$env:USERPROFILE = Join-Path $cleanupTestRoot "home"
+$skillPaths = @(
+    (Join-Path $env:USERPROFILE ".claude\skills\impeccable"),
+    (Join-Path $env:USERPROFILE ".agents\skills\impeccable"),
+    (Join-Path $env:USERPROFILE ".cursor\skills\impeccable"),
+    (Join-Path $env:USERPROFILE ".gemini\skills\impeccable"),
+    (Join-Path $env:USERPROFILE ".pi\agent\skills\impeccable")
+)
+$agentPaths = @(
+    (Join-Path $env:USERPROFILE ".cursor\agents\impeccable-manual-edit-applier.md"),
+    (Join-Path $env:USERPROFILE ".cursor\agents\impeccable-asset-producer.md"),
+    (Join-Path $env:USERPROFILE ".cursor\agents\impeccable-documenter.md"),
+    (Join-Path $env:USERPROFILE ".cursor\agents\impeccable-finish-reviewer.md")
+)
+$symlinkTarget = Join-Path $cleanupTestRoot "symlink-target"
+$symlinkCreated = $false
+
+try {
+    New-Item -ItemType Directory -Force -Path $symlinkTarget | Out-Null
+    Set-Content -Path (Join-Path $symlinkTarget "sentinel") -Value "keep"
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $skillPaths[0]) | Out-Null
+    try {
+        New-Item -ItemType SymbolicLink -Path $skillPaths[0] -Target $symlinkTarget -ErrorAction Stop | Out-Null
+        $symlinkCreated = $true
+    }
+    catch {
+        New-Item -ItemType Directory -Force -Path $skillPaths[0] | Out-Null
+        Set-Content -Path (Join-Path $skillPaths[0] "SKILL.md") -Value "legacy"
+    }
+
+    foreach ($skillPath in $skillPaths[1..4]) {
+        New-Item -ItemType Directory -Force -Path $skillPath | Out-Null
+        Set-Content -Path (Join-Path $skillPath "SKILL.md") -Value "legacy"
+    }
+    foreach ($agentPath in $agentPaths) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $agentPath) | Out-Null
+        Set-Content -Path $agentPath -Value "legacy"
+    }
+
+    $siblingSkill = Join-Path $env:USERPROFILE ".agents\skills\keep-me\SKILL.md"
+    $siblingAgent = Join-Path $env:USERPROFILE ".cursor\agents\keep-me.md"
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $siblingSkill) | Out-Null
+    Set-Content -Path $siblingSkill -Value "keep"
+    Set-Content -Path $siblingAgent -Value "keep"
+
+    Remove-ImpeccableResources
+    Remove-ImpeccableResources
+
+    foreach ($path in @($skillPaths + $agentPaths)) {
+        if (Test-Path -LiteralPath $path) {
+            throw "Legacy Impeccable cleanup left $path"
+        }
+    }
+    if (-not (Test-Path -LiteralPath $siblingSkill) -or -not (Test-Path -LiteralPath $siblingAgent)) {
+        throw "Legacy Impeccable cleanup removed an unrelated sibling"
+    }
+    if ($symlinkCreated -and -not (Test-Path -LiteralPath (Join-Path $symlinkTarget "sentinel"))) {
+        throw "Legacy Impeccable cleanup followed a symlink target"
+    }
+}
+finally {
+    $env:USERPROFILE = $originalCleanupUserProfile
+    Remove-Item -Recurse -Force $cleanupTestRoot -ErrorAction SilentlyContinue
+}
+
 function global:gcloud {
     Write-Output "ERROR: The Google Cloud CLI"
     Write-Output "component manager"

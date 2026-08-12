@@ -118,7 +118,6 @@ create_env_local() {
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
 # BAN_RTK=1
-# BAN_IMPECCABLE=1
 # SYNTHETIC_API_KEY=<your Synthetic API key>
 # BAN_CLAUDE_CODE=1
 EOF
@@ -1783,89 +1782,47 @@ ensure_pi_node_runtime() {
     return 1
 }
 
-# Impeccable requires Node.js 24 or newer.
-impeccable_node_runtime_ready() {
-    command -v node &> /dev/null || return 1
-    node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)' > /dev/null 2>&1
-}
+# Remove setup-managed Impeccable resources without affecting sibling agent tooling.
+remove_impeccable_resources() {
+    local -a _paths=(
+        "${HOME}/.claude/skills/impeccable"
+        "${HOME}/.agents/skills/impeccable"
+        "${HOME}/.cursor/skills/impeccable"
+        "${HOME}/.gemini/skills/impeccable"
+        "${HOME}/.pi/agent/skills/impeccable"
+        "${HOME}/.cursor/agents/impeccable-manual-edit-applier.md"
+        "${HOME}/.cursor/agents/impeccable-asset-producer.md"
+        "${HOME}/.cursor/agents/impeccable-documenter.md"
+        "${HOME}/.cursor/agents/impeccable-finish-reviewer.md"
+    )
+    local -a _failed=()
+    local _path=""
+    local _removed=0
 
-ensure_impeccable_node_runtime() {
-    local _runtime="node@24"
+    for _path in "${_paths[@]}"; do
+        if [[ ! -e "${_path}" && ! -L "${_path}" ]]; then
+            continue
+        fi
 
-    if impeccable_node_runtime_ready; then
-        print_debug "Node.js $(node --version || true) is ready for Impeccable."
-        return 0
-    fi
-
-    if [[ -d "${HOME}/.local/bin" ]]; then
-        export PATH="${HOME}/.local/bin:${PATH}"
-    fi
-    if [[ -d "${HOME}/.mise/bin" ]]; then
-        export PATH="${HOME}/.mise/bin:${PATH}"
-    fi
-
-    if ! command -v mise &> /dev/null; then
-        print_warning "Node.js 24+ is required for Impeccable, but mise is not available to install it."
-        return 1
-    fi
-
-    print_message "Ensuring Node.js 24 runtime for Impeccable..."
-    if ! mise use -g -y "${_runtime}" > /dev/null; then
-        print_warning "Failed to install/configure ${_runtime} for Impeccable."
-        return 1
-    fi
-
-    local _mise_env=""
-    if ! _mise_env=$(mise env -C "${HOME}" -s bash "${_runtime}"); then
-        print_warning "Failed to generate mise environment for ${_runtime}."
-        return 1
-    fi
-    if ! eval "${_mise_env}"; then
-        print_warning "Failed to activate ${_runtime} for Impeccable."
-        return 1
-    fi
-
-    impeccable_node_runtime_ready
-}
-
-# Install/update Impeccable's provider-specific skill globally for every AI harness.
-install_impeccable_skill() {
-    if [[ "${BAN_IMPECCABLE:-}" == "1" ]]; then
-        print_debug "BAN_IMPECCABLE=1, skipping Impeccable skill setup."
-        return
-    fi
-
-    if ! ensure_impeccable_node_runtime; then
-        print_warning "Skipping Impeccable skill setup because Node.js 24 is not ready."
-        return
-    fi
-    if ! command -v npx &> /dev/null; then
-        print_warning "npx not found. Cannot install the Impeccable skill."
-        return
-    fi
-
-    print_message "Installing/updating Impeccable across AI harnesses..."
-    local _output=""
-    if _output=$(npx --yes impeccable@latest install --scope=global --providers=claude,codex,cursor,gemini,pi --force --yes --no-hooks 2>&1); then
-        local -a _skill_files=(
-            "${HOME}/.claude/skills/impeccable/SKILL.md"
-            "${HOME}/.agents/skills/impeccable/SKILL.md"
-            "${HOME}/.cursor/skills/impeccable/SKILL.md"
-            "${HOME}/.gemini/skills/impeccable/SKILL.md"
-            "${HOME}/.pi/agent/skills/impeccable/SKILL.md"
-        )
-        local _skill_file
-        for _skill_file in "${_skill_files[@]}"; do
-            if [[ ! -f "${_skill_file}" ]]; then
-                print_warning "Impeccable installer completed, but ${_skill_file} is missing."
-                print_debug "${_output}"
-                return
+        if [[ -L "${_path}" ]] || [[ ! -d "${_path}" ]]; then
+            if rm -f -- "${_path}"; then
+                _removed=1
+            else
+                _failed+=("${_path}")
             fi
-        done
-        print_success "Impeccable installed/updated for Claude, Codex, Cursor, Gemini, and Pi."
+        elif rm -rf -- "${_path}"; then
+            _removed=1
+        else
+            _failed+=("${_path}")
+        fi
+    done
+
+    if (( ${#_failed[@]} > 0 )); then
+        print_warning "Failed to remove legacy Impeccable resources: ${_failed[*]}"
+    elif (( _removed == 1 )); then
+        print_success "Legacy Impeccable resources removed."
     else
-        print_warning "Failed to install/update the Impeccable skill."
-        print_debug "${_output}"
+        print_debug "No legacy Impeccable resources found."
     fi
 }
 
@@ -4907,7 +4864,7 @@ setup_headless_sudo() {
 
 run_setup_tasks() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 209 | Last changed: Harden Paseo systemd recovery from wedged unit state"
+    echo -e "${GRAY}Version 210 | Last changed: Remove Impeccable from machine setup"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5074,7 +5031,7 @@ HELPER_EOF
         print_warning "Skipping Pi extension setup because Pi migration failed."
     fi
 
-    install_impeccable_skill
+    remove_impeccable_resources
 
     remove_compound_engineering_resources
 

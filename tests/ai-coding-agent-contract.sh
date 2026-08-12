@@ -21,6 +21,16 @@ assert_contains() {
     fi
 }
 
+assert_not_contains() {
+    local file=$1
+    local pattern=$2
+    local description=$3
+
+    if grep -Eq "${pattern}" "${file}"; then
+        fail "${file}: unexpectedly contains ${description} (${pattern})"
+    fi
+}
+
 first_line_matching() {
     local file=$1
     local pattern=$2
@@ -57,13 +67,23 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '^[[:space:]]+setup_pi_claude_bridge$' 'Pi Claude bridge main wiring'
     assert_order "${file}" '^[[:space:]]+install_codex_cli([[:space:]]+\|\|[[:space:]]+return 1)?$' '^[[:space:]]+setup_rtk_integrations$' 'Codex CLI installed before RTK integration'
     assert_order "${file}" '^[[:space:]]+if install_pi_cli; then$' '^[[:space:]]+setup_pi_claude_bridge$' 'Pi installed before Pi Claude bridge'
-    assert_contains "${file}" '^install_impeccable_skill\(\)' 'Impeccable installer function'
-    assert_contains "${file}" 'npx --yes impeccable@latest install --scope=global --providers=claude,codex,cursor,gemini,pi --force --yes --no-hooks' 'provider-specific global Impeccable install'
-    assert_contains "${file}" 'BAN_IMPECCABLE' 'Impeccable opt-out'
-    assert_contains "${file}" '\.agents/skills/impeccable/SKILL\.md' 'Codex Impeccable verification path'
-    assert_contains "${file}" '\.pi/agent/skills/impeccable/SKILL\.md' 'Pi Impeccable verification path'
-    assert_contains "${file}" '^[[:space:]]+install_impeccable_skill$' 'Impeccable main wiring'
-    assert_order "${file}" '^[[:space:]]+if install_pi_cli; then$' '^[[:space:]]+install_impeccable_skill$' 'Node-backed Pi setup runs before Impeccable'
+    assert_contains "${file}" '^remove_impeccable_resources\(\)' 'legacy Impeccable cleanup function'
+    assert_contains "${file}" '^[[:space:]]+remove_impeccable_resources$' 'legacy Impeccable cleanup wiring'
+    assert_order "${file}" '^[[:space:]]+if install_pi_cli; then$' '^[[:space:]]+remove_impeccable_resources$' 'Pi setup runs before legacy Impeccable cleanup'
+    assert_not_contains "${file}" 'install_impeccable_skill|impeccable@latest install' 'Impeccable installer'
+    assert_not_contains "${file}" 'BAN_IMPECCABLE' 'retired Impeccable opt-out'
+    for path in \
+        '.claude/skills/impeccable' \
+        '.agents/skills/impeccable' \
+        '.cursor/skills/impeccable' \
+        '.gemini/skills/impeccable' \
+        '.pi/agent/skills/impeccable' \
+        '.cursor/agents/impeccable-manual-edit-applier.md' \
+        '.cursor/agents/impeccable-asset-producer.md' \
+        '.cursor/agents/impeccable-documenter.md' \
+        '.cursor/agents/impeccable-finish-reviewer.md'; do
+        assert_contains "${file}" "${path}" "legacy Impeccable cleanup path ${path}"
+    done
 done
 
 assert_contains win.ps1 'function Install-ClaudeCode' 'Claude Code installer function'
@@ -80,17 +100,81 @@ assert_contains win.ps1 'npm:pi-claude-bridge' 'Pi Claude bridge package source'
 assert_contains win.ps1 '^[[:space:]]+Setup-PiClaudeBridge$' 'Pi Claude bridge main wiring'
 assert_order win.ps1 '^[[:space:]]+Install-CodexCli$' '^[[:space:]]+Setup-RtkIntegrations$' 'Codex CLI installed before RTK integration'
 assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+Setup-PiClaudeBridge$' 'Pi installed before Pi Claude bridge'
-assert_contains win.ps1 'function Install-ImpeccableSkill' 'Impeccable installer function'
-assert_contains win.ps1 'npx --yes impeccable@latest install --scope=global --providers=claude,codex,cursor,gemini,pi --force --yes --no-hooks' 'provider-specific global Impeccable install'
-assert_contains win.ps1 'BAN_IMPECCABLE' 'Impeccable opt-out'
-assert_contains win.ps1 '\.agents\\skills\\impeccable\\SKILL\.md' 'Codex Impeccable verification path'
-assert_contains win.ps1 '\.pi\\agent\\skills\\impeccable\\SKILL\.md' 'Pi Impeccable verification path'
-assert_contains win.ps1 '^[[:space:]]+Install-ImpeccableSkill$' 'Impeccable main wiring'
-assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+Install-ImpeccableSkill$' 'Node-backed Pi setup runs before Impeccable'
+assert_contains win.ps1 'function Remove-ImpeccableResources' 'legacy Impeccable cleanup function'
+assert_contains win.ps1 '^[[:space:]]+Remove-ImpeccableResources$' 'legacy Impeccable cleanup wiring'
+assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+Remove-ImpeccableResources$' 'Pi setup runs before legacy Impeccable cleanup'
+assert_not_contains win.ps1 'Install-ImpeccableSkill|impeccable@latest install' 'Impeccable installer'
+assert_not_contains win.ps1 'BAN_IMPECCABLE' 'retired Impeccable opt-out'
+for path in \
+    '\.claude\\skills\\impeccable' \
+    '\.agents\\skills\\impeccable' \
+    '\.cursor\\skills\\impeccable' \
+    '\.gemini\\skills\\impeccable' \
+    '\.pi\\agent\\skills\\impeccable' \
+    '\.cursor\\agents\\impeccable-manual-edit-applier\.md' \
+    '\.cursor\\agents\\impeccable-asset-producer\.md' \
+    '\.cursor\\agents\\impeccable-documenter\.md' \
+    '\.cursor\\agents\\impeccable-finish-reviewer\.md'; do
+    assert_contains win.ps1 "${path}" "legacy Impeccable cleanup path ${path}"
+done
 
 assert_contains README.md 'macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows' 'all-machine AI coding agent statement'
 assert_contains README.md 'Claude Code CLI and Codex CLI' 'Claude/Codex README contract'
 assert_contains README.md 'Pi Claude bridge' 'Pi Claude bridge README contract'
-assert_contains README.md 'Impeccable design skill' 'Impeccable README contract'
+assert_contains README.md 'removes legacy global Impeccable skill copies' 'legacy Impeccable cleanup documentation'
+assert_not_contains README.md 'Impeccable design skill|BAN_IMPECCABLE' 'retired Impeccable setup documentation'
+assert_not_contains CLAUDE.md 'BAN_IMPECCABLE' 'retired Impeccable setup guidance'
 
-printf '✓ AI coding agent installation contract checks passed\n'
+source_without_main='s/^main "\$@"$/:/'
+for file in "${bash_setup_scripts[@]}"; do
+    cleanup_test_root=$(mktemp -d)
+    cleanup_home="${cleanup_test_root}/home"
+    symlink_target="${cleanup_test_root}/symlink-target"
+    mkdir -p \
+        "${cleanup_home}/.claude/skills" \
+        "${cleanup_home}/.agents/skills/impeccable" \
+        "${cleanup_home}/.agents/skills/keep-me" \
+        "${cleanup_home}/.cursor/skills/impeccable" \
+        "${cleanup_home}/.gemini/skills/impeccable" \
+        "${cleanup_home}/.pi/agent/skills/impeccable" \
+        "${cleanup_home}/.cursor/agents" \
+        "${symlink_target}"
+    touch \
+        "${cleanup_home}/.agents/skills/impeccable/SKILL.md" \
+        "${cleanup_home}/.agents/skills/keep-me/SKILL.md" \
+        "${cleanup_home}/.cursor/skills/impeccable/SKILL.md" \
+        "${cleanup_home}/.gemini/skills/impeccable/SKILL.md" \
+        "${cleanup_home}/.pi/agent/skills/impeccable/SKILL.md" \
+        "${cleanup_home}/.cursor/agents/impeccable-manual-edit-applier.md" \
+        "${cleanup_home}/.cursor/agents/impeccable-asset-producer.md" \
+        "${cleanup_home}/.cursor/agents/impeccable-documenter.md" \
+        "${cleanup_home}/.cursor/agents/impeccable-finish-reviewer.md" \
+        "${cleanup_home}/.cursor/agents/keep-me.md" \
+        "${symlink_target}/sentinel"
+    ln -s "${symlink_target}" "${cleanup_home}/.claude/skills/impeccable"
+
+    SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" HOME="${cleanup_home}" bash -c '
+        source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+        remove_impeccable_resources
+        remove_impeccable_resources
+    '
+
+    for path in \
+        "${cleanup_home}/.claude/skills/impeccable" \
+        "${cleanup_home}/.agents/skills/impeccable" \
+        "${cleanup_home}/.cursor/skills/impeccable" \
+        "${cleanup_home}/.gemini/skills/impeccable" \
+        "${cleanup_home}/.pi/agent/skills/impeccable" \
+        "${cleanup_home}/.cursor/agents/impeccable-manual-edit-applier.md" \
+        "${cleanup_home}/.cursor/agents/impeccable-asset-producer.md" \
+        "${cleanup_home}/.cursor/agents/impeccable-documenter.md" \
+        "${cleanup_home}/.cursor/agents/impeccable-finish-reviewer.md"; do
+        [[ ! -e "${path}" && ! -L "${path}" ]] || fail "${file}: legacy Impeccable cleanup left ${path}"
+    done
+    [[ -f "${cleanup_home}/.agents/skills/keep-me/SKILL.md" ]] || fail "${file}: cleanup removed a sibling skill"
+    [[ -f "${cleanup_home}/.cursor/agents/keep-me.md" ]] || fail "${file}: cleanup removed a sibling Cursor agent"
+    [[ -f "${symlink_target}/sentinel" ]] || fail "${file}: cleanup followed the Impeccable symlink target"
+    rm -rf "${cleanup_test_root}"
+done
+
+printf '✓ AI coding agent contract checks passed\n'
