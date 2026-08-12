@@ -12,7 +12,7 @@ Every machine setup script (macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windo
 
 Claude Code is installed with Anthropic's native installer rather than npm/Bun. Setup only ensures the `claude` CLI exists; run Claude Code's normal login/account flow before using Fable. If setup warns that another `claude` command shadows the native binary, resolve PATH/package shadowing or use the native path shown in the warning before authenticating.
 
-On Bazzite, Codex CLI is installed from Homebrew's native `codex` cask; setup removes the older Bun package so `codex` does not depend on Node.js being active in the invoking shell.
+Codex CLI is installed from Homebrew's native `codex` cask on macOS, Ubuntu, WSL, Raspberry Pi, and Bazzite, and from OpenAI's native GitHub release binary on Windows. Setup removes the older Bun package so `codex` does not depend on Node.js being active in the invoking shell, and smoke-tests the binary with Node stripped from PATH.
 
 Notion CLI is installed with Notion's native installer on macOS and Linux and with WinGet on Windows. The native installer supports x64 and ARM64, while the Windows package supports x64 only; unsupported architectures warn and continue setup. Setup does not authenticate Notion CLI or configure shell completions. Run `ntn login` manually when you are ready to connect a workspace.
 

@@ -1367,26 +1367,66 @@ install_gemini_cli() {
     fi
 }
 
-# Install/update Codex CLI (OpenAI's AI coding agent)
+# Install/update Codex CLI using Homebrew's native, zero-Node-dependency cask.
 install_codex_cli() {
+    local bun_packages=""
+    local brew_prefix=""
+    local brew_codex=""
+    local resolved_codex=""
+    local version_output=""
+    local safe_path=""
+    local installed_casks=""
+
     print_message "Installing/updating Codex CLI..."
 
-    # Ensure bun is available
-    if [[ -d "${HOME}/.bun" ]]; then
-        export PATH="${HOME}/.bun/bin:${PATH}"
+    if ! command -v brew &> /dev/null; then
+        print_error "Homebrew not found. Cannot install the native Codex CLI."
+        return 1
     fi
 
-    if ! command -v bun &> /dev/null; then
-        print_warning "Bun not found. Cannot install Codex CLI."
-        print_debug "Install Bun first, then run: bun install -g @openai/codex"
-        return
+    if command -v bun &> /dev/null; then
+        bun_packages=$(bun pm ls -g 2>/dev/null || true)
+        if grep -Fq "@openai/codex" <<< "${bun_packages}"; then
+            print_message "Removing Node-dependent Bun Codex package..."
+            if ! bun remove -g @openai/codex > /dev/null; then
+                print_error "Failed to remove Bun's @openai/codex package."
+                return 1
+            fi
+        fi
+    fi
+    hash -r 2>/dev/null || true
+
+    installed_casks=$(brew list --cask -1 2>/dev/null || true)
+    if grep -Fxq codex <<< "${installed_casks}"; then
+        if ! brew upgrade --cask codex; then
+            print_error "Failed to upgrade the native Codex CLI cask."
+            return 1
+        fi
+    elif ! brew install --cask codex; then
+        print_error "Failed to install the native Codex CLI cask."
+        return 1
     fi
 
-    if bun install -g @openai/codex; then
-        print_success "Codex CLI installed/updated."
-    else
-        print_error "Failed to install Codex CLI."
+    hash -r 2>/dev/null || true
+    brew_prefix=$(brew --prefix 2>/dev/null || true)
+    brew_codex="${brew_prefix}/bin/codex"
+    resolved_codex=$(command -v codex 2>/dev/null || true)
+    if [[ -z "${brew_prefix}" || ! -x "${brew_codex}" ]]; then
+        print_error "Homebrew completed, but its Codex binary is missing."
+        return 1
     fi
+    if [[ -z "${resolved_codex}" || ! "${resolved_codex}" -ef "${brew_codex}" ]]; then
+        print_error "Codex is shadowed by ${resolved_codex:-<missing>}; expected ${brew_codex}."
+        return 1
+    fi
+
+    safe_path="/nonexistent"
+    if ! version_output=$(env -u NODE_PATH -u NODE_OPTIONS HOME="${HOME}" PATH="${safe_path}" "${brew_codex}" --version 2>/dev/null) || [[ -z "${version_output}" ]]; then
+        print_error "Native Codex CLI smoke test failed without Node.js on PATH."
+        return 1
+    fi
+
+    print_success "Codex CLI installed/updated (${version_output})."
 }
 
 # Install/update Notion CLI.
