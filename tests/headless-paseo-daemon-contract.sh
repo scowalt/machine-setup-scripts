@@ -501,6 +501,8 @@ for file in "${supported_linux[@]}"; do
     assert_contains "${file}" 'paseo_systemctl_user enable' 'systemd service enablement'
     assert_contains "${file}" 'paseo_systemctl_user restart' 'systemd service start/restart'
     assert_contains "${file}" 'paseo_managed_service_is_active' 'managed service activity detection'
+    assert_contains "${file}" 'paseo_managed_service_is_active_strict' 'is-active verification with retry'
+    assert_contains "${file}" '\--machine=.*@' 'machined-mediated user manager fallback'
     assert_contains "${file}" 'cmp -s.*_service_file' 'idempotent service definition comparison'
     assert_contains "${file}" 'leaving the active daemon running' 'unchanged active daemon preservation'
     assert_contains "${file}" 'WantedBy=default.target' 'systemd user-service boot target'

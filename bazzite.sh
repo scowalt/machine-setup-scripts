@@ -2781,17 +2781,47 @@ paseo_managed_service_is_active() {
     paseo_systemctl_user is-active "${PASEO_SERVICE_NAME}" >/dev/null 2>&1
 }
 
+# systemd --user bus-backed control. When D-Bus is unavailable or stale (e.g.
+# after lingering sessions close PAM sessions and systemd --runtime-dir is
+# removed), fall back to the machined-mediated control channel
+# (`--machine=<user>@ --user`) which works for any user manager systemd
+# has spawned.
 paseo_systemctl_user() {
     local _uid=""
     local _runtime_dir=""
+    local _user=""
 
     _uid=$(id -u 2>/dev/null || true)
     [[ "${_uid}" =~ ^[0-9]+$ ]] || return 1
     _runtime_dir="/run/user/${_uid}"
 
-    XDG_RUNTIME_DIR="${_runtime_dir}" \
+    if XDG_RUNTIME_DIR="${_runtime_dir}" \
         DBUS_SESSION_BUS_ADDRESS="unix:path=${_runtime_dir}/bus" \
-        systemctl --user "$@"
+        systemctl --user "$@" 2>/dev/null; then
+        return 0
+    fi
+
+    _user=$(whoami 2>/dev/null || true)
+    if [[ -z "${_user}" ]]; then
+        return 1
+    fi
+
+    systemctl --machine="${_user}@" --user "$@" 2>/dev/null
+}
+
+paseo_managed_service_is_active_strict() {
+    local _attempt=0
+    local _max_attempts=${PASEO_ACTIVE_CHECK_ATTEMPTS:-5}
+    local _delay=${PASEO_ACTIVE_CHECK_DELAY:-1}
+
+    while [[ ${_attempt} -lt ${_max_attempts} ]]; do
+        if paseo_systemctl_user is-active "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
+            return 0
+        fi
+        _attempt=$(( _attempt + 1 ))
+        [[ ${_attempt} -lt ${_max_attempts} ]] && sleep "${_delay}" || true
+    done
+    return 1
 }
 
 stop_existing_paseo_daemon() {
@@ -3316,10 +3346,11 @@ EOF
 
     if ! paseo_systemctl_user is-enabled "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
         print_error "${PASEO_SERVICE_NAME} is not enabled after setup."
+        print_debug "Inspect privately with: systemctl --user is-enabled ${PASEO_SERVICE_NAME}"
         return 1
     fi
 
-    if ! paseo_systemctl_user is-active "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
+    if ! paseo_managed_service_is_active_strict; then
         print_error "${PASEO_SERVICE_NAME} is not active after setup."
         print_debug "Inspect privately with: journalctl --user -u ${PASEO_SERVICE_NAME} --no-pager"
         return 1
