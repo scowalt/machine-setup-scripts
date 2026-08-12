@@ -4907,7 +4907,7 @@ setup_headless_sudo() {
 
 run_setup_tasks() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 207 | Last changed: Install Impeccable across AI harnesses${NC}"
+    echo -e "${GRAY}Version 208 | Last changed: Retry Paseo activity checks via machined fallback"
 
     if ! acquire_setup_lock; then
         return 1
