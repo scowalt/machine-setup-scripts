@@ -107,10 +107,10 @@ for file in "${bash_setup_scripts[@]}"; do
 done
 
 assert_contains mac.sh 'Version 188 \| Last changed: Install Impeccable across AI harnesses' 'macOS version banner'
-assert_contains ubuntu.sh 'Version 208 \| Last changed: Retry Paseo activity checks via machined fallback' 'Ubuntu version banner'
+assert_contains ubuntu.sh 'Version 209 \| Last changed: Harden Paseo systemd recovery from wedged unit state' 'Ubuntu version banner'
 assert_contains wsl.sh 'Version 153 \| Last changed: Install Impeccable across AI harnesses' 'WSL version banner'
-assert_contains pi.sh 'Version 169 \| Last changed: Retry Paseo activity checks via machined fallback' 'Raspberry Pi version banner'
-assert_contains bazzite.sh 'Version 68 \| Last changed: Retry Paseo activity checks via machined fallback' 'Bazzite version banner'
+assert_contains pi.sh 'Version 170 \| Last changed: Harden Paseo systemd recovery from wedged unit state' 'Raspberry Pi version banner'
+assert_contains bazzite.sh 'Version 69 \| Last changed: Harden Paseo systemd recovery from wedged unit state' 'Bazzite version banner'
 
 assert_contains win.ps1 '"Notion\.ntn"' 'official Notion CLI WinGet package'
 # These regexes intentionally use single quotes to preserve literal shell and Markdown syntax.
