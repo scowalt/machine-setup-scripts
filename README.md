@@ -12,7 +12,7 @@ Every machine setup script (macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windo
 
 Claude Code is installed with Anthropic's native installer rather than npm/Bun. Setup only ensures the `claude` CLI exists; run Claude Code's normal login/account flow before using Fable. If setup warns that another `claude` command shadows the native binary, resolve PATH/package shadowing or use the native path shown in the warning before authenticating.
 
-On Bazzite, Codex CLI is installed from Homebrew's native `codex` cask; setup removes the older Bun package so `codex` does not depend on Node.js being active in the invoking shell.
+Codex CLI is installed from Homebrew's native `codex` cask on macOS, Ubuntu, WSL, Raspberry Pi, and Bazzite, and from OpenAI's native GitHub release binary on Windows. Setup removes the older Bun package so `codex` does not depend on Node.js being active in the invoking shell, and smoke-tests the binary with Node stripped from PATH.
 
 Impeccable is installed globally with provider-specific builds for Claude Code, Codex, Cursor, Gemini, and Pi. Setup updates it on every run and deliberately skips project-scoped design hooks.
 

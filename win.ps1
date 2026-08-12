@@ -972,33 +972,85 @@ function Install-GeminiCli {
     }
 }
 
-# Function to install/update Codex CLI (OpenAI's AI coding agent)
+# Function to install/update Codex CLI from OpenAI's native GitHub release
+# binary, so codex does not depend on Node.js/Bun being present at runtime.
 function Install-CodexCli {
     Write-Host "$arrow Installing/updating Codex CLI..." -ForegroundColor Cyan
 
-    # Ensure bun is available
+    # Remove the legacy Bun package so the node_modules symlink can no
+    # longer shadow the native binary (or vanish in a broken state).
     $bunPath = "$env:USERPROFILE\.bun\bin"
     if (Test-Path $bunPath) {
         $env:PATH = "$bunPath;$env:PATH"
     }
-
-    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
-        Write-Host "$warnIcon Bun not found. Cannot install Codex CLI." -ForegroundColor Yellow
-        Write-Host "  Install Bun first, then run: bun install -g @openai/codex" -ForegroundColor DarkGray
-        return
+    if (Get-Command bun -ErrorAction SilentlyContinue) {
+        $bunPackages = ''
+        try { $bunPackages = (bun pm ls -g 2>$null) -join "`n" } catch { $bunPackages = '' }
+        if ($bunPackages -match [regex]::Escape('@openai/codex')) {
+            Write-Host "$arrow Removing Node-dependent Bun Codex package..." -ForegroundColor Cyan
+            try {
+                bun remove -g '@openai/codex' | Out-Null
+            }
+            catch {
+                Write-Host "$failIcon Failed to remove Bun's @openai/codex package: $($_.Exception.Message)" -ForegroundColor Red
+                return
+            }
+        }
     }
 
+    $installDir = "$env:USERPROFILE\.local\bin"
+    $codexExe = Join-Path $installDir 'codex.exe'
+    New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+
+    $tmp = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP ("codex-install-" + [guid]::NewGuid()))
     try {
-        bun install -g @openai/codex
-        if ($?) {
-            Write-Host "$success Codex CLI installed/updated." -ForegroundColor Green
+        $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
+        $asset = "codex-$arch-pc-windows-msvc.exe.zip"
+        $url = "https://github.com/openai/codex/releases/latest/download/$asset"
+        $archive = Join-Path $tmp.FullName $asset
+
+        Write-Debug "Downloading Codex CLI from $url"
+        Invoke-WebRequest -Uri $url -OutFile $archive -UseBasicParsing
+        Expand-Archive -Path $archive -DestinationPath $tmp.FullName -Force
+
+        $downloaded = Get-ChildItem "$tmp.FullName\codex-*.exe" | Select-Object -First 1
+        if (-not $downloaded) {
+            Write-Host "$failIcon Downloaded Codex release archive is missing its executable." -ForegroundColor Red
+            return
         }
-        else {
-            Write-Host "$failIcon Failed to install Codex CLI." -ForegroundColor Red
+        Copy-Item $downloaded.FullName $codexExe -Force
+
+        # Ensure the user-local bin directory is on the persistent user PATH
+        # without duplicating it.
+        $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+        $userEntries = @()
+        if ($userPath) {
+            $userEntries = @($userPath -split ';' | Where-Object { $_ })
         }
+        if (-not ($userEntries -contains $installDir)) {
+            if ($userPath) {
+                [Environment]::SetEnvironmentVariable('PATH', ($userPath.TrimEnd(';') + ';' + $installDir), 'User')
+            }
+            else {
+                [Environment]::SetEnvironmentVariable('PATH', $installDir, 'User')
+            }
+        }
+        $env:PATH = "$installDir;$env:PATH"
+
+        $env:NODE_OPTIONS = $null
+        $env:NODE_PATH = $null
+        $versionOutput = & $codexExe --version 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $versionOutput) {
+            Write-Host "$failIcon Codex CLI installed, but its smoke test failed." -ForegroundColor Red
+            return
+        }
+        Write-Host "$success Codex CLI installed/updated ($($versionOutput -join ' ') => $codexExe)." -ForegroundColor Green
     }
     catch {
         Write-Host "$failIcon Failed to install Codex CLI: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    finally {
+        Remove-Item $tmp.FullName -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
