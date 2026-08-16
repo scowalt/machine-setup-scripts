@@ -823,17 +823,17 @@ block_public_upload_services() {
         return
     fi
 
-    if ! can_sudo; then
-        print_warning "No sudo access — cannot block upload services."
-        return
-    fi
-
     local hosts_file="/etc/hosts"
     local marker="# WORK_MACHINE: blocked public upload services"
 
-    # Check if already configured
+    # Check before requesting sudo so completed setup runs stay non-interactive.
     if grep -q "${marker}" "${hosts_file}" 2>/dev/null; then
         print_debug "Public upload services already blocked."
+        return
+    fi
+
+    if ! can_sudo; then
+        print_warning "No sudo access — cannot block upload services."
         return
     fi
 
@@ -895,14 +895,39 @@ EOF
 }
 
 enable_ssh() {
+    local sshd_config="/etc/ssh/sshd_config"
+    local ssh_enabled=false
+    local ssh_configured=false
+
+    # Query the system launchd domain without escalating first. Read-only
+    # checks keep an already-configured setup run non-interactive.
+    if launchctl print system/com.openssh.sshd &>/dev/null; then
+        ssh_enabled=true
+    fi
+
+    if grep -q "^PasswordAuthentication no" "${sshd_config}" 2>/dev/null \
+        && grep -q "^KbdInteractiveAuthentication no" "${sshd_config}" 2>/dev/null \
+        && grep -q "^ChallengeResponseAuthentication no" "${sshd_config}" 2>/dev/null; then
+        ssh_configured=true
+    fi
+
+    if [[ "${ssh_enabled}" == true && "${ssh_configured}" == true ]]; then
+        print_debug "SSH (Remote Login) is enabled and configured for key-only auth."
+        return
+    fi
+
     if ! can_sudo; then
         print_warning "No sudo access — cannot enable SSH."
         return
     fi
 
     # Enable Remote Login (SSH)
-    # Check if sshd is already running
-    if sudo launchctl list com.openssh.sshd &>/dev/null; then
+    # Retry an inconclusive unprivileged check with cached sudo credentials.
+    if [[ "${ssh_enabled}" != true ]] && sudo launchctl print system/com.openssh.sshd &>/dev/null; then
+        ssh_enabled=true
+    fi
+
+    if [[ "${ssh_enabled}" == true ]]; then
         print_debug "SSH (Remote Login) is already enabled."
     else
         print_message "Enabling SSH (Remote Login)..."
@@ -918,7 +943,6 @@ enable_ssh() {
     fi
 
     # Configure key-only auth (disable password auth for SSH)
-    local sshd_config="/etc/ssh/sshd_config"
     local needs_restart=false
 
     # Disable password authentication

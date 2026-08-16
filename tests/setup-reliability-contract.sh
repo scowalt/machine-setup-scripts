@@ -244,6 +244,122 @@ for file in "${bash_setup_scripts[@]}"; do
     fi
 done
 
+# Completed macOS policy and SSH setup must not request sudo again.
+upload_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
+    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+    WORK_MACHINE=1
+    grep() {
+        if [[ "${*: -1}" == "/etc/hosts" ]]; then
+            return 0
+        fi
+        command grep "$@"
+    }
+    can_sudo() { printf "%s\n" "unexpected can_sudo"; return 90; }
+    sudo() { printf "%s\n" "unexpected sudo: $*"; return 90; }
+    block_public_upload_services
+')
+grep -q 'Public upload services already blocked' <<< "${upload_output}" || fail 'mac.sh: existing upload block marker was not recognized'
+if grep -q 'unexpected' <<< "${upload_output}"; then
+    fail 'mac.sh: existing upload block marker still requested sudo'
+fi
+
+ssh_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
+    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+    launchctl() { [[ "$*" == "print system/com.openssh.sshd" ]]; }
+    grep() {
+        if [[ "${*: -1}" == "/etc/ssh/sshd_config" ]]; then
+            return 0
+        fi
+        command grep "$@"
+    }
+    can_sudo() { printf "%s\n" "unexpected can_sudo"; return 90; }
+    sudo() { printf "%s\n" "unexpected sudo: $*"; return 90; }
+    enable_ssh
+')
+grep -q 'enabled and configured for key-only auth' <<< "${ssh_output}" || fail 'mac.sh: completed SSH setup was not recognized'
+if grep -q 'unexpected' <<< "${ssh_output}"; then
+    fail 'mac.sh: completed SSH setup still requested sudo'
+fi
+
+# Missing state still follows the existing privilege and mutation paths.
+upload_tmp=$(mktemp -d)
+upload_missing_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" CALL_LOG="${upload_tmp}/calls" bash -c '
+    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+    WORK_MACHINE=1
+    grep() {
+        if [[ "${*: -1}" == "/etc/hosts" ]]; then
+            return 1
+        fi
+        command grep "$@"
+    }
+    can_sudo() { printf "%s\n" "can_sudo" >> "${CALL_LOG}"; return 0; }
+    sudo() {
+        printf "%s\n" "$*" >> "${CALL_LOG}"
+        [[ "$1" == "tee" ]] && command cat >/dev/null
+        return 0
+    }
+    block_public_upload_services
+')
+grep -q 'Blocked blocked public upload services' <<< "${upload_missing_output}" || fail 'mac.sh: missing upload block did not run the mutation path'
+upload_sudo_checks=$(grep -c '^can_sudo$' "${upload_tmp}/calls" || true)
+[[ "${upload_sudo_checks}" -eq 1 ]] || fail 'mac.sh: missing upload block did not request sudo exactly once'
+grep -q '^tee -a /etc/hosts$' "${upload_tmp}/calls" || fail 'mac.sh: missing upload block did not update /etc/hosts'
+rm -rf "${upload_tmp}"
+
+ssh_tmp=$(mktemp -d)
+ssh_missing_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" CALL_LOG="${ssh_tmp}/calls" bash -c '
+    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+    launchctl() { return 1; }
+    grep() {
+        if [[ "${*: -1}" == "/etc/ssh/sshd_config" ]]; then
+            return 1
+        fi
+        command grep "$@"
+    }
+    can_sudo() { printf "%s\n" "can_sudo" >> "${CALL_LOG}"; return 0; }
+    sudo() {
+        printf "%s\n" "$*" >> "${CALL_LOG}"
+        case "$1" in
+            launchctl)
+                [[ "$2" == "print" ]] && return 1
+                return 0
+                ;;
+            systemsetup) return 0 ;;
+            tee) command cat >/dev/null; return 0 ;;
+            sed) return 0 ;;
+        esac
+        return 0
+    }
+    enable_ssh
+')
+grep -q 'SSH configured for key-only authentication' <<< "${ssh_missing_output}" || fail 'mac.sh: missing SSH state did not run the mutation path'
+ssh_sudo_checks=$(grep -c '^can_sudo$' "${ssh_tmp}/calls" || true)
+[[ "${ssh_sudo_checks}" -eq 1 ]] || fail 'mac.sh: missing SSH state did not request sudo exactly once'
+grep -q '^systemsetup -setremotelogin on$' "${ssh_tmp}/calls" || fail 'mac.sh: missing SSH service was not enabled'
+grep -q '^launchctl stop com.openssh.sshd$' "${ssh_tmp}/calls" || fail 'mac.sh: changed SSH configuration was not restarted'
+rm -rf "${ssh_tmp}"
+
+no_sudo_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
+    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+    WORK_MACHINE=1
+    launchctl() { return 1; }
+    grep() {
+        case "${*: -1}" in
+            /etc/hosts|/etc/ssh/sshd_config) return 1 ;;
+        esac
+        command grep "$@"
+    }
+    can_sudo() { return 1; }
+    sudo() { printf "%s\n" "unexpected sudo: $*"; return 90; }
+    block_public_upload_services
+    enable_ssh
+')
+grep -q 'No sudo access — cannot block upload services' <<< "${no_sudo_output}" || fail 'mac.sh: missing upload block without sudo lacked its warning'
+grep -q 'No sudo access — cannot enable SSH' <<< "${no_sudo_output}" || fail 'mac.sh: missing SSH state without sudo lacked its warning'
+if grep -q 'unexpected sudo' <<< "${no_sudo_output}"; then
+    fail 'mac.sh: unavailable sudo still attempted a privileged mutation'
+fi
+
 # These regexes intentionally use single quotes to preserve PowerShell variable syntax.
 # shellcheck disable=SC2016
 assert_contains win.ps1 '\$normalizedUpdateText[[:space:]]*=' 'normalized gcloud update output'
