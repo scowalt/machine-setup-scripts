@@ -405,6 +405,29 @@ update_and_install_core() {
 }
 
 
+# Fetch GitHub SSH keys with bounded retries and reject empty responses.
+fetch_github_ssh_keys() {
+    local _keys_url="${1:-https://github.com/scowalt.keys}"
+    local _attempt=1
+    local _keys=""
+
+    while [[ "${_attempt}" -le 3 ]]; do
+        if _keys=$(curl --fail --silent --show-error --location \
+            --connect-timeout 10 --max-time 20 "${_keys_url}") && \
+            grep -q '[^[:space:]]' <<< "${_keys}"; then
+            printf '%s\n' "${_keys}"
+            return 0
+        fi
+
+        if [[ "${_attempt}" -lt 3 ]]; then
+            sleep 2
+        fi
+        _attempt=$((_attempt + 1))
+    done
+
+    return 1
+}
+
 # Check and set up SSH key
 setup_ssh_key() {
     # Skip SSH key setup for non-sudo users (they won't be making outbound SSH requests)
@@ -417,7 +440,10 @@ setup_ssh_key() {
 
     # Retrieve GitHub-associated keys and log for debug purposes
     local existing_keys
-    existing_keys=$(curl -s https://github.com/scowalt.keys)
+    if ! existing_keys=$(fetch_github_ssh_keys "https://github.com/scowalt.keys"); then
+        print_error "Failed to download SSH keys from GitHub after three attempts; key registration could not be verified."
+        return 1
+    fi
 
     # Check if a local SSH key exists
     if [[ -f ~/.ssh/id_rsa.pub ]]; then
@@ -426,7 +452,7 @@ setup_ssh_key() {
         local_key=$(awk '{print $2}' ~/.ssh/id_rsa.pub)
 
         # Verify if the extracted key part matches any of the GitHub keys
-        if echo "${existing_keys}" | grep -q "${local_key}"; then
+        if awk -v expected="${local_key}" 'NF >= 2 && $2 == expected { found=1 } END { exit !found }' <<< "${existing_keys}"; then
             print_success "Existing SSH key recognized by GitHub."
         else
             print_error "SSH key not recognized by GitHub. Please add it manually."
@@ -3081,7 +3107,7 @@ finish_setup_log() {
 run_setup_tasks() {
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 154 | Last changed: Remove Impeccable from machine setup${NC}"
+    echo -e "${GRAY}Version 155 | Last changed: Harden setup reliability from Paseo log audit${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -3206,7 +3232,7 @@ run_setup_tasks() {
     update_packages
     upgrade_npm_global_packages
 
-    printf '\n%s%s✨ Setup complete!%s\n\n' "${GREEN}" "${BOLD}" "${NC}"
+    printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}"
 }
 
 main() {

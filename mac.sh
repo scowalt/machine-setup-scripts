@@ -997,19 +997,45 @@ sys.stdout.buffer.write(font_data)
     fi
 }
 
+# Fetch GitHub SSH keys with bounded retries and reject empty responses.
+fetch_github_ssh_keys() {
+    local _keys_url="${1:-https://github.com/scowalt.keys}"
+    local _attempt=1
+    local _keys=""
+
+    while [[ "${_attempt}" -le 3 ]]; do
+        if _keys=$(curl --fail --silent --show-error --location \
+            --connect-timeout 10 --max-time 20 "${_keys_url}") && \
+            grep -q '[^[:space:]]' <<< "${_keys}"; then
+            printf '%s\n' "${_keys}"
+            return 0
+        fi
+
+        if [[ "${_attempt}" -lt 3 ]]; then
+            sleep 2
+        fi
+        _attempt=$((_attempt + 1))
+    done
+
+    return 1
+}
+
 # Check and set up SSH key
 setup_ssh_key() {
     print_message "Checking for existing SSH key associated with GitHub..."
 
     # Retrieve GitHub-associated keys
     local existing_keys
-    existing_keys=$(curl -s https://github.com/scowalt.keys)
+    if ! existing_keys=$(fetch_github_ssh_keys "https://github.com/scowalt.keys"); then
+        print_error "Failed to download SSH keys from GitHub after three attempts; key registration could not be verified."
+        return 1
+    fi
 
     if [[ -f ~/.ssh/id_rsa.pub ]]; then
         local local_key
         local_key=$(awk '{print $2}' ~/.ssh/id_rsa.pub)
 
-        if echo "${existing_keys}" | grep -q "${local_key}"; then
+        if awk -v expected="${local_key}" 'NF >= 2 && $2 == expected { found=1 } END { exit !found }' <<< "${existing_keys}"; then
             print_success "Existing SSH key recognized by GitHub."
         else
             print_error "SSH key not recognized by GitHub. Please add it manually."
@@ -4523,7 +4549,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 189 | Last changed: Remove Impeccable from machine setup${NC}"
+    echo -e "${GRAY}Version 190 | Last changed: Harden setup reliability from Paseo log audit${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -4731,7 +4757,7 @@ HELPER_EOF
 
     upgrade_npm_global_packages
 
-    printf '\n%s%s✨ Setup complete!%s\n\n' "${GREEN}" "${BOLD}" "${NC}"
+    printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}"
 }
 
 main() {

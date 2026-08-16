@@ -139,6 +139,29 @@ is_main_user() {
     [[ "${_whoami}" == "scowalt" ]]
 }
 
+# Fetch GitHub SSH keys with bounded retries and reject empty responses.
+fetch_github_ssh_keys() {
+    local _keys_url="${1:-https://github.com/scowalt.keys}"
+    local _attempt=1
+    local _keys=""
+
+    while [[ "${_attempt}" -le 3 ]]; do
+        if _keys=$(curl --fail --silent --show-error --location \
+            --connect-timeout 10 --max-time 20 "${_keys_url}") && \
+            grep -q '[^[:space:]]' <<< "${_keys}"; then
+            printf '%s\n' "${_keys}"
+            return 0
+        fi
+
+        if [[ "${_attempt}" -lt 3 ]]; then
+            sleep 2
+        fi
+        _attempt=$((_attempt + 1))
+    done
+
+    return 1
+}
+
 # Check if user has a personal SSH key registered with GitHub
 has_verified_ssh_key() {
     local local_key=""
@@ -155,8 +178,8 @@ has_verified_ssh_key() {
 
     # Verify key is registered with GitHub
     local existing_keys
-    existing_keys=$(curl -s https://github.com/scowalt.keys 2>/dev/null) || return 1
-    [[ -n "${local_key}" ]] && echo "${existing_keys}" | grep -q "${local_key}"
+    existing_keys=$(fetch_github_ssh_keys "https://github.com/scowalt.keys" 2>/dev/null) || return 1
+    [[ -n "${local_key}" ]] && awk -v expected="${local_key}" 'NF >= 2 && $2 == expected { found=1 } END { exit !found }' <<< "${existing_keys}"
 }
 
 # Detect if this machine is a VPS or physical machine
@@ -796,7 +819,10 @@ setup_ssh_key() {
     print_message "Checking for existing SSH key associated with GitHub..."
 
     local existing_keys
-    existing_keys=$(curl -s https://github.com/scowalt.keys)
+    if ! existing_keys=$(fetch_github_ssh_keys "https://github.com/scowalt.keys"); then
+        print_error "Failed to download SSH keys from GitHub after three attempts; key registration could not be verified."
+        return 1
+    fi
     # Remember - chezmoi will set up authorized_keys for you
 
     # Check if a local SSH key exists
@@ -806,7 +832,7 @@ setup_ssh_key() {
         local_key=$(awk '{print $2}' ~/.ssh/id_rsa.pub)
 
         # Verify if the extracted key part matches any of the GitHub keys
-        if echo "${existing_keys}" | grep -q "${local_key}"; then
+        if awk -v expected="${local_key}" 'NF >= 2 && $2 == expected { found=1 } END { exit !found }' <<< "${existing_keys}"; then
             print_success "Existing SSH key recognized by GitHub."
         else
             print_error "SSH key not recognized by GitHub. Please add it manually."
@@ -2791,7 +2817,9 @@ paseo_managed_service_is_active_strict() {
             return 0
         fi
         _attempt=$(( _attempt + 1 ))
-        [[ ${_attempt} -lt ${_max_attempts} ]] && sleep "${_delay}" || true
+        if [[ ${_attempt} -lt ${_max_attempts} ]]; then
+            sleep "${_delay}" || true
+        fi
     done
     return 1
 }
@@ -3303,14 +3331,19 @@ EOF
     if ! paseo_managed_service_is_active; then
         PASEO_MANAGED_SERVICE_TOUCHED=1
         if ! paseo_systemctl_user start "${PASEO_SERVICE_NAME}"; then
-            print_error "Failed to start ${PASEO_SERVICE_NAME}."
-            return 1
+            print_debug "Initial start of ${PASEO_SERVICE_NAME} reported an error; attempting recovery."
         fi
     elif [[ "${PASEO_PACKAGE_CHANGED}" == "1" || "${PASEO_DAEMON_WRAPPER_CHANGED}" == "1" || "${PASEO_SYSTEMD_SERVICE_CHANGED}" == "1" ]]; then
         PASEO_MANAGED_SERVICE_TOUCHED=1
+        if ! paseo_systemctl_user reset-failed "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
+            print_debug "reset-failed reported an error (unit may not be failed); continuing."
+        fi
+        # Kill any leftover orphan processes in the Paseo cgroup before restarting;
+        # otherwise systemd can refuse the new start (exit-code 219/cgroup).
+        paseo_systemctl_user kill "${PASEO_SERVICE_NAME}" --kill-whom=all >/dev/null 2>&1 || true
+        sleep 1
         if ! paseo_systemctl_user restart "${PASEO_SERVICE_NAME}"; then
-            print_error "Failed to restart ${PASEO_SERVICE_NAME} after a Paseo package or service change."
-            return 1
+            print_debug "Initial restart of ${PASEO_SERVICE_NAME} reported an error; attempting recovery."
         fi
     else
         print_debug "Paseo package, wrapper, and service definition are unchanged; leaving the active daemon running."
@@ -3323,7 +3356,19 @@ EOF
     fi
 
     if ! paseo_managed_service_is_active_strict; then
+        # Give the service one last chance: reset failed state, sweep orphan
+        # processes, and start it before declaring failure.
+        paseo_systemctl_user reset-failed "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
+        paseo_systemctl_user kill "${PASEO_SERVICE_NAME}" --kill-whom=all >/dev/null 2>&1 || true
+        sleep 1
+        paseo_systemctl_user start "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
+        PASEO_MANAGED_SERVICE_TOUCHED=1
+    fi
+
+    if ! paseo_managed_service_is_active_strict; then
         print_error "${PASEO_SERVICE_NAME} is not active after setup."
+        print_debug "State captured from systemd:"
+        paseo_systemctl_user status "${PASEO_SERVICE_NAME}" --no-pager 2>&1 | head -10 | sed 's/^/  /' || true
         print_debug "Inspect privately with: journalctl --user -u ${PASEO_SERVICE_NAME} --no-pager"
         return 1
     fi
@@ -3341,7 +3386,6 @@ cleanup_paseo_managed_service() {
     case "${_platform}" in
         Linux)
             paseo_systemctl_user stop "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
-            paseo_systemctl_user disable "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
             ;;
         *) ;;
     esac
@@ -4864,7 +4908,7 @@ setup_headless_sudo() {
 
 run_setup_tasks() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 210 | Last changed: Remove Impeccable from machine setup"
+    echo -e "${GRAY}Version 211 | Last changed: Harden setup reliability from Paseo log audit"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5038,7 +5082,7 @@ HELPER_EOF
     print_section "Final Updates"
     upgrade_npm_global_packages
 
-    printf '\n%s%s✨ Setup complete!%s\n\n' "${GREEN}" "${BOLD}" "${NC}"
+    printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}"
 }
 
 main() {
