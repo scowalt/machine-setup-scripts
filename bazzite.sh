@@ -3316,8 +3316,7 @@ EOF
     if ! paseo_managed_service_is_active; then
         PASEO_MANAGED_SERVICE_TOUCHED=1
         if ! paseo_systemctl_user start "${PASEO_SERVICE_NAME}"; then
-            print_error "Failed to start ${PASEO_SERVICE_NAME}."
-            return 1
+            print_debug "Initial start of ${PASEO_SERVICE_NAME} reported an error; attempting recovery."
         fi
     elif [[ "${PASEO_PACKAGE_CHANGED}" == "1" || "${PASEO_DAEMON_WRAPPER_CHANGED}" == "1" || "${PASEO_SYSTEMD_SERVICE_CHANGED}" == "1" ]]; then
         PASEO_MANAGED_SERVICE_TOUCHED=1
@@ -3329,8 +3328,7 @@ EOF
         paseo_systemctl_user kill "${PASEO_SERVICE_NAME}" --kill-whom=all >/dev/null 2>&1 || true
         sleep 1
         if ! paseo_systemctl_user restart "${PASEO_SERVICE_NAME}"; then
-            print_error "Failed to restart ${PASEO_SERVICE_NAME} after a Paseo package or service change."
-            return 1
+            print_debug "Initial restart of ${PASEO_SERVICE_NAME} reported an error; attempting recovery."
         fi
     else
         print_debug "Paseo package, wrapper, and service definition are unchanged; leaving the active daemon running."

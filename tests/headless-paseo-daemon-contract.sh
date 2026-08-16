@@ -351,7 +351,7 @@ assert_wedged_service_is_recovered() {
             printf '%s\n' "$*" >> "${PASEO_TEST_SYSTEMCTL_LOG}"
             case "$*" in
                 "is-active ${PASEO_SERVICE_NAME}") [[ "${PASEO_TEST_ACTIVE}" == "1" ]] ;;
-                "restart ${PASEO_SERVICE_NAME}") PASEO_TEST_ACTIVE=0 ;;
+                "restart ${PASEO_SERVICE_NAME}") PASEO_TEST_ACTIVE=0; return 1 ;;
                 "start ${PASEO_SERVICE_NAME}") PASEO_TEST_ACTIVE=1 ;;
                 "is-enabled ${PASEO_SERVICE_NAME}") return 0 ;;
                 *) return 0 ;;
@@ -377,6 +377,53 @@ assert_wedged_service_is_recovered() {
         [[ "${reset_count}" -eq 2 ]] || fail "ubuntu.sh: expected two reset-failed recovery attempts, saw ${reset_count}"
         [[ "${kill_count}" -eq 2 ]] || fail "ubuntu.sh: expected two orphan-cgroup sweeps, saw ${kill_count}"
         [[ "${PASEO_TEST_ACTIVE}" == "1" ]] || fail 'ubuntu.sh: fallback recovery did not activate the Paseo service'
+    )
+}
+
+assert_failed_initial_start_is_recovered() {
+    local tmp_dir
+    local start_count
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        HOME="${tmp_dir}/home"
+        PASEO_SERVICE_PATH=/usr/bin
+        PASEO_ACTIVE_CHECK_ATTEMPTS=1
+        PASEO_TEST_ACTIVE=0
+        PASEO_TEST_START_COUNT=0
+        PASEO_TEST_SYSTEMCTL_LOG="${tmp_dir}/initial-start-systemctl.log"
+
+        paseo_enable_lingering_strict() { return 0; }
+        sleep() { :; }
+        paseo_systemctl_user() {
+            printf '%s\n' "$*" >> "${PASEO_TEST_SYSTEMCTL_LOG}"
+            case "$*" in
+                "is-active ${PASEO_SERVICE_NAME}") [[ "${PASEO_TEST_ACTIVE}" == "1" ]] ;;
+                "start ${PASEO_SERVICE_NAME}")
+                    PASEO_TEST_START_COUNT=$((PASEO_TEST_START_COUNT + 1))
+                    if [[ "${PASEO_TEST_START_COUNT}" -eq 1 ]]; then
+                        return 1
+                    fi
+                    PASEO_TEST_ACTIVE=1
+                    ;;
+                "is-enabled ${PASEO_SERVICE_NAME}") return 0 ;;
+                *) return 0 ;;
+            esac
+        }
+
+        install_paseo_systemd_user_service
+
+        start_count=$(grep -cFx "start ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}")
+        [[ "${start_count}" -eq 2 ]] || fail "ubuntu.sh: expected recovery after a failed initial start, saw ${start_count} start attempts"
+        grep -qF "reset-failed ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}" || \
+            fail 'ubuntu.sh: failed initial start did not reset the unit before retrying'
+        grep -qF "kill ${PASEO_SERVICE_NAME} --kill-whom=all" "${PASEO_TEST_SYSTEMCTL_LOG}" || \
+            fail 'ubuntu.sh: failed initial start did not sweep the orphan cgroup before retrying'
+        [[ "${PASEO_TEST_ACTIVE}" == "1" ]] || fail 'ubuntu.sh: failed initial start was not recovered'
     )
 }
 
@@ -683,6 +730,7 @@ assert_untrusted_optional_service_path_is_filtered
 assert_managed_daemon_is_preserved
 assert_unchanged_service_is_not_restarted
 assert_wedged_service_is_recovered
+assert_failed_initial_start_is_recovered
 assert_failed_recovery_captures_status
 assert_failed_cleanup_preserves_enablement
 assert_managed_launchdaemon_is_preserved
