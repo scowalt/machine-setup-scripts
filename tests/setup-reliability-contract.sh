@@ -6,6 +6,7 @@ cd "${repo_root}"
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 linux_apt_scripts=(ubuntu.sh wsl.sh pi.sh)
+github_key_bash_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 
 fail() {
     printf '✗ %s\n' "$1" >&2
@@ -31,6 +32,107 @@ assert_not_contains() {
 }
 
 source_without_main='s/^main "\$@"$/:/'
+
+# GitHub key downloads must retry transient/empty responses without confusing
+# transport failures with a successfully fetched list that lacks the local key.
+for file in "${github_key_bash_scripts[@]}"; do
+    assert_contains "${file}" '^fetch_github_ssh_keys\(\)' 'bounded GitHub SSH-key fetch helper'
+    assert_contains "${file}" 'curl --fail --silent --show-error --location' 'failing GitHub key curl request'
+    assert_contains "${file}" '\--connect-timeout 10 --max-time 20' 'bounded GitHub key request timeouts'
+    assert_not_contains "${file}" 'curl -s https://github\.com/scowalt\.keys' 'unhardened GitHub key download'
+
+    key_test_root=$(mktemp -d)
+    retry_output=$(SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" \
+        FETCH_CALLS="${key_test_root}/retry-calls" bash -c '
+            source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+            sleep() { :; }
+            curl() {
+                local call_count=0
+                printf "%s\n" "$*" >> "${FETCH_CALLS}"
+                call_count=$(wc -l < "${FETCH_CALLS}")
+                if [[ "${call_count}" -lt 3 ]]; then
+                    return 22
+                fi
+                printf "%s\n" "ssh-ed25519 expected-key fixture@example"
+            }
+            fetch_github_ssh_keys
+        ')
+    [[ "${retry_output}" == 'ssh-ed25519 expected-key fixture@example' ]] || fail "${file}: GitHub key fetch did not recover on the third attempt"
+    retry_count=$(wc -l < "${key_test_root}/retry-calls")
+    [[ "${retry_count}" -eq 3 ]] || fail "${file}: GitHub key fetch made ${retry_count} attempts instead of three"
+
+    SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" \
+        FETCH_CALLS="${key_test_root}/failure-calls" bash -c '
+            source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+            sleep() { :; }
+            curl() {
+                printf "%s\n" "$*" >> "${FETCH_CALLS}"
+                return 22
+            }
+            if fetch_github_ssh_keys; then
+                exit 90
+            fi
+        ' || fail "${file}: persistent GitHub transport failure was accepted"
+    failure_count=$(wc -l < "${key_test_root}/failure-calls")
+    [[ "${failure_count}" -eq 3 ]] || fail "${file}: persistent GitHub failure made ${failure_count} attempts instead of three"
+
+    SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" \
+        FETCH_CALLS="${key_test_root}/empty-calls" bash -c '
+            source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+            sleep() { :; }
+            curl() {
+                printf "%s\n" "$*" >> "${FETCH_CALLS}"
+                printf " \n"
+            }
+            if fetch_github_ssh_keys; then
+                exit 90
+            fi
+        ' || fail "${file}: empty GitHub key response was accepted"
+    empty_count=$(wc -l < "${key_test_root}/empty-calls")
+    [[ "${empty_count}" -eq 3 ]] || fail "${file}: empty GitHub response made ${empty_count} attempts instead of three"
+    rm -rf "${key_test_root}"
+done
+
+key_test_root=$(mktemp -d)
+mkdir -p "${key_test_root}/home/.ssh"
+printf '%s\n' 'ssh-rsa expected-key fixture@example' > "${key_test_root}/home/.ssh/id_rsa.pub"
+transport_output=$(SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" \
+    HOME="${key_test_root}/home" OPEN_MARKER="${key_test_root}/transport-opened" bash -c '
+        source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+        can_sudo() { return 0; }
+        detect_machine_type() { printf "physical\n"; }
+        fetch_github_ssh_keys() { return 1; }
+        xdg-open() { touch "${OPEN_MARKER}"; }
+        setup_ssh_key || true
+    ')
+grep -q 'Failed to download SSH keys from GitHub after three attempts' <<< "${transport_output}" || fail 'ubuntu.sh: GitHub transport failure lacked a distinct error'
+if grep -q 'SSH key not recognized by GitHub' <<< "${transport_output}"; then
+    fail 'ubuntu.sh: GitHub transport failure was reported as a key mismatch'
+fi
+[[ ! -e "${key_test_root}/transport-opened" ]] || fail 'ubuntu.sh: transport failure opened GitHub key settings'
+
+mismatch_output=$(SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" \
+    HOME="${key_test_root}/home" OPEN_MARKER="${key_test_root}/mismatch-opened" bash -c '
+        source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+        can_sudo() { return 0; }
+        detect_machine_type() { printf "physical\n"; }
+        fetch_github_ssh_keys() { printf "%s\n" "ssh-rsa another-key fixture@example"; }
+        xdg-open() { touch "${OPEN_MARKER}"; }
+        setup_ssh_key || true
+    ')
+grep -q 'SSH key not recognized by GitHub' <<< "${mismatch_output}" || fail 'ubuntu.sh: valid nonmatching GitHub response lacked the key-mismatch error'
+[[ -e "${key_test_root}/mismatch-opened" ]] || fail 'ubuntu.sh: valid key mismatch did not open GitHub key settings'
+rm -rf "${key_test_root}"
+
+# Completion colors must be emitted as actual escape bytes, never literal \033.
+for file in "${bash_setup_scripts[@]}"; do
+    completion_line=$(grep '✨ Setup complete' "${file}" | tail -n 1)
+    completion_output=$(GREEN='\033[0;32m' BOLD='\033[1m' NC='\033[0m' bash -c "${completion_line}")
+    [[ "${completion_output}" == *$'\033[0;32m'* ]] || fail "${file}: completion output did not interpret ANSI colors"
+    if grep -Fq '\033' <<< "${completion_output}"; then
+        fail "${file}: completion output contained literal ANSI escape text"
+    fi
+done
 
 # Every Bash entry point must flush and upload a failed run exactly once while
 # preserving the setup task's original status.

@@ -151,6 +151,29 @@ can_sudo() {
     [[ "${_has_sudo}" == "1" ]]
 }
 
+# Fetch GitHub SSH keys with bounded retries and reject empty responses.
+fetch_github_ssh_keys() {
+    local _keys_url="${1:-https://github.com/scowalt.keys}"
+    local _attempt=1
+    local _keys=""
+
+    while [[ "${_attempt}" -le 3 ]]; do
+        if _keys=$(curl --fail --silent --show-error --location \
+            --connect-timeout 10 --max-time 20 "${_keys_url}") && \
+            grep -q '[^[:space:]]' <<< "${_keys}"; then
+            printf '%s\n' "${_keys}"
+            return 0
+        fi
+
+        if [[ "${_attempt}" -lt 3 ]]; then
+            sleep 2
+        fi
+        _attempt=$((_attempt + 1))
+    done
+
+    return 1
+}
+
 # Check if user has a personal SSH key registered with GitHub
 has_verified_ssh_key() {
     local local_key=""
@@ -167,8 +190,8 @@ has_verified_ssh_key() {
 
     # Verify key is registered with GitHub
     local existing_keys
-    existing_keys=$(curl -s https://github.com/scowalt.keys 2>/dev/null) || return 1
-    [[ -n "${local_key}" ]] && echo "${existing_keys}" | grep -q "${local_key}"
+    existing_keys=$(fetch_github_ssh_keys 2>/dev/null) || return 1
+    [[ -n "${local_key}" ]] && awk -v expected="${local_key}" 'NF >= 2 && $2 == expected { found=1 } END { exit !found }' <<< "${existing_keys}"
 }
 
 # Ensure the script is not run as root
@@ -563,8 +586,8 @@ verify_github_key() {
 
     # Pull remote keys (fail hard if the request itself fails)
     local remote_keys
-    if ! remote_keys="$(curl -fsSL "${keys_url}")"; then
-        print_error "Failed to download keys from ${keys_url}"
+    if ! remote_keys="$(fetch_github_ssh_keys "${keys_url}")"; then
+        print_error "Failed to download SSH keys from ${keys_url} after three attempts; key registration could not be verified."
         return 1
     fi
 
@@ -573,9 +596,7 @@ verify_github_key() {
     local_key_value=$(awk '{print $2}' ~/.ssh/id_rsa.pub)
 
     # Search the list returned by GitHub
-    local awk_output
-    awk_output=$(echo "${remote_keys}" | awk '{print $2}')
-    if echo "${awk_output}" | grep -qx "${local_key_value}"; then
+    if awk -v expected="${local_key_value}" 'NF >= 2 && $2 == expected { found=1 } END { exit !found }' <<< "${remote_keys}"; then
         print_success "Local key is recognized by GitHub."
     else
         print_error "Your public key is NOT registered with GitHub!"
@@ -3003,7 +3024,9 @@ paseo_managed_service_is_active_strict() {
             return 0
         fi
         _attempt=$(( _attempt + 1 ))
-        [[ ${_attempt} -lt ${_max_attempts} ]] && sleep "${_delay}" || true
+        if [[ ${_attempt} -lt ${_max_attempts} ]]; then
+            sleep "${_delay}" || true
+        fi
     done
     return 1
 }
@@ -4670,7 +4693,7 @@ finish_setup_log() {
 
 run_setup_tasks() {
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 171 | Last changed: Remove Impeccable from machine setup"
+    echo -e "${GRAY}Version 172 | Last changed: Harden setup reliability from Paseo log audit"
 
     if ! acquire_setup_lock; then
         return 1
@@ -4804,7 +4827,7 @@ run_setup_tasks() {
     print_section "Final Updates"
     upgrade_npm_global_packages
 
-    printf '\n%s%s✨ Setup complete! Please log out and log back in for all changes to take effect.%s\n\n' "${GREEN}" "${BOLD}" "${NC}"
+    printf '\n%b%b✨ Setup complete! Please log out and log back in for all changes to take effect.%b\n\n' "${GREEN}" "${BOLD}" "${NC}"
 }
 
 main() {

@@ -326,6 +326,120 @@ assert_unchanged_service_is_not_restarted() {
     )
 }
 
+assert_wedged_service_is_recovered() {
+    local tmp_dir
+    local reset_count
+    local kill_count
+    local restart_line
+    local start_line
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        HOME="${tmp_dir}/home"
+        PASEO_SERVICE_PATH=/usr/bin
+        PASEO_ACTIVE_CHECK_ATTEMPTS=1
+        PASEO_TEST_ACTIVE=1
+        PASEO_TEST_SYSTEMCTL_LOG="${tmp_dir}/recovery-systemctl.log"
+
+        paseo_enable_lingering_strict() { return 0; }
+        sleep() { :; }
+        paseo_systemctl_user() {
+            printf '%s\n' "$*" >> "${PASEO_TEST_SYSTEMCTL_LOG}"
+            case "$*" in
+                "is-active ${PASEO_SERVICE_NAME}") [[ "${PASEO_TEST_ACTIVE}" == "1" ]] ;;
+                "restart ${PASEO_SERVICE_NAME}") PASEO_TEST_ACTIVE=0 ;;
+                "start ${PASEO_SERVICE_NAME}") PASEO_TEST_ACTIVE=1 ;;
+                "is-enabled ${PASEO_SERVICE_NAME}") return 0 ;;
+                *) return 0 ;;
+            esac
+        }
+
+        install_paseo_systemd_user_service
+
+        assert_order "${PASEO_TEST_SYSTEMCTL_LOG}" \
+            "reset-failed ${PASEO_SERVICE_NAME}" \
+            "kill ${PASEO_SERVICE_NAME} --kill-whom=all" \
+            'wedged-service reset before orphan-cgroup cleanup'
+        assert_order "${PASEO_TEST_SYSTEMCTL_LOG}" \
+            "kill ${PASEO_SERVICE_NAME} --kill-whom=all" \
+            "restart ${PASEO_SERVICE_NAME}" \
+            'orphan-cgroup cleanup before changed-service restart'
+        restart_line=$(grep -nFx "restart ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}" | head -n 1 | cut -d: -f1)
+        start_line=$(grep -nFx "start ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}" | head -n 1 | cut -d: -f1)
+        [[ "${restart_line}" -lt "${start_line}" ]] || fail 'ubuntu.sh: fallback start did not follow the inactive changed-service restart'
+
+        reset_count=$(grep -cF "reset-failed ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}")
+        kill_count=$(grep -cF "kill ${PASEO_SERVICE_NAME} --kill-whom=all" "${PASEO_TEST_SYSTEMCTL_LOG}")
+        [[ "${reset_count}" -eq 2 ]] || fail "ubuntu.sh: expected two reset-failed recovery attempts, saw ${reset_count}"
+        [[ "${kill_count}" -eq 2 ]] || fail "ubuntu.sh: expected two orphan-cgroup sweeps, saw ${kill_count}"
+        [[ "${PASEO_TEST_ACTIVE}" == "1" ]] || fail 'ubuntu.sh: fallback recovery did not activate the Paseo service'
+    )
+}
+
+assert_failed_recovery_captures_status() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        HOME="${tmp_dir}/home"
+        PASEO_SERVICE_PATH=/usr/bin
+        PASEO_ACTIVE_CHECK_ATTEMPTS=1
+        PASEO_TEST_SYSTEMCTL_LOG="${tmp_dir}/failed-recovery-systemctl.log"
+
+        paseo_enable_lingering_strict() { return 0; }
+        paseo_managed_service_is_active() { return 0; }
+        sleep() { :; }
+        paseo_systemctl_user() {
+            printf '%s\n' "$*" >> "${PASEO_TEST_SYSTEMCTL_LOG}"
+            case "$*" in
+                "is-active ${PASEO_SERVICE_NAME}") return 1 ;;
+                "is-enabled ${PASEO_SERVICE_NAME}") return 0 ;;
+                "status ${PASEO_SERVICE_NAME} --no-pager") printf 'failed\n' ;;
+                *) return 0 ;;
+            esac
+        }
+
+        if install_paseo_systemd_user_service; then
+            fail 'ubuntu.sh: accepted a Paseo service that stayed inactive after recovery'
+        fi
+        grep -qF "status ${PASEO_SERVICE_NAME} --no-pager" "${PASEO_TEST_SYSTEMCTL_LOG}" || \
+            fail 'ubuntu.sh: failed Paseo recovery did not capture systemd status'
+    )
+}
+
+assert_failed_cleanup_preserves_enablement() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        PASEO_MANAGED_SERVICE_TOUCHED=1
+        PASEO_TEST_SYSTEMCTL_LOG="${tmp_dir}/cleanup-systemctl.log"
+
+        paseo_systemctl_user() {
+            printf '%s\n' "$*" >> "${PASEO_TEST_SYSTEMCTL_LOG}"
+        }
+
+        cleanup_paseo_managed_service Linux
+        grep -qF "stop ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}" || \
+            fail 'ubuntu.sh: failed verification cleanup did not stop the touched service'
+        if grep -qF "disable ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}"; then
+            fail 'ubuntu.sh: failed verification cleanup disabled the Paseo service'
+        fi
+    )
+}
+
 assert_managed_launchdaemon_is_preserved() {
     local tmp_dir
 
@@ -502,6 +616,10 @@ for file in "${supported_linux[@]}"; do
     assert_contains "${file}" 'paseo_systemctl_user restart' 'systemd service start/restart'
     assert_contains "${file}" 'paseo_managed_service_is_active' 'managed service activity detection'
     assert_contains "${file}" 'paseo_managed_service_is_active_strict' 'is-active verification with retry'
+    assert_contains "${file}" 'paseo_systemctl_user reset-failed' 'failed-unit state reset'
+    assert_contains "${file}" 'paseo_systemctl_user kill.*--kill-whom=all' 'orphan-cgroup cleanup'
+    assert_contains "${file}" 'paseo_systemctl_user status.*--no-pager' 'failed-recovery systemd diagnostics'
+    assert_not_contains "${file}" 'paseo_systemctl_user disable' 'failure cleanup that disables the managed service'
     assert_contains "${file}" '\--machine=.*@' 'machined-mediated user manager fallback'
     assert_contains "${file}" 'cmp -s.*_service_file' 'idempotent service definition comparison'
     assert_contains "${file}" 'leaving the active daemon running' 'unchanged active daemon preservation'
@@ -564,6 +682,9 @@ assert_bun_global_paseo_identity_check
 assert_untrusted_optional_service_path_is_filtered
 assert_managed_daemon_is_preserved
 assert_unchanged_service_is_not_restarted
+assert_wedged_service_is_recovered
+assert_failed_recovery_captures_status
+assert_failed_cleanup_preserves_enablement
 assert_managed_launchdaemon_is_preserved
 assert_unchanged_launchdaemon_is_not_restarted
 assert_macos_headless_noncanary_is_nonfatal
