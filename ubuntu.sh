@@ -1181,22 +1181,18 @@ install_gemini_cli() {
     fi
 }
 
-# Install/update Codex CLI using Homebrew's native, zero-Node-dependency cask.
+# Install/update Codex CLI with OpenAI's per-user standalone installer.
 install_codex_cli() {
     local bun_packages=""
-    local brew_prefix=""
-    local brew_codex=""
+    local curl_bin=""
+    local installer=""
+    local install_status=0
+    local native_path="${HOME}/.local/bin/codex"
     local resolved_codex=""
     local version_output=""
     local safe_path=""
-    local installed_casks=""
 
     print_message "Installing/updating Codex CLI..."
-
-    if ! command -v brew &> /dev/null; then
-        print_error "Homebrew not found. Cannot install the native Codex CLI."
-        return 1
-    fi
 
     if command -v bun &> /dev/null; then
         bun_packages=$(bun pm ls -g 2>/dev/null || true)
@@ -1210,32 +1206,47 @@ install_codex_cli() {
     fi
     hash -r 2>/dev/null || true
 
-    installed_casks=$(brew list --cask -1 2>/dev/null || true)
-    if grep -Fxq codex <<< "${installed_casks}"; then
-        if ! brew upgrade --cask codex; then
-            print_error "Failed to upgrade the native Codex CLI cask."
-            return 1
-        fi
-    elif ! brew install --cask codex; then
-        print_error "Failed to install the native Codex CLI cask."
+    if ! curl_bin=$(claude_code_trusted_curl); then
+        print_error "Trusted system curl not found. Cannot download the Codex installer."
         return 1
     fi
 
-    hash -r 2>/dev/null || true
-    brew_prefix=$(brew --prefix 2>/dev/null || true)
-    brew_codex="${brew_prefix}/bin/codex"
-    resolved_codex=$(command -v codex 2>/dev/null || true)
-    if [[ -z "${brew_prefix}" || ! -x "${brew_codex}" ]]; then
-        print_error "Homebrew completed, but its Codex binary is missing."
+    if ! installer=$(mktemp); then
+        print_error "Failed to create a temporary file for the Codex installer."
         return 1
     fi
-    if [[ -z "${resolved_codex}" || ! "${resolved_codex}" -ef "${brew_codex}" ]]; then
-        print_error "Codex is shadowed by ${resolved_codex:-<missing>}; expected ${brew_codex}."
+    if ! claude_code_run_safely "${curl_bin}" -fsSL --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 2 -o "${installer}" "https://chatgpt.com/codex/install.sh"; then
+        rm -f "${installer}"
+        print_error "Failed to download the Codex installer."
+        return 1
+    fi
+
+    chmod 700 "${installer}"
+    if claude_code_run_safely /usr/bin/env CODEX_NON_INTERACTIVE=1 /bin/sh "${installer}"; then
+        install_status=0
+    else
+        install_status=$?
+    fi
+    rm -f "${installer}"
+    if [[ "${install_status}" -ne 0 ]]; then
+        print_error "Codex installer failed with exit code ${install_status}."
+        return 1
+    fi
+
+    export PATH="${HOME}/.local/bin:${PATH}"
+    hash -r 2>/dev/null || true
+    resolved_codex=$(command -v codex 2>/dev/null || true)
+    if [[ ! -x "${native_path}" ]]; then
+        print_error "Codex installer completed, but ${native_path} is missing."
+        return 1
+    fi
+    if [[ -z "${resolved_codex}" || ! "${resolved_codex}" -ef "${native_path}" ]]; then
+        print_error "Codex is shadowed by ${resolved_codex:-<missing>}; expected ${native_path}."
         return 1
     fi
 
     safe_path="/nonexistent"
-    if ! version_output=$(env -u NODE_PATH -u NODE_OPTIONS HOME="${HOME}" PATH="${safe_path}" "${brew_codex}" --version 2>/dev/null) || [[ -z "${version_output}" ]]; then
+    if ! version_output=$(/usr/bin/env -u NODE_PATH -u NODE_OPTIONS HOME="${HOME}" PATH="${safe_path}" "${native_path}" --version 2>/dev/null) || [[ -z "${version_output}" ]]; then
         print_error "Native Codex CLI smoke test failed without Node.js on PATH."
         return 1
     fi
@@ -4908,7 +4919,7 @@ setup_headless_sudo() {
 
 run_setup_tasks() {
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 211 | Last changed: Harden setup reliability from Paseo log audit"
+    echo -e "${GRAY}Version 212 | Last changed: Install Codex per user for Paseo compatibility"
 
     if ! acquire_setup_lock; then
         return 1

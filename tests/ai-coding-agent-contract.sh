@@ -5,6 +5,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
+linux_codex_scripts=(ubuntu.sh wsl.sh pi.sh bazzite.sh)
 
 fail() {
     printf '✗ %s\n' "$1" >&2
@@ -59,9 +60,8 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '^[[:space:]]+install_claude_code$' 'Claude Code main wiring'
     assert_contains "${file}" '^[[:space:]]+install_codex_cli([[:space:]]+\|\|[[:space:]]+return 1)?$' 'Codex CLI main wiring'
     assert_contains "${file}" 'https://claude\.ai/install\.sh' 'Claude Code native installer download'
-    assert_contains "${file}" 'brew (install|upgrade) --cask codex' 'native Codex Homebrew cask install'
     assert_contains "${file}" 'bun remove -g @openai/codex' 'legacy Bun Codex cleanup'
-    assert_contains "${file}" 'codex.* --version 2>/dev/null' 'Codex CLI no-Node smoke test'
+    assert_contains "${file}" '(codex|native_path).* --version 2>/dev/null' 'Codex CLI no-Node smoke test'
     assert_contains "${file}" '^setup_pi_claude_bridge\(\)' 'Pi Claude bridge setup function'
     assert_contains "${file}" 'npm:pi-claude-bridge' 'Pi Claude bridge package source'
     assert_contains "${file}" '^[[:space:]]+setup_pi_claude_bridge$' 'Pi Claude bridge main wiring'
@@ -84,6 +84,14 @@ for file in "${bash_setup_scripts[@]}"; do
         '.cursor/agents/impeccable-finish-reviewer.md'; do
         assert_contains "${file}" "${path}" "legacy Impeccable cleanup path ${path}"
     done
+done
+
+assert_contains mac.sh 'brew (install|upgrade) --cask codex' 'native Codex Homebrew cask install'
+for file in "${linux_codex_scripts[@]}"; do
+    assert_contains "${file}" 'https://chatgpt\.com/codex/install\.sh' 'official Codex standalone installer download'
+    assert_contains "${file}" 'CODEX_NON_INTERACTIVE=1' 'non-interactive Codex standalone install'
+    assert_contains "${file}" 'native_path="\$\{HOME\}/\.local/bin/codex"' 'per-user Codex executable path'
+    assert_not_contains "${file}" 'brew (install|upgrade) --cask codex' 'shared Homebrew Codex installation'
 done
 
 assert_contains win.ps1 'function Install-ClaudeCode' 'Claude Code installer function'
@@ -120,6 +128,8 @@ done
 
 assert_contains README.md 'macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows' 'all-machine AI coding agent statement'
 assert_contains README.md 'Claude Code CLI and Codex CLI' 'Claude/Codex README contract'
+assert_contains README.md "OpenAI's standalone installer" 'per-user Linux Codex installer documentation'
+assert_contains README.md '\.local/bin' 'Paseo-compatible Codex path documentation'
 assert_contains README.md 'Pi Claude bridge' 'Pi Claude bridge README contract'
 assert_contains README.md 'removes legacy global Impeccable skill copies' 'legacy Impeccable cleanup documentation'
 assert_not_contains README.md 'Impeccable design skill|BAN_IMPECCABLE' 'retired Impeccable setup documentation'

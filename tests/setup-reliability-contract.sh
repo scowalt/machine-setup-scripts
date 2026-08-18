@@ -475,48 +475,86 @@ bazzite_trust_output=$(SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAI
 ')
 grep -q '^trust --formula dopplerhq/doppler/doppler$' <<< "${bazzite_trust_output}" || fail 'bazzite.sh: Doppler trust was not formula-scoped'
 
-# The native Codex migration removes Bun ownership, installs the cask, and
-# executes successfully with a PATH that cannot resolve Node.js.
+# The native Codex migration removes Bun ownership, installs a per-user
+# standalone binary, and executes successfully with a PATH that cannot resolve
+# Node.js.
 codex_tmp=$(mktemp -d)
-mkdir -p "${codex_tmp}/bin"
-cat > "${codex_tmp}/bin/codex" <<'EOF'
+mkdir -p "${codex_tmp}/home"
+cat > "${codex_tmp}/codex-binary" <<'EOF'
 #!/bin/sh
 command -v node >/dev/null 2>&1 && exit 42
 printf '%s\n' 'codex-cli 9.9.9'
 EOF
-chmod +x "${codex_tmp}/bin/codex"
-codex_output=$(SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" CODEX_TMP="${codex_tmp}" PATH="${codex_tmp}/bin:${PATH}" bash -c '
+chmod +x "${codex_tmp}/codex-binary"
+cat > "${codex_tmp}/installer" <<'EOF'
+#!/bin/sh
+[ "${CODEX_NON_INTERACTIVE:-}" = "1" ] || exit 43
+mkdir -p "${HOME}/.local/bin"
+cp "${CODEX_TMP}/codex-binary" "${HOME}/.local/bin/codex"
+chmod +x "${HOME}/.local/bin/codex"
+printf '%s\n' "standalone ${CODEX_NON_INTERACTIVE}" >> "${CODEX_TMP}/calls"
+EOF
+chmod +x "${codex_tmp}/installer"
+codex_output=$(SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" CODEX_TMP="${codex_tmp}" HOME="${codex_tmp}/home" bash -c '
     source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
     bun() {
         printf "%s\n" "$*" >> "${CODEX_TMP}/calls"
         [[ "$1 $2 $3" == "pm ls -g" ]] && printf "%s\n" "@openai/codex@9.9.9"
         return 0
     }
-    brew() {
-        printf "%s\n" "$*" >> "${CODEX_TMP}/calls"
-        case "$1 $2" in
-            "list --cask") return 0 ;;
-            "--prefix ") printf "%s\n" "${CODEX_TMP}" ;;
-        esac
+    claude_code_trusted_curl() {
+        printf "%s\n" /mock/curl
+    }
+    claude_code_run_safely() {
+        if [[ "$1" == "/mock/curl" ]]; then
+            local output=""
+            while [[ "$#" -gt 0 ]]; do
+                if [[ "$1" == "-o" ]]; then
+                    output="$2"
+                    break
+                fi
+                shift
+            done
+            cp "${CODEX_TMP}/installer" "${output}"
+            printf "%s\n" download >> "${CODEX_TMP}/calls"
+            return 0
+        fi
+        "$@"
     }
     install_codex_cli
 ')
 grep -q 'Codex CLI installed/updated (codex-cli 9.9.9)' <<< "${codex_output}" || fail 'bazzite.sh: native Codex smoke test did not succeed'
 grep -q '^remove -g @openai/codex$' "${codex_tmp}/calls" || fail 'bazzite.sh: legacy Bun Codex was not removed'
-grep -q '^install --cask codex$' "${codex_tmp}/calls" || fail 'bazzite.sh: native Codex cask was not installed'
+grep -q '^download$' "${codex_tmp}/calls" || fail 'bazzite.sh: official Codex installer was not downloaded'
+grep -q '^standalone 1$' "${codex_tmp}/calls" || fail 'bazzite.sh: Codex installer was not run non-interactively'
 
-cat > "${codex_tmp}/bin/codex" <<'EOF'
+cat > "${codex_tmp}/codex-binary" <<'EOF'
 #!/bin/sh
 exit 1
 EOF
-chmod +x "${codex_tmp}/bin/codex"
-if SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" CODEX_TMP="${codex_tmp}" PATH="${codex_tmp}/bin:${PATH}" bash -c '
+chmod +x "${codex_tmp}/codex-binary"
+if SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" CODEX_TMP="${codex_tmp}" HOME="${codex_tmp}/home" bash -c '
     source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
-    brew() {
-        case "$1 $2" in
-            "list --cask") return 0 ;;
-            "--prefix ") printf "%s\n" "${CODEX_TMP}" ;;
-        esac
+    bun() {
+        return 0
+    }
+    claude_code_trusted_curl() {
+        printf "%s\n" /mock/curl
+    }
+    claude_code_run_safely() {
+        if [[ "$1" == "/mock/curl" ]]; then
+            local output=""
+            while [[ "$#" -gt 0 ]]; do
+                if [[ "$1" == "-o" ]]; then
+                    output="$2"
+                    break
+                fi
+                shift
+            done
+            cp "${CODEX_TMP}/installer" "${output}"
+            return 0
+        fi
+        "$@"
     }
     install_codex_cli
 ' > "${codex_tmp}/failure-output" 2>&1; then
