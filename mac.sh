@@ -255,6 +255,7 @@ create_env_local() {
 # BAN_MATT_POCOCK_SKILLS=1
 # BAN_RTK=1
 # SYNTHETIC_API_KEY=<your Synthetic API key>
+# ZAI_API_KEY=<your z.ai API key>
 # BAN_CLAUDE_CODE=1
 EOF
         chmod 600 "${HOME}/.env.local"
@@ -2133,13 +2134,16 @@ cleanup_noncanonical_pi_installs() {
     fi
 }
 
-# Force Pi defaults: Synthetic provider with Kimi K3 as the default model.
+# Force Pi defaults: Kimi K3 (Synthetic) as the default model, or GLM-5.3
+# (z.ai GLM Coding Plan) on work machines that have a z.ai API key.
 # Chezmoi owns ~/.pi/agent/settings.json long-term; this seeds the desired
 # state on fresh machines and repairs drift where dotfiles are not applied.
 configure_pi_defaults() {
     local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
     local _settings_file="${_agent_dir}/settings.json"
     local _tmp=""
+    local _jq_expr=""
+    local _default_desc="Kimi K3 (Synthetic)"
 
     if ! command -v jq &> /dev/null; then
         print_warning "jq not found. Cannot set Pi default model in ${_settings_file}."
@@ -2158,14 +2162,25 @@ configure_pi_defaults() {
         return 1
     fi
 
-    if jq '
-        .defaultProvider = "synthetic"
-        | .defaultModel = "hf:moonshotai/Kimi-K3"
-        | .defaultThinkingLevel = "high"
-    ' "${_settings_file}" > "${_tmp}"; then
+    if [[ "${WORK_MACHINE:-}" == "1" ]] && pi_zai_key_available; then
+        _default_desc="GLM-5.3 (z.ai)"
+        _jq_expr='
+            .defaultProvider = "zai"
+            | .defaultModel = "glm-5.3"
+            | .defaultThinkingLevel = "high"
+        '
+    else
+        _jq_expr='
+            .defaultProvider = "synthetic"
+            | .defaultModel = "hf:moonshotai/Kimi-K3"
+            | .defaultThinkingLevel = "high"
+        '
+    fi
+
+    if jq "${_jq_expr}" "${_settings_file}" > "${_tmp}"; then
         if cat "${_tmp}" > "${_settings_file}"; then
             rm -f "${_tmp}"
-            print_success "Pi default model set to Kimi K3 (Synthetic) with high thinking."
+            print_success "Pi default model set to ${_default_desc} with high thinking."
             return 0
         fi
         rm -f "${_tmp}"
@@ -2194,6 +2209,22 @@ read_env_local_value() {
     _value="${_value#\'}" && _value="${_value%\'}"
     [[ -n "${_value}" ]] || return 1
     printf '%s\n' "${_value}"
+}
+
+# Check whether a z.ai API key is available from ~/.env.local or from an
+# existing z.ai provider block in Pi's models.json.
+pi_zai_key_available() {
+    local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _models_file="${_agent_dir}/models.json"
+
+    if read_env_local_value "ZAI_API_KEY" > /dev/null 2>&1; then
+        return 0
+    fi
+    if [[ -f "${_models_file}" ]] \
+        && jq -e '.providers.zai.apiKey // empty | length > 0' "${_models_file}" > /dev/null 2>&1; then
+        return 0
+    fi
+    return 1
 }
 
 # Seed the Synthetic provider block (Kimi K3) into Pi's models.json.
@@ -2277,6 +2308,134 @@ seed_pi_synthetic_models() {
         fi
         rm -f "${_tmp}"
         print_warning "Failed to write Synthetic provider to ${_models_file}."
+        return 1
+    fi
+
+    rm -f "${_tmp}"
+    print_warning "Failed to parse Pi models at ${_models_file}; leaving it unchanged."
+    return 1
+}
+
+# Seed the z.ai provider block (GLM Coding Plan) into Pi's models.json.
+# The API key comes from ZAI_API_KEY in ~/.env.local; it is never stored in
+# this repository. Existing z.ai keys are preserved. Seeding follows key
+# presence: any machine with the key gets the provider, and only work
+# machines are warned when the key is missing.
+seed_pi_zai_models() {
+    local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _models_file="${_agent_dir}/models.json"
+    local _api_key=""
+    local _tmp=""
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot seed z.ai provider in ${_models_file}."
+        return 1
+    fi
+
+    if [[ -f "${_models_file}" ]] && jq -e '.providers.zai.apiKey // empty | length > 0' "${_models_file}" > /dev/null 2>&1; then
+        print_debug "z.ai provider with an API key already configured in ${_models_file}."
+        return 0
+    fi
+
+    if ! _api_key=$(read_env_local_value "ZAI_API_KEY"); then
+        if [[ "${WORK_MACHINE:-}" == "1" ]]; then
+            print_warning "ZAI_API_KEY not set in ~/.env.local. Work machines default Pi to GLM-5.3 (z.ai) but there is no API key yet; add the key and rerun setup."
+            return 1
+        fi
+        print_debug "ZAI_API_KEY not set in ~/.env.local; skipping z.ai provider seeding."
+        return 0
+    fi
+
+    mkdir -p "${_agent_dir}"
+    if [[ ! -f "${_models_file}" ]]; then
+        printf '{"providers":{}}\n' > "${_models_file}"
+    fi
+
+    if ! _tmp=$(mktemp); then
+        print_warning "Could not create a temporary file for Pi models at ${_models_file}."
+        return 1
+    fi
+
+    if jq --arg apiKey "${_api_key}" '
+        .providers = (.providers // {})
+        | .providers.zai = {
+            baseUrl: "https://api.z.ai/api/coding/paas/v4",
+            api: "openai-completions",
+            apiKey: ((.providers.zai.apiKey // "") | if length > 0 then . else $apiKey end),
+            compat: {
+                supportsDeveloperRole: false,
+                supportsStore: false,
+                maxTokensField: "max_tokens",
+                supportsStrictMode: false
+            },
+            models: [
+                {
+                    id: "glm-5.3",
+                    name: "GLM-5.3 (z.ai)",
+                    reasoning: true,
+                    thinkingLevelMap: {
+                        off: null,
+                        minimal: null,
+                        low: "low",
+                        medium: null,
+                        high: "high",
+                        xhigh: null,
+                        max: "max"
+                    },
+                    input: ["text"],
+                    contextWindow: 1000000,
+                    maxTokens: 131072,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    compat: {
+                        supportsReasoningEffort: true,
+                        thinkingFormat: "openai"
+                    }
+                },
+                {
+                    id: "glm-5-turbo",
+                    name: "GLM-5-Turbo (z.ai)",
+                    reasoning: true,
+                    thinkingLevelMap: {
+                        off: "none",
+                        minimal: "minimal",
+                        low: "low",
+                        medium: "medium",
+                        high: "high",
+                        xhigh: "xhigh",
+                        max: "max"
+                    },
+                    input: ["text"],
+                    contextWindow: 200000,
+                    maxTokens: 131072,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    compat: {
+                        supportsReasoningEffort: true,
+                        thinkingFormat: "openai"
+                    }
+                },
+                {
+                    id: "glm-4.7",
+                    name: "GLM-4.7 (z.ai)",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 200000,
+                    maxTokens: 131072,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    compat: {
+                        supportsReasoningEffort: false,
+                        thinkingFormat: "openai"
+                    }
+                }
+            ]
+        }
+    ' "${_models_file}" > "${_tmp}"; then
+        if cat "${_tmp}" > "${_models_file}" && chmod 600 "${_models_file}"; then
+            rm -f "${_tmp}"
+            print_success "z.ai provider (GLM Coding Plan) seeded in ${_models_file}."
+            return 0
+        fi
+        rm -f "${_tmp}"
+        print_warning "Failed to write z.ai provider to ${_models_file}."
         return 1
     fi
 
@@ -4573,7 +4732,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 190 | Last changed: Harden setup reliability from Paseo log audit${NC}"
+    echo -e "${GRAY}Version 191 | Last changed: Add z.ai GLM Coding Plan provider for Pi work machines${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -4750,6 +4909,7 @@ HELPER_EOF
     if install_pi_cli; then
         configure_pi_defaults
         seed_pi_synthetic_models
+        seed_pi_zai_models
         setup_pi_subagents
         setup_pi_mcp_adapter
         setup_pi_claude_bridge
