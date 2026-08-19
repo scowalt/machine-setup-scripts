@@ -3677,6 +3677,35 @@ setup_pi_claude_bridge() {
     fi
 }
 
+# Install/update Pi Ask User extension
+setup_pi_ask_user() {
+    local _package="npm:pi-ask-user"
+    local _output=""
+    local _list_output=""
+
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Cannot install Pi Ask User extension."
+        print_debug "Install Node.js/npm, then run: pi install npm:pi-ask-user"
+        return 0
+    fi
+
+    if ! command -v pi &> /dev/null; then
+        print_warning "Pi coding agent not found. Cannot install Pi Ask User extension."
+        return 0
+    fi
+
+    print_message "Installing/updating Pi Ask User extension..."
+    if _output=$(pi install "${_package}" 2>&1); then
+        if _list_output=$(pi list 2>&1) && grep -q "npm:pi-ask-user" <<< "${_list_output}"; then
+            print_success "Pi Ask User extension installed/updated."
+        else
+            print_warning "Pi Ask User install completed, but package validation was inconclusive: ${_list_output}"
+        fi
+    else
+        print_warning "Failed to install Pi Ask User extension: ${_output}"
+    fi
+}
+
 # Remove Pi goal/autoresearch package sources from settings when disabled
 remove_pi_goal_autoresearch_settings() {
     local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
@@ -4573,7 +4602,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 190 | Last changed: Harden setup reliability from Paseo log audit${NC}"
+    echo -e "${GRAY}Version 191 | Last changed: Install Pi Ask User extension by default${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -4753,6 +4782,7 @@ HELPER_EOF
         setup_pi_subagents
         setup_pi_mcp_adapter
         setup_pi_claude_bridge
+        setup_pi_ask_user
         setup_pi_goal_autoresearch
         if ! matt_pocock_pi_skills_disabled; then
             setup_matt_pocock_pi_skills
