@@ -106,18 +106,18 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_order "${file}" '^[[:space:]]+install_ntn_cli$' '^[[:space:]]+install_rtk_cli$' 'Notion CLI before RTK'
 done
 
-assert_contains mac.sh 'Version 191 \| Last changed: Add z.ai GLM Coding Plan provider for Pi work machines' 'macOS version banner'
-assert_contains ubuntu.sh 'Version 213 \| Last changed: Add z.ai GLM Coding Plan provider for Pi work machines' 'Ubuntu version banner'
-assert_contains wsl.sh 'Version 157 \| Last changed: Add z.ai GLM Coding Plan provider for Pi work machines' 'WSL version banner'
-assert_contains pi.sh 'Version 174 \| Last changed: Add z.ai GLM Coding Plan provider for Pi work machines' 'Raspberry Pi version banner'
-assert_contains bazzite.sh 'Version 73 \| Last changed: Add z.ai GLM Coding Plan provider for Pi work machines' 'Bazzite version banner'
+assert_contains mac.sh 'Version 192 \| Last changed: Add z.ai GLM Coding Plan provider for Pi work machines' 'macOS version banner'
+assert_contains ubuntu.sh 'Version 214 \| Last changed: Add z.ai GLM Coding Plan provider for Pi work machines' 'Ubuntu version banner'
+assert_contains wsl.sh 'Version 158 \| Last changed: Add z.ai GLM Coding Plan provider for Pi work machines' 'WSL version banner'
+assert_contains pi.sh 'Version 175 \| Last changed: Add z.ai GLM Coding Plan provider for Pi work machines' 'Raspberry Pi version banner'
+assert_contains bazzite.sh 'Version 74 \| Last changed: Add z.ai GLM Coding Plan provider for Pi work machines' 'Bazzite version banner'
 
 assert_contains win.ps1 '"Notion\.ntn"' 'official Notion CLI WinGet package'
 # These regexes intentionally use single quotes to preserve literal shell and Markdown syntax.
 # shellcheck disable=SC2016
 assert_contains win.ps1 '\$package -eq "Notion\.ntn" -and \$env:PROCESSOR_ARCHITECTURE -ne "AMD64"' 'Windows x64 architecture guard'
 assert_contains win.ps1 'Notion CLI supports Windows x64 only; skipping' 'unsupported Windows architecture warning'
-assert_contains win.ps1 'Version 113 \| Last changed: Add z.ai GLM Coding Plan provider for Pi work machines' 'Windows version banner'
+assert_contains win.ps1 'Version 114 \| Last changed: Add z.ai GLM Coding Plan provider for Pi work machines' 'Windows version banner'
 assert_order win.ps1 '^[[:space:]]+Install-WingetPackages$' '^[[:space:]]+Install-WingetUpdates$' 'WinGet install before update'
 assert_not_contains win.ps1 'npm (install|i).*(--global|-g).*ntn' 'npm-based Notion CLI installation'
 assert_not_contains win.ps1 'ntn (login|completions)' 'Notion authentication or completion automation'

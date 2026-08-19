@@ -2176,6 +2176,38 @@ function Setup-PiClaudeBridge {
     }
 }
 
+# Function to install/update Pi Ask User extension
+function Setup-PiAskUser {
+    $package = "npm:pi-ask-user"
+
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Warning "npm not found. Cannot install Pi Ask User extension."
+        Write-Debug "Install Node.js/npm, then run: pi install npm:pi-ask-user"
+        return
+    }
+
+    if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
+        Write-Warning "Pi coding agent not found. Cannot install Pi Ask User extension."
+        return
+    }
+
+    Write-Message "Installing/updating Pi Ask User extension..."
+    $output = & pi install $package 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $listOutput = & pi list 2>&1
+        $listText = ($listOutput | Out-String)
+        if ($LASTEXITCODE -eq 0 -and $listText.Contains($package)) {
+            Write-Success "Pi Ask User extension installed/updated."
+        }
+        else {
+            Write-Warning "Pi Ask User install completed, but package validation was inconclusive: $listText"
+        }
+    }
+    else {
+        Write-Warning "Failed to install Pi Ask User extension: $output"
+    }
+}
+
 # Function to remove Pi goal/autoresearch package sources from settings when disabled
 function Remove-PiGoalAutoresearchSettings {
     if ($env:PI_CODING_AGENT_DIR) {
@@ -2939,7 +2971,7 @@ function Complete-SetupLog {
 function Invoke-WindowsSetupTasks {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 113 | Last changed: Add z.ai GLM Coding Plan provider for Pi work machines" -ForegroundColor DarkGray
+    Write-Host "Version 114 | Last changed: Add z.ai GLM Coding Plan provider for Pi work machines" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -2986,6 +3018,7 @@ function Invoke-WindowsSetupTasks {
         Setup-PiSubagents
         Setup-PiMcpAdapter
         Setup-PiClaudeBridge
+        Setup-PiAskUser
         Setup-PiGoalAutoresearch
         if (-not (Test-MattPocockPiSkillsDisabled)) {
             Setup-MattPocockPiSkills
