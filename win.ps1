@@ -121,6 +121,7 @@ function New-TokenPlaceholders {
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
 # BAN_RTK=1
+# ZAI_API_KEY=<your z.ai API key>
 # BAN_CLAUDE_CODE=1
 "@ | Set-Content -Path $envLocalPath
         Write-Debug "Created placeholder ~/.env.local"
@@ -1526,7 +1527,8 @@ function Install-PiCli {
     }
 }
 
-# Force Pi defaults: Synthetic provider with Kimi K3 as the default model.
+# Force Pi defaults: Kimi K3 (Synthetic), or GLM-5.3 (z.ai GLM Coding Plan)
+# on work machines that have a z.ai API key.
 # Chezmoi owns settings.json long-term; this seeds fresh machines and repairs drift.
 function Set-PiDefaults {
     if ($env:PI_CODING_AGENT_DIR) {
@@ -1555,11 +1557,19 @@ function Set-PiDefaults {
         if ($null -eq $settings) {
             $settings = New-Object PSObject
         }
-        Set-JsonProperty -Object $settings -Name "defaultProvider" -Value "synthetic"
-        Set-JsonProperty -Object $settings -Name "defaultModel" -Value "hf:moonshotai/Kimi-K3"
+        $defaultDesc = "Kimi K3 (Synthetic)"
+        if ((Test-EnvLocalFlag "WORK_MACHINE") -and (Test-PiZaiKeyAvailable)) {
+            Set-JsonProperty -Object $settings -Name "defaultProvider" -Value "zai"
+            Set-JsonProperty -Object $settings -Name "defaultModel" -Value "glm-5.3"
+            $defaultDesc = "GLM-5.3 (z.ai)"
+        }
+        else {
+            Set-JsonProperty -Object $settings -Name "defaultProvider" -Value "synthetic"
+            Set-JsonProperty -Object $settings -Name "defaultModel" -Value "hf:moonshotai/Kimi-K3"
+        }
         Set-JsonProperty -Object $settings -Name "defaultThinkingLevel" -Value "high"
         $settings | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsPath -Encoding UTF8
-        Write-Host "$success Pi default model set to Kimi K3 (Synthetic) with high thinking." -ForegroundColor Green
+        Write-Host "$success Pi default model set to $defaultDesc with high thinking." -ForegroundColor Green
         return $true
     }
     catch {
@@ -1687,6 +1697,176 @@ function Seed-PiSyntheticModels {
     }
     catch {
         Write-Host "$failIcon Failed to seed Synthetic provider in $modelsPath : $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+# Check whether a z.ai API key is available from ~/.env.local or from an
+# existing z.ai provider block in Pi's models.json.
+function Test-PiZaiKeyAvailable {
+    if (-not [string]::IsNullOrWhiteSpace((Get-EnvLocalValue "ZAI_API_KEY"))) {
+        return $true
+    }
+
+    if ($env:PI_CODING_AGENT_DIR) {
+        $agentDir = $env:PI_CODING_AGENT_DIR
+    }
+    else {
+        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    }
+    $modelsPath = Join-Path $agentDir "models.json"
+    if (Test-Path $modelsPath) {
+        try {
+            $existingModels = Get-Content -Path $modelsPath -Raw | ConvertFrom-Json
+            if ($existingModels.providers -and ($existingModels.providers.PSObject.Properties.Name -contains "zai")) {
+                $existingKey = $existingModels.providers.zai.apiKey
+                if (-not [string]::IsNullOrWhiteSpace($existingKey)) {
+                    return $true
+                }
+            }
+        }
+        catch {
+            Write-Debug "Could not parse Pi models at $modelsPath while checking for a z.ai key."
+        }
+    }
+    return $false
+}
+
+# Seed the z.ai provider block (GLM Coding Plan) into Pi's models.json.
+# The API key comes from ZAI_API_KEY in ~/.env.local; it is never stored in
+# this repository. Existing z.ai keys are preserved. Seeding follows key
+# presence: any machine with the key gets the provider, and only work
+# machines are warned when the key is missing.
+function Seed-PiZaiModels {
+    if ($env:PI_CODING_AGENT_DIR) {
+        $agentDir = $env:PI_CODING_AGENT_DIR
+    }
+    else {
+        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    }
+
+    $modelsPath = Join-Path $agentDir "models.json"
+
+    $modelsJson = '{"providers":{}}'
+    if (Test-Path $modelsPath) {
+        $modelsJson = Get-Content -Path $modelsPath -Raw
+        if ([string]::IsNullOrWhiteSpace($modelsJson)) {
+            $modelsJson = '{"providers":{}}'
+        }
+    }
+
+    try {
+        $models = $modelsJson | ConvertFrom-Json
+        if ($null -eq $models) {
+            $models = [PSCustomObject]@{ providers = [PSCustomObject]@{} }
+        }
+        if ($null -eq $models.providers) {
+            $models | Add-Member -NotePropertyName "providers" -NotePropertyValue ([PSCustomObject]@{}) -Force
+        }
+
+        $existingKey = $null
+        if ($models.providers.PSObject.Properties.Name -contains "zai") {
+            $existingKey = $models.providers.zai.apiKey
+        }
+        if (-not [string]::IsNullOrWhiteSpace($existingKey)) {
+            Write-Debug "z.ai provider with an API key already configured in $modelsPath."
+            return $true
+        }
+
+        $apiKey = Get-EnvLocalValue "ZAI_API_KEY"
+        if ([string]::IsNullOrWhiteSpace($apiKey)) {
+            if (Test-EnvLocalFlag "WORK_MACHINE") {
+                Write-Warning "ZAI_API_KEY not set in ~/.env.local. Work machines default Pi to GLM-5.3 (z.ai) but there is no API key yet; add the key and rerun setup."
+                return $false
+            }
+            Write-Debug "ZAI_API_KEY not set in ~/.env.local; skipping z.ai provider seeding."
+            return $true
+        }
+
+        $zaiProvider = [PSCustomObject]@{
+            baseUrl = "https://api.z.ai/api/coding/paas/v4"
+            api     = "openai-completions"
+            apiKey  = $apiKey
+            compat  = [PSCustomObject]@{
+                supportsDeveloperRole = $false
+                supportsStore         = $false
+                maxTokensField        = "max_tokens"
+                supportsStrictMode    = $false
+            }
+            models  = @(
+                [PSCustomObject]@{
+                    id               = "glm-5.3"
+                    name             = "GLM-5.3 (z.ai)"
+                    reasoning        = $true
+                    thinkingLevelMap = [PSCustomObject]@{
+                        off     = $null
+                        minimal = $null
+                        low     = "low"
+                        medium  = $null
+                        high    = "high"
+                        xhigh   = $null
+                        max     = "max"
+                    }
+                    input            = @("text")
+                    contextWindow    = 1000000
+                    maxTokens        = 131072
+                    cost             = [PSCustomObject]@{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }
+                    compat           = [PSCustomObject]@{
+                        supportsReasoningEffort = $true
+                        thinkingFormat          = "openai"
+                    }
+                },
+                [PSCustomObject]@{
+                    id               = "glm-5-turbo"
+                    name             = "GLM-5-Turbo (z.ai)"
+                    reasoning        = $true
+                    thinkingLevelMap = [PSCustomObject]@{
+                        off     = "none"
+                        minimal = "minimal"
+                        low     = "low"
+                        medium  = "medium"
+                        high    = "high"
+                        xhigh   = "xhigh"
+                        max     = "max"
+                    }
+                    input            = @("text")
+                    contextWindow    = 200000
+                    maxTokens        = 131072
+                    cost             = [PSCustomObject]@{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }
+                    compat           = [PSCustomObject]@{
+                        supportsReasoningEffort = $true
+                        thinkingFormat          = "openai"
+                    }
+                },
+                [PSCustomObject]@{
+                    id            = "glm-4.7"
+                    name          = "GLM-4.7 (z.ai)"
+                    reasoning     = $true
+                    input         = @("text")
+                    contextWindow = 200000
+                    maxTokens     = 131072
+                    cost          = [PSCustomObject]@{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }
+                    compat        = [PSCustomObject]@{
+                        supportsReasoningEffort = $false
+                        thinkingFormat          = "openai"
+                    }
+                }
+            )
+        }
+
+        if ($models.providers.PSObject.Properties.Name -contains "zai") {
+            $models.providers.zai = $zaiProvider
+        }
+        else {
+            $models.providers | Add-Member -NotePropertyName "zai" -NotePropertyValue $zaiProvider
+        }
+
+        $models | ConvertTo-Json -Depth 20 | Set-Content -Path $modelsPath -Encoding UTF8
+        Write-Host "$success z.ai provider (GLM Coding Plan) seeded in $modelsPath." -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "$failIcon Failed to seed z.ai provider in $modelsPath : $($_.Exception.Message)" -ForegroundColor Red
         return $false
     }
 }
@@ -2791,7 +2971,7 @@ function Complete-SetupLog {
 function Invoke-WindowsSetupTasks {
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 113 | Last changed: Install Pi Ask User extension by default" -ForegroundColor DarkGray
+    Write-Host "Version 114 | Last changed: Add z.ai GLM Coding Plan provider for Pi work machines" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -2834,6 +3014,7 @@ function Invoke-WindowsSetupTasks {
     if (Install-PiCli) {
         Set-PiDefaults
         Seed-PiSyntheticModels
+        Seed-PiZaiModels
         Setup-PiSubagents
         Setup-PiMcpAdapter
         Setup-PiClaudeBridge
