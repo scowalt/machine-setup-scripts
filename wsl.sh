@@ -21,6 +21,7 @@ SETUP_ORIGINAL_CLAUDE_COMMAND=$(command -v claude 2>/dev/null || true)
 SETUP_LOG_FILE=""
 SETUP_LOG_TEE_PID=""
 SETUP_LOGGING_ACTIVE=0
+DOTFILES_ACCESS_METHOD=""
 
 # Acquire a non-blocking per-user setup lock so overlapping setup runs don't
 # corrupt shared global package directories (npm, Bun, Homebrew, etc.). The lock
@@ -215,7 +216,7 @@ ensure_not_root() {
 # Bootstrap SSH config for deploy key access to dotfiles
 bootstrap_ssh_config() {
     # Ensure github-dotfiles host alias exists for deploy key access
-    if ! grep -q "Host github-dotfiles" ~/.ssh/config 2>/dev/null; then
+    if ! awk 'tolower($1) == "host" { for (i=2; i<=NF; i++) if ($i == "github-dotfiles") found=1 } END { exit !found }' ~/.ssh/config 2>/dev/null; then
         print_message "Bootstrapping SSH config for dotfiles access..."
         mkdir -p ~/.ssh
         chmod 700 ~/.ssh
@@ -295,6 +296,7 @@ setup_dotfiles_deploy_key() {
         _ssh_output=$(ssh -i "${key_file}" -o StrictHostKeyChecking=accept-new -T git@github.com < /dev/null 2>&1) || true
         if echo "${_ssh_output}" | grep -q "successfully authenticated"; then
             print_success "Deploy key works! Continuing setup..."
+            DOTFILES_ACCESS_METHOD="deploy"
             return 0
         fi
 
@@ -322,6 +324,7 @@ setup_dotfiles_deploy_key() {
 
 # Check if we have access to scowalt/dotfiles via any available method
 check_dotfiles_access() {
+    DOTFILES_ACCESS_METHOD=""
     print_message "Checking access to scowalt/dotfiles..."
 
     # Method 1: SSH key (main user)
@@ -330,6 +333,7 @@ check_dotfiles_access() {
     _ssh_output=$(ssh -T git@github.com < /dev/null 2>&1) || true
     if echo "${_ssh_output}" | grep -q "successfully authenticated"; then
         print_debug "Access via SSH"
+        DOTFILES_ACCESS_METHOD="ssh"
         return 0
     fi
 
@@ -343,6 +347,7 @@ check_dotfiles_access() {
         _deploy_ssh_output=$(ssh -i ~/.ssh/dotfiles-deploy-key -T git@github.com < /dev/null 2>&1) || true
         if echo "${_deploy_ssh_output}" | grep -q "successfully authenticated"; then
             print_debug "Access via deploy key"
+            DOTFILES_ACCESS_METHOD="deploy"
             return 0
         else
             print_warning "Deploy key exists but cannot authenticate with GitHub"
@@ -585,21 +590,30 @@ initialize_chezmoi() {
 
     if [[ ! -d "${chez_src}" ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
-        local _current_user
-        _current_user=$(whoami || true)
-        if [[ "${_current_user}" == "scowalt" ]]; then
-            # Main user uses SSH with default key for push access
-            if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
-                print_error "Failed to initialize chezmoi. Check SSH key and network connectivity."
+        case "${DOTFILES_ACCESS_METHOD}" in
+            ssh)
+                if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
+                    print_error "Failed to initialize chezmoi with the verified SSH key."
+                    return 1
+                fi
+                ;;
+            token)
+                if ! chezmoi init --apply --force "https://github.com/scowalt/dotfiles.git"; then
+                    print_error "Failed to initialize chezmoi with the verified GitHub token."
+                    return 1
+                fi
+                ;;
+            deploy)
+                if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
+                    print_error "Failed to initialize chezmoi with the verified deploy key."
+                    return 1
+                fi
+                ;;
+            *)
+                print_error "Cannot initialize chezmoi without a verified dotfiles access method."
                 return 1
-            fi
-        else
-            # Secondary users use SSH via deploy key (github-dotfiles alias)
-            if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
-                print_error "Failed to initialize chezmoi. Check deploy key setup."
-                return 1
-            fi
-        fi
+                ;;
+        esac
         print_success "chezmoi initialized with scowalt/dotfiles."
     else
         print_debug "chezmoi is already initialized."
@@ -1822,6 +1836,32 @@ seed_pi_zai_models() {
     return 1
 }
 
+# Validate and repair npm's effective user configuration before setup mutates
+# any npm-owned package tree. npm handles registry-scoped auth migration without
+# exposing configuration values in the setup log.
+NPM_CONFIGURATION_COMMAND=""
+ensure_npm_configuration() {
+    local _npm_command=""
+
+    _npm_command=$(command -v npm 2>/dev/null || true)
+    if [[ -z "${_npm_command}" ]]; then
+        print_warning "npm not found. Cannot validate npm configuration."
+        return 1
+    fi
+    if [[ "${NPM_CONFIGURATION_COMMAND}" == "${_npm_command}" ]]; then
+        return 0
+    fi
+
+    if ! npm config fix > /dev/null 2>&1 || ! npm config list --location=user > /dev/null 2>&1; then
+        print_error "npm configuration is invalid and automatic repair failed."
+        print_debug "Run 'npm config fix', review the user npmrc, and rerun setup."
+        return 1
+    fi
+
+    NPM_CONFIGURATION_COMMAND="${_npm_command}"
+    print_debug "npm configuration validated."
+}
+
 # Install/update Pi coding agent
 install_pi_cli() {
     local _new_package="@earendil-works/pi-coding-agent"
@@ -1856,6 +1896,8 @@ install_pi_cli() {
         print_debug "Install Node.js/npm, then run: npm install -g --ignore-scripts --prefix \"${_local_prefix}\" ${_new_package}@latest"
         return 1
     fi
+
+    ensure_npm_configuration || return 1
 
     # Remove old npm-package ownership before installing so npm can claim ~/.local/bin/pi.
     npm uninstall -g --prefix "${_local_prefix}" "${_old_package}" > /dev/null 2>&1 || true
@@ -2251,11 +2293,22 @@ setup_pi_goal_autoresearch() {
 matt_pocock_pi_skills() {
     printf '%s\n' \
         setup-matt-pocock-skills \
-        diagnose \
+        diagnosing-bugs \
         tdd \
         improve-codebase-architecture \
-        zoom-out \
         grill-with-docs
+}
+
+# Setup-managed skill names retired or renamed upstream.
+matt_pocock_obsolete_pi_skills() {
+    printf '%s\n' \
+        diagnose \
+        zoom-out
+}
+
+matt_pocock_all_managed_pi_skills() {
+    matt_pocock_pi_skills
+    matt_pocock_obsolete_pi_skills
 }
 
 matt_pocock_pi_skills_disabled() {
@@ -2280,14 +2333,14 @@ remove_matt_pocock_pi_skills() {
     for _skills_dir in "${_skills_dirs[@]}"; do
         while IFS= read -r _skill; do
             _skill_path="${_skills_dir}/${_skill}"
-            if [[ -e "${_skill_path}" ]]; then
-                if rm -rf -- "${_skill_path:?}" && [[ ! -e "${_skill_path}" ]]; then
+            if [[ -e "${_skill_path}" || -L "${_skill_path}" ]]; then
+                if rm -rf -- "${_skill_path:?}" && [[ ! -e "${_skill_path}" && ! -L "${_skill_path}" ]]; then
                     _removed=1
                 else
                     _failed+=("${_skill}")
                 fi
             fi
-        done < <(matt_pocock_pi_skills || true)
+        done < <(matt_pocock_all_managed_pi_skills || true)
     done
 
     if [[ "${#_failed[@]}" -gt 0 ]]; then
@@ -2297,6 +2350,37 @@ remove_matt_pocock_pi_skills() {
         print_success "Matt Pocock Pi skills disabled."
     else
         print_debug "Matt Pocock Pi skills disabled; no installed copies found."
+    fi
+}
+
+# Remove only retired setup-managed names after their replacements validate.
+remove_obsolete_matt_pocock_pi_skills() {
+    local _default_agent_dir="${HOME}/.pi/agent"
+    local _active_agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
+    local _skills_dir=""
+    local _skill=""
+    local _skill_path=""
+    local _failed=()
+    local _skills_dirs=("${_default_agent_dir}/skills")
+
+    if [[ "${_active_agent_dir}" != "${_default_agent_dir}" ]]; then
+        _skills_dirs+=("${_active_agent_dir}/skills")
+    fi
+
+    for _skills_dir in "${_skills_dirs[@]}"; do
+        while IFS= read -r _skill; do
+            _skill_path="${_skills_dir}/${_skill}"
+            if [[ -e "${_skill_path}" || -L "${_skill_path}" ]]; then
+                if ! rm -rf -- "${_skill_path:?}" || [[ -e "${_skill_path}" || -L "${_skill_path}" ]]; then
+                    _failed+=("${_skill_path}")
+                fi
+            fi
+        done < <(matt_pocock_obsolete_pi_skills || true)
+    done
+
+    if [[ "${#_failed[@]}" -gt 0 ]]; then
+        print_warning "Failed to remove obsolete Matt Pocock Pi skills: ${_failed[*]}"
+        return 1
     fi
 }
 
@@ -2320,7 +2404,7 @@ setup_matt_pocock_pi_skills() {
             print_debug "WORK_MACHINE=1, skipping Matt Pocock Pi skills."
         fi
         remove_matt_pocock_pi_skills
-        return 0
+        return
     fi
 
     if ! command -v pi &> /dev/null; then
@@ -2370,13 +2454,18 @@ setup_matt_pocock_pi_skills() {
 
         if [[ "${#_sync_failed[@]}" -gt 0 ]]; then
             print_warning "Matt Pocock Pi skills installed, but failed to sync to active Pi dir ${_agent_dir}: ${_sync_failed[*]}"
-        elif [[ "${#_missing[@]}" -eq 0 ]]; then
-            print_success "Matt Pocock Pi skills installed/updated."
-        else
+            return 1
+        elif [[ "${#_missing[@]}" -gt 0 ]]; then
             print_warning "Matt Pocock Pi skills install completed, but missing expected skills: ${_missing[*]}"
+            return 1
+        elif ! remove_obsolete_matt_pocock_pi_skills; then
+            return 1
+        else
+            print_success "Matt Pocock Pi skills installed/updated."
         fi
     else
         print_warning "Failed to install Matt Pocock Pi skills: ${_output}"
+        return 1
     fi
 }
 
@@ -3185,49 +3274,91 @@ install_iterm2_shell_integration() {
     fi
 }
 
+apt_kept_back_packages() {
+    awk '
+        /The following packages have been kept back:|The following upgrades have been deferred due to phasing:/ { capture=1; next }
+        capture && /^  / {
+            for (i=1; i<=NF; i++) {
+                printf "%s%s", separator, $i
+                separator=" "
+            }
+            next
+        }
+        capture { capture=0 }
+        END { if (separator != "") print "" }
+    '
+}
+
 update_packages() {
+    local _upgrade_output=""
+    local _upgrade_status=0
+    local _kept_back=""
+    local _updates_complete=1
+    local _tmux_hold_added=0
+    local _brew_tmux_pin_added=0
+    local _brew_upgrade_status=0
+    local _apt_holds=""
+    local _brew_pins=""
+
     print_message "Updating all packages..."
-    brew update
-    # Pin tmux during upgrades to prevent killing existing sessions.
-    brew pin tmux 2>/dev/null || true
-    brew upgrade
-    brew unpin tmux 2>/dev/null || true
+    if ! brew update; then
+        print_error "Homebrew update failed."
+        return 1
+    fi
+    # Pin tmux during upgrades without changing a pre-existing user pin.
+    _brew_pins=$(brew list --pinned 2>/dev/null || true)
+    if ! grep -Fxq tmux <<< "${_brew_pins}" && brew pin tmux 2>/dev/null; then
+        _brew_tmux_pin_added=1
+    fi
+    brew upgrade || _brew_upgrade_status=$?
+    if [[ "${_brew_tmux_pin_added}" -eq 1 ]] && ! brew unpin tmux 2>/dev/null; then
+        print_error "Failed to remove the temporary Homebrew tmux pin."
+        return 1
+    fi
+    if [[ "${_brew_upgrade_status}" -ne 0 ]]; then
+        print_error "Homebrew package upgrade failed."
+        return "${_brew_upgrade_status}"
+    fi
     if can_sudo; then
-        sudo apt update
-        sudo apt-mark hold tmux 2>/dev/null || true
-        sudo apt upgrade -y
-        sudo apt-mark unhold tmux 2>/dev/null || true
-        sudo apt autoremove -y
+        if ! sudo apt update; then
+            print_error "Failed to update apt package lists."
+            return 1
+        fi
+        _apt_holds=$(apt-mark showhold 2>/dev/null || true)
+        if dpkg -s tmux > /dev/null 2>&1 && ! grep -Fxq tmux <<< "${_apt_holds}"; then
+            if ! sudo apt-mark hold tmux 2>/dev/null; then
+                print_error "Failed to hold tmux before the package upgrade."
+                return 1
+            fi
+            _tmux_hold_added=1
+        fi
+        _upgrade_output=$(sudo LC_ALL=C apt upgrade --with-new-pkgs -y 2>&1) || _upgrade_status=$?
+        printf '%s\n' "${_upgrade_output}"
+        if [[ "${_tmux_hold_added}" -eq 1 ]] && ! sudo apt-mark unhold tmux 2>/dev/null; then
+            print_error "Failed to remove the temporary tmux hold after the package upgrade."
+            return 1
+        fi
+        if [[ "${_upgrade_status}" -ne 0 ]]; then
+            print_error "Package upgrade failed."
+            return "${_upgrade_status}"
+        fi
+        if ! sudo apt autoremove -y; then
+            print_warning "Package upgrade completed, but autoremove failed."
+            return 1
+        fi
+        _kept_back=$(apt_kept_back_packages <<< "${_upgrade_output}")
+        if [[ -n "${_kept_back}" ]]; then
+            print_warning "Packages remain kept back after upgrade: ${_kept_back}"
+            _updates_complete=0
+        fi
     else
         print_warning "No sudo access - skipping apt system updates."
     fi
-    print_success "Package updates completed."
-}
 
-# Upgrade global npm packages
-upgrade_npm_global_packages() {
-    # Initialize mise for current session (provides npm if Node.js is installed)
-    ensure_brew_available
-    if command -v mise &> /dev/null; then
-        local mise_activation
-        mise_activation=$(mise activate bash || true)
-        eval "${mise_activation}"
-    fi
-
-    # Make sure npm is available
-    if ! command -v npm &> /dev/null; then
-        print_warning "npm not found. Skipping global package upgrade."
-        return
-    fi
-
-    print_message "Upgrading global npm packages..."
-    if npm update -g &> /dev/null; then
-        print_success "Global npm packages upgraded."
-    else
-        print_warning "Failed to upgrade some global npm packages."
+    if [[ "${_updates_complete}" -eq 1 ]]; then
+        print_success "Package updates completed."
     fi
 }
-
 
 # Setup ~/Code directory
 setup_code_directory() {
@@ -3303,9 +3434,11 @@ finish_setup_log() {
 }
 
 run_setup_tasks() {
+    local _setup_had_errors=0
+
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 158 | Last changed: Add z.ai GLM Coding Plan provider for Pi work machines${NC}"
+    echo -e "${GRAY}Version 159 | Last changed: Harden setup idempotency from weekly log audit${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -3368,14 +3501,21 @@ run_setup_tasks() {
     if check_dotfiles_access || setup_dotfiles_deploy_key; then
         # We have access, proceed with chezmoi setup
         install_chezmoi
-        initialize_chezmoi
+        if ! initialize_chezmoi; then
+            _setup_had_errors=1
+        fi
         # chezmoi init --apply overwrites ~/.ssh/config, removing the
         # github-dotfiles host alias needed for deploy key access.
         # Re-bootstrap it before any further chezmoi network operations.
         bootstrap_ssh_config
         configure_chezmoi_git
         update_chezmoi
-        chezmoi apply --force
+        if ! chezmoi apply --force; then
+            print_error "Failed to apply chezmoi dotfiles."
+            _setup_had_errors=1
+        fi
+        # The apply may replace ~/.ssh/config; leave the deploy alias durable.
+        bootstrap_ssh_config
         tmux source ~/.tmux.conf 2>/dev/null || true
     else
         print_warning "Skipping dotfiles management - no access to repository."
@@ -3397,7 +3537,9 @@ run_setup_tasks() {
     install_rtk_cli
     setup_rtk_integrations
     if matt_pocock_pi_skills_disabled; then
-        setup_matt_pocock_pi_skills
+        if ! setup_matt_pocock_pi_skills; then
+            _setup_had_errors=1
+        fi
     fi
     if install_pi_cli; then
         configure_pi_defaults
@@ -3409,7 +3551,9 @@ run_setup_tasks() {
         setup_pi_ask_user
         setup_pi_goal_autoresearch
         if ! matt_pocock_pi_skills_disabled; then
-            setup_matt_pocock_pi_skills
+            if ! setup_matt_pocock_pi_skills; then
+                _setup_had_errors=1
+            fi
         fi
     else
         if [[ "${BAN_PI_SUBAGENTS:-}" == "1" ]]; then
@@ -3422,6 +3566,7 @@ run_setup_tasks() {
             setup_pi_goal_autoresearch
         fi
         print_warning "Skipping Pi extension setup because Pi migration failed."
+        _setup_had_errors=1
     fi
 
     remove_impeccable_resources
@@ -3429,10 +3574,17 @@ run_setup_tasks() {
     remove_compound_engineering_resources
 
     print_section "Final Updates"
-    update_packages
-    upgrade_npm_global_packages
+    if ! update_packages; then
+        _setup_had_errors=1
+    fi
 
-    printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}"
+    if [[ "${_setup_had_errors}" -eq 0 ]]; then
+        printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}"
+    else
+        print_warning "Setup completed with errors; review the failures above."
+    fi
+
+    return "${_setup_had_errors}"
 }
 
 main() {

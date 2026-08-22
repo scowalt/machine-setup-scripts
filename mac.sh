@@ -26,6 +26,7 @@ SETUP_BREW_TRUST_FAILURES=0
 SETUP_LOG_FILE=""
 SETUP_LOG_TEE_PID=""
 SETUP_LOGGING_ACTIVE=0
+DOTFILES_ACCESS_METHOD=""
 
 release_setup_reclaim() {
     if [[ -n "${SETUP_LOCK_RECLAIM_DIR}" ]]; then
@@ -355,6 +356,7 @@ setup_dotfiles_deploy_key() {
         _ssh_output=$(ssh -i "${key_file}" -o StrictHostKeyChecking=accept-new -T git@github.com < /dev/null 2>&1) || true
         if echo "${_ssh_output}" | grep -q "successfully authenticated"; then
             print_success "Deploy key works! Continuing setup..."
+            DOTFILES_ACCESS_METHOD="deploy"
             return 0
         fi
 
@@ -382,6 +384,7 @@ setup_dotfiles_deploy_key() {
 
 # Check if we have access to scowalt/dotfiles via any available method
 check_dotfiles_access() {
+    DOTFILES_ACCESS_METHOD=""
     print_message "Checking access to scowalt/dotfiles..."
 
     # Method 1: Main user with SSH key
@@ -391,6 +394,7 @@ check_dotfiles_access() {
         _ssh_output=$(ssh -T git@github.com < /dev/null 2>&1) || true
         if echo "${_ssh_output}" | grep -q "successfully authenticated"; then
             print_debug "Access via SSH (main user)"
+            DOTFILES_ACCESS_METHOD="ssh"
             return 0
         fi
     fi
@@ -402,6 +406,7 @@ check_dotfiles_access() {
         if curl -sf -H "Authorization: token ${GH_TOKEN_SCOWALT}" \
             "https://api.github.com/repos/scowalt/dotfiles" > /dev/null 2>&1; then
             print_debug "Access via GH_TOKEN_SCOWALT"
+            DOTFILES_ACCESS_METHOD="token"
             return 0
         else
             print_warning "GH_TOKEN_SCOWALT is set but cannot access scowalt/dotfiles"
@@ -418,6 +423,7 @@ check_dotfiles_access() {
         _deploy_ssh_output=$(ssh -i ~/.ssh/dotfiles-deploy-key -T git@github.com < /dev/null 2>&1) || true
         if echo "${_deploy_ssh_output}" | grep -q "successfully authenticated"; then
             print_debug "Access via deploy key"
+            DOTFILES_ACCESS_METHOD="deploy"
             return 0
         else
             print_warning "Deploy key exists but cannot authenticate with GitHub"
@@ -698,17 +704,31 @@ install_sessionwatcher() {
 # privileged network daemons properly. The cask installs the same app as a direct
 # download from tailscale.com and manages the daemon natively.
 setup_tailscale() {
-    # If the formula is installed (not the cask), replace it with the cask
+    # If the formula is installed (not the cask), replace it with the cask.
     if brew list --formula tailscale &>/dev/null 2>&1; then
         print_message "Replacing Tailscale formula with cask (GUI app)..."
         brew services stop tailscale 2>/dev/null || true
-        brew uninstall tailscale 2>/dev/null || true
+        if ! brew uninstall --formula --force tailscale; then
+            print_error "Failed to remove the Tailscale formula."
+            return 1
+        fi
+        if brew list --formula tailscale &>/dev/null 2>&1; then
+            print_error "Tailscale formula versions remain installed after migration."
+            return 1
+        fi
     fi
 
-    # Install the cask if not already present
-    if ! brew list --cask tailscale &>/dev/null 2>&1; then
+    # Homebrew records the GUI cask under the canonical tailscale-app token.
+    if ! brew list --cask tailscale-app &>/dev/null 2>&1; then
         print_message "Installing Tailscale (cask)..."
-        brew install --cask tailscale
+        if ! brew install --cask tailscale-app; then
+            print_error "Failed to install the Tailscale cask."
+            return 1
+        fi
+        if ! brew list --cask tailscale-app &>/dev/null 2>&1; then
+            print_error "Tailscale cask installation could not be verified."
+            return 1
+        fi
         print_success "Tailscale cask installed."
     else
         print_debug "Tailscale cask is already installed."
@@ -721,8 +741,15 @@ setup_tailscale() {
         print_debug "Tailscale app is already running."
     else
         print_message "Starting Tailscale..."
-        open -a Tailscale 2>/dev/null || true
+        if ! open -a Tailscale 2>/dev/null; then
+            print_error "Failed to launch the Tailscale app."
+            return 1
+        fi
         sleep 3
+        if ! pgrep -q "Tailscale" 2>/dev/null; then
+            print_error "Tailscale app did not start after launch."
+            return 1
+        fi
         print_success "Tailscale started."
     fi
 }
@@ -1177,7 +1204,7 @@ bootstrap_ssh_config() {
     fi
 
     # Ensure github-dotfiles host alias exists for deploy key access
-    if ! grep -q "Host github-dotfiles" ~/.ssh/config 2>/dev/null; then
+    if ! awk 'tolower($1) == "host" { for (i=2; i<=NF; i++) if ($i == "github-dotfiles") found=1 } END { exit !found }' ~/.ssh/config 2>/dev/null; then
         print_message "Bootstrapping SSH config for dotfiles access..."
         mkdir -p ~/.ssh
         chmod 700 ~/.ssh
@@ -1207,19 +1234,30 @@ initialize_chezmoi() {
 
     if [[ ! -d "${chez_src}" ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
-        if is_main_user; then
-            # Main user uses SSH with default key for push access
-            if ! chezmoi init --apply --force scowalt/dotfiles --ssh > /dev/null; then
-                print_error "Failed to initialize chezmoi."
+        case "${DOTFILES_ACCESS_METHOD}" in
+            ssh)
+                if ! chezmoi init --apply --force scowalt/dotfiles --ssh > /dev/null; then
+                    print_error "Failed to initialize chezmoi with the verified SSH key."
+                    return 1
+                fi
+                ;;
+            token)
+                if ! chezmoi init --apply --force "https://github.com/scowalt/dotfiles.git" > /dev/null; then
+                    print_error "Failed to initialize chezmoi with the verified GitHub token."
+                    return 1
+                fi
+                ;;
+            deploy)
+                if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git" > /dev/null; then
+                    print_error "Failed to initialize chezmoi with the verified deploy key."
+                    return 1
+                fi
+                ;;
+            *)
+                print_error "Cannot initialize chezmoi without a verified dotfiles access method."
                 return 1
-            fi
-        else
-            # Secondary users use SSH via deploy key (github-dotfiles alias)
-            if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git" > /dev/null; then
-                print_error "Failed to initialize chezmoi. Check deploy key setup."
-                return 1
-            fi
-        fi
+                ;;
+        esac
         print_success "chezmoi initialized with scowalt/dotfiles."
     else
         print_debug "chezmoi is already initialized."
@@ -2444,6 +2482,32 @@ seed_pi_zai_models() {
     return 1
 }
 
+# Validate and repair npm's effective user configuration before setup mutates
+# any npm-owned package tree. npm handles registry-scoped auth migration without
+# exposing configuration values in the setup log.
+NPM_CONFIGURATION_COMMAND=""
+ensure_npm_configuration() {
+    local _npm_command=""
+
+    _npm_command=$(command -v npm 2>/dev/null || true)
+    if [[ -z "${_npm_command}" ]]; then
+        print_warning "npm not found. Cannot validate npm configuration."
+        return 1
+    fi
+    if [[ "${NPM_CONFIGURATION_COMMAND}" == "${_npm_command}" ]]; then
+        return 0
+    fi
+
+    if ! npm config fix > /dev/null 2>&1 || ! npm config list --location=user > /dev/null 2>&1; then
+        print_error "npm configuration is invalid and automatic repair failed."
+        print_debug "Run 'npm config fix', review the user npmrc, and rerun setup."
+        return 1
+    fi
+
+    NPM_CONFIGURATION_COMMAND="${_npm_command}"
+    print_debug "npm configuration validated."
+}
+
 # Install/update Pi coding agent
 install_pi_cli() {
     local _new_package="@earendil-works/pi-coding-agent"
@@ -2478,6 +2542,8 @@ install_pi_cli() {
         print_debug "Install Node.js/npm, then run: npm install -g --ignore-scripts --prefix \"${_local_prefix}\" ${_new_package}@latest"
         return 1
     fi
+
+    ensure_npm_configuration || return 1
 
     # Remove old npm-package ownership before installing so npm can claim ~/.local/bin/pi.
     npm uninstall -g --prefix "${_local_prefix}" "${_old_package}" > /dev/null 2>&1 || true
@@ -3943,11 +4009,22 @@ setup_pi_goal_autoresearch() {
 matt_pocock_pi_skills() {
     printf '%s\n' \
         setup-matt-pocock-skills \
-        diagnose \
+        diagnosing-bugs \
         tdd \
         improve-codebase-architecture \
-        zoom-out \
         grill-with-docs
+}
+
+# Setup-managed skill names retired or renamed upstream.
+matt_pocock_obsolete_pi_skills() {
+    printf '%s\n' \
+        diagnose \
+        zoom-out
+}
+
+matt_pocock_all_managed_pi_skills() {
+    matt_pocock_pi_skills
+    matt_pocock_obsolete_pi_skills
 }
 
 matt_pocock_pi_skills_disabled() {
@@ -3972,14 +4049,14 @@ remove_matt_pocock_pi_skills() {
     for _skills_dir in "${_skills_dirs[@]}"; do
         while IFS= read -r _skill; do
             _skill_path="${_skills_dir}/${_skill}"
-            if [[ -e "${_skill_path}" ]]; then
-                if rm -rf -- "${_skill_path:?}" && [[ ! -e "${_skill_path}" ]]; then
+            if [[ -e "${_skill_path}" || -L "${_skill_path}" ]]; then
+                if rm -rf -- "${_skill_path:?}" && [[ ! -e "${_skill_path}" && ! -L "${_skill_path}" ]]; then
                     _removed=1
                 else
                     _failed+=("${_skill}")
                 fi
             fi
-        done < <(matt_pocock_pi_skills || true)
+        done < <(matt_pocock_all_managed_pi_skills || true)
     done
 
     if [[ "${#_failed[@]}" -gt 0 ]]; then
@@ -3989,6 +4066,37 @@ remove_matt_pocock_pi_skills() {
         print_success "Matt Pocock Pi skills disabled."
     else
         print_debug "Matt Pocock Pi skills disabled; no installed copies found."
+    fi
+}
+
+# Remove only retired setup-managed names after their replacements validate.
+remove_obsolete_matt_pocock_pi_skills() {
+    local _default_agent_dir="${HOME}/.pi/agent"
+    local _active_agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
+    local _skills_dir=""
+    local _skill=""
+    local _skill_path=""
+    local _failed=()
+    local _skills_dirs=("${_default_agent_dir}/skills")
+
+    if [[ "${_active_agent_dir}" != "${_default_agent_dir}" ]]; then
+        _skills_dirs+=("${_active_agent_dir}/skills")
+    fi
+
+    for _skills_dir in "${_skills_dirs[@]}"; do
+        while IFS= read -r _skill; do
+            _skill_path="${_skills_dir}/${_skill}"
+            if [[ -e "${_skill_path}" || -L "${_skill_path}" ]]; then
+                if ! rm -rf -- "${_skill_path:?}" || [[ -e "${_skill_path}" || -L "${_skill_path}" ]]; then
+                    _failed+=("${_skill_path}")
+                fi
+            fi
+        done < <(matt_pocock_obsolete_pi_skills || true)
+    done
+
+    if [[ "${#_failed[@]}" -gt 0 ]]; then
+        print_warning "Failed to remove obsolete Matt Pocock Pi skills: ${_failed[*]}"
+        return 1
     fi
 }
 
@@ -4012,7 +4120,7 @@ setup_matt_pocock_pi_skills() {
             print_debug "WORK_MACHINE=1, skipping Matt Pocock Pi skills."
         fi
         remove_matt_pocock_pi_skills
-        return 0
+        return
     fi
 
     if ! command -v pi &> /dev/null; then
@@ -4062,13 +4170,18 @@ setup_matt_pocock_pi_skills() {
 
         if [[ "${#_sync_failed[@]}" -gt 0 ]]; then
             print_warning "Matt Pocock Pi skills installed, but failed to sync to active Pi dir ${_agent_dir}: ${_sync_failed[*]}"
-        elif [[ "${#_missing[@]}" -eq 0 ]]; then
-            print_success "Matt Pocock Pi skills installed/updated."
-        else
+            return 1
+        elif [[ "${#_missing[@]}" -gt 0 ]]; then
             print_warning "Matt Pocock Pi skills install completed, but missing expected skills: ${_missing[*]}"
+            return 1
+        elif ! remove_obsolete_matt_pocock_pi_skills; then
+            return 1
+        else
+            print_success "Matt Pocock Pi skills installed/updated."
         fi
     else
         print_warning "Failed to install Matt Pocock Pi skills: ${_output}"
+        return 1
     fi
 }
 
@@ -4537,23 +4650,6 @@ update_brew() {
     fi
 }
 
-# Upgrade global npm packages
-upgrade_npm_global_packages() {
-    # Make sure npm is available
-    if ! command -v npm &> /dev/null; then
-        print_warning "npm not found. Skipping global package upgrade."
-        return
-    fi
-
-    print_message "Upgrading global npm packages..."
-    if npm update -g &> /dev/null; then
-        print_success "Global npm packages upgraded."
-    else
-        print_warning "Failed to upgrade some global npm packages."
-    fi
-}
-
-
 # Setup ~/Code directory
 setup_code_directory() {
     local code_dir="${HOME}/Code"
@@ -4758,10 +4854,12 @@ enable_screen_sharing() {
 }
 
 run_setup_tasks() {
+    local _setup_had_errors=0
+
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 192 | Last changed: Add z.ai GLM Coding Plan provider for Pi work machines${NC}"
+    echo -e "${GRAY}Version 193 | Last changed: Harden setup idempotency from weekly log audit${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -4800,7 +4898,7 @@ run_setup_tasks() {
         enable_ssh
 
         # Install Tailscale as cask (GUI app) and start daemon
-        setup_tailscale
+        setup_tailscale || return 1
 
         # Install Nerd Font for terminal icons (Starship prompt, etc.)
         install_nerd_font
@@ -4894,14 +4992,21 @@ HELPER_EOF
         # Set up the credential helper for GitHub
         setup_github_credential_helper
 
-        initialize_chezmoi
+        if ! initialize_chezmoi; then
+            _setup_had_errors=1
+        fi
         # chezmoi init --apply overwrites ~/.ssh/config, removing the
         # github-dotfiles host alias needed for deploy key access.
         # Re-bootstrap it before any further chezmoi network operations.
         bootstrap_ssh_config
         configure_chezmoi_git
         update_chezmoi
-        chezmoi apply --force
+        if ! chezmoi apply --force; then
+            print_error "Failed to apply chezmoi dotfiles."
+            _setup_had_errors=1
+        fi
+        # The apply may replace ~/.ssh/config; leave the deploy alias durable.
+        bootstrap_ssh_config
         tmux source ~/.tmux.conf 2>/dev/null || true
     else
         print_warning "Skipping dotfiles management - no access to repository."
@@ -4933,7 +5038,9 @@ HELPER_EOF
     install_rtk_cli
     setup_rtk_integrations
     if matt_pocock_pi_skills_disabled; then
-        setup_matt_pocock_pi_skills
+        if ! setup_matt_pocock_pi_skills; then
+            _setup_had_errors=1
+        fi
     fi
     if install_pi_cli; then
         configure_pi_defaults
@@ -4945,7 +5052,9 @@ HELPER_EOF
         setup_pi_ask_user
         setup_pi_goal_autoresearch
         if ! matt_pocock_pi_skills_disabled; then
-            setup_matt_pocock_pi_skills
+            if ! setup_matt_pocock_pi_skills; then
+                _setup_had_errors=1
+            fi
         fi
     else
         if [[ "${BAN_PI_SUBAGENTS:-}" == "1" ]]; then
@@ -4958,6 +5067,7 @@ HELPER_EOF
             setup_pi_goal_autoresearch
         fi
         print_warning "Skipping Pi extension setup because Pi migration failed."
+        _setup_had_errors=1
     fi
 
     remove_impeccable_resources
@@ -4969,9 +5079,14 @@ HELPER_EOF
         update_brew
     fi
 
-    upgrade_npm_global_packages
 
-    printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}"
+    if [[ "${_setup_had_errors}" -eq 0 ]]; then
+        printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}"
+    else
+        print_warning "Setup completed with errors; review the failures above."
+    fi
+
+    return "${_setup_had_errors}"
 }
 
 main() {
