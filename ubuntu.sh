@@ -22,6 +22,7 @@ SETUP_ORIGINAL_CLAUDE_COMMAND=$(command -v claude 2>/dev/null || true)
 SETUP_LOG_FILE=""
 SETUP_LOG_TEE_PID=""
 SETUP_LOGGING_ACTIVE=0
+DOTFILES_ACCESS_METHOD=""
 
 # Acquire a non-blocking per-user setup lock so overlapping setup runs don't
 # corrupt shared global package directories (npm, Bun, Homebrew, etc.). The lock
@@ -305,7 +306,7 @@ can_sudo() {
 # Bootstrap SSH config for deploy key access to dotfiles
 bootstrap_ssh_config() {
     # Ensure github-dotfiles host alias exists for deploy key access
-    if ! grep -q "Host github-dotfiles" ~/.ssh/config 2>/dev/null; then
+    if ! awk 'tolower($1) == "host" { for (i=2; i<=NF; i++) if ($i == "github-dotfiles") found=1 } END { exit !found }' ~/.ssh/config 2>/dev/null; then
         print_message "Bootstrapping SSH config for dotfiles access..."
         mkdir -p ~/.ssh
         chmod 700 ~/.ssh
@@ -382,6 +383,7 @@ setup_dotfiles_deploy_key() {
         _ssh_output=$(ssh -i "${key_file}" -o StrictHostKeyChecking=accept-new -T git@github.com < /dev/null 2>&1) || true
         if echo "${_ssh_output}" | grep -q "successfully authenticated"; then
             print_success "Deploy key works! Continuing setup..."
+            DOTFILES_ACCESS_METHOD="deploy"
             return 0
         fi
 
@@ -409,6 +411,7 @@ setup_dotfiles_deploy_key() {
 
 # Check if we have access to scowalt/dotfiles via any available method
 check_dotfiles_access() {
+    DOTFILES_ACCESS_METHOD=""
     print_message "Checking access to scowalt/dotfiles..."
 
     # Method 1: User with verified SSH key on GitHub
@@ -418,6 +421,7 @@ check_dotfiles_access() {
         _ssh_output=$(ssh -T git@github.com < /dev/null 2>&1) || true
         if echo "${_ssh_output}" | grep -q "successfully authenticated"; then
             print_debug "Access via SSH (verified key)"
+            DOTFILES_ACCESS_METHOD="ssh"
             return 0
         fi
     fi
@@ -429,6 +433,7 @@ check_dotfiles_access() {
         if curl -sf -H "Authorization: token ${GH_TOKEN_SCOWALT}" \
             "https://api.github.com/repos/scowalt/dotfiles" > /dev/null 2>&1; then
             print_debug "Access via GH_TOKEN_SCOWALT"
+            DOTFILES_ACCESS_METHOD="token"
             return 0
         else
             print_warning "GH_TOKEN_SCOWALT is set but cannot access scowalt/dotfiles"
@@ -445,6 +450,7 @@ check_dotfiles_access() {
         _deploy_ssh_output=$(ssh -i ~/.ssh/dotfiles-deploy-key -T git@github.com < /dev/null 2>&1) || true
         if echo "${_deploy_ssh_output}" | grep -q "successfully authenticated"; then
             print_debug "Access via deploy key"
+            DOTFILES_ACCESS_METHOD="deploy"
             return 0
         else
             print_warning "Deploy key exists but cannot authenticate with GitHub"
@@ -610,20 +616,70 @@ ensure_not_root() {
     cd ~ || return 1
 }
 
+apt_kept_back_packages() {
+    awk '
+        /The following packages have been kept back:|The following upgrades have been deferred due to phasing:/ { capture=1; next }
+        capture && /^  / {
+            for (i=1; i<=NF; i++) {
+                printf "%s%s", separator, $i
+                separator=" "
+            }
+            next
+        }
+        capture { capture=0 }
+        END { if (separator != "") print "" }
+    '
+}
+
 # Update dependencies non-silently
 update_dependencies() {
+    local _upgrade_output=""
+    local _upgrade_status=0
+    local _kept_back=""
+    local _tmux_hold_added=0
+    local _apt_holds=""
+
     if ! can_sudo; then
         print_warning "No sudo access - skipping system updates."
         return
     fi
     print_message "Updating package lists..."
-    sudo DEBIAN_FRONTEND=noninteractive apt-get update
-    # Hold tmux during upgrades to prevent killing existing sessions.
-    sudo apt-mark hold tmux 2>/dev/null || true
-    sudo DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" upgrade -y
-    sudo apt-mark unhold tmux 2>/dev/null || true
-    sudo DEBIAN_FRONTEND=noninteractive apt-get autoremove -y
-    print_success "Package lists updated."
+    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get update; then
+        print_error "Failed to update package lists."
+        return 1
+    fi
+
+    # Hold tmux during upgrades without changing a pre-existing user hold.
+    _apt_holds=$(apt-mark showhold 2>/dev/null || true)
+    if dpkg -s tmux > /dev/null 2>&1 && ! grep -Fxq tmux <<< "${_apt_holds}"; then
+        if ! sudo apt-mark hold tmux 2>/dev/null; then
+            print_error "Failed to hold tmux before the package upgrade."
+            return 1
+        fi
+        _tmux_hold_added=1
+    fi
+    _upgrade_output=$(sudo LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::="--force-confold" upgrade --with-new-pkgs -y 2>&1) || _upgrade_status=$?
+    printf '%s\n' "${_upgrade_output}"
+    if [[ "${_tmux_hold_added}" -eq 1 ]] && ! sudo apt-mark unhold tmux 2>/dev/null; then
+        print_error "Failed to remove the temporary tmux hold after the package upgrade."
+        return 1
+    fi
+
+    if [[ "${_upgrade_status}" -ne 0 ]]; then
+        print_error "Package upgrade failed."
+        return "${_upgrade_status}"
+    fi
+    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get autoremove -y; then
+        print_warning "Package upgrade completed, but autoremove failed."
+        return 1
+    fi
+
+    _kept_back=$(apt_kept_back_packages <<< "${_upgrade_output}")
+    if [[ -n "${_kept_back}" ]]; then
+        print_warning "Packages remain kept back after upgrade: ${_kept_back}"
+    else
+        print_success "System packages updated."
+    fi
 }
 
 # Update and install core dependencies silently
@@ -927,19 +983,30 @@ initialize_chezmoi() {
 
     if [[ ! -d "${chez_src}" ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles..."
-        if has_verified_ssh_key; then
-            # User with verified SSH key uses default SSH for push access
-            if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
-                print_error "Failed to initialize chezmoi. Please review the output above."
+        case "${DOTFILES_ACCESS_METHOD}" in
+            ssh)
+                if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
+                    print_error "Failed to initialize chezmoi with the verified SSH key."
+                    return 1
+                fi
+                ;;
+            token)
+                if ! chezmoi init --apply --force "https://github.com/scowalt/dotfiles.git"; then
+                    print_error "Failed to initialize chezmoi with the verified GitHub token."
+                    return 1
+                fi
+                ;;
+            deploy)
+                if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
+                    print_error "Failed to initialize chezmoi with the verified deploy key."
+                    return 1
+                fi
+                ;;
+            *)
+                print_error "Cannot initialize chezmoi without a verified dotfiles access method."
                 return 1
-            fi
-        else
-            # Other users use SSH via deploy key (github-dotfiles alias)
-            if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
-                print_error "Failed to initialize chezmoi. Please review the output above."
-                return 1
-            fi
-        fi
+                ;;
+        esac
         print_success "chezmoi initialized with scowalt/dotfiles."
     else
         print_debug "chezmoi is already initialized."
@@ -964,28 +1031,52 @@ EOF
     fi
 }
 
-# Fix chezmoi remote URL when switching from personal SSH to deploy key
+# Reconcile chezmoi's remote with the strongest verified SSH credential.
 fix_chezmoi_remote_for_deploy_key() {
     local chez_src="${HOME}/.local/share/chezmoi"
+    local current_remote=""
+    local desired_remote=""
+    local personal_key=""
+    local ssh_output=""
     [[ ! -d "${chez_src}/.git" ]] && return 0
 
-    # Only fix if we're NOT using a verified personal SSH key
+    current_remote=$(git -C "${chez_src}" remote get-url origin 2>/dev/null) || return 0
     if has_verified_ssh_key; then
+        if [[ -f "${HOME}/.ssh/id_rsa" ]]; then
+            personal_key="${HOME}/.ssh/id_rsa"
+        elif [[ -f "${HOME}/.ssh/id_ed25519" ]]; then
+            personal_key="${HOME}/.ssh/id_ed25519"
+        fi
+        if [[ -n "${personal_key}" ]]; then
+            ssh_output=$(ssh -o IdentitiesOnly=yes -i "${personal_key}" -T git@github.com < /dev/null 2>&1) || true
+            if grep -q "successfully authenticated" <<< "${ssh_output}"; then
+                desired_remote="git@github.com:scowalt/dotfiles.git"
+            fi
+        fi
+    fi
+    if [[ -z "${desired_remote}" && -f "${HOME}/.ssh/dotfiles-deploy-key" ]]; then
+        ssh_output=$(ssh -o IdentitiesOnly=yes -i "${HOME}/.ssh/dotfiles-deploy-key" -T git@github.com < /dev/null 2>&1) || true
+        if grep -q "successfully authenticated" <<< "${ssh_output}"; then
+            desired_remote="git@github-dotfiles:scowalt/dotfiles.git"
+        fi
+    fi
+    if [[ -z "${desired_remote}" ]]; then
+        print_warning "Could not verify an SSH credential for the chezmoi remote; leaving it unchanged."
         return 0
     fi
 
-    # Check current remote URL
-    local current_remote
-    current_remote=$(git -C "${chez_src}" remote get-url origin 2>/dev/null) || return 0
+    [[ "${current_remote}" == "${desired_remote}" ]] && return 0
+    case "${current_remote}" in
+        git@github.com:scowalt/dotfiles.git|git@github-dotfiles:scowalt/dotfiles.git) ;;
+        *) return 0 ;;
+    esac
 
-    # If using github.com directly, switch to github-dotfiles alias for deploy key
-    if [[ "${current_remote}" == "git@github.com:scowalt/dotfiles.git" ]]; then
-        print_message "Updating chezmoi remote URL for deploy key access..."
-        if git -C "${chez_src}" remote set-url origin "git@github-dotfiles:scowalt/dotfiles.git"; then
-            print_success "Chezmoi remote URL updated to use deploy key."
-        else
-            print_warning "Failed to update chezmoi remote URL."
-        fi
+    print_message "Reconciling chezmoi remote with available SSH credentials..."
+    if git -C "${chez_src}" remote set-url origin "${desired_remote}"; then
+        print_success "Chezmoi remote URL updated."
+    else
+        print_warning "Failed to update chezmoi remote URL."
+        return 1
     fi
 }
 
@@ -2277,6 +2368,32 @@ seed_pi_zai_models() {
     return 1
 }
 
+# Validate and repair npm's effective user configuration before setup mutates
+# any npm-owned package tree. npm handles registry-scoped auth migration without
+# exposing configuration values in the setup log.
+NPM_CONFIGURATION_COMMAND=""
+ensure_npm_configuration() {
+    local _npm_command=""
+
+    _npm_command=$(command -v npm 2>/dev/null || true)
+    if [[ -z "${_npm_command}" ]]; then
+        print_warning "npm not found. Cannot validate npm configuration."
+        return 1
+    fi
+    if [[ "${NPM_CONFIGURATION_COMMAND}" == "${_npm_command}" ]]; then
+        return 0
+    fi
+
+    if ! npm config fix > /dev/null 2>&1 || ! npm config list --location=user > /dev/null 2>&1; then
+        print_error "npm configuration is invalid and automatic repair failed."
+        print_debug "Run 'npm config fix', review the user npmrc, and rerun setup."
+        return 1
+    fi
+
+    NPM_CONFIGURATION_COMMAND="${_npm_command}"
+    print_debug "npm configuration validated."
+}
+
 # Install/update Pi coding agent
 install_pi_cli() {
     local _new_package="@earendil-works/pi-coding-agent"
@@ -2311,6 +2428,8 @@ install_pi_cli() {
         print_debug "Install Node.js/npm, then run: npm install -g --ignore-scripts --prefix \"${_local_prefix}\" ${_new_package}@latest"
         return 1
     fi
+
+    ensure_npm_configuration || return 1
 
     # Remove old npm-package ownership before installing so npm can claim ~/.local/bin/pi.
     npm uninstall -g --prefix "${_local_prefix}" "${_old_package}" > /dev/null 2>&1 || true
@@ -3902,11 +4021,22 @@ setup_pi_goal_autoresearch() {
 matt_pocock_pi_skills() {
     printf '%s\n' \
         setup-matt-pocock-skills \
-        diagnose \
+        diagnosing-bugs \
         tdd \
         improve-codebase-architecture \
-        zoom-out \
         grill-with-docs
+}
+
+# Setup-managed skill names retired or renamed upstream.
+matt_pocock_obsolete_pi_skills() {
+    printf '%s\n' \
+        diagnose \
+        zoom-out
+}
+
+matt_pocock_all_managed_pi_skills() {
+    matt_pocock_pi_skills
+    matt_pocock_obsolete_pi_skills
 }
 
 matt_pocock_pi_skills_disabled() {
@@ -3931,14 +4061,14 @@ remove_matt_pocock_pi_skills() {
     for _skills_dir in "${_skills_dirs[@]}"; do
         while IFS= read -r _skill; do
             _skill_path="${_skills_dir}/${_skill}"
-            if [[ -e "${_skill_path}" ]]; then
-                if rm -rf -- "${_skill_path:?}" && [[ ! -e "${_skill_path}" ]]; then
+            if [[ -e "${_skill_path}" || -L "${_skill_path}" ]]; then
+                if rm -rf -- "${_skill_path:?}" && [[ ! -e "${_skill_path}" && ! -L "${_skill_path}" ]]; then
                     _removed=1
                 else
                     _failed+=("${_skill}")
                 fi
             fi
-        done < <(matt_pocock_pi_skills || true)
+        done < <(matt_pocock_all_managed_pi_skills || true)
     done
 
     if [[ "${#_failed[@]}" -gt 0 ]]; then
@@ -3948,6 +4078,37 @@ remove_matt_pocock_pi_skills() {
         print_success "Matt Pocock Pi skills disabled."
     else
         print_debug "Matt Pocock Pi skills disabled; no installed copies found."
+    fi
+}
+
+# Remove only retired setup-managed names after their replacements validate.
+remove_obsolete_matt_pocock_pi_skills() {
+    local _default_agent_dir="${HOME}/.pi/agent"
+    local _active_agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
+    local _skills_dir=""
+    local _skill=""
+    local _skill_path=""
+    local _failed=()
+    local _skills_dirs=("${_default_agent_dir}/skills")
+
+    if [[ "${_active_agent_dir}" != "${_default_agent_dir}" ]]; then
+        _skills_dirs+=("${_active_agent_dir}/skills")
+    fi
+
+    for _skills_dir in "${_skills_dirs[@]}"; do
+        while IFS= read -r _skill; do
+            _skill_path="${_skills_dir}/${_skill}"
+            if [[ -e "${_skill_path}" || -L "${_skill_path}" ]]; then
+                if ! rm -rf -- "${_skill_path:?}" || [[ -e "${_skill_path}" || -L "${_skill_path}" ]]; then
+                    _failed+=("${_skill_path}")
+                fi
+            fi
+        done < <(matt_pocock_obsolete_pi_skills || true)
+    done
+
+    if [[ "${#_failed[@]}" -gt 0 ]]; then
+        print_warning "Failed to remove obsolete Matt Pocock Pi skills: ${_failed[*]}"
+        return 1
     fi
 }
 
@@ -3971,7 +4132,7 @@ setup_matt_pocock_pi_skills() {
             print_debug "WORK_MACHINE=1, skipping Matt Pocock Pi skills."
         fi
         remove_matt_pocock_pi_skills
-        return 0
+        return
     fi
 
     if ! command -v pi &> /dev/null; then
@@ -4021,13 +4182,18 @@ setup_matt_pocock_pi_skills() {
 
         if [[ "${#_sync_failed[@]}" -gt 0 ]]; then
             print_warning "Matt Pocock Pi skills installed, but failed to sync to active Pi dir ${_agent_dir}: ${_sync_failed[*]}"
-        elif [[ "${#_missing[@]}" -eq 0 ]]; then
-            print_success "Matt Pocock Pi skills installed/updated."
-        else
+            return 1
+        elif [[ "${#_missing[@]}" -gt 0 ]]; then
             print_warning "Matt Pocock Pi skills install completed, but missing expected skills: ${_missing[*]}"
+            return 1
+        elif ! remove_obsolete_matt_pocock_pi_skills; then
+            return 1
+        else
+            print_success "Matt Pocock Pi skills installed/updated."
         fi
     else
         print_warning "Failed to install Matt Pocock Pi skills: ${_output}"
+        return 1
     fi
 }
 
@@ -4443,6 +4609,40 @@ https://downloads.1password.com/linux/debian/${repo_arch} stable main" \
     print_success "1Password CLI installed."
 }
 
+# Enable Tailscale SSH idempotently and verify the resulting preference.
+tailscale_ssh_is_enabled() {
+    local _prefs=""
+    _prefs=$(tailscale debug prefs 2>/dev/null || true)
+    grep -Eq '"RunSSH"[[:space:]]*:[[:space:]]*true' <<< "${_prefs}"
+}
+
+setup_tailscale_ssh() {
+    if ! command -v tailscale &> /dev/null; then
+        print_debug "Tailscale not installed, skipping SSH setup."
+        return 0
+    fi
+
+    if tailscale_ssh_is_enabled; then
+        print_debug "Tailscale SSH is already enabled."
+        return 0
+    fi
+    if ! can_sudo; then
+        print_error "No sudo access; cannot enable Tailscale SSH."
+        return 1
+    fi
+
+    print_message "Enabling Tailscale SSH..."
+    if ! sudo tailscale set --ssh; then
+        print_error "Failed to enable Tailscale SSH."
+        return 1
+    fi
+    if ! tailscale_ssh_is_enabled; then
+        print_error "Tailscale accepted the SSH setting, but RunSSH is still disabled."
+        return 1
+    fi
+    print_success "Tailscale SSH enabled."
+}
+
 # Install Tailscale
 install_tailscale() {
     # --- Install if not present ---
@@ -4504,15 +4704,7 @@ install_tailscale() {
     fi
 
     # --- Ensure Tailscale SSH is enabled ---
-    local run_ssh
-    run_ssh=$(tailscale debug prefs 2>/dev/null | grep -o '"RunSSH":[a-z]*' | cut -d: -f2 || true)
-    if [[ "${run_ssh}" != "true" ]]; then
-        print_message "Enabling Tailscale SSH..."
-        sudo tailscale set --ssh
-        print_success "Tailscale SSH enabled."
-    else
-        print_debug "Tailscale SSH is already enabled."
-    fi
+    setup_tailscale_ssh || return 1
 
     # --- Verify SSH is accessible (ACL check) ---
     local tailscale_ip
@@ -4935,31 +5127,30 @@ enable_tmux_service() {
 
     print_message "Enabling tmux systemd user service..."
 
-    # systemctl --user requires a D-Bus session bus; skip if unavailable
-    # (e.g. running via curl | bash over SSH or from a non-login context)
-    if ! systemctl --user daemon-reload 2>/dev/null; then
-        print_warning "D-Bus session bus not available — skipping tmux service setup."
-        print_debug "Run 'systemctl --user enable --now tmux.service' manually in a login session."
-        return
+    # Use the same canonical D-Bus and machined-mediated fallback as Paseo so
+    # lingering user managers remain reachable from non-login setup sessions.
+    if ! paseo_systemctl_user daemon-reload; then
+        print_warning "Could not reload the user service manager; skipping tmux service setup."
+        return 1
     fi
 
     # Enable for next boot (never restart — restarting kills existing tmux windows)
-    if systemctl --user enable tmux.service 2>/dev/null; then
+    if paseo_systemctl_user enable tmux.service; then
         print_success "tmux service enabled."
+    elif paseo_systemctl_user is-enabled tmux.service; then
+        print_debug "tmux service already enabled."
     else
-        if systemctl --user is-enabled tmux.service &>/dev/null; then
-            print_debug "tmux service already enabled."
-        else
-            print_warning "Could not enable tmux service."
-        fi
+        print_warning "Could not enable tmux service."
+        return 1
     fi
 
     # Start only if not already running (never restart)
-    if ! systemctl --user is-active tmux.service &>/dev/null; then
-        if systemctl --user start tmux.service 2>/dev/null; then
+    if ! paseo_systemctl_user is-active tmux.service; then
+        if paseo_systemctl_user start tmux.service; then
             print_success "tmux service started."
         else
             print_warning "Could not start tmux service."
+            return 1
         fi
     else
         print_debug "tmux service already running."
@@ -4982,30 +5173,6 @@ install_iterm2_shell_integration() {
         print_warning "Failed to download iTerm2 shell integration."
     fi
 }
-
-# Upgrade global npm packages
-upgrade_npm_global_packages() {
-    # Initialize mise for current session (provides npm if Node.js is installed)
-    if command -v mise &> /dev/null; then
-        local mise_activation
-        mise_activation=$(mise activate bash || true)
-        eval "${mise_activation}"
-    fi
-
-    # Make sure npm is available
-    if ! command -v npm &> /dev/null; then
-        print_warning "npm not found. Skipping global package upgrade."
-        return
-    fi
-
-    print_message "Upgrading global npm packages..."
-    if npm update -g &> /dev/null; then
-        print_success "Global npm packages upgraded."
-    else
-        print_warning "Failed to upgrade some global npm packages."
-    fi
-}
-
 
 # Setup ~/Code directory
 setup_code_directory() {
@@ -5106,8 +5273,10 @@ setup_headless_sudo() {
 }
 
 run_setup_tasks() {
+    local _setup_had_errors=0
+
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 214 | Last changed: Add z.ai GLM Coding Plan provider for Pi work machines"
+    echo -e "${GRAY}Version 215 | Last changed: Harden setup idempotency from weekly log audit"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5133,7 +5302,9 @@ run_setup_tasks() {
     fix_dpkg_and_broken_dependencies
 
     print_section "System Updates"
-    update_dependencies # I do this first b/c on raspberry pi, it's slow
+    if ! update_dependencies; then
+        _setup_had_errors=1
+    fi
     update_and_install_core
     install_nerd_font
 
@@ -5160,7 +5331,9 @@ run_setup_tasks() {
 
     print_section "Security Tools"
     install_1password_cli
-    install_tailscale
+    if ! install_tailscale; then
+        _setup_had_errors=1
+    fi
     install_secrets_manager
     install_gcloud_cli
     install_fail2ban
@@ -5215,15 +5388,24 @@ HELPER_EOF
         setup_github_credential_helper
 
         install_chezmoi
-        initialize_chezmoi
+        if ! initialize_chezmoi; then
+            _setup_had_errors=1
+        fi
         # chezmoi init --apply overwrites ~/.ssh/config, removing the
         # github-dotfiles host alias needed for deploy key access.
         # Re-bootstrap it before any further chezmoi network operations.
         bootstrap_ssh_config
         configure_chezmoi_git
-        fix_chezmoi_remote_for_deploy_key
+        if ! fix_chezmoi_remote_for_deploy_key; then
+            _setup_had_errors=1
+        fi
         update_chezmoi
-        (chezmoi apply --force) || true
+        if ! chezmoi apply --force; then
+            print_error "Failed to apply chezmoi dotfiles."
+            _setup_had_errors=1
+        fi
+        # The apply may replace ~/.ssh/config; leave the deploy alias durable.
+        bootstrap_ssh_config
         tmux source ~/.tmux.conf 2>/dev/null || true
     else
         print_warning "Skipping dotfiles management - no access to repository."
@@ -5234,7 +5416,9 @@ HELPER_EOF
     install_act
     install_tmux_plugins
     enable_user_lingering
-    enable_tmux_service
+    if ! enable_tmux_service; then
+        _setup_had_errors=1
+    fi
     install_iterm2_shell_integration
 
     print_section "Additional Development Tools"
@@ -5249,7 +5433,9 @@ HELPER_EOF
     install_rtk_cli
     setup_rtk_integrations
     if matt_pocock_pi_skills_disabled; then
-        setup_matt_pocock_pi_skills
+        if ! setup_matt_pocock_pi_skills; then
+            _setup_had_errors=1
+        fi
     fi
     if install_pi_cli; then
         configure_pi_defaults
@@ -5261,7 +5447,9 @@ HELPER_EOF
         setup_pi_ask_user
         setup_pi_goal_autoresearch
         if ! matt_pocock_pi_skills_disabled; then
-            setup_matt_pocock_pi_skills
+            if ! setup_matt_pocock_pi_skills; then
+                _setup_had_errors=1
+            fi
         fi
     else
         if [[ "${BAN_PI_SUBAGENTS:-}" == "1" ]]; then
@@ -5274,6 +5462,7 @@ HELPER_EOF
             setup_pi_goal_autoresearch
         fi
         print_warning "Skipping Pi extension setup because Pi migration failed."
+        _setup_had_errors=1
     fi
 
     remove_impeccable_resources
@@ -5281,9 +5470,14 @@ HELPER_EOF
     remove_compound_engineering_resources
 
     print_section "Final Updates"
-    upgrade_npm_global_packages
 
-    printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}"
+    if [[ "${_setup_had_errors}" -eq 0 ]]; then
+        printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}"
+    else
+        print_warning "Setup completed with errors; review the failures above."
+    fi
+
+    return "${_setup_had_errors}"
 }
 
 main() {

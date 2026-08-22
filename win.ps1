@@ -1427,6 +1427,33 @@ function Remove-NonCanonicalPiInstalls {
     }
 }
 
+# Validate and repair npm's effective user configuration before setup mutates
+# any npm-owned package tree. npm performs registry-scoped auth migration while
+# all command output stays out of the setup transcript.
+function Repair-NpmConfiguration {
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Warning "npm not found. Cannot validate npm configuration."
+        return $false
+    }
+
+    & npm config fix *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "$failIcon npm configuration is invalid and automatic repair failed." -ForegroundColor Red
+        Write-Debug "Run 'npm config fix', review the user npmrc, and rerun setup."
+        return $false
+    }
+
+    & npm config list --location=user *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "$failIcon npm configuration remains invalid after automatic repair." -ForegroundColor Red
+        Write-Debug "Run 'npm config fix', review the user npmrc, and rerun setup."
+        return $false
+    }
+
+    Write-Debug "npm configuration validated."
+    return $true
+}
+
 # Function to install/update Pi coding agent
 function Install-PiCli {
     $newPackage = "@earendil-works/pi-coding-agent"
@@ -1463,6 +1490,10 @@ function Install-PiCli {
             return $false
         }
 
+        if (-not (Repair-NpmConfiguration)) {
+            return $false
+        }
+
         # Remove old npm-package ownership before installing so npm can claim the canonical shim.
         & npm uninstall -g --prefix $localPrefix $oldPackage *> $null
         foreach ($candidate in $canonicalCandidates) {
@@ -1475,8 +1506,12 @@ function Install-PiCli {
         }
 
         Write-Message "Installing Pi with npm into $localPrefix..."
-        & npm install -g --ignore-scripts --prefix $localPrefix "$newPackage@latest"
-        if ($LASTEXITCODE -ne 0) {
+        $npmInstallOutput = & npm install -g --ignore-scripts --prefix $localPrefix "$newPackage@latest" 2>&1
+        $npmInstallStatus = $LASTEXITCODE
+        foreach ($npmInstallLine in $npmInstallOutput) {
+            Write-Host $npmInstallLine
+        }
+        if ($npmInstallStatus -ne 0) {
             Write-Host "$failIcon Failed to install Pi coding agent." -ForegroundColor Red
             return $false
         }
@@ -1518,6 +1553,11 @@ function Install-PiCli {
         }
 
         $piVersion = (& pi --version 2>$null | Out-String).Trim()
+        $piVersionStatus = $LASTEXITCODE
+        if ($piVersionStatus -ne 0 -or [string]::IsNullOrWhiteSpace($piVersion)) {
+            Write-Host "$warnIcon Pi migration incomplete: canonical pi failed its version smoke test." -ForegroundColor Yellow
+            return $false
+        }
         Write-Host "$success Pi coding agent $piVersion installed/updated at $canonicalPi." -ForegroundColor Green
         return $true
     }
@@ -2327,16 +2367,54 @@ function Test-MattPocockPiSkillsDisabled {
     return ((Test-EnvLocalFlag "WORK_MACHINE") -or (Test-EnvLocalFlag "BAN_MATT_POCOCK_SKILLS") -or (Test-EnvLocalFlag "BAN_MATT_POCKOCK_SKILLS"))
 }
 
+function Remove-MattPocockSkillPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    try {
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    }
+    catch [System.Management.Automation.ItemNotFoundException] {
+        return $true
+    }
+    catch {
+        return $false
+    }
+
+    try {
+        $isReparsePoint = ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+        if ($isReparsePoint -or -not $item.PSIsContainer) {
+            Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+        }
+        else {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        }
+        try {
+            Get-Item -LiteralPath $Path -Force -ErrorAction Stop | Out-Null
+            return $false
+        }
+        catch [System.Management.Automation.ItemNotFoundException] {
+            return $true
+        }
+        catch {
+            return $false
+        }
+    }
+    catch {
+        return $false
+    }
+}
+
 # Function to remove Matt Pocock skill copies from Pi when disabled
 function Remove-MattPocockPiSkills {
     $skills = @(
         "setup-matt-pocock-skills",
-        "diagnose",
+        "diagnosing-bugs",
         "tdd",
         "improve-codebase-architecture",
-        "zoom-out",
         "grill-with-docs"
     )
+    $obsoleteSkills = @("diagnose", "zoom-out")
+    $skills += $obsoleteSkills
 
     $defaultAgentDir = Join-Path $env:USERPROFILE ".pi\agent"
     if ($env:PI_CODING_AGENT_DIR) {
@@ -2356,67 +2434,71 @@ function Remove-MattPocockPiSkills {
     foreach ($skillsDir in $skillsDirs) {
         foreach ($skill in $skills) {
             $skillPath = Join-Path $skillsDir $skill
-            if (Test-Path $skillPath) {
-                try {
-                    Remove-Item -Path $skillPath -Recurse -Force -ErrorAction Stop
-                    if (Test-Path $skillPath) {
-                        $failed += $skill
-                    }
-                    else {
-                        $removed = $true
-                    }
-                }
-                catch {
-                    $failed += $skill
-                }
+            try {
+                Get-Item -LiteralPath $skillPath -Force -ErrorAction Stop | Out-Null
+            }
+            catch [System.Management.Automation.ItemNotFoundException] {
+                continue
+            }
+            catch {
+                $failed += $skill
+                continue
+            }
+
+            if (Remove-MattPocockSkillPath -Path $skillPath) {
+                $removed = $true
+            }
+            else {
+                $failed += $skill
             }
         }
     }
 
     if ($failed.Count -gt 0) {
         Write-Warning "Failed to remove Matt Pocock Pi skills: $($failed -join ', ')"
+        return $false
     }
-    elseif ($removed) {
+    if ($removed) {
         Write-Success "Matt Pocock Pi skills disabled."
     }
     else {
         Write-Debug "Matt Pocock Pi skills disabled; no installed copies found."
     }
+    return $true
 }
 
 # Function to install/update Matt Pocock engineering skills for Pi
 function Setup-MattPocockPiSkills {
     $skills = @(
         "setup-matt-pocock-skills",
-        "diagnose",
+        "diagnosing-bugs",
         "tdd",
         "improve-codebase-architecture",
-        "zoom-out",
         "grill-with-docs"
     )
+    $obsoleteSkills = @("diagnose", "zoom-out")
 
     if (Test-MattPocockPiSkillsDisabled) {
         if (Test-EnvLocalFlag "WORK_MACHINE") {
             Write-Debug "WORK_MACHINE=1, skipping Matt Pocock Pi skills."
         }
-        Remove-MattPocockPiSkills
-        return
+        return (Remove-MattPocockPiSkills)
     }
 
     if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
         Write-Warning "Pi coding agent not found. Cannot install Matt Pocock Pi skills."
-        return
+        return $false
     }
 
     if (-not (Enable-PiNodeRuntime)) {
         Write-Warning "Skipping Matt Pocock Pi skills because the Pi Node.js runtime is not ready."
-        return
+        return $false
     }
 
     if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
         Write-Warning "npx not found. Cannot install Matt Pocock Pi skills."
         Write-Debug "Install Node.js >=20.6, then run: npx --yes skills@latest add mattpocock/skills --global --agent pi --copy"
-        return
+        return $false
     }
 
     $defaultAgentDir = Join-Path $env:USERPROFILE ".pi\agent"
@@ -2438,7 +2520,7 @@ function Setup-MattPocockPiSkills {
     $output = & npx @npxArgs 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "Failed to install Matt Pocock Pi skills: $output"
-        return
+        return $false
     }
 
     $syncFailed = @()
@@ -2447,12 +2529,12 @@ function Setup-MattPocockPiSkills {
         foreach ($skill in $skills) {
             $sourcePath = Join-Path $defaultSkillsDir $skill
             $destPath = Join-Path $skillsDir $skill
-            if (Test-Path $sourcePath) {
+            if (Test-Path -LiteralPath $sourcePath -PathType Container) {
                 try {
-                    if (Test-Path $destPath) {
-                        Remove-Item -Path $destPath -Recurse -Force -ErrorAction Stop
+                    if (-not (Remove-MattPocockSkillPath -Path $destPath)) {
+                        throw "Could not safely remove existing destination skill."
                     }
-                    Copy-Item -Path $sourcePath -Destination $destPath -Recurse -Force -ErrorAction Stop
+                    Copy-Item -LiteralPath $sourcePath -Destination $destPath -Recurse -Force -ErrorAction Stop
                 }
                 catch {
                     $syncFailed += $skill
@@ -2466,21 +2548,46 @@ function Setup-MattPocockPiSkills {
 
     $missing = @()
     foreach ($skill in $skills) {
-        $skillFile = Join-Path (Join-Path $skillsDir $skill) "SKILL.md"
-        if (-not (Test-Path $skillFile)) {
+        $skillDir = Join-Path $skillsDir $skill
+        $skillFile = Join-Path $skillDir "SKILL.md"
+        $skillDirItem = Get-Item -LiteralPath $skillDir -Force -ErrorAction SilentlyContinue
+        $skillFileItem = Get-Item -LiteralPath $skillFile -Force -ErrorAction SilentlyContinue
+        $skillDirIsLink = $null -ne $skillDirItem -and (($skillDirItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+        $skillFileIsLink = $null -ne $skillFileItem -and (($skillFileItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+        if ($null -eq $skillFileItem -or $skillFileItem.PSIsContainer -or $skillDirIsLink -or $skillFileIsLink) {
             $missing += $skill
         }
     }
 
     if ($syncFailed.Count -gt 0) {
         Write-Warning "Matt Pocock Pi skills installed, but failed to sync to active Pi dir ${agentDir}: $($syncFailed -join ', ')"
+        return $false
     }
-    elseif ($missing.Count -eq 0) {
-        Write-Success "Matt Pocock Pi skills installed/updated."
-    }
-    else {
+    if ($missing.Count -gt 0) {
         Write-Warning "Matt Pocock Pi skills install completed, but missing expected skills: $($missing -join ', ')"
+        return $false
     }
+
+    $obsoleteCleanupFailed = @()
+    $managedSkillsDirs = @($defaultSkillsDir)
+    if ($skillsDir -ne $defaultSkillsDir) {
+        $managedSkillsDirs += $skillsDir
+    }
+    foreach ($managedSkillsDir in $managedSkillsDirs) {
+        foreach ($obsoleteSkill in $obsoleteSkills) {
+            $obsoletePath = Join-Path $managedSkillsDir $obsoleteSkill
+            if (-not (Remove-MattPocockSkillPath -Path $obsoletePath)) {
+                $obsoleteCleanupFailed += $obsoletePath
+            }
+        }
+    }
+    if ($obsoleteCleanupFailed.Count -gt 0) {
+        Write-Warning "Failed to remove obsolete Matt Pocock Pi skills: $($obsoleteCleanupFailed -join ', ')"
+        return $false
+    }
+
+    Write-Success "Matt Pocock Pi skills installed/updated."
+    return $true
 }
 
 
@@ -2865,34 +2972,6 @@ function Install-WindowsUpdates {
     }
 }
 
-# Function to upgrade global npm packages
-function Update-NpmGlobalPackages {
-    # Try to initialize mise if available (provides npm if Node.js is installed)
-    if (Get-Command mise -ErrorAction SilentlyContinue) {
-        mise activate pwsh | Out-String | Invoke-Expression
-    }
-
-    # Make sure npm is available
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        Write-Host "$warnIcon npm not found. Skipping global package upgrade." -ForegroundColor Yellow
-        return
-    }
-
-    Write-Host "$arrow Upgrading global npm packages..." -ForegroundColor Cyan
-    try {
-        npm update -g
-        if ($?) {
-            Write-Host "$success Global npm packages upgraded." -ForegroundColor Green
-        }
-        else {
-            Write-Host "$warnIcon Failed to upgrade some global npm packages." -ForegroundColor Yellow
-        }
-    }
-    catch {
-        Write-Host "$warnIcon Failed to upgrade global npm packages: $($_.Exception.Message)" -ForegroundColor Yellow
-    }
-}
-
 # Function to setup ~/Code directory
 function Setup-CodeDirectory {
     $codeDir = "$env:USERPROFILE\Code"
@@ -2969,9 +3048,10 @@ function Complete-SetupLog {
 }
 
 function Invoke-WindowsSetupTasks {
+    $piSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 114 | Last changed: Add z.ai GLM Coding Plan provider for Pi work machines" -ForegroundColor DarkGray
+    Write-Host "Version 115 | Last changed: Harden setup idempotency from weekly log audit" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -3009,7 +3089,9 @@ function Invoke-WindowsSetupTasks {
     Install-RtkCli
     Setup-RtkIntegrations
     if (Test-MattPocockPiSkillsDisabled) {
-        Setup-MattPocockPiSkills
+        if (-not (Setup-MattPocockPiSkills)) {
+            $piSetupFailed = $true
+        }
     }
     if (Install-PiCli) {
         Set-PiDefaults
@@ -3021,7 +3103,9 @@ function Invoke-WindowsSetupTasks {
         Setup-PiAskUser
         Setup-PiGoalAutoresearch
         if (-not (Test-MattPocockPiSkillsDisabled)) {
-            Setup-MattPocockPiSkills
+            if (-not (Setup-MattPocockPiSkills)) {
+                $piSetupFailed = $true
+            }
         }
     }
     else {
@@ -3035,6 +3119,7 @@ function Invoke-WindowsSetupTasks {
             Setup-PiGoalAutoresearch
         }
         Write-Warning "Skipping Pi extension setup because Pi migration failed."
+        $piSetupFailed = $true
     }
     Remove-ImpeccableResources
     Remove-CompoundEngineeringResources
@@ -3042,8 +3127,11 @@ function Invoke-WindowsSetupTasks {
 
     Write-Section "System Updates"
     Install-WingetUpdates
-    Update-NpmGlobalPackages
     Install-WindowsUpdates # this should always be LAST since it may prompt a system reboot
+
+    if ($piSetupFailed) {
+        throw "Required Pi coding agent setup failed."
+    }
 
     Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen
 }
