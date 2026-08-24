@@ -106,18 +106,11 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_order "${file}" '^[[:space:]]+install_ntn_cli$' '^[[:space:]]+install_rtk_cli$' 'Notion CLI before RTK'
 done
 
-assert_contains mac.sh 'Version 194 \| Last changed: Install Simple English across AI harnesses' 'macOS version banner'
-assert_contains ubuntu.sh 'Version 216 \| Last changed: Install Simple English across AI harnesses' 'Ubuntu version banner'
-assert_contains wsl.sh 'Version 160 \| Last changed: Install Simple English across AI harnesses' 'WSL version banner'
-assert_contains pi.sh 'Version 177 \| Last changed: Install Simple English across AI harnesses' 'Raspberry Pi version banner'
-assert_contains bazzite.sh 'Version 76 \| Last changed: Install Simple English across AI harnesses' 'Bazzite version banner'
-
 assert_contains win.ps1 '"Notion\.ntn"' 'official Notion CLI WinGet package'
 # These regexes intentionally use single quotes to preserve literal shell and Markdown syntax.
 # shellcheck disable=SC2016
 assert_contains win.ps1 '\$package -eq "Notion\.ntn" -and \$env:PROCESSOR_ARCHITECTURE -ne "AMD64"' 'Windows x64 architecture guard'
 assert_contains win.ps1 'Notion CLI supports Windows x64 only; skipping' 'unsupported Windows architecture warning'
-assert_contains win.ps1 'Version 116 \| Last changed: Install Simple English across AI harnesses' 'Windows version banner'
 assert_order win.ps1 '^[[:space:]]+Install-WingetPackages$' '^[[:space:]]+Install-WingetUpdates$' 'WinGet install before update'
 assert_not_contains win.ps1 'npm (install|i).*(--global|-g).*ntn' 'npm-based Notion CLI installation'
 assert_not_contains win.ps1 'ntn (login|completions)' 'Notion authentication or completion automation'

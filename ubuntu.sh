@@ -1966,6 +1966,353 @@ ensure_simple_english_node_runtime() {
     return 1
 }
 
+# Install/update Attention-kind for every supported AI coding harness.
+attention_span_style_is_valid() {
+    local _style_file="${1:-}"
+    [[ -f "${_style_file}" ]] || return 1
+    grep -Fqx -- "name: Attention-kind" "${_style_file}" &&
+        grep -Fqx -- "keep-coding-instructions: true" "${_style_file}" &&
+        grep -Fqx -- "<!-- body-start -->" "${_style_file}" &&
+        grep -Fq -- "<!-- attention-span v" "${_style_file}" &&
+        grep -Fq -- "## How to protect their attention" "${_style_file}" &&
+        grep -Fq -- "## Format for scanning" "${_style_file}"
+}
+
+attention_span_body_is_valid() {
+    local _body_file="${1:-}"
+    [[ -s "${_body_file}" ]] || return 1
+    grep -Fq -- "<!-- attention-span v" "${_body_file}" &&
+        grep -Fq -- "## How to protect their attention" "${_body_file}" &&
+        grep -Fq -- "## Format for scanning" "${_body_file}"
+}
+
+attention_span_prepare_file_mode() {
+    local _staged_file="${1:-}"
+    local _target_file="${2:-}"
+    local _mode=""
+
+    if [[ -e "${_target_file}" ]]; then
+        _mode=$(stat -c '%a' "${_target_file}" 2>/dev/null || stat -f '%Lp' "${_target_file}" 2>/dev/null || true)
+    fi
+    if [[ -n "${_mode}" ]]; then
+        chmod "${_mode}" "${_staged_file}"
+    else
+        chmod 600 "${_staged_file}"
+    fi
+}
+
+
+attention_span_managed_file_is_safe() {
+    local _target_file="${1:-}"
+    local _begin_marker="<!-- attention-span:start -->"
+    local _end_marker="<!-- attention-span:end -->"
+    local _begin_count=0
+    local _end_count=0
+    local _begin_line=""
+    local _end_line=""
+
+    if [[ -L "${_target_file}" ]]; then
+        print_warning "Attention-kind cannot safely update symlinked file ${_target_file}."
+        return 1
+    fi
+    [[ -e "${_target_file}" ]] || return 0
+    [[ -f "${_target_file}" ]] || {
+        print_warning "Attention-kind target is not a regular file: ${_target_file}."
+        return 1
+    }
+
+    _begin_count=$(grep -Fxc -- "${_begin_marker}" "${_target_file}" || true)
+    _end_count=$(grep -Fxc -- "${_end_marker}" "${_target_file}" || true)
+    if [[ "${_begin_count}" -eq 0 && "${_end_count}" -eq 0 ]]; then
+        return 0
+    fi
+    if [[ "${_begin_count}" -ne 1 || "${_end_count}" -ne 1 ]]; then
+        print_warning "Attention-kind markers are malformed in ${_target_file}; leaving it unchanged."
+        return 1
+    fi
+
+    _begin_line=$(grep -nFx -- "${_begin_marker}" "${_target_file}" || true)
+    _begin_line=${_begin_line%%:*}
+    _end_line=$(grep -nFx -- "${_end_marker}" "${_target_file}" || true)
+    _end_line=${_end_line%%:*}
+    if [[ -z "${_begin_line}" || -z "${_end_line}" || "${_begin_line}" -ge "${_end_line}" ]]; then
+        print_warning "Attention-kind markers are out of order in ${_target_file}; leaving it unchanged."
+        return 1
+    fi
+}
+
+attention_span_upsert_managed_block() {
+    local _target_file="${1:-}"
+    local _body_file="${2:-}"
+    local _begin_marker="<!-- attention-span:start -->"
+    local _end_marker="<!-- attention-span:end -->"
+    local _target_dir=""
+    local _tmp_file=""
+    local _begin_count=0
+    local _target_last_character=""
+    local _body_last_character=""
+
+    attention_span_body_is_valid "${_body_file}" || return 1
+    attention_span_managed_file_is_safe "${_target_file}" || return 1
+
+    _target_dir=$(dirname "${_target_file}")
+    if ! mkdir -p "${_target_dir}"; then
+        print_warning "Failed to create Attention-kind target directory ${_target_dir}."
+        return 1
+    fi
+    if ! _tmp_file=$(mktemp "${_target_file}.XXXXXX"); then
+        print_warning "Failed to create a temporary file for ${_target_file}."
+        return 1
+    fi
+
+    if [[ -f "${_target_file}" ]]; then
+        _begin_count=$(grep -Fxc -- "${_begin_marker}" "${_target_file}" || true)
+    fi
+
+    if [[ "${_begin_count}" -eq 1 ]]; then
+        if ! awk -v begin="${_begin_marker}" -v end="${_end_marker}" -v body_file="${_body_file}" '
+            $0 == begin {
+                print
+                while ((getline body_line < body_file) > 0) print body_line
+                close(body_file)
+                in_block = 1
+                next
+            }
+            $0 == end && in_block {
+                print
+                in_block = 0
+                next
+            }
+            !in_block { print }
+            END { exit in_block ? 1 : 0 }
+        ' "${_target_file}" > "${_tmp_file}"; then
+            rm -f -- "${_tmp_file}"
+            print_warning "Failed to replace the Attention-kind block in ${_target_file}."
+            return 1
+        fi
+    else
+        _target_last_character=$(tail -c 1 "${_target_file}" 2>/dev/null || true)
+        _body_last_character=$(tail -c 1 "${_body_file}" 2>/dev/null || true)
+        if ! {
+            if [[ -f "${_target_file}" ]]; then
+                cat "${_target_file}"
+            fi
+            if [[ -s "${_target_file}" && -n "${_target_last_character}" ]]; then
+                printf '\n'
+            fi
+            if [[ -s "${_target_file}" ]]; then
+                printf '\n'
+            fi
+            printf '%s\n' "${_begin_marker}"
+            cat "${_body_file}"
+            if [[ -n "${_body_last_character}" ]]; then
+                printf '\n'
+            fi
+            printf '%s\n' "${_end_marker}"
+        } > "${_tmp_file}"; then
+            rm -f -- "${_tmp_file}"
+            print_warning "Failed to append the Attention-kind block to ${_target_file}."
+            return 1
+        fi
+    fi
+
+    if ! attention_span_prepare_file_mode "${_tmp_file}" "${_target_file}" ||
+        ! mv -f -- "${_tmp_file}" "${_target_file}"; then
+        rm -f -- "${_tmp_file}"
+        print_warning "Failed to atomically update ${_target_file}."
+        return 1
+    fi
+}
+
+attention_span_claude_settings_is_safe() {
+    local _settings_file="${1:-}"
+    if [[ -L "${_settings_file}" ]]; then
+        print_warning "Attention-kind cannot safely update symlinked file ${_settings_file}."
+        return 1
+    fi
+    [[ -e "${_settings_file}" ]] || return 0
+    [[ -f "${_settings_file}" ]] || {
+        print_warning "Claude settings target is not a regular file: ${_settings_file}."
+        return 1
+    }
+    [[ -s "${_settings_file}" ]] || return 0
+    if ! jq -e 'type == "object"' "${_settings_file}" > /dev/null 2>&1; then
+        print_warning "Claude settings are not a valid JSON object: ${_settings_file}."
+        return 1
+    fi
+}
+
+attention_span_merge_claude_settings() {
+    local _settings_file="${1:-}"
+    local _settings_dir=""
+    local _tmp_file=""
+
+    attention_span_claude_settings_is_safe "${_settings_file}" || return 1
+    _settings_dir=$(dirname "${_settings_file}")
+    if ! mkdir -p "${_settings_dir}"; then
+        print_warning "Failed to create Claude settings directory ${_settings_dir}."
+        return 1
+    fi
+    if ! _tmp_file=$(mktemp "${_settings_file}.XXXXXX"); then
+        print_warning "Failed to create a temporary Claude settings file."
+        return 1
+    fi
+
+    if [[ -s "${_settings_file}" ]]; then
+        jq '.outputStyle = "Attention-kind"' "${_settings_file}" > "${_tmp_file}" || {
+            rm -f -- "${_tmp_file}"
+            return 1
+        }
+    else
+        jq -n '{outputStyle: "Attention-kind"}' > "${_tmp_file}" || {
+            rm -f -- "${_tmp_file}"
+            return 1
+        }
+    fi
+
+    if ! attention_span_prepare_file_mode "${_tmp_file}" "${_settings_file}" ||
+        ! mv -f -- "${_tmp_file}" "${_settings_file}"; then
+        rm -f -- "${_tmp_file}"
+        print_warning "Failed to atomically update Claude settings."
+        return 1
+    fi
+}
+
+attention_span_install_claude_style() {
+    local _source_file="${1:-}"
+    local _target_file="${2:-}"
+    local _target_dir=""
+    local _tmp_file=""
+
+    attention_span_style_is_valid "${_source_file}" || return 1
+    if [[ -L "${_target_file}" ]]; then
+        print_warning "Attention-kind cannot safely replace symlinked file ${_target_file}."
+        return 1
+    fi
+    _target_dir=$(dirname "${_target_file}")
+    if ! mkdir -p "${_target_dir}"; then
+        print_warning "Failed to create Claude output-styles directory ${_target_dir}."
+        return 1
+    fi
+    if ! _tmp_file=$(mktemp "${_target_file}.XXXXXX"); then
+        print_warning "Failed to create a temporary Attention-kind style file."
+        return 1
+    fi
+    if ! cp "${_source_file}" "${_tmp_file}" ||
+        ! attention_span_prepare_file_mode "${_tmp_file}" "${_target_file}" ||
+        ! mv -f -- "${_tmp_file}" "${_target_file}"; then
+        rm -f -- "${_tmp_file}"
+        print_warning "Failed to atomically install Attention-kind for Claude Code."
+        return 1
+    fi
+}
+
+attention_span_resolve_style() {
+    local _output_file="${1:-}"
+    local _installed_file="${2:-}"
+    local _upstream_url="https://raw.githubusercontent.com/alexgreensh/attention-span/main/output-styles/attention-kind.md"
+    local _fallback_url="https://scripts.scowalt.com/setup/vendor/attention-span/attention-kind.md"
+    local _script_source="${BASH_SOURCE[0]:-}"
+    local _script_dir=""
+    local _local_fallback=""
+    local _candidate_file="${_output_file}.download"
+
+    rm -f -- "${_candidate_file}"
+    if curl -fsSL --connect-timeout 10 --max-time 30 "${_upstream_url}" -o "${_candidate_file}" &&
+        attention_span_style_is_valid "${_candidate_file}"; then
+        mv -f -- "${_candidate_file}" "${_output_file}"
+        return 0
+    fi
+    rm -f -- "${_candidate_file}"
+
+    if attention_span_style_is_valid "${_installed_file}"; then
+        cp "${_installed_file}" "${_output_file}"
+        return $?
+    fi
+
+    if [[ -n "${_script_source}" && -f "${_script_source}" ]]; then
+        _script_dir=$(cd "$(dirname "${_script_source}")" 2>/dev/null && pwd -P) || _script_dir=""
+        _local_fallback="${_script_dir}/vendor/attention-span/attention-kind.md"
+        if attention_span_style_is_valid "${_local_fallback}"; then
+            cp "${_local_fallback}" "${_output_file}"
+            return $?
+        fi
+    fi
+
+    if curl -fsSL --connect-timeout 10 --max-time 30 "${_fallback_url}" -o "${_candidate_file}" &&
+        attention_span_style_is_valid "${_candidate_file}"; then
+        mv -f -- "${_candidate_file}" "${_output_file}"
+        return 0
+    fi
+    rm -f -- "${_candidate_file}"
+    print_warning "No valid Attention-kind source is available."
+    return 1
+}
+
+setup_attention_span_style() {
+    local _claude_dir="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
+    local _codex_dir="${CODEX_HOME:-${HOME}/.codex}"
+    local _pi_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _claude_style="${_claude_dir}/output-styles/attention-kind.md"
+    local _claude_settings="${_claude_dir}/settings.json"
+    local _codex_agents="${_codex_dir}/AGENTS.md"
+    local _gemini_context="${HOME}/.gemini/GEMINI.md"
+    local _pi_append_system="${_pi_dir}/APPEND_SYSTEM.md"
+    local _style_file=""
+    local _body_file=""
+    local _managed_file=""
+
+    if ! command -v jq > /dev/null 2>&1; then
+        print_warning "jq is required to activate Attention-kind for Claude Code."
+        return 1
+    fi
+    if ! command -v curl > /dev/null 2>&1; then
+        print_warning "curl is required to install/update Attention-kind."
+        return 1
+    fi
+    if ! _style_file=$(mktemp) || ! _body_file=$(mktemp); then
+        [[ -n "${_style_file}" ]] && rm -f -- "${_style_file}"
+        [[ -n "${_body_file}" ]] && rm -f -- "${_body_file}"
+        print_warning "Failed to create temporary Attention-kind files."
+        return 1
+    fi
+
+    print_message "Installing/updating Attention-kind across AI harnesses..."
+    if ! attention_span_resolve_style "${_style_file}" "${_claude_style}"; then
+        rm -f -- "${_style_file}" "${_body_file}"
+        return 1
+    fi
+    sed '1,/^<!-- body-start -->$/d' "${_style_file}" > "${_body_file}"
+    if ! attention_span_body_is_valid "${_body_file}"; then
+        rm -f -- "${_style_file}" "${_body_file}"
+        print_warning "Attention-kind body validation failed."
+        return 1
+    fi
+
+    if ! attention_span_claude_settings_is_safe "${_claude_settings}"; then
+        rm -f -- "${_style_file}" "${_body_file}"
+        return 1
+    fi
+    for _managed_file in "${_codex_agents}" "${_gemini_context}" "${_pi_append_system}"; do
+        if ! attention_span_managed_file_is_safe "${_managed_file}"; then
+            rm -f -- "${_style_file}" "${_body_file}"
+            return 1
+        fi
+    done
+
+    if ! attention_span_install_claude_style "${_style_file}" "${_claude_style}" ||
+        ! attention_span_merge_claude_settings "${_claude_settings}" ||
+        ! attention_span_upsert_managed_block "${_codex_agents}" "${_body_file}" ||
+        ! attention_span_upsert_managed_block "${_gemini_context}" "${_body_file}" ||
+        ! attention_span_upsert_managed_block "${_pi_append_system}" "${_body_file}"; then
+        rm -f -- "${_style_file}" "${_body_file}"
+        return 1
+    fi
+
+    rm -f -- "${_style_file}" "${_body_file}"
+    print_success "Attention-kind is active for Claude Code, Codex, Gemini CLI, and Pi."
+}
+
 # Install/update Simple English for every supported AI coding harness.
 setup_simple_english_skill() {
     local _install_output=""
@@ -5403,7 +5750,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 216 | Last changed: Install Simple English across AI harnesses"
+    echo -e "${GRAY}Version 217 | Last changed: Install Attention-kind across AI harnesses"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5589,6 +5936,10 @@ HELPER_EOF
             setup_pi_goal_autoresearch
         fi
         print_warning "Skipping Pi extension setup because Pi migration failed."
+        _setup_had_errors=1
+    fi
+
+    if ! setup_attention_span_style; then
         _setup_had_errors=1
     fi
 

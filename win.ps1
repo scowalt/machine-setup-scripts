@@ -1353,6 +1353,353 @@ function Enable-SimpleEnglishNodeRuntime {
     return $false
 }
 
+# Install/update Attention-kind for every supported AI coding harness.
+function Test-AttentionSpanStyleFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $false
+    }
+
+    $lines = @(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue)
+    if ($lines -notcontains "name: Attention-kind" -or
+        $lines -notcontains "keep-coding-instructions: true" -or
+        $lines -notcontains "<!-- body-start -->") {
+        return $false
+    }
+
+    $content = $lines -join "`n"
+    return $content.Contains("<!-- attention-span v") -and
+        $content.Contains("## How to protect their attention") -and
+        $content.Contains("## Format for scanning")
+}
+
+function Test-AttentionSpanBodyFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $false
+    }
+    $content = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
+    return -not [string]::IsNullOrWhiteSpace($content) -and
+        $content.Contains("<!-- attention-span v") -and
+        $content.Contains("## How to protect their attention") -and
+        $content.Contains("## Format for scanning")
+}
+
+function Test-AttentionSpanManagedFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $beginMarker = "<!-- attention-span:start -->"
+    $endMarker = "<!-- attention-span:end -->"
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) {
+        return $true
+    }
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $item.PSIsContainer) {
+        Write-Warning "Attention-kind cannot safely update $Path."
+        return $false
+    }
+
+    $lines = @(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue)
+    $beginIndexes = @()
+    $endIndexes = @()
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($lines[$index] -ceq $beginMarker) { $beginIndexes += $index }
+        if ($lines[$index] -ceq $endMarker) { $endIndexes += $index }
+    }
+
+    if ($beginIndexes.Count -eq 0 -and $endIndexes.Count -eq 0) {
+        return $true
+    }
+    if ($beginIndexes.Count -ne 1 -or $endIndexes.Count -ne 1 -or
+        $beginIndexes[0] -ge $endIndexes[0]) {
+        Write-Warning "Attention-kind markers are malformed in $Path; leaving it unchanged."
+        return $false
+    }
+    return $true
+}
+
+function Write-AttentionSpanAtomicLines {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$Lines
+    )
+
+    $directory = Split-Path -Parent $Path
+    $temporaryPath = $null
+    try {
+        New-Item -ItemType Directory -Force -Path $directory | Out-Null
+        $temporaryPath = Join-Path $directory ([System.IO.Path]::GetRandomFileName())
+        $encoding = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllLines($temporaryPath, $Lines, $encoding)
+        if (Test-Path -LiteralPath $Path) {
+            [System.IO.File]::Replace($temporaryPath, $Path, $null)
+        }
+        else {
+            [System.IO.File]::Move($temporaryPath, $Path)
+        }
+        return $true
+    }
+    catch {
+        if ($temporaryPath -and (Test-Path -LiteralPath $temporaryPath)) {
+            Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        }
+        Write-Warning "Failed to atomically update $($Path): $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Set-AttentionSpanManagedBlock {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$BodyPath
+    )
+
+    if (-not (Test-AttentionSpanBodyFile -Path $BodyPath) -or
+        -not (Test-AttentionSpanManagedFile -Path $Path)) {
+        return $false
+    }
+
+    $beginMarker = "<!-- attention-span:start -->"
+    $endMarker = "<!-- attention-span:end -->"
+    [string[]]$bodyLines = @(Get-Content -LiteralPath $BodyPath)
+    [string[]]$targetLines = if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        @(Get-Content -LiteralPath $Path)
+    }
+    else {
+        @()
+    }
+    $beginIndex = [Array]::IndexOf($targetLines, $beginMarker)
+    $endIndex = [Array]::IndexOf($targetLines, $endMarker)
+    $updatedLines = [System.Collections.Generic.List[string]]::new()
+
+    if ($beginIndex -ge 0) {
+        for ($index = 0; $index -le $beginIndex; $index++) {
+            $updatedLines.Add([string]$targetLines[$index])
+        }
+        foreach ($line in $bodyLines) { $updatedLines.Add([string]$line) }
+        for ($index = $endIndex; $index -lt $targetLines.Count; $index++) {
+            $updatedLines.Add([string]$targetLines[$index])
+        }
+    }
+    else {
+        foreach ($line in $targetLines) { $updatedLines.Add([string]$line) }
+        if ($updatedLines.Count -gt 0) { $updatedLines.Add("") }
+        $updatedLines.Add($beginMarker)
+        foreach ($line in $bodyLines) { $updatedLines.Add([string]$line) }
+        $updatedLines.Add($endMarker)
+    }
+
+    return (Write-AttentionSpanAtomicLines -Path $Path -Lines ($updatedLines.ToArray()))
+}
+
+function Test-AttentionSpanClaudeSettingsFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) {
+        return $true
+    }
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $item.PSIsContainer) {
+        Write-Warning "Attention-kind cannot safely update Claude settings at $Path."
+        return $false
+    }
+
+    $content = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($content)) {
+        return $true
+    }
+    try {
+        $settings = $content | ConvertFrom-Json -ErrorAction Stop
+        if ($settings -isnot [PSCustomObject]) {
+            throw "the root value is not an object"
+        }
+        return $true
+    }
+    catch {
+        Write-Warning "Claude settings are not a valid JSON object: $Path."
+        return $false
+    }
+}
+
+function Set-AttentionSpanClaudeSettings {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-AttentionSpanClaudeSettingsFile -Path $Path)) {
+        return $false
+    }
+
+    $content = if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        Get-Content -LiteralPath $Path -Raw
+    }
+    else {
+        ""
+    }
+    $settings = if ([string]::IsNullOrWhiteSpace($content)) {
+        [PSCustomObject]@{}
+    }
+    else {
+        $content | ConvertFrom-Json
+    }
+
+    if ($settings.PSObject.Properties.Name -contains "outputStyle") {
+        $settings.outputStyle = "Attention-kind"
+    }
+    else {
+        $settings | Add-Member -NotePropertyName outputStyle -NotePropertyValue "Attention-kind"
+    }
+    $jsonLines = @(($settings | ConvertTo-Json -Depth 100) -split "`r?`n")
+    return (Write-AttentionSpanAtomicLines -Path $Path -Lines $jsonLines)
+}
+
+function Install-AttentionSpanClaudeStyle {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    if (-not (Test-AttentionSpanStyleFile -Path $Source)) {
+        return $false
+    }
+    $item = Get-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+    if ($item -and ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+        Write-Warning "Attention-kind cannot safely replace symlinked file $Destination."
+        return $false
+    }
+
+    $directory = Split-Path -Parent $Destination
+    $temporaryPath = $null
+    try {
+        New-Item -ItemType Directory -Force -Path $directory | Out-Null
+        $temporaryPath = Join-Path $directory ([System.IO.Path]::GetRandomFileName())
+        [System.IO.File]::WriteAllBytes($temporaryPath, [System.IO.File]::ReadAllBytes($Source))
+        if (Test-Path -LiteralPath $Destination) {
+            [System.IO.File]::Replace($temporaryPath, $Destination, $null)
+        }
+        else {
+            [System.IO.File]::Move($temporaryPath, $Destination)
+        }
+        return $true
+    }
+    catch {
+        if ($temporaryPath -and (Test-Path -LiteralPath $temporaryPath)) {
+            Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        }
+        Write-Warning "Failed to atomically install Attention-kind for Claude Code: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Resolve-AttentionSpanStyle {
+    param(
+        [Parameter(Mandatory = $true)][string]$OutputPath,
+        [Parameter(Mandatory = $true)][string]$InstalledPath
+    )
+
+    $upstreamUrl = "https://raw.githubusercontent.com/alexgreensh/attention-span/main/output-styles/attention-kind.md"
+    $fallbackUrl = "https://scripts.scowalt.com/setup/vendor/attention-span/attention-kind.md"
+    $candidatePath = "$OutputPath.download"
+    Remove-Item -LiteralPath $candidatePath -Force -ErrorAction SilentlyContinue
+
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri $upstreamUrl -OutFile $candidatePath -TimeoutSec 30 -ErrorAction Stop
+        if (Test-AttentionSpanStyleFile -Path $candidatePath) {
+            Move-Item -LiteralPath $candidatePath -Destination $OutputPath -Force
+            return $true
+        }
+    }
+    catch {
+        Write-Debug "Latest Attention-kind download failed: $($_.Exception.Message)"
+    }
+    Remove-Item -LiteralPath $candidatePath -Force -ErrorAction SilentlyContinue
+
+    if (Test-AttentionSpanStyleFile -Path $InstalledPath) {
+        Copy-Item -LiteralPath $InstalledPath -Destination $OutputPath -Force
+        return $true
+    }
+
+    if ($PSScriptRoot) {
+        $localFallback = Join-Path (Join-Path (Join-Path $PSScriptRoot "vendor") "attention-span") "attention-kind.md"
+        if (Test-AttentionSpanStyleFile -Path $localFallback) {
+            Copy-Item -LiteralPath $localFallback -Destination $OutputPath -Force
+            return $true
+        }
+    }
+
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri $fallbackUrl -OutFile $candidatePath -TimeoutSec 30 -ErrorAction Stop
+        if (Test-AttentionSpanStyleFile -Path $candidatePath) {
+            Move-Item -LiteralPath $candidatePath -Destination $OutputPath -Force
+            return $true
+        }
+    }
+    catch {
+        Write-Debug "Bundled Attention-kind download failed: $($_.Exception.Message)"
+    }
+    Remove-Item -LiteralPath $candidatePath -Force -ErrorAction SilentlyContinue
+    Write-Warning "No valid Attention-kind source is available."
+    return $false
+}
+
+function Install-AttentionSpanStyle {
+    $claudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
+    $codexDir = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE ".codex" }
+    $piDir = if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { Join-Path (Join-Path $env:USERPROFILE ".pi") "agent" }
+    $claudeStyle = Join-Path (Join-Path $claudeDir "output-styles") "attention-kind.md"
+    $claudeSettings = Join-Path $claudeDir "settings.json"
+    $codexAgents = Join-Path $codexDir "AGENTS.md"
+    $geminiContext = Join-Path (Join-Path $env:USERPROFILE ".gemini") "GEMINI.md"
+    $piAppendSystem = Join-Path $piDir "APPEND_SYSTEM.md"
+    $stylePath = [System.IO.Path]::GetTempFileName()
+    $bodyPath = [System.IO.Path]::GetTempFileName()
+
+    Write-Message "Installing/updating Attention-kind across AI harnesses..."
+    try {
+        if (-not (Resolve-AttentionSpanStyle -OutputPath $stylePath -InstalledPath $claudeStyle)) {
+            return $false
+        }
+
+        [string[]]$styleLines = @(Get-Content -LiteralPath $stylePath)
+        $bodyMarkerIndex = [Array]::IndexOf($styleLines, "<!-- body-start -->")
+        if ($bodyMarkerIndex -lt 0 -or $bodyMarkerIndex -ge ($styleLines.Count - 1)) {
+            Write-Warning "Attention-kind body marker validation failed."
+            return $false
+        }
+        [string[]]$bodyLines = @($styleLines[($bodyMarkerIndex + 1)..($styleLines.Count - 1)])
+        $encoding = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllLines($bodyPath, $bodyLines, $encoding)
+        if (-not (Test-AttentionSpanBodyFile -Path $bodyPath)) {
+            Write-Warning "Attention-kind body validation failed."
+            return $false
+        }
+
+        if (-not (Test-AttentionSpanClaudeSettingsFile -Path $claudeSettings)) {
+            return $false
+        }
+        foreach ($managedPath in @($codexAgents, $geminiContext, $piAppendSystem)) {
+            if (-not (Test-AttentionSpanManagedFile -Path $managedPath)) {
+                return $false
+            }
+        }
+
+        if (-not (Install-AttentionSpanClaudeStyle -Source $stylePath -Destination $claudeStyle) -or
+            -not (Set-AttentionSpanClaudeSettings -Path $claudeSettings) -or
+            -not (Set-AttentionSpanManagedBlock -Path $codexAgents -BodyPath $bodyPath) -or
+            -not (Set-AttentionSpanManagedBlock -Path $geminiContext -BodyPath $bodyPath) -or
+            -not (Set-AttentionSpanManagedBlock -Path $piAppendSystem -BodyPath $bodyPath)) {
+            return $false
+        }
+
+        Write-Success "Attention-kind is active for Claude Code, Codex, Gemini CLI, and Pi."
+        return $true
+    }
+    finally {
+        Remove-Item -LiteralPath $stylePath, $bodyPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath "$stylePath.download" -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # Install/update Simple English for every supported AI coding harness.
 function Install-SimpleEnglishSkill {
     if (-not (Enable-SimpleEnglishNodeRuntime)) {
@@ -3189,10 +3536,11 @@ function Complete-SetupLog {
 
 function Invoke-WindowsSetupTasks {
     $piSetupFailed = $false
+    $attentionSpanSetupFailed = $false
     $simpleEnglishSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 116 | Last changed: Install Simple English across AI harnesses" -ForegroundColor DarkGray
+    Write-Host "Version 117 | Last changed: Install Attention-kind across AI harnesses" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -3262,6 +3610,9 @@ function Invoke-WindowsSetupTasks {
         Write-Warning "Skipping Pi extension setup because Pi migration failed."
         $piSetupFailed = $true
     }
+    if (-not (Install-AttentionSpanStyle)) {
+        $attentionSpanSetupFailed = $true
+    }
     if (-not (Install-SimpleEnglishSkill)) {
         $simpleEnglishSetupFailed = $true
     }
@@ -3275,6 +3626,9 @@ function Invoke-WindowsSetupTasks {
 
     if ($piSetupFailed) {
         throw "Required Pi coding agent setup failed."
+    }
+    if ($attentionSpanSetupFailed) {
+        throw "Required Attention-kind setup failed."
     }
     if ($simpleEnglishSetupFailed) {
         throw "Required Simple English skill setup failed."
