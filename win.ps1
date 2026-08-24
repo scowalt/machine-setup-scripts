@@ -1761,11 +1761,10 @@ function Install-SimpleEnglishSkill {
     }
 
     $claudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
-    $codexDir = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE ".codex" }
+    # Codex and Gemini CLI both discover the skills CLI's shared user copy.
     $skillFiles = @(
         (Join-Path $claudeDir "skills\simple-english\SKILL.md"),
-        (Join-Path $codexDir "skills\simple-english\SKILL.md"),
-        (Join-Path $env:USERPROFILE ".gemini\skills\simple-english\SKILL.md"),
+        (Join-Path $env:USERPROFILE ".agents\skills\simple-english\SKILL.md"),
         (Join-Path $activePiSkill "SKILL.md")
     )
 
@@ -3540,7 +3539,7 @@ function Invoke-WindowsSetupTasks {
     $simpleEnglishSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 117 | Last changed: Install Attention-kind across AI harnesses" -ForegroundColor DarkGray
+    Write-Host "Version 118 | Last changed: Fix Simple English shared skill validation" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 

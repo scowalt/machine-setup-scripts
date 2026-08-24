@@ -113,8 +113,7 @@ function global:npx {
     $script:SimpleEnglishCalls.Add(($Arguments -join " "))
     $skillFiles = @(
         (Join-Path $env:CLAUDE_CONFIG_DIR "skills\simple-english\SKILL.md"),
-        (Join-Path $env:CODEX_HOME "skills\simple-english\SKILL.md"),
-        (Join-Path $env:USERPROFILE ".gemini\skills\simple-english\SKILL.md"),
+        (Join-Path $env:USERPROFILE ".agents\skills\simple-english\SKILL.md"),
         (Join-Path $env:USERPROFILE ".pi\agent\skills\simple-english\SKILL.md")
     )
     foreach ($skillFile in $skillFiles) {
@@ -141,8 +140,7 @@ try {
 
     $installedSkillFiles = @(
         (Join-Path $env:CLAUDE_CONFIG_DIR "skills\simple-english\SKILL.md"),
-        (Join-Path $env:CODEX_HOME "skills\simple-english\SKILL.md"),
-        (Join-Path $env:USERPROFILE ".gemini\skills\simple-english\SKILL.md"),
+        (Join-Path $env:USERPROFILE ".agents\skills\simple-english\SKILL.md"),
         (Join-Path $env:PI_CODING_AGENT_DIR "skills\simple-english\SKILL.md")
     )
     foreach ($skillFile in $installedSkillFiles) {

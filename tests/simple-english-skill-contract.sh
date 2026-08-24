@@ -90,9 +90,10 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_function_contains "${file}" setup_simple_english_skill '^        --copy [\\]$' 'copied installation mode'
     assert_function_contains "${file}" setup_simple_english_skill '^        --yes < /dev/null' 'non-interactive confirmation and stdin'
     assert_function_contains "${file}" setup_simple_english_skill 'CLAUDE_CONFIG_DIR:-\$\{HOME\}/\.claude' 'CLAUDE_CONFIG_DIR support'
-    assert_function_contains "${file}" setup_simple_english_skill 'CODEX_HOME:-\$\{HOME\}/\.codex' 'CODEX_HOME support'
     assert_function_contains "${file}" setup_simple_english_skill 'PI_CODING_AGENT_DIR:-\$\{_default_pi_dir\}' 'PI_CODING_AGENT_DIR support'
+    assert_function_contains "${file}" setup_simple_english_skill '\$\{HOME\}/\.agents/skills/simple-english/SKILL\.md' 'shared Codex and Gemini skill validation'
     assert_function_contains "${file}" setup_simple_english_skill 'skills/simple-english/SKILL\.md' 'installed artifact validation'
+    assert_function_not_contains "${file}" setup_simple_english_skill '\.codex/skills/simple-english|\.gemini/skills/simple-english' 'obsolete agent-specific validation path'
     assert_function_not_contains "${file}" setup_simple_english_skill 'cursor|plugin|output-style|BAN_SIMPLE' 'unrequested target or opt-out'
     assert_contains "${file}" '^[[:space:]]+(if ! )?setup_simple_english_skill' 'Simple English main wiring'
     assert_order "${file}" '^[[:space:]]+if install_pi_cli; then$' '^[[:space:]]+(if ! )?setup_simple_english_skill' 'Simple English installation after agent provisioning'
@@ -113,9 +114,8 @@ assert_contains win.ps1 '"--copy"' 'PowerShell copied installation mode'
 # shellcheck disable=SC2016 # Preserve literal PowerShell variable syntax.
 assert_contains win.ps1 '\$env:CLAUDE_CONFIG_DIR' 'PowerShell CLAUDE_CONFIG_DIR support'
 # shellcheck disable=SC2016 # Preserve literal PowerShell variable syntax.
-assert_contains win.ps1 '\$env:CODEX_HOME' 'PowerShell CODEX_HOME support'
-# shellcheck disable=SC2016 # Preserve literal PowerShell variable syntax.
 assert_contains win.ps1 '\$env:PI_CODING_AGENT_DIR' 'PowerShell PI_CODING_AGENT_DIR support'
+assert_contains win.ps1 '\.agents\\skills\\simple-english\\SKILL\.md' 'PowerShell shared Codex and Gemini skill validation'
 assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal failure propagation'
 assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+Remove-ImpeccableResources$' 'PowerShell validation before cleanup'
@@ -140,8 +140,7 @@ for file in "${bash_setup_scripts[@]}"; do
                 local skill_file
                 for skill_file in \
                     "${CLAUDE_CONFIG_DIR}/skills/simple-english/SKILL.md" \
-                    "${CODEX_HOME}/skills/simple-english/SKILL.md" \
-                    "${HOME}/.gemini/skills/simple-english/SKILL.md" \
+                    "${HOME}/.agents/skills/simple-english/SKILL.md" \
                     "${HOME}/.pi/agent/skills/simple-english/SKILL.md"; do
                     mkdir -p "$(dirname "${skill_file}")"
                     printf "%s\n" "---" "name: simple-english" "---" > "${skill_file}"
@@ -160,8 +159,7 @@ for file in "${bash_setup_scripts[@]}"; do
     fi
     for skill_file in \
         "${claude_home}/skills/simple-english/SKILL.md" \
-        "${codex_home}/skills/simple-english/SKILL.md" \
-        "${test_home}/.gemini/skills/simple-english/SKILL.md" \
+        "${test_home}/.agents/skills/simple-english/SKILL.md" \
         "${pi_home}/skills/simple-english/SKILL.md"; do
         [[ -f "${skill_file}" ]] || fail "${file}: missing mocked artifact ${skill_file}"
         [[ ! -L "$(dirname "${skill_file}")" ]] || fail "${file}: ${skill_file} was installed as a symlink"

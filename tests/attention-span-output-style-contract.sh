@@ -77,11 +77,11 @@ grep -Fq 'GNU AFFERO GENERAL PUBLIC LICENSE' vendor/attention-span/LICENSE ||
     fail 'vendored Attention Span license is missing'
 
 declare -A expected_versions=(
-    [mac.sh]=195
-    [ubuntu.sh]=217
-    [wsl.sh]=161
-    [pi.sh]=178
-    [bazzite.sh]=77
+    [mac.sh]=196
+    [ubuntu.sh]=218
+    [wsl.sh]=162
+    [pi.sh]=179
+    [bazzite.sh]=78
 )
 
 for file in "${bash_setup_scripts[@]}"; do
@@ -103,7 +103,7 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '<!-- attention-span:end -->' 'managed end marker'
     assert_contains "${file}" '^[[:space:]]+(if ! )?setup_attention_span_style' 'required setup wiring'
     assert_order "${file}" '^[[:space:]]+(if ! )?setup_attention_span_style' '^[[:space:]]+(if ! )?setup_simple_english_skill' 'Attention-kind before Simple English'
-    assert_contains "${file}" "Version ${expected_versions[${file}]} \\| Last changed: Install Attention-kind across AI harnesses" 'updated version banner'
+    assert_contains "${file}" "Version ${expected_versions[${file}]} \\| Last changed: Fix Simple English shared skill validation" 'updated version banner'
     assert_not_contains "${file}" 'BAN_ATTENTION' 'Attention-kind opt-out'
 done
 
@@ -121,7 +121,7 @@ assert_contains win.ps1 'outputStyle.*Attention-kind' 'PowerShell Claude style a
 assert_contains win.ps1 '\.gemini.*GEMINI\.md' 'PowerShell Gemini context target'
 assert_contains win.ps1 'APPEND_SYSTEM\.md' 'PowerShell Pi target'
 assert_contains win.ps1 'Required Attention-kind setup failed' 'PowerShell required failure'
-assert_contains win.ps1 'Version 117 \| Last changed: Install Attention-kind across AI harnesses' 'PowerShell version banner'
+assert_contains win.ps1 'Version 118 \| Last changed: Fix Simple English shared skill validation' 'PowerShell version banner'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-AttentionSpanStyle\)\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell Attention-kind before Simple English'
 assert_not_contains win.ps1 'BAN_ATTENTION' 'PowerShell Attention-kind opt-out'
 

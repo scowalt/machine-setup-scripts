@@ -2435,10 +2435,10 @@ setup_simple_english_skill() {
     local _default_pi_skill="${_default_pi_dir}/skills/simple-english"
     local _active_pi_skill="${_active_pi_dir}/skills/simple-english"
     local _skill_file=""
+    # Codex and Gemini CLI both discover the skills CLI's shared user copy.
     local -a _skill_files=(
         "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/skills/simple-english/SKILL.md"
-        "${CODEX_HOME:-${HOME}/.codex}/skills/simple-english/SKILL.md"
-        "${HOME}/.gemini/skills/simple-english/SKILL.md"
+        "${HOME}/.agents/skills/simple-english/SKILL.md"
         "${_active_pi_skill}/SKILL.md"
     )
 
@@ -5333,7 +5333,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 195 | Last changed: Install Attention-kind across AI harnesses${NC}"
+    echo -e "${GRAY}Version 196 | Last changed: Fix Simple English shared skill validation${NC}"
 
     if ! acquire_setup_lock; then
         return 1
