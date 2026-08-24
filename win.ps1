@@ -1294,6 +1294,146 @@ function Enable-PiNodeRuntime {
     return $false
 }
 
+# Check whether the active Node.js runtime can run the current skills CLI.
+function Test-SimpleEnglishNodeRuntimeReady {
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    & node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 20) ? 0 : 1)' *> $null
+    return ($LASTEXITCODE -eq 0)
+}
+
+# Ensure the skills CLI runs on its required Node.js version.
+function Enable-SimpleEnglishNodeRuntime {
+    $runtime = "node@24"
+
+    if (Test-SimpleEnglishNodeRuntimeReady) {
+        $nodeVersion = (& node --version 2>$null | Out-String).Trim()
+        Write-Debug "Node.js $nodeVersion is ready for the skills CLI."
+        return $true
+    }
+
+    $pathCandidates = @(
+        [Environment]::GetEnvironmentVariable("Path", "User"),
+        [Environment]::GetEnvironmentVariable("Path", "Machine"),
+        (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links"),
+        (Join-Path $env:USERPROFILE ".local\bin")
+    ) | Where-Object { $_ -and $_.Trim() -ne "" }
+    $env:PATH = (($pathCandidates + @($env:PATH)) -join ";")
+
+    if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
+        Write-Warning "Node.js >=22.20 is required for the skills CLI, but mise is not available to install it."
+        Write-Debug "Install mise, then run: mise use -g -y $runtime"
+        return $false
+    }
+
+    Write-Message "Ensuring Node.js 24 runtime for the skills CLI..."
+    & mise use -g -y $runtime *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to install/configure $runtime with mise."
+        return $false
+    }
+
+    $miseEnv = & mise env -C $env:USERPROFILE -s pwsh $runtime 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to activate $runtime with mise."
+        return $false
+    }
+
+    $miseEnv | Out-String | Invoke-Expression
+
+    if (Test-SimpleEnglishNodeRuntimeReady) {
+        $nodeVersion = (& node --version 2>$null | Out-String).Trim()
+        Write-Success "Node.js $nodeVersion is ready for the skills CLI."
+        return $true
+    }
+
+    Write-Warning "Node.js >=22.20 is still not active after installing $runtime."
+    return $false
+}
+
+# Install/update Simple English for every supported AI coding harness.
+function Install-SimpleEnglishSkill {
+    if (-not (Enable-SimpleEnglishNodeRuntime)) {
+        return $false
+    }
+
+    if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
+        Write-Warning "npx is not available; cannot install the Simple English skill."
+        return $false
+    }
+
+    $installArguments = @(
+        "--yes",
+        "skills@latest",
+        "add",
+        "AminBlg/SimpleEnglish",
+        "--global",
+        "--agent", "claude-code",
+        "--agent", "codex",
+        "--agent", "gemini-cli",
+        "--agent", "pi",
+        "--skill", "simple-english",
+        "--copy",
+        "--yes"
+    )
+
+    Write-Message "Installing/updating Simple English across AI harnesses..."
+    $global:LASTEXITCODE = 0
+    $installOutput = & npx @installArguments 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to install/update the Simple English skill."
+        if ($installOutput) { Write-Debug ($installOutput | Out-String) }
+        return $false
+    }
+
+    $defaultPiDir = Join-Path $env:USERPROFILE ".pi\agent"
+    $activePiDir = if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { $defaultPiDir }
+    $defaultPiSkill = Join-Path $defaultPiDir "skills\simple-english"
+    $activePiSkill = Join-Path $activePiDir "skills\simple-english"
+
+    # The skills CLI does not currently honor PI_CODING_AGENT_DIR.
+    if ($activePiDir -ne $defaultPiDir) {
+        if (-not (Test-Path -LiteralPath (Join-Path $defaultPiSkill "SKILL.md") -PathType Leaf)) {
+            Write-Warning "Simple English was not installed at the default Pi skill path."
+            return $false
+        }
+
+        try {
+            New-Item -ItemType Directory -Force -Path (Join-Path $activePiDir "skills") | Out-Null
+            if (Test-Path -LiteralPath $activePiSkill) {
+                Remove-Item -LiteralPath $activePiSkill -Recurse -Force -ErrorAction Stop
+            }
+            Copy-Item -LiteralPath $defaultPiSkill -Destination $activePiSkill -Recurse -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Failed to copy Simple English into PI_CODING_AGENT_DIR: $($_.Exception.Message)"
+            return $false
+        }
+    }
+
+    $claudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
+    $codexDir = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE ".codex" }
+    $skillFiles = @(
+        (Join-Path $claudeDir "skills\simple-english\SKILL.md"),
+        (Join-Path $codexDir "skills\simple-english\SKILL.md"),
+        (Join-Path $env:USERPROFILE ".gemini\skills\simple-english\SKILL.md"),
+        (Join-Path $activePiSkill "SKILL.md")
+    )
+
+    foreach ($skillFile in $skillFiles) {
+        if (-not (Test-Path -LiteralPath $skillFile -PathType Leaf)) {
+            Write-Warning "Simple English validation failed: missing $skillFile."
+            return $false
+        }
+    }
+
+    Write-Success "Simple English installed/updated for Claude Code, Codex, Gemini CLI, and Pi."
+    if ($installOutput) { Write-Debug ($installOutput | Out-String) }
+    return $true
+}
+
 # Remove setup-managed Impeccable resources without affecting sibling agent tooling.
 function Remove-ImpeccableResources {
     $paths = @(
@@ -3049,9 +3189,10 @@ function Complete-SetupLog {
 
 function Invoke-WindowsSetupTasks {
     $piSetupFailed = $false
+    $simpleEnglishSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 115 | Last changed: Harden setup idempotency from weekly log audit" -ForegroundColor DarkGray
+    Write-Host "Version 116 | Last changed: Install Simple English across AI harnesses" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -3121,6 +3262,9 @@ function Invoke-WindowsSetupTasks {
         Write-Warning "Skipping Pi extension setup because Pi migration failed."
         $piSetupFailed = $true
     }
+    if (-not (Install-SimpleEnglishSkill)) {
+        $simpleEnglishSetupFailed = $true
+    }
     Remove-ImpeccableResources
     Remove-CompoundEngineeringResources
     Install-TursoCli
@@ -3131,6 +3275,9 @@ function Invoke-WindowsSetupTasks {
 
     if ($piSetupFailed) {
         throw "Required Pi coding agent setup failed."
+    }
+    if ($simpleEnglishSetupFailed) {
+        throw "Required Simple English skill setup failed."
     }
 
     Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen
