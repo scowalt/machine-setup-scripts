@@ -1380,6 +1380,133 @@ ensure_pi_node_runtime() {
     return 1
 }
 
+# Check whether the active Node.js runtime can run the current skills CLI.
+simple_english_node_runtime_ready() {
+    command -v node &> /dev/null || return 1
+    node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 20) ? 0 : 1)' >/dev/null 2>&1
+}
+
+# Ensure the skills CLI runs on its required Node.js version.
+ensure_simple_english_node_runtime() {
+    local _runtime="node@24"
+
+    if simple_english_node_runtime_ready; then
+        print_debug "Node.js $(node --version || true) is ready for the skills CLI."
+        return 0
+    fi
+
+    if [[ -d "${HOME}/.local/bin" ]]; then
+        export PATH="${HOME}/.local/bin:${PATH}"
+    fi
+
+    if [[ -d "${HOME}/.mise/bin" ]]; then
+        export PATH="${HOME}/.mise/bin:${PATH}"
+    fi
+
+    if ! command -v mise &> /dev/null; then
+        print_warning "Node.js >=22.20 is required for the skills CLI, but mise is not available to install it."
+        print_debug "Install mise, then run: mise use -g -y ${_runtime}"
+        return 1
+    fi
+
+    print_message "Ensuring Node.js 24 runtime for the skills CLI..."
+    if ! mise use -g -y "${_runtime}" > /dev/null; then
+        print_warning "Failed to install/configure ${_runtime} with mise."
+        return 1
+    fi
+
+    local _mise_env=""
+    if ! _mise_env=$(mise env -C "${HOME}" -s bash "${_runtime}"); then
+        print_warning "Failed to generate mise environment for ${_runtime}."
+        return 1
+    fi
+
+    if ! eval "${_mise_env}"; then
+        print_warning "Failed to activate ${_runtime} with mise."
+        return 1
+    fi
+
+    if simple_english_node_runtime_ready; then
+        print_success "Node.js $(node --version || true) is ready for the skills CLI."
+        return 0
+    fi
+
+    print_warning "Node.js >=22.20 is still not active after installing ${_runtime}."
+    return 1
+}
+
+# Install/update Simple English for every supported AI coding harness.
+setup_simple_english_skill() {
+    local _install_output=""
+    local _default_pi_dir="${HOME}/.pi/agent"
+    local _active_pi_dir="${PI_CODING_AGENT_DIR:-${_default_pi_dir}}"
+    local _default_pi_skill="${_default_pi_dir}/skills/simple-english"
+    local _active_pi_skill="${_active_pi_dir}/skills/simple-english"
+    local _skill_file=""
+    local -a _skill_files=(
+        "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/skills/simple-english/SKILL.md"
+        "${CODEX_HOME:-${HOME}/.codex}/skills/simple-english/SKILL.md"
+        "${HOME}/.gemini/skills/simple-english/SKILL.md"
+        "${_active_pi_skill}/SKILL.md"
+    )
+
+    if ! ensure_simple_english_node_runtime; then
+        return 1
+    fi
+
+    if ! command -v npx &> /dev/null; then
+        print_warning "npx is not available; cannot install the Simple English skill."
+        return 1
+    fi
+
+    print_message "Installing/updating Simple English across AI harnesses..."
+    if ! _install_output=$(npx --yes skills@latest add AminBlg/SimpleEnglish \
+        --global \
+        --agent claude-code \
+        --agent codex \
+        --agent gemini-cli \
+        --agent pi \
+        --skill simple-english \
+        --copy \
+        --yes < /dev/null 2>&1); then
+        print_warning "Failed to install/update the Simple English skill."
+        print_debug "${_install_output}"
+        return 1
+    fi
+
+    # The skills CLI does not currently honor PI_CODING_AGENT_DIR.
+    if [[ "${_active_pi_dir}" != "${_default_pi_dir}" ]]; then
+        if [[ ! -f "${_default_pi_skill}/SKILL.md" ]]; then
+            print_warning "Simple English was not installed at the default Pi skill path."
+            return 1
+        fi
+        if ! mkdir -p "${_active_pi_dir}/skills"; then
+            print_warning "Failed to create the configured Pi skills directory."
+            return 1
+        fi
+        if [[ -e "${_active_pi_skill}" || -L "${_active_pi_skill}" ]]; then
+            if ! rm -rf -- "${_active_pi_skill}"; then
+                print_warning "Failed to replace Simple English in PI_CODING_AGENT_DIR."
+                return 1
+            fi
+        fi
+        if ! cp -R "${_default_pi_skill}" "${_active_pi_skill}"; then
+            print_warning "Failed to copy Simple English into PI_CODING_AGENT_DIR."
+            return 1
+        fi
+    fi
+
+    for _skill_file in "${_skill_files[@]}"; do
+        if [[ ! -f "${_skill_file}" ]]; then
+            print_warning "Simple English validation failed: missing ${_skill_file}."
+            return 1
+        fi
+    done
+
+    print_success "Simple English installed/updated for Claude Code, Codex, Gemini CLI, and Pi."
+    print_debug "${_install_output}"
+}
+
 # Remove setup-managed Impeccable resources without affecting sibling agent tooling.
 remove_impeccable_resources() {
     local -a _paths=(
@@ -3438,7 +3565,7 @@ run_setup_tasks() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 159 | Last changed: Harden setup idempotency from weekly log audit${NC}"
+    echo -e "${GRAY}Version 160 | Last changed: Install Simple English across AI harnesses${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -3566,6 +3693,10 @@ run_setup_tasks() {
             setup_pi_goal_autoresearch
         fi
         print_warning "Skipping Pi extension setup because Pi migration failed."
+        _setup_had_errors=1
+    fi
+
+    if ! setup_simple_english_skill; then
         _setup_had_errors=1
     fi
 

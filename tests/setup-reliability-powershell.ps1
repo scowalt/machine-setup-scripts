@@ -93,6 +93,83 @@ finally {
     Remove-Item -Recurse -Force $cleanupTestRoot -ErrorAction SilentlyContinue
 }
 
+# Simple English provisioning updates on every run, validates custom harness
+# locations, and synchronizes Pi without removing sibling skills.
+$originalSimpleEnglishUserProfile = $env:USERPROFILE
+$originalClaudeConfigDir = $env:CLAUDE_CONFIG_DIR
+$originalCodexHome = $env:CODEX_HOME
+$originalPiCodingAgentDir = $env:PI_CODING_AGENT_DIR
+$simpleEnglishTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "simple-english-$([guid]::NewGuid())"
+$env:USERPROFILE = Join-Path $simpleEnglishTestRoot "home"
+$env:CLAUDE_CONFIG_DIR = Join-Path $simpleEnglishTestRoot "claude-home"
+$env:CODEX_HOME = Join-Path $simpleEnglishTestRoot "codex-home"
+$env:PI_CODING_AGENT_DIR = Join-Path $simpleEnglishTestRoot "custom-pi"
+$script:SimpleEnglishCalls = [System.Collections.Generic.List[string]]::new()
+
+function global:Enable-SimpleEnglishNodeRuntime { return $true }
+function global:npx {
+    param([Parameter(ValueFromRemainingArguments = $true)][object[]]$Arguments)
+
+    $script:SimpleEnglishCalls.Add(($Arguments -join " "))
+    $skillFiles = @(
+        (Join-Path $env:CLAUDE_CONFIG_DIR "skills\simple-english\SKILL.md"),
+        (Join-Path $env:CODEX_HOME "skills\simple-english\SKILL.md"),
+        (Join-Path $env:USERPROFILE ".gemini\skills\simple-english\SKILL.md"),
+        (Join-Path $env:USERPROFILE ".pi\agent\skills\simple-english\SKILL.md")
+    )
+    foreach ($skillFile in $skillFiles) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $skillFile) | Out-Null
+        Set-Content -LiteralPath $skillFile -Value "---`nname: simple-english`n---"
+    }
+    $global:LASTEXITCODE = 0
+    Write-Output "mock install complete"
+}
+
+try {
+    $siblingSkill = Join-Path $env:PI_CODING_AGENT_DIR "skills\keep-me\SKILL.md"
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $siblingSkill) | Out-Null
+    Set-Content -LiteralPath $siblingSkill -Value "keep"
+
+    if (-not (Install-SimpleEnglishSkill) -or -not (Install-SimpleEnglishSkill)) {
+        throw "Simple English mocked installation failed"
+    }
+
+    $expectedArguments = "--yes skills@latest add AminBlg/SimpleEnglish --global --agent claude-code --agent codex --agent gemini-cli --agent pi --skill simple-english --copy --yes"
+    if ($script:SimpleEnglishCalls.Count -ne 2 -or ($script:SimpleEnglishCalls | Where-Object { $_ -ne $expectedArguments })) {
+        throw "Simple English installer did not update twice with the exact targets: $($script:SimpleEnglishCalls -join '; ')"
+    }
+
+    $installedSkillFiles = @(
+        (Join-Path $env:CLAUDE_CONFIG_DIR "skills\simple-english\SKILL.md"),
+        (Join-Path $env:CODEX_HOME "skills\simple-english\SKILL.md"),
+        (Join-Path $env:USERPROFILE ".gemini\skills\simple-english\SKILL.md"),
+        (Join-Path $env:PI_CODING_AGENT_DIR "skills\simple-english\SKILL.md")
+    )
+    foreach ($skillFile in $installedSkillFiles) {
+        if (-not (Test-Path -LiteralPath $skillFile -PathType Leaf)) {
+            throw "Simple English validation missed $skillFile"
+        }
+    }
+    if (-not (Test-Path -LiteralPath $siblingSkill -PathType Leaf)) {
+        throw "Simple English custom Pi sync removed a sibling skill"
+    }
+
+    function global:npx {
+        $global:LASTEXITCODE = 1
+        Write-Output "simulated install failure"
+    }
+    if (Install-SimpleEnglishSkill) {
+        throw "Simple English installer failure was not propagated"
+    }
+}
+finally {
+    $env:USERPROFILE = $originalSimpleEnglishUserProfile
+    $env:CLAUDE_CONFIG_DIR = $originalClaudeConfigDir
+    $env:CODEX_HOME = $originalCodexHome
+    $env:PI_CODING_AGENT_DIR = $originalPiCodingAgentDir
+    Remove-Item -Recurse -Force $simpleEnglishTestRoot -ErrorAction SilentlyContinue
+}
+
 function global:gcloud {
     Write-Output "ERROR: The Google Cloud CLI"
     Write-Output "component manager"
