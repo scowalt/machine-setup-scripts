@@ -8,7 +8,13 @@ Every setup run writes a local log under `~/.local/log/machine-setup` and makes 
 
 ## AI Coding Agents
 
-Every machine setup script (macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows) installs/updates Claude Code CLI and Codex CLI, Notion CLI (`ntn`), Gemini CLI, Pi, RTK, tintinweb Pi subagents, Pi MCP adapter, Pi Claude bridge, and Pi goal/autoresearch extensions. Personal machines also install Matt Pocock Pi skills; work machines also install Google Cloud CLI. Set `WORK_MACHINE=1` in `~/.env.local` for work machines. Set `BAN_CLAUDE_CODE=1` to skip Claude Code CLI setup. Set `BAN_RTK=1` to skip RTK setup. Set `BAN_PI_SUBAGENTS=1` to keep the tintinweb Pi subagents extension inactive. Set `BAN_PI_MCP_ADAPTER=1` to keep the Pi MCP adapter inactive. Set `BAN_PI_GOAL_AUTORESEARCH=1` to keep the Pi goal/autoresearch extensions inactive. Set `BAN_MATT_POCOCK_SKILLS=1` to keep Matt Pocock Pi skills inactive.
+Every setup script installs or updates the main AI development tools. The supported systems are macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows. The tools include Claude Code CLI and Codex CLI, Notion CLI (`ntn`), Gemini CLI, Pi, and RTK. Setup also installs the tintinweb Pi subagents. It installs the Pi MCP adapter, Pi Claude bridge, and Pi goal/autoresearch extensions.
+
+Setup installs the managed Matt Pocock engineering skills for Pi and Codex on personal and work machines. Codex reads its copies from `~/.agents/skills`. Work machines also install Google Cloud CLI.
+
+Set `WORK_MACHINE=1` in `~/.env.local` for work machines. Set `BAN_CLAUDE_CODE=1` to skip Claude Code CLI setup. Set `BAN_RTK=1` to skip RTK setup. Set `BAN_PI_SUBAGENTS=1` to keep the tintinweb Pi subagents inactive. Set `BAN_PI_MCP_ADAPTER=1` to keep the Pi MCP adapter inactive. Set `BAN_PI_GOAL_AUTORESEARCH=1` to keep the Pi goal/autoresearch extensions inactive.
+
+Set `BAN_MATT_POCOCK_SKILLS=1` to remove the managed Matt Pocock skills and keep them inactive. The older `BAN_MATT_POCKOCK_SKILLS=1` spelling also works.
 
 Every setup run installs the latest [Simple English](https://github.com/AminBlg/SimpleEnglish) skill globally for Claude Code, Codex, Gemini CLI, and Pi. The installation is non-interactive and uses copied files for cross-platform compatibility. Codex and Gemini CLI discover the shared user copy at `~/.agents/skills/simple-english`; Claude Code and Pi use their agent-specific copies. `CLAUDE_CONFIG_DIR` and `PI_CODING_AGENT_DIR` select custom Claude Code and Pi locations when they are set. Simple English is required on personal and work machines and has no setup opt-out.
 

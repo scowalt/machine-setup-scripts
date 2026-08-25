@@ -87,45 +87,122 @@ assert_contains win.ps1 'Required Pi coding agent setup failed' 'fatal required 
 # retired zoom-out. Legacy copies remain explicitly tracked for safe cleanup.
 for file in "${matt_setup_scripts[@]}"; do
     assert_contains "${file}" '^[[:space:]]*diagnosing-bugs([[:space:]\\]*$)?' 'current diagnosing-bugs skill'
-    assert_contains "${file}" '^matt_pocock_obsolete_pi_skills\(\)' 'obsolete Matt Pocock skill inventory'
+    assert_contains "${file}" '^matt_pocock_obsolete_skills\(\)' 'obsolete Matt Pocock skill inventory'
+    assert_contains "${file}" '^setup_matt_pocock_skills\(\)' 'Pi and Codex Matt Pocock installer'
+    assert_contains "${file}" '.*--agent pi --agent codex --copy --yes' 'Pi and Codex skills CLI targets'
     assert_contains "${file}" '^[[:space:]]*diagnose([[:space:]\\]*$)?' 'legacy diagnose cleanup entry'
     assert_contains "${file}" '^[[:space:]]*zoom-out([[:space:]\\]*$)?' 'legacy zoom-out cleanup entry'
+    if sed -n '/^matt_pocock_skills_disabled()/,/^}/p' "${file}" | grep -q 'WORK_MACHINE'; then
+        fail "${file}: WORK_MACHINE still disables Matt Pocock skills"
+    fi
+    if sed -n '/^setup_matt_pocock_skills()/,/^}/p' "${file}" | grep -Eq 'command -v pi|ensure_pi_node_runtime'; then
+        fail "${file}: Matt Pocock setup still depends on the Pi executable"
+    fi
 done
 assert_contains win.ps1 '"diagnosing-bugs"' 'current PowerShell diagnosing-bugs skill'
+assert_contains win.ps1 '^function Setup-MattPocockSkills' 'PowerShell Pi and Codex Matt Pocock installer'
+assert_contains win.ps1 '"--agent", "codex"' 'PowerShell Codex target'
 # shellcheck disable=SC2016 # Preserve literal PowerShell variable syntax.
 assert_contains win.ps1 '\$obsoleteSkills[[:space:]]*=' 'PowerShell obsolete skill inventory'
+if sed -n '/^function Test-MattPocockSkillsDisabled/,/^}/p' win.ps1 | grep -q 'WORK_MACHINE'; then
+    fail 'win.ps1: WORK_MACHINE still disables Matt Pocock skills'
+fi
+if sed -n '/^function Setup-MattPocockSkills/,/^}/p' win.ps1 | grep -Eq 'Get-Command pi|Enable-PiNodeRuntime'; then
+    fail 'win.ps1: Matt Pocock setup still depends on the Pi executable'
+fi
 
 # Successful skill provisioning removes only obsolete setup-managed names and
-# converges on a second run without following symlink targets.
+# converges on a second run for Pi and Codex.
 for file in "${matt_setup_scripts[@]}"; do
     matt_tmp=$(mktemp -d)
-    skills_dir="${matt_tmp}/home/.pi/agent/skills"
-    mkdir -p "${skills_dir}" "${matt_tmp}/obsolete-target"
+    default_pi_skills="${matt_tmp}/home/.pi/agent/skills"
+    codex_skills="${matt_tmp}/home/.agents/skills"
+    custom_pi_skills="${matt_tmp}/custom-pi/skills"
+    codex_home="${matt_tmp}/codex-home"
+    mkdir -p "${default_pi_skills}" "${codex_skills}" "${custom_pi_skills}" "${matt_tmp}/obsolete-target"
     touch "${matt_tmp}/obsolete-target/sentinel"
-    for skill in setup-matt-pocock-skills diagnosing-bugs tdd improve-codebase-architecture grill-with-docs; do
-        mkdir -p "${skills_dir}/${skill}"
-        printf '%s\n' "---" "name: ${skill}" "---" > "${skills_dir}/${skill}/SKILL.md"
+    for skills_dir in "${default_pi_skills}" "${codex_skills}" "${custom_pi_skills}"; do
+        mkdir -p "${skills_dir}/keep-me" "${skills_dir}/diagnose"
+        touch "${skills_dir}/keep-me/SKILL.md" "${skills_dir}/diagnose/SKILL.md"
+        ln -s "${matt_tmp}/obsolete-target" "${skills_dir}/zoom-out"
     done
-    mkdir -p "${skills_dir}/diagnose"
-    touch "${skills_dir}/diagnose/SKILL.md"
-    ln -s "${matt_tmp}/obsolete-target" "${skills_dir}/zoom-out"
 
     SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" \
-        HOME="${matt_tmp}/home" CALL_LOG="${matt_tmp}/calls" bash -c '
+        HOME="${matt_tmp}/home" CODEX_HOME="${codex_home}" PI_CODING_AGENT_DIR="${matt_tmp}/custom-pi" \
+        WORK_MACHINE=1 CALL_LOG="${matt_tmp}/calls" bash -c '
             source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
-            pi() { return 0; }
-            npx() { printf "%s\n" "$*" >> "${CALL_LOG}"; }
-            ensure_pi_node_runtime() { return 0; }
-            setup_matt_pocock_pi_skills > /dev/null
-            setup_matt_pocock_pi_skills > /dev/null
+            ensure_skills_cli_node_runtime() { return 0; }
+            npx() {
+                printf "%s\n" "$*" >> "${CALL_LOG}"
+                local skill skills_dir
+                for skills_dir in "${HOME}/.pi/agent/skills" "${HOME}/.agents/skills"; do
+                    for skill in setup-matt-pocock-skills diagnosing-bugs tdd improve-codebase-architecture grill-with-docs; do
+                        mkdir -p "${skills_dir}/${skill}"
+                        printf "%s\n" "---" "name: ${skill}" "---" > "${skills_dir}/${skill}/SKILL.md"
+                    done
+                done
+            }
+            setup_matt_pocock_skills > /dev/null
+            setup_matt_pocock_skills > /dev/null
         '
-    grep -q -- '--skill diagnosing-bugs' "${matt_tmp}/calls" || fail "${file}: installer omitted diagnosing-bugs"
-    if grep -Eq -- '--skill (diagnose|zoom-out)([[:space:]]|$)' "${matt_tmp}/calls"; then
-        fail "${file}: installer requested an obsolete Matt Pocock skill"
+    expected_args='--yes skills@latest add mattpocock/skills --global --agent pi --agent codex --copy --yes --skill setup-matt-pocock-skills --skill diagnosing-bugs --skill tdd --skill improve-codebase-architecture --skill grill-with-docs'
+    call_count=$(wc -l < "${matt_tmp}/calls")
+    [[ "${call_count}" -eq 2 ]] || fail "${file}: installer did not update on both setup runs"
+    if grep -Fvx -- "${expected_args}" "${matt_tmp}/calls" > /dev/null; then
+        fail "${file}: installer used unexpected arguments"
     fi
-    [[ ! -e "${skills_dir}/diagnose" && ! -L "${skills_dir}/zoom-out" ]] || fail "${file}: obsolete Matt Pocock skills survived validated setup"
+    for skills_dir in "${default_pi_skills}" "${codex_skills}" "${custom_pi_skills}"; do
+        for skill in setup-matt-pocock-skills diagnosing-bugs tdd improve-codebase-architecture grill-with-docs; do
+            [[ -f "${skills_dir}/${skill}/SKILL.md" ]] || fail "${file}: missing ${skill} in ${skills_dir}"
+            [[ ! -L "${skills_dir}/${skill}" ]] || fail "${file}: ${skill} is a symlink in ${skills_dir}"
+        done
+        [[ -f "${skills_dir}/keep-me/SKILL.md" ]] || fail "${file}: setup removed a sibling skill from ${skills_dir}"
+        [[ ! -e "${skills_dir}/diagnose" && ! -L "${skills_dir}/zoom-out" ]] || fail "${file}: obsolete Matt Pocock skills survived in ${skills_dir}"
+    done
+    [[ ! -e "${codex_home}/skills/setup-matt-pocock-skills" ]] || fail "${file}: installer used CODEX_HOME instead of the canonical shared path"
     [[ -f "${matt_tmp}/obsolete-target/sentinel" ]] || fail "${file}: obsolete skill cleanup followed a symlink target"
     rm -rf "${matt_tmp}"
+done
+
+# Both supported ban spellings remove only managed names from Pi and Codex.
+for file in "${matt_setup_scripts[@]}"; do
+    for ban_name in BAN_MATT_POCOCK_SKILLS BAN_MATT_POCKOCK_SKILLS; do
+        matt_tmp=$(mktemp -d)
+        default_pi_skills="${matt_tmp}/home/.pi/agent/skills"
+        codex_skills="${matt_tmp}/home/.agents/skills"
+        custom_pi_skills="${matt_tmp}/custom-pi/skills"
+        mkdir -p "${default_pi_skills}" "${codex_skills}" "${custom_pi_skills}" "${matt_tmp}/managed-target"
+        touch "${matt_tmp}/managed-target/sentinel"
+        for skills_dir in "${default_pi_skills}" "${codex_skills}" "${custom_pi_skills}"; do
+            mkdir -p "${skills_dir}/keep-me"
+            touch "${skills_dir}/keep-me/SKILL.md"
+            for skill in setup-matt-pocock-skills diagnosing-bugs improve-codebase-architecture grill-with-docs diagnose zoom-out; do
+                mkdir -p "${skills_dir}/${skill}"
+                touch "${skills_dir}/${skill}/SKILL.md"
+            done
+            ln -s "${matt_tmp}/managed-target" "${skills_dir}/tdd"
+        done
+
+        # shellcheck disable=SC2016 # Expand these variables in the child shell.
+        env "${ban_name}=1" SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" \
+            HOME="${matt_tmp}/home" PI_CODING_AGENT_DIR="${matt_tmp}/custom-pi" CALL_LOG="${matt_tmp}/calls" bash -c '
+                source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+                npx() { printf "%s\n" unexpected >> "${CALL_LOG}"; return 90; }
+                ensure_skills_cli_node_runtime() { return 90; }
+                setup_matt_pocock_skills > /dev/null
+                setup_matt_pocock_skills > /dev/null
+            '
+
+        for skills_dir in "${default_pi_skills}" "${codex_skills}" "${custom_pi_skills}"; do
+            for skill in setup-matt-pocock-skills diagnosing-bugs tdd improve-codebase-architecture grill-with-docs diagnose zoom-out; do
+                [[ ! -e "${skills_dir}/${skill}" && ! -L "${skills_dir}/${skill}" ]] || fail "${file}: ${ban_name} left ${skill} in ${skills_dir}"
+            done
+            [[ -f "${skills_dir}/keep-me/SKILL.md" ]] || fail "${file}: ${ban_name} removed a sibling skill"
+        done
+        [[ -f "${matt_tmp}/managed-target/sentinel" ]] || fail "${file}: ${ban_name} cleanup followed a symlink target"
+        [[ ! -e "${matt_tmp}/calls" ]] || fail "${file}: ${ban_name} still ran the installer"
+        rm -rf "${matt_tmp}"
+    done
 done
 
 # Ubuntu tmux service setup must reach a lingering user manager even when the

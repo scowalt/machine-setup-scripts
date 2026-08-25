@@ -1912,16 +1912,16 @@ ensure_pi_node_runtime() {
 }
 
 # Check whether the active Node.js runtime can run the current skills CLI.
-simple_english_node_runtime_ready() {
+skills_cli_node_runtime_ready() {
     command -v node &> /dev/null || return 1
     node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 20) ? 0 : 1)' >/dev/null 2>&1
 }
 
 # Ensure the skills CLI runs on its required Node.js version.
-ensure_simple_english_node_runtime() {
+ensure_skills_cli_node_runtime() {
     local _runtime="node@24"
 
-    if simple_english_node_runtime_ready; then
+    if skills_cli_node_runtime_ready; then
         print_debug "Node.js $(node --version || true) is ready for the skills CLI."
         return 0
     fi
@@ -1957,7 +1957,7 @@ ensure_simple_english_node_runtime() {
         return 1
     fi
 
-    if simple_english_node_runtime_ready; then
+    if skills_cli_node_runtime_ready; then
         print_success "Node.js $(node --version || true) is ready for the skills CLI."
         return 0
     fi
@@ -1981,7 +1981,7 @@ setup_simple_english_skill() {
         "${_active_pi_skill}/SKILL.md"
     )
 
-    if ! ensure_simple_english_node_runtime; then
+    if ! ensure_skills_cli_node_runtime; then
         return 1
     fi
 
@@ -4144,8 +4144,8 @@ setup_pi_goal_autoresearch() {
 }
 
 
-# Matt Pocock skills to install for Pi.
-matt_pocock_pi_skills() {
+# Matt Pocock skills to install for Pi and Codex.
+matt_pocock_skills() {
     printf '%s\n' \
         setup-matt-pocock-skills \
         diagnosing-bugs \
@@ -4155,23 +4155,23 @@ matt_pocock_pi_skills() {
 }
 
 # Setup-managed skill names retired or renamed upstream.
-matt_pocock_obsolete_pi_skills() {
+matt_pocock_obsolete_skills() {
     printf '%s\n' \
         diagnose \
         zoom-out
 }
 
-matt_pocock_all_managed_pi_skills() {
-    matt_pocock_pi_skills
-    matt_pocock_obsolete_pi_skills
+matt_pocock_all_managed_skills() {
+    matt_pocock_skills
+    matt_pocock_obsolete_skills
 }
 
-matt_pocock_pi_skills_disabled() {
-    [[ "${WORK_MACHINE:-}" == "1" || "${BAN_MATT_POCOCK_SKILLS:-}" == "1" || "${BAN_MATT_POCKOCK_SKILLS:-}" == "1" ]]
+matt_pocock_skills_disabled() {
+    [[ "${BAN_MATT_POCOCK_SKILLS:-}" == "1" || "${BAN_MATT_POCKOCK_SKILLS:-}" == "1" ]]
 }
 
-# Remove Matt Pocock skill copies from Pi when disabled.
-remove_matt_pocock_pi_skills() {
+# Remove setup-managed Matt Pocock skills without following symlink targets.
+remove_matt_pocock_skills() {
     local _default_agent_dir="${HOME}/.pi/agent"
     local _active_agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
     local _skills_dir=""
@@ -4179,7 +4179,7 @@ remove_matt_pocock_pi_skills() {
     local _skill_path=""
     local _removed=0
     local _failed=()
-    local _skills_dirs=("${_default_agent_dir}/skills")
+    local _skills_dirs=("${_default_agent_dir}/skills" "${HOME}/.agents/skills")
 
     if [[ "${_active_agent_dir}" != "${_default_agent_dir}" ]]; then
         _skills_dirs+=("${_active_agent_dir}/skills")
@@ -4195,28 +4195,28 @@ remove_matt_pocock_pi_skills() {
                     _failed+=("${_skill}")
                 fi
             fi
-        done < <(matt_pocock_all_managed_pi_skills || true)
+        done < <(matt_pocock_all_managed_skills || true)
     done
 
     if [[ "${#_failed[@]}" -gt 0 ]]; then
-        print_warning "Failed to remove Matt Pocock Pi skills: ${_failed[*]}"
+        print_warning "Failed to remove Matt Pocock skills: ${_failed[*]}"
         return 1
     elif [[ "${_removed}" -eq 1 ]]; then
-        print_success "Matt Pocock Pi skills disabled."
+        print_success "Matt Pocock skills disabled."
     else
-        print_debug "Matt Pocock Pi skills disabled; no installed copies found."
+        print_debug "Matt Pocock skills disabled; no installed copies found."
     fi
 }
 
 # Remove only retired setup-managed names after their replacements validate.
-remove_obsolete_matt_pocock_pi_skills() {
+remove_obsolete_matt_pocock_skills() {
     local _default_agent_dir="${HOME}/.pi/agent"
     local _active_agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
     local _skills_dir=""
     local _skill=""
     local _skill_path=""
     local _failed=()
-    local _skills_dirs=("${_default_agent_dir}/skills")
+    local _skills_dirs=("${_default_agent_dir}/skills" "${HOME}/.agents/skills")
 
     if [[ "${_active_agent_dir}" != "${_default_agent_dir}" ]]; then
         _skills_dirs+=("${_active_agent_dir}/skills")
@@ -4230,98 +4230,103 @@ remove_obsolete_matt_pocock_pi_skills() {
                     _failed+=("${_skill_path}")
                 fi
             fi
-        done < <(matt_pocock_obsolete_pi_skills || true)
+        done < <(matt_pocock_obsolete_skills || true)
     done
 
     if [[ "${#_failed[@]}" -gt 0 ]]; then
-        print_warning "Failed to remove obsolete Matt Pocock Pi skills: ${_failed[*]}"
+        print_warning "Failed to remove obsolete Matt Pocock skills: ${_failed[*]}"
         return 1
     fi
 }
 
-# Install/update Matt Pocock engineering skills for Pi.
-setup_matt_pocock_pi_skills() {
+# Install/update Matt Pocock engineering skills for Pi and Codex.
+setup_matt_pocock_skills() {
     local _repo="mattpocock/skills"
-    local _default_agent_dir="${HOME}/.pi/agent"
-    local _agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
-    local _default_skills_dir="${_default_agent_dir}/skills"
-    local _skills_dir="${_agent_dir}/skills"
+    local _default_pi_dir="${HOME}/.pi/agent"
+    local _active_pi_dir="${PI_CODING_AGENT_DIR:-${_default_pi_dir}}"
+    local _default_pi_skills_dir="${_default_pi_dir}/skills"
+    local _active_pi_skills_dir="${_active_pi_dir}/skills"
+    local _codex_skills_dir="${HOME}/.agents/skills"
+    local _validation_dir=""
     local _skill=""
     local _output=""
     local _source_path=""
     local _dest_path=""
-    local _args=(--yes skills@latest add "${_repo}" --global --agent pi --copy -y)
+    local _args=(--yes skills@latest add "${_repo}" --global --agent pi --agent codex --copy --yes)
+    local _validation_dirs=("${_default_pi_skills_dir}" "${_codex_skills_dir}")
     local _missing=()
     local _sync_failed=()
 
-    if matt_pocock_pi_skills_disabled; then
-        if [[ "${WORK_MACHINE:-}" == "1" ]]; then
-            print_debug "WORK_MACHINE=1, skipping Matt Pocock Pi skills."
-        fi
-        remove_matt_pocock_pi_skills
+    if matt_pocock_skills_disabled; then
+        remove_matt_pocock_skills
         return
     fi
 
-    if ! command -v pi &> /dev/null; then
-        print_warning "Pi coding agent not found. Cannot install Matt Pocock Pi skills."
-        return 0
-    fi
-
-    if ! ensure_pi_node_runtime; then
-        print_warning "Skipping Matt Pocock Pi skills because the Pi Node.js runtime is not ready."
-        return 0
+    if ! ensure_skills_cli_node_runtime; then
+        print_warning "Cannot install Matt Pocock skills because the skills CLI runtime is not ready."
+        return 1
     fi
 
     if ! command -v npx &> /dev/null; then
-        print_warning "npx not found. Cannot install Matt Pocock Pi skills."
-        print_debug "Install Node.js >=20.6, then run: npx --yes skills@latest add mattpocock/skills --global --agent pi --copy"
-        return 0
+        print_warning "npx is not available; cannot install Matt Pocock skills."
+        print_debug "Install Node.js >=22.20, then run: npx --yes skills@latest add mattpocock/skills --global --agent pi --agent codex --copy --yes"
+        return 1
     fi
 
     while IFS= read -r _skill; do
         _args+=(--skill "${_skill}")
-    done < <(matt_pocock_pi_skills || true)
+    done < <(matt_pocock_skills || true)
 
-    print_message "Installing/updating Matt Pocock Pi skills..."
-    if _output=$(npx "${_args[@]}" 2>&1); then
-        if [[ "${_agent_dir}" != "${_default_agent_dir}" ]]; then
-            mkdir -p "${_skills_dir}"
-            while IFS= read -r _skill; do
-                _source_path="${_default_skills_dir}/${_skill}"
-                _dest_path="${_skills_dir}/${_skill}"
-                if [[ -d "${_source_path}" ]]; then
-                    if rm -rf -- "${_dest_path:?}" && cp -a "${_source_path}" "${_dest_path}"; then
-                        true
-                    else
-                        _sync_failed+=("${_skill}")
-                    fi
+    print_message "Installing/updating Matt Pocock skills for Pi and Codex..."
+    if ! _output=$(npx "${_args[@]}" < /dev/null 2>&1); then
+        print_warning "Failed to install Matt Pocock skills."
+        print_debug "${_output}"
+        return 1
+    fi
+
+    # The skills CLI does not currently honor PI_CODING_AGENT_DIR.
+    if [[ "${_active_pi_dir}" != "${_default_pi_dir}" ]]; then
+        if ! mkdir -p "${_active_pi_skills_dir}"; then
+            print_warning "Failed to create the configured Pi skills directory."
+            return 1
+        fi
+        while IFS= read -r _skill; do
+            _source_path="${_default_pi_skills_dir}/${_skill}"
+            _dest_path="${_active_pi_skills_dir}/${_skill}"
+            if [[ -d "${_source_path}" && ! -L "${_source_path}" && -f "${_source_path}/SKILL.md" && ! -L "${_source_path}/SKILL.md" ]]; then
+                if rm -rf -- "${_dest_path:?}" && cp -a "${_source_path}" "${_dest_path}"; then
+                    true
                 else
                     _sync_failed+=("${_skill}")
                 fi
-            done < <(matt_pocock_pi_skills || true)
-        fi
-
-        while IFS= read -r _skill; do
-            if [[ ! -f "${_skills_dir}/${_skill}/SKILL.md" ]]; then
-                _missing+=("${_skill}")
+            else
+                _sync_failed+=("${_skill}")
             fi
-        done < <(matt_pocock_pi_skills || true)
+        done < <(matt_pocock_skills || true)
+        _validation_dirs+=("${_active_pi_skills_dir}")
+    fi
 
-        if [[ "${#_sync_failed[@]}" -gt 0 ]]; then
-            print_warning "Matt Pocock Pi skills installed, but failed to sync to active Pi dir ${_agent_dir}: ${_sync_failed[*]}"
-            return 1
-        elif [[ "${#_missing[@]}" -gt 0 ]]; then
-            print_warning "Matt Pocock Pi skills install completed, but missing expected skills: ${_missing[*]}"
-            return 1
-        elif ! remove_obsolete_matt_pocock_pi_skills; then
-            return 1
-        else
-            print_success "Matt Pocock Pi skills installed/updated."
-        fi
-    else
-        print_warning "Failed to install Matt Pocock Pi skills: ${_output}"
+    for _validation_dir in "${_validation_dirs[@]}"; do
+        while IFS= read -r _skill; do
+            _source_path="${_validation_dir}/${_skill}"
+            if [[ ! -d "${_source_path}" || -L "${_source_path}" || ! -f "${_source_path}/SKILL.md" || -L "${_source_path}/SKILL.md" ]]; then
+                _missing+=("${_source_path}")
+            fi
+        done < <(matt_pocock_skills || true)
+    done
+
+    if [[ "${#_sync_failed[@]}" -gt 0 ]]; then
+        print_warning "Matt Pocock skills installed, but the custom Pi copy failed: ${_sync_failed[*]}"
+        return 1
+    elif [[ "${#_missing[@]}" -gt 0 ]]; then
+        print_warning "Matt Pocock skills are missing required files: ${_missing[*]}"
+        return 1
+    elif ! remove_obsolete_matt_pocock_skills; then
         return 1
     fi
+
+    print_success "Matt Pocock skills installed/updated for Pi and Codex."
+    print_debug "${_output}"
 }
 
 
@@ -5403,7 +5408,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 219 | Last changed: Use Simple English without an output style"
+    echo -e "${GRAY}Version 220 | Last changed: Install Matt Pocock skills for Codex and Pi"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5559,10 +5564,8 @@ HELPER_EOF
     install_ntn_cli
     install_rtk_cli
     setup_rtk_integrations
-    if matt_pocock_pi_skills_disabled; then
-        if ! setup_matt_pocock_pi_skills; then
-            _setup_had_errors=1
-        fi
+    if ! setup_matt_pocock_skills; then
+        _setup_had_errors=1
     fi
     if install_pi_cli; then
         configure_pi_defaults
@@ -5573,11 +5576,6 @@ HELPER_EOF
         setup_pi_claude_bridge
         setup_pi_ask_user
         setup_pi_goal_autoresearch
-        if ! matt_pocock_pi_skills_disabled; then
-            if ! setup_matt_pocock_pi_skills; then
-                _setup_had_errors=1
-            fi
-        fi
     else
         if [[ "${BAN_PI_SUBAGENTS:-}" == "1" ]]; then
             setup_pi_subagents

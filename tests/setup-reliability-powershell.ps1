@@ -106,7 +106,7 @@ $env:CODEX_HOME = Join-Path $simpleEnglishTestRoot "codex-home"
 $env:PI_CODING_AGENT_DIR = Join-Path $simpleEnglishTestRoot "custom-pi"
 $script:SimpleEnglishCalls = [System.Collections.Generic.List[string]]::new()
 
-function global:Enable-SimpleEnglishNodeRuntime { return $true }
+function global:Enable-SkillsCliNodeRuntime { return $true }
 function global:npx {
     param([Parameter(ValueFromRemainingArguments = $true)][object[]]$Arguments)
 
@@ -166,6 +166,144 @@ finally {
     $env:CODEX_HOME = $originalCodexHome
     $env:PI_CODING_AGENT_DIR = $originalPiCodingAgentDir
     Remove-Item -Recurse -Force $simpleEnglishTestRoot -ErrorAction SilentlyContinue
+}
+
+# Matt Pocock provisioning targets Pi and Codex on all machines. It uses the
+# canonical Codex path and synchronizes a custom Pi directory.
+$originalMattUserProfile = $env:USERPROFILE
+$originalMattCodexHome = $env:CODEX_HOME
+$originalMattPiCodingAgentDir = $env:PI_CODING_AGENT_DIR
+$originalWorkMachine = $env:WORK_MACHINE
+$originalMattBan = $env:BAN_MATT_POCOCK_SKILLS
+$originalMattBanAlias = $env:BAN_MATT_POCKOCK_SKILLS
+$mattTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "matt-pocock-$([guid]::NewGuid())"
+$env:USERPROFILE = Join-Path $mattTestRoot "home"
+$env:CODEX_HOME = Join-Path $mattTestRoot "codex-home"
+$env:PI_CODING_AGENT_DIR = Join-Path $mattTestRoot "custom-pi"
+$env:WORK_MACHINE = "1"
+$env:BAN_MATT_POCOCK_SKILLS = $null
+$env:BAN_MATT_POCKOCK_SKILLS = $null
+$script:MattPocockCalls = [System.Collections.Generic.List[string]]::new()
+$mattSkills = @(
+    "setup-matt-pocock-skills",
+    "diagnosing-bugs",
+    "tdd",
+    "improve-codebase-architecture",
+    "grill-with-docs"
+)
+$script:MattPocockTestSkills = $mattSkills
+$mattManagedSkills = $mattSkills + @("diagnose", "zoom-out")
+$defaultMattPiSkills = Join-Path $env:USERPROFILE ".pi\agent\skills"
+$codexMattSkills = Join-Path $env:USERPROFILE ".agents\skills"
+$customMattPiSkills = Join-Path $env:PI_CODING_AGENT_DIR "skills"
+$mattSkillsDirs = @($defaultMattPiSkills, $codexMattSkills, $customMattPiSkills)
+$mattSymlinkTarget = Join-Path $mattTestRoot "managed-target"
+
+function global:Enable-SkillsCliNodeRuntime { return $true }
+function global:npx {
+    param([Parameter(ValueFromRemainingArguments = $true)][object[]]$Arguments)
+
+    $script:MattPocockCalls.Add(($Arguments -join " "))
+    $mockSkillsDirs = @(
+        (Join-Path $env:USERPROFILE ".pi\agent\skills"),
+        (Join-Path $env:USERPROFILE ".agents\skills")
+    )
+    foreach ($skillsDir in $mockSkillsDirs) {
+        foreach ($skill in $script:MattPocockTestSkills) {
+            $skillFile = Join-Path $skillsDir "$skill\SKILL.md"
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $skillFile) | Out-Null
+            Set-Content -LiteralPath $skillFile -Value "---`nname: $skill`n---"
+        }
+    }
+    $global:LASTEXITCODE = 0
+    Write-Output "mock install complete"
+}
+
+try {
+    New-Item -ItemType Directory -Force -Path $mattSymlinkTarget | Out-Null
+    Set-Content -LiteralPath (Join-Path $mattSymlinkTarget "sentinel") -Value "keep"
+    foreach ($skillsDir in $mattSkillsDirs) {
+        $siblingSkill = Join-Path $skillsDir "keep-me\SKILL.md"
+        $obsoleteSkill = Join-Path $skillsDir "diagnose\SKILL.md"
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $siblingSkill) | Out-Null
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $obsoleteSkill) | Out-Null
+        Set-Content -LiteralPath $siblingSkill -Value "keep"
+        Set-Content -LiteralPath $obsoleteSkill -Value "obsolete"
+        try {
+            New-Item -ItemType SymbolicLink -Path (Join-Path $skillsDir "zoom-out") -Target $mattSymlinkTarget -ErrorAction Stop | Out-Null
+        }
+        catch {
+            New-Item -ItemType Directory -Force -Path (Join-Path $skillsDir "zoom-out") | Out-Null
+        }
+    }
+
+    if (-not (Setup-MattPocockSkills) -or -not (Setup-MattPocockSkills)) {
+        throw "Matt Pocock mocked installation failed"
+    }
+
+    $expectedMattArguments = "--yes skills@latest add mattpocock/skills --global --agent pi --agent codex --copy --yes --skill setup-matt-pocock-skills --skill diagnosing-bugs --skill tdd --skill improve-codebase-architecture --skill grill-with-docs"
+    if ($script:MattPocockCalls.Count -ne 2 -or ($script:MattPocockCalls | Where-Object { $_ -ne $expectedMattArguments })) {
+        throw "Matt Pocock installer did not update twice with the exact targets: $($script:MattPocockCalls -join '; ')"
+    }
+    foreach ($skillsDir in $mattSkillsDirs) {
+        foreach ($skill in $mattSkills) {
+            if (-not (Test-Path -LiteralPath (Join-Path $skillsDir "$skill\SKILL.md") -PathType Leaf)) {
+                throw "Matt Pocock validation missed $skill in $skillsDir"
+            }
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $skillsDir "keep-me\SKILL.md") -PathType Leaf)) {
+            throw "Matt Pocock setup removed a sibling in $skillsDir"
+        }
+        foreach ($obsoleteSkill in @("diagnose", "zoom-out")) {
+            if (Test-Path -LiteralPath (Join-Path $skillsDir $obsoleteSkill)) {
+                throw "Matt Pocock setup left $obsoleteSkill in $skillsDir"
+            }
+        }
+    }
+    if (Test-Path -LiteralPath (Join-Path $env:CODEX_HOME "skills\setup-matt-pocock-skills")) {
+        throw "Matt Pocock setup used CODEX_HOME instead of the canonical shared path"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $mattSymlinkTarget "sentinel") -PathType Leaf)) {
+        throw "Matt Pocock obsolete cleanup followed a symlink target"
+    }
+
+    foreach ($banName in @("BAN_MATT_POCOCK_SKILLS", "BAN_MATT_POCKOCK_SKILLS")) {
+        foreach ($skillsDir in $mattSkillsDirs) {
+            foreach ($skill in $mattManagedSkills) {
+                $skillFile = Join-Path $skillsDir "$skill\SKILL.md"
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $skillFile) | Out-Null
+                Set-Content -LiteralPath $skillFile -Value "managed"
+            }
+        }
+        [Environment]::SetEnvironmentVariable($banName, "1")
+        if (-not (Setup-MattPocockSkills) -or -not (Setup-MattPocockSkills)) {
+            throw "$banName cleanup failed"
+        }
+        [Environment]::SetEnvironmentVariable($banName, $null)
+
+        foreach ($skillsDir in $mattSkillsDirs) {
+            foreach ($skill in $mattManagedSkills) {
+                if (Test-Path -LiteralPath (Join-Path $skillsDir $skill)) {
+                    throw "$banName left $skill in $skillsDir"
+                }
+            }
+            if (-not (Test-Path -LiteralPath (Join-Path $skillsDir "keep-me\SKILL.md") -PathType Leaf)) {
+                throw "$banName removed a sibling skill"
+            }
+        }
+    }
+    if ($script:MattPocockCalls.Count -ne 2) {
+        throw "A Matt Pocock ban still ran the installer"
+    }
+}
+finally {
+    $env:USERPROFILE = $originalMattUserProfile
+    $env:CODEX_HOME = $originalMattCodexHome
+    $env:PI_CODING_AGENT_DIR = $originalMattPiCodingAgentDir
+    $env:WORK_MACHINE = $originalWorkMachine
+    $env:BAN_MATT_POCOCK_SKILLS = $originalMattBan
+    $env:BAN_MATT_POCKOCK_SKILLS = $originalMattBanAlias
+    Remove-Item -Recurse -Force $mattTestRoot -ErrorAction SilentlyContinue
 }
 
 function global:gcloud {

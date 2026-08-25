@@ -7,11 +7,11 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=197
-    [ubuntu.sh]=219
-    [wsl.sh]=163
-    [pi.sh]=180
-    [bazzite.sh]=79
+    [mac.sh]=198
+    [ubuntu.sh]=220
+    [wsl.sh]=164
+    [pi.sh]=181
+    [bazzite.sh]=80
 )
 
 fail() {
@@ -81,12 +81,12 @@ assert_order() {
 
 for file in "${bash_setup_scripts[@]}"; do
     bash -n "${file}"
-    assert_contains "${file}" '^simple_english_node_runtime_ready\(\)' 'Simple English Node.js runtime check'
-    assert_contains "${file}" '^ensure_simple_english_node_runtime\(\)' 'Simple English Node.js runtime setup'
+    assert_contains "${file}" '^skills_cli_node_runtime_ready\(\)' 'skills CLI Node.js runtime check'
+    assert_contains "${file}" '^ensure_skills_cli_node_runtime\(\)' 'skills CLI Node.js runtime setup'
     assert_contains "${file}" '^setup_simple_english_skill\(\)' 'Simple English installer function'
-    assert_function_contains "${file}" simple_english_node_runtime_ready 'major > 22.*major === 22 && minor >= 20' 'Node.js 22.20 minimum'
-    assert_function_contains "${file}" ensure_simple_english_node_runtime 'local _runtime="node@24"' 'mise Node.js 24 runtime'
-    assert_function_contains "${file}" ensure_simple_english_node_runtime 'mise use -g -y "\$\{_runtime\}"' 'global mise activation'
+    assert_function_contains "${file}" skills_cli_node_runtime_ready 'major > 22.*major === 22 && minor >= 20' 'Node.js 22.20 minimum'
+    assert_function_contains "${file}" ensure_skills_cli_node_runtime 'local _runtime="node@24"' 'mise Node.js 24 runtime'
+    assert_function_contains "${file}" ensure_skills_cli_node_runtime 'mise use -g -y "\$\{_runtime\}"' 'global mise activation'
     assert_function_contains "${file}" setup_simple_english_skill 'npx --yes skills@latest add AminBlg/SimpleEnglish' 'latest upstream skills CLI install'
     assert_function_contains "${file}" setup_simple_english_skill '^        --global [\\]$' 'global installation flag'
     assert_function_contains "${file}" setup_simple_english_skill '^        --agent claude-code [\\]$' 'Claude Code target'
@@ -105,11 +105,11 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '^[[:space:]]+(if ! )?setup_simple_english_skill' 'Simple English main wiring'
     assert_order "${file}" '^[[:space:]]+if install_pi_cli; then$' '^[[:space:]]+(if ! )?setup_simple_english_skill' 'Simple English installation after agent provisioning'
     assert_order "${file}" '^[[:space:]]+(if ! )?setup_simple_english_skill' '^[[:space:]]+remove_impeccable_resources$' 'Simple English validation before cleanup'
-    assert_contains "${file}" "Version ${expected_versions[${file}]} \\| Last changed: Use Simple English without an output style" 'updated version banner'
+    assert_contains "${file}" "Version ${expected_versions[${file}]} \\| Last changed: Install Matt Pocock skills for Codex and Pi" 'updated version banner'
 done
 
-assert_contains win.ps1 '^function Test-SimpleEnglishNodeRuntimeReady' 'PowerShell Node.js runtime check'
-assert_contains win.ps1 '^function Enable-SimpleEnglishNodeRuntime' 'PowerShell Node.js runtime setup'
+assert_contains win.ps1 '^function Test-SkillsCliNodeRuntimeReady' 'PowerShell Node.js runtime check'
+assert_contains win.ps1 '^function Enable-SkillsCliNodeRuntime' 'PowerShell Node.js runtime setup'
 assert_contains win.ps1 '^function Install-SimpleEnglishSkill' 'PowerShell Simple English installer'
 assert_contains win.ps1 '"skills@latest"' 'PowerShell latest skills CLI package'
 assert_contains win.ps1 '"AminBlg/SimpleEnglish"' 'PowerShell upstream skill source'
@@ -125,7 +125,7 @@ assert_contains win.ps1 '\$env:CLAUDE_CONFIG_DIR' 'PowerShell CLAUDE_CONFIG_DIR 
 assert_contains win.ps1 '\$env:PI_CODING_AGENT_DIR' 'PowerShell PI_CODING_AGENT_DIR support'
 assert_contains win.ps1 '\.agents\\skills\\simple-english\\SKILL\.md' 'PowerShell shared Codex and Gemini skill validation'
 assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal failure propagation'
-assert_contains win.ps1 'Version 119 \| Last changed: Use Simple English without an output style' 'PowerShell version banner'
+assert_contains win.ps1 'Version 120 \| Last changed: Install Matt Pocock skills for Codex and Pi' 'PowerShell version banner'
 assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+Remove-ImpeccableResources$' 'PowerShell validation before cleanup'
 
@@ -143,7 +143,7 @@ for file in "${bash_setup_scripts[@]}"; do
         HOME="${test_home}" CLAUDE_CONFIG_DIR="${claude_home}" CODEX_HOME="${codex_home}" \
         PI_CODING_AGENT_DIR="${pi_home}" CALL_LOG="${test_root}/calls" bash -c '
             source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
-            ensure_simple_english_node_runtime() { return 0; }
+            ensure_skills_cli_node_runtime() { return 0; }
             npx() {
                 printf "%s\n" "$*" >> "${CALL_LOG}"
                 local skill_file
@@ -178,7 +178,7 @@ for file in "${bash_setup_scripts[@]}"; do
     SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" \
         HOME="${test_home}" bash -c '
             source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
-            ensure_simple_english_node_runtime() { return 0; }
+            ensure_skills_cli_node_runtime() { return 0; }
             npx() { return 1; }
             if setup_simple_english_skill > /dev/null; then
                 exit 91

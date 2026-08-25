@@ -1295,7 +1295,7 @@ function Enable-PiNodeRuntime {
 }
 
 # Check whether the active Node.js runtime can run the current skills CLI.
-function Test-SimpleEnglishNodeRuntimeReady {
+function Test-SkillsCliNodeRuntimeReady {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         return $false
     }
@@ -1305,10 +1305,10 @@ function Test-SimpleEnglishNodeRuntimeReady {
 }
 
 # Ensure the skills CLI runs on its required Node.js version.
-function Enable-SimpleEnglishNodeRuntime {
+function Enable-SkillsCliNodeRuntime {
     $runtime = "node@24"
 
-    if (Test-SimpleEnglishNodeRuntimeReady) {
+    if (Test-SkillsCliNodeRuntimeReady) {
         $nodeVersion = (& node --version 2>$null | Out-String).Trim()
         Write-Debug "Node.js $nodeVersion is ready for the skills CLI."
         return $true
@@ -1343,7 +1343,7 @@ function Enable-SimpleEnglishNodeRuntime {
 
     $miseEnv | Out-String | Invoke-Expression
 
-    if (Test-SimpleEnglishNodeRuntimeReady) {
+    if (Test-SkillsCliNodeRuntimeReady) {
         $nodeVersion = (& node --version 2>$null | Out-String).Trim()
         Write-Success "Node.js $nodeVersion is ready for the skills CLI."
         return $true
@@ -1355,7 +1355,7 @@ function Enable-SimpleEnglishNodeRuntime {
 
 # Install/update Simple English for every supported AI coding harness.
 function Install-SimpleEnglishSkill {
-    if (-not (Enable-SimpleEnglishNodeRuntime)) {
+    if (-not (Enable-SkillsCliNodeRuntime)) {
         return $false
     }
 
@@ -2502,8 +2502,8 @@ function Setup-PiGoalAutoresearch {
 }
 
 
-function Test-MattPocockPiSkillsDisabled {
-    return ((Test-EnvLocalFlag "WORK_MACHINE") -or (Test-EnvLocalFlag "BAN_MATT_POCOCK_SKILLS") -or (Test-EnvLocalFlag "BAN_MATT_POCKOCK_SKILLS"))
+function Test-MattPocockSkillsDisabled {
+    return ((Test-EnvLocalFlag "BAN_MATT_POCOCK_SKILLS") -or (Test-EnvLocalFlag "BAN_MATT_POCKOCK_SKILLS"))
 }
 
 function Remove-MattPocockSkillPath {
@@ -2543,8 +2543,8 @@ function Remove-MattPocockSkillPath {
     }
 }
 
-# Function to remove Matt Pocock skill copies from Pi when disabled
-function Remove-MattPocockPiSkills {
+# Remove setup-managed Matt Pocock skills without following symlink targets.
+function Remove-MattPocockSkills {
     $skills = @(
         "setup-matt-pocock-skills",
         "diagnosing-bugs",
@@ -2563,7 +2563,10 @@ function Remove-MattPocockPiSkills {
         $activeAgentDir = $defaultAgentDir
     }
 
-    $skillsDirs = @((Join-Path $defaultAgentDir "skills"))
+    $skillsDirs = @(
+        (Join-Path $defaultAgentDir "skills"),
+        (Join-Path $env:USERPROFILE ".agents\skills")
+    )
     if ($activeAgentDir -ne $defaultAgentDir) {
         $skillsDirs += (Join-Path $activeAgentDir "skills")
     }
@@ -2594,20 +2597,20 @@ function Remove-MattPocockPiSkills {
     }
 
     if ($failed.Count -gt 0) {
-        Write-Warning "Failed to remove Matt Pocock Pi skills: $($failed -join ', ')"
+        Write-Warning "Failed to remove Matt Pocock skills: $($failed -join ', ')"
         return $false
     }
     if ($removed) {
-        Write-Success "Matt Pocock Pi skills disabled."
+        Write-Success "Matt Pocock skills disabled."
     }
     else {
-        Write-Debug "Matt Pocock Pi skills disabled; no installed copies found."
+        Write-Debug "Matt Pocock skills disabled; no installed copies found."
     }
     return $true
 }
 
-# Function to install/update Matt Pocock engineering skills for Pi
-function Setup-MattPocockPiSkills {
+# Install/update Matt Pocock engineering skills for Pi and Codex.
+function Setup-MattPocockSkills {
     $skills = @(
         "setup-matt-pocock-skills",
         "diagnosing-bugs",
@@ -2617,58 +2620,65 @@ function Setup-MattPocockPiSkills {
     )
     $obsoleteSkills = @("diagnose", "zoom-out")
 
-    if (Test-MattPocockPiSkillsDisabled) {
-        if (Test-EnvLocalFlag "WORK_MACHINE") {
-            Write-Debug "WORK_MACHINE=1, skipping Matt Pocock Pi skills."
-        }
-        return (Remove-MattPocockPiSkills)
+    if (Test-MattPocockSkillsDisabled) {
+        return (Remove-MattPocockSkills)
     }
 
-    if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
-        Write-Warning "Pi coding agent not found. Cannot install Matt Pocock Pi skills."
-        return $false
-    }
-
-    if (-not (Enable-PiNodeRuntime)) {
-        Write-Warning "Skipping Matt Pocock Pi skills because the Pi Node.js runtime is not ready."
+    if (-not (Enable-SkillsCliNodeRuntime)) {
+        Write-Warning "Cannot install Matt Pocock skills because the skills CLI runtime is not ready."
         return $false
     }
 
     if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
-        Write-Warning "npx not found. Cannot install Matt Pocock Pi skills."
-        Write-Debug "Install Node.js >=20.6, then run: npx --yes skills@latest add mattpocock/skills --global --agent pi --copy"
+        Write-Warning "npx is not available; cannot install Matt Pocock skills."
+        Write-Debug "Install Node.js >=22.20, then run: npx --yes skills@latest add mattpocock/skills --global --agent pi --agent codex --copy --yes"
         return $false
     }
 
     $defaultAgentDir = Join-Path $env:USERPROFILE ".pi\agent"
     if ($env:PI_CODING_AGENT_DIR) {
-        $agentDir = $env:PI_CODING_AGENT_DIR
+        $activePiDir = $env:PI_CODING_AGENT_DIR
     }
     else {
-        $agentDir = $defaultAgentDir
+        $activePiDir = $defaultAgentDir
     }
 
     $defaultSkillsDir = Join-Path $defaultAgentDir "skills"
-    $skillsDir = Join-Path $agentDir "skills"
-    $npxArgs = @("--yes", "skills@latest", "add", "mattpocock/skills", "--global", "--agent", "pi", "--copy", "-y")
+    $activePiSkillsDir = Join-Path $activePiDir "skills"
+    $codexSkillsDir = Join-Path $env:USERPROFILE ".agents\skills"
+    $npxArgs = @(
+        "--yes", "skills@latest", "add", "mattpocock/skills",
+        "--global",
+        "--agent", "pi",
+        "--agent", "codex",
+        "--copy",
+        "--yes"
+    )
     foreach ($skill in $skills) {
         $npxArgs += @("--skill", $skill)
     }
 
-    Write-Message "Installing/updating Matt Pocock Pi skills..."
+    Write-Message "Installing/updating Matt Pocock skills for Pi and Codex..."
+    $global:LASTEXITCODE = 0
     $output = & npx @npxArgs 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Failed to install Matt Pocock Pi skills: $output"
+        Write-Warning "Failed to install Matt Pocock skills."
+        if ($output) { Write-Debug ($output | Out-String) }
         return $false
     }
 
     $syncFailed = @()
-    if ($agentDir -ne $defaultAgentDir) {
-        New-Item -ItemType Directory -Force -Path $skillsDir | Out-Null
+    if ($activePiDir -ne $defaultAgentDir) {
+        New-Item -ItemType Directory -Force -Path $activePiSkillsDir | Out-Null
         foreach ($skill in $skills) {
             $sourcePath = Join-Path $defaultSkillsDir $skill
-            $destPath = Join-Path $skillsDir $skill
-            if (Test-Path -LiteralPath $sourcePath -PathType Container) {
+            $sourceSkillFile = Join-Path $sourcePath "SKILL.md"
+            $destPath = Join-Path $activePiSkillsDir $skill
+            $sourceItem = Get-Item -LiteralPath $sourcePath -Force -ErrorAction SilentlyContinue
+            $sourceSkillFileItem = Get-Item -LiteralPath $sourceSkillFile -Force -ErrorAction SilentlyContinue
+            $sourceIsLink = $null -ne $sourceItem -and (($sourceItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+            $sourceSkillFileIsLink = $null -ne $sourceSkillFileItem -and (($sourceSkillFileItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+            if ($null -ne $sourceItem -and $sourceItem.PSIsContainer -and $null -ne $sourceSkillFileItem -and -not $sourceSkillFileItem.PSIsContainer -and -not $sourceIsLink -and -not $sourceSkillFileIsLink) {
                 try {
                     if (-not (Remove-MattPocockSkillPath -Path $destPath)) {
                         throw "Could not safely remove existing destination skill."
@@ -2686,32 +2696,34 @@ function Setup-MattPocockPiSkills {
     }
 
     $missing = @()
-    foreach ($skill in $skills) {
-        $skillDir = Join-Path $skillsDir $skill
-        $skillFile = Join-Path $skillDir "SKILL.md"
-        $skillDirItem = Get-Item -LiteralPath $skillDir -Force -ErrorAction SilentlyContinue
-        $skillFileItem = Get-Item -LiteralPath $skillFile -Force -ErrorAction SilentlyContinue
-        $skillDirIsLink = $null -ne $skillDirItem -and (($skillDirItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
-        $skillFileIsLink = $null -ne $skillFileItem -and (($skillFileItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
-        if ($null -eq $skillFileItem -or $skillFileItem.PSIsContainer -or $skillDirIsLink -or $skillFileIsLink) {
-            $missing += $skill
+    $managedSkillsDirs = @($defaultSkillsDir, $codexSkillsDir)
+    if ($activePiSkillsDir -ne $defaultSkillsDir) {
+        $managedSkillsDirs += $activePiSkillsDir
+    }
+    foreach ($managedSkillsDir in $managedSkillsDirs) {
+        foreach ($skill in $skills) {
+            $skillDir = Join-Path $managedSkillsDir $skill
+            $skillFile = Join-Path $skillDir "SKILL.md"
+            $skillDirItem = Get-Item -LiteralPath $skillDir -Force -ErrorAction SilentlyContinue
+            $skillFileItem = Get-Item -LiteralPath $skillFile -Force -ErrorAction SilentlyContinue
+            $skillDirIsLink = $null -ne $skillDirItem -and (($skillDirItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+            $skillFileIsLink = $null -ne $skillFileItem -and (($skillFileItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+            if ($null -eq $skillFileItem -or $skillFileItem.PSIsContainer -or $skillDirIsLink -or $skillFileIsLink) {
+                $missing += $skillDir
+            }
         }
     }
 
     if ($syncFailed.Count -gt 0) {
-        Write-Warning "Matt Pocock Pi skills installed, but failed to sync to active Pi dir ${agentDir}: $($syncFailed -join ', ')"
+        Write-Warning "Matt Pocock skills installed, but the custom Pi copy failed: $($syncFailed -join ', ')"
         return $false
     }
     if ($missing.Count -gt 0) {
-        Write-Warning "Matt Pocock Pi skills install completed, but missing expected skills: $($missing -join ', ')"
+        Write-Warning "Matt Pocock skills are missing required files: $($missing -join ', ')"
         return $false
     }
 
     $obsoleteCleanupFailed = @()
-    $managedSkillsDirs = @($defaultSkillsDir)
-    if ($skillsDir -ne $defaultSkillsDir) {
-        $managedSkillsDirs += $skillsDir
-    }
     foreach ($managedSkillsDir in $managedSkillsDirs) {
         foreach ($obsoleteSkill in $obsoleteSkills) {
             $obsoletePath = Join-Path $managedSkillsDir $obsoleteSkill
@@ -2721,11 +2733,12 @@ function Setup-MattPocockPiSkills {
         }
     }
     if ($obsoleteCleanupFailed.Count -gt 0) {
-        Write-Warning "Failed to remove obsolete Matt Pocock Pi skills: $($obsoleteCleanupFailed -join ', ')"
+        Write-Warning "Failed to remove obsolete Matt Pocock skills: $($obsoleteCleanupFailed -join ', ')"
         return $false
     }
 
-    Write-Success "Matt Pocock Pi skills installed/updated."
+    Write-Success "Matt Pocock skills installed/updated for Pi and Codex."
+    if ($output) { Write-Debug ($output | Out-String) }
     return $true
 }
 
@@ -3188,10 +3201,11 @@ function Complete-SetupLog {
 
 function Invoke-WindowsSetupTasks {
     $piSetupFailed = $false
+    $mattPocockSetupFailed = $false
     $simpleEnglishSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 119 | Last changed: Use Simple English without an output style" -ForegroundColor DarkGray
+    Write-Host "Version 120 | Last changed: Install Matt Pocock skills for Codex and Pi" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -3228,10 +3242,8 @@ function Invoke-WindowsSetupTasks {
     Install-PortlessCli
     Install-RtkCli
     Setup-RtkIntegrations
-    if (Test-MattPocockPiSkillsDisabled) {
-        if (-not (Setup-MattPocockPiSkills)) {
-            $piSetupFailed = $true
-        }
+    if (-not (Setup-MattPocockSkills)) {
+        $mattPocockSetupFailed = $true
     }
     if (Install-PiCli) {
         Set-PiDefaults
@@ -3242,11 +3254,6 @@ function Invoke-WindowsSetupTasks {
         Setup-PiClaudeBridge
         Setup-PiAskUser
         Setup-PiGoalAutoresearch
-        if (-not (Test-MattPocockPiSkillsDisabled)) {
-            if (-not (Setup-MattPocockPiSkills)) {
-                $piSetupFailed = $true
-            }
-        }
     }
     else {
         if (Test-EnvLocalFlag "BAN_PI_SUBAGENTS") {
@@ -3274,6 +3281,9 @@ function Invoke-WindowsSetupTasks {
 
     if ($piSetupFailed) {
         throw "Required Pi coding agent setup failed."
+    }
+    if ($mattPocockSetupFailed) {
+        throw "Required Matt Pocock skill setup failed."
     }
     if ($simpleEnglishSetupFailed) {
         throw "Required Simple English skill setup failed."
