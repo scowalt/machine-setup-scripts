@@ -122,6 +122,7 @@ create_env_local() {
 # SYNTHETIC_API_KEY=<your Synthetic API key>
 # ZAI_API_KEY=<your z.ai API key>
 # BAN_CLAUDE_CODE=1
+# BAN_OPENCODE=1
 EOF
         chmod 600 "${HOME}/.env.local"
         print_debug "Created placeholder ~/.env.local"
@@ -1346,6 +1347,116 @@ install_codex_cli() {
     print_success "Codex CLI installed/updated (${version_output})."
 }
 
+# Install/update opencode (Anomaly's terminal AI coding agent) via the
+# anomalyco/tap Homebrew formula when brew is available, or the official
+# per-user installer otherwise. The installer always runs with
+# --no-modify-path because chezmoi owns shell configuration. opencode's own
+# configuration (~/.config/opencode/opencode.json) is also managed by chezmoi.
+install_opencode() {
+    local bun_packages=""
+    local brew_prefix=""
+    local curl_bin=""
+    local installer=""
+    local install_status=0
+    local installed_formulae=""
+    local native_path=""
+    local resolved_opencode=""
+    local version_output=""
+
+    if [[ "${BAN_OPENCODE:-}" == "1" ]]; then
+        print_debug "BAN_OPENCODE=1, skipping opencode setup."
+        return
+    fi
+
+    print_message "Installing/updating opencode..."
+
+    # Migrate the Node-dependent Bun package to a native install.
+    if command -v bun &> /dev/null; then
+        bun_packages=$(bun pm ls -g 2>/dev/null || true)
+        if grep -Fq "opencode-ai" <<< "${bun_packages}"; then
+            print_message "Removing Node-dependent Bun opencode-ai package..."
+            if ! bun remove -g opencode-ai > /dev/null; then
+                print_error "Failed to remove Bun's opencode-ai package."
+                return 1
+            fi
+        fi
+    fi
+    hash -r 2>/dev/null || true
+
+    if command -v brew &> /dev/null; then
+        brew_prefix=$(brew --prefix 2>/dev/null || true)
+        native_path="${brew_prefix}/bin/opencode"
+
+        # Migrate a standalone-installer copy to the Homebrew formula.
+        if [[ -e "${HOME}/.opencode/bin/opencode" ]]; then
+            print_message "Removing the standalone opencode binary in favor of the Homebrew formula..."
+            if ! rm -f "${HOME}/.opencode/bin/opencode"; then
+                print_error "Failed to remove ${HOME}/.opencode/bin/opencode."
+                return 1
+            fi
+            hash -r 2>/dev/null || true
+        fi
+
+        installed_formulae=$(brew list --formula -1 2>/dev/null || true)
+        if grep -Fxq opencode <<< "${installed_formulae}"; then
+            if ! brew upgrade opencode; then
+                print_error "Failed to upgrade the opencode formula."
+                return 1
+            fi
+        elif ! brew install anomalyco/tap/opencode; then
+            print_error "Failed to install the opencode formula."
+            return 1
+        fi
+    else
+        native_path="${HOME}/.opencode/bin/opencode"
+
+        if ! curl_bin=$(claude_code_trusted_curl); then
+            print_error "Trusted system curl not found. Cannot download the opencode installer."
+            return 1
+        fi
+        if ! installer=$(mktemp "${TMPDIR:-/tmp}/opencode-install.XXXXXX"); then
+            print_error "Failed to create a temporary file for the opencode installer."
+            return 1
+        fi
+        if ! claude_code_run_safely "${curl_bin}" -fsSL --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 2 -o "${installer}" "https://opencode.ai/install"; then
+            rm -f "${installer}"
+            print_error "Failed to download the opencode installer."
+            return 1
+        fi
+
+        chmod 700 "${installer}"
+        if claude_code_run_safely /bin/bash "${installer}" --no-modify-path; then
+            install_status=0
+        else
+            install_status=$?
+        fi
+        rm -f "${installer}"
+        if [[ "${install_status}" -ne 0 ]]; then
+            print_error "opencode installer failed with exit code ${install_status}."
+            return 1
+        fi
+        export PATH="${HOME}/.opencode/bin:${PATH}"
+    fi
+
+    hash -r 2>/dev/null || true
+    if [[ -z "${native_path}" || ! -x "${native_path}" ]]; then
+        print_error "opencode installation completed, but the opencode binary is missing."
+        return 1
+    fi
+    resolved_opencode=$(command -v opencode 2>/dev/null || true)
+    if [[ -z "${resolved_opencode}" || ! "${resolved_opencode}" -ef "${native_path}" ]]; then
+        print_error "opencode is shadowed by ${resolved_opencode:-<missing>}; expected ${native_path}."
+        return 1
+    fi
+
+    if ! version_output=$("${native_path}" --version 2>/dev/null) || [[ -z "${version_output}" ]]; then
+        print_error "opencode smoke test failed."
+        return 1
+    fi
+
+    print_success "opencode installed/updated (${version_output})."
+}
+
 # Install/update Notion CLI.
 install_ntn_cli() {
     local os
@@ -1820,6 +1931,7 @@ setup_rtk_integrations() {
     fi
 
     export PATH="${HOME}/.local/bin:${PATH}"
+    export PATH="${HOME}/.opencode/bin:${PATH}"
 
     if ! rtk_cli_ready; then
         print_warning "RTK CLI is not available; skipping RTK integrations."
@@ -1853,6 +1965,18 @@ setup_rtk_integrations() {
         fi
     else
         print_debug "Codex CLI not installed; skipping RTK Codex integration."
+    fi
+
+    if command -v opencode &> /dev/null; then
+        print_message "Configuring RTK for opencode..."
+        if init_output=$(rtk init -g --opencode < /dev/null 2>&1); then
+            print_success "RTK configured for opencode."
+        else
+            print_warning "Failed to configure RTK for opencode."
+            print_debug "${init_output}"
+        fi
+    else
+        print_debug "opencode not installed; skipping RTK opencode integration."
     fi
 }
 
@@ -1978,6 +2102,7 @@ setup_simple_english_skill() {
     local -a _skill_files=(
         "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/skills/simple-english/SKILL.md"
         "${HOME}/.agents/skills/simple-english/SKILL.md"
+        "${HOME}/.config/opencode/skills/simple-english/SKILL.md"
         "${_active_pi_skill}/SKILL.md"
     )
 
@@ -1996,6 +2121,7 @@ setup_simple_english_skill() {
         --agent claude-code \
         --agent codex \
         --agent gemini-cli \
+        --agent opencode \
         --agent pi \
         --skill simple-english \
         --copy \
@@ -2034,7 +2160,7 @@ setup_simple_english_skill() {
         fi
     done
 
-    print_success "Simple English installed/updated for Claude Code, Codex, Gemini CLI, and Pi."
+    print_success "Simple English installed/updated for Claude Code, Codex, Gemini CLI, opencode, and Pi."
     print_debug "${_install_output}"
 }
 
@@ -2493,6 +2619,28 @@ seed_pi_zai_models() {
     rm -f "${_tmp}"
     print_warning "Failed to parse Pi models at ${_models_file}; leaving it unchanged."
     return 1
+}
+
+# Warn when opencode's provider keys are missing from ~/.env.local. opencode
+# configuration is managed by chezmoi; these scripts only install the binary
+# and surface missing keys. Work machines default opencode to GLM-5.3 (z.ai),
+# so only they are warned about a missing z.ai key.
+validate_opencode_keys() {
+    if [[ "${BAN_OPENCODE:-}" == "1" ]]; then
+        return
+    fi
+
+    if ! read_env_local_value "SYNTHETIC_API_KEY" > /dev/null 2>&1; then
+        print_warning "SYNTHETIC_API_KEY not set in ~/.env.local. Kimi K3 (Synthetic) is the opencode default but has no API key yet; add it to ~/.env.local and rerun setup."
+    fi
+
+    if ! read_env_local_value "ZAI_API_KEY" > /dev/null 2>&1; then
+        if [[ "${WORK_MACHINE:-}" == "1" ]]; then
+            print_warning "ZAI_API_KEY not set in ~/.env.local. Work machines default opencode to GLM-5.3 (z.ai) but there is no API key yet; add it to ~/.env.local and rerun setup."
+        else
+            print_debug "ZAI_API_KEY not set in ~/.env.local; personal machines default opencode to Kimi K3 (Synthetic)."
+        fi
+    fi
 }
 
 # Validate and repair npm's effective user configuration before setup mutates
@@ -4144,7 +4292,7 @@ setup_pi_goal_autoresearch() {
 }
 
 
-# Matt Pocock skills to install for Pi and Codex.
+# Matt Pocock skills to install for Pi, Codex, and opencode.
 matt_pocock_skills() {
     printf '%s\n' \
         setup-matt-pocock-skills \
@@ -4179,7 +4327,7 @@ remove_matt_pocock_skills() {
     local _skill_path=""
     local _removed=0
     local _failed=()
-    local _skills_dirs=("${_default_agent_dir}/skills" "${HOME}/.agents/skills")
+    local _skills_dirs=("${_default_agent_dir}/skills" "${HOME}/.agents/skills" "${HOME}/.config/opencode/skills")
 
     if [[ "${_active_agent_dir}" != "${_default_agent_dir}" ]]; then
         _skills_dirs+=("${_active_agent_dir}/skills")
@@ -4216,7 +4364,7 @@ remove_obsolete_matt_pocock_skills() {
     local _skill=""
     local _skill_path=""
     local _failed=()
-    local _skills_dirs=("${_default_agent_dir}/skills" "${HOME}/.agents/skills")
+    local _skills_dirs=("${_default_agent_dir}/skills" "${HOME}/.agents/skills" "${HOME}/.config/opencode/skills")
 
     if [[ "${_active_agent_dir}" != "${_default_agent_dir}" ]]; then
         _skills_dirs+=("${_active_agent_dir}/skills")
@@ -4252,8 +4400,8 @@ setup_matt_pocock_skills() {
     local _output=""
     local _source_path=""
     local _dest_path=""
-    local _args=(--yes skills@latest add "${_repo}" --global --agent pi --agent codex --copy --yes)
-    local _validation_dirs=("${_default_pi_skills_dir}" "${_codex_skills_dir}")
+    local _args=(--yes skills@latest add "${_repo}" --global --agent pi --agent codex --agent opencode --copy --yes)
+    local _validation_dirs=("${_default_pi_skills_dir}" "${_codex_skills_dir}" "${HOME}/.config/opencode/skills")
     local _missing=()
     local _sync_failed=()
 
@@ -4269,7 +4417,7 @@ setup_matt_pocock_skills() {
 
     if ! command -v npx &> /dev/null; then
         print_warning "npx is not available; cannot install Matt Pocock skills."
-        print_debug "Install Node.js >=22.20, then run: npx --yes skills@latest add mattpocock/skills --global --agent pi --agent codex --copy --yes"
+        print_debug "Install Node.js >=22.20, then run: npx --yes skills@latest add mattpocock/skills --global --agent pi --agent codex --agent opencode --copy --yes"
         return 1
     fi
 
@@ -4277,7 +4425,7 @@ setup_matt_pocock_skills() {
         _args+=(--skill "${_skill}")
     done < <(matt_pocock_skills || true)
 
-    print_message "Installing/updating Matt Pocock skills for Pi and Codex..."
+    print_message "Installing/updating Matt Pocock skills for Pi, Codex, and opencode..."
     if ! _output=$(npx "${_args[@]}" < /dev/null 2>&1); then
         print_warning "Failed to install Matt Pocock skills."
         print_debug "${_output}"
@@ -4325,7 +4473,7 @@ setup_matt_pocock_skills() {
         return 1
     fi
 
-    print_success "Matt Pocock skills installed/updated for Pi and Codex."
+    print_success "Matt Pocock skills installed/updated for Pi, Codex, and opencode."
     print_debug "${_output}"
 }
 
@@ -5408,7 +5556,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 220 | Last changed: Install Matt Pocock skills for Codex and Pi"
+    echo -e "${GRAY}Version 221 | Last changed: Install opencode across agent machines"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5560,6 +5708,8 @@ HELPER_EOF
     install_claude_code
     install_gemini_cli
     install_codex_cli
+    install_opencode
+    validate_opencode_keys
     install_portless_cli
     install_ntn_cli
     install_rtk_cli

@@ -89,7 +89,7 @@ for file in "${matt_setup_scripts[@]}"; do
     assert_contains "${file}" '^[[:space:]]*diagnosing-bugs([[:space:]\\]*$)?' 'current diagnosing-bugs skill'
     assert_contains "${file}" '^matt_pocock_obsolete_skills\(\)' 'obsolete Matt Pocock skill inventory'
     assert_contains "${file}" '^setup_matt_pocock_skills\(\)' 'Pi and Codex Matt Pocock installer'
-    assert_contains "${file}" '.*--agent pi --agent codex --copy --yes' 'Pi and Codex skills CLI targets'
+    assert_contains "${file}" '.*--agent pi --agent codex( --agent opencode)? --copy --yes' 'Pi and Codex skills CLI targets'
     assert_contains "${file}" '^[[:space:]]*diagnose([[:space:]\\]*$)?' 'legacy diagnose cleanup entry'
     assert_contains "${file}" '^[[:space:]]*zoom-out([[:space:]\\]*$)?' 'legacy zoom-out cleanup entry'
     if sed -n '/^matt_pocock_skills_disabled()/,/^}/p' "${file}" | grep -q 'WORK_MACHINE'; then
@@ -119,9 +119,13 @@ for file in "${matt_setup_scripts[@]}"; do
     codex_skills="${matt_tmp}/home/.agents/skills"
     custom_pi_skills="${matt_tmp}/custom-pi/skills"
     codex_home="${matt_tmp}/codex-home"
+    managed_skills_dirs=("${default_pi_skills}" "${codex_skills}" "${custom_pi_skills}")
+    if [[ "${file}" != "pi.sh" ]]; then
+        managed_skills_dirs+=("${matt_tmp}/home/.config/opencode/skills")
+    fi
     mkdir -p "${default_pi_skills}" "${codex_skills}" "${custom_pi_skills}" "${matt_tmp}/obsolete-target"
     touch "${matt_tmp}/obsolete-target/sentinel"
-    for skills_dir in "${default_pi_skills}" "${codex_skills}" "${custom_pi_skills}"; do
+    for skills_dir in "${managed_skills_dirs[@]}"; do
         mkdir -p "${skills_dir}/keep-me" "${skills_dir}/diagnose"
         touch "${skills_dir}/keep-me/SKILL.md" "${skills_dir}/diagnose/SKILL.md"
         ln -s "${matt_tmp}/obsolete-target" "${skills_dir}/zoom-out"
@@ -135,7 +139,7 @@ for file in "${matt_setup_scripts[@]}"; do
             npx() {
                 printf "%s\n" "$*" >> "${CALL_LOG}"
                 local skill skills_dir
-                for skills_dir in "${HOME}/.pi/agent/skills" "${HOME}/.agents/skills"; do
+                for skills_dir in "${HOME}/.pi/agent/skills" "${HOME}/.agents/skills" "${HOME}/.config/opencode/skills"; do
                     for skill in setup-matt-pocock-skills diagnosing-bugs tdd improve-codebase-architecture grill-with-docs; do
                         mkdir -p "${skills_dir}/${skill}"
                         printf "%s\n" "---" "name: ${skill}" "---" > "${skills_dir}/${skill}/SKILL.md"
@@ -146,12 +150,15 @@ for file in "${matt_setup_scripts[@]}"; do
             setup_matt_pocock_skills > /dev/null
         '
     expected_args='--yes skills@latest add mattpocock/skills --global --agent pi --agent codex --copy --yes --skill setup-matt-pocock-skills --skill diagnosing-bugs --skill tdd --skill improve-codebase-architecture --skill grill-with-docs'
+    if [[ "${file}" != "pi.sh" ]]; then
+        expected_args='--yes skills@latest add mattpocock/skills --global --agent pi --agent codex --agent opencode --copy --yes --skill setup-matt-pocock-skills --skill diagnosing-bugs --skill tdd --skill improve-codebase-architecture --skill grill-with-docs'
+    fi
     call_count=$(wc -l < "${matt_tmp}/calls")
     [[ "${call_count}" -eq 2 ]] || fail "${file}: installer did not update on both setup runs"
     if grep -Fvx -- "${expected_args}" "${matt_tmp}/calls" > /dev/null; then
         fail "${file}: installer used unexpected arguments"
     fi
-    for skills_dir in "${default_pi_skills}" "${codex_skills}" "${custom_pi_skills}"; do
+    for skills_dir in "${managed_skills_dirs[@]}"; do
         for skill in setup-matt-pocock-skills diagnosing-bugs tdd improve-codebase-architecture grill-with-docs; do
             [[ -f "${skills_dir}/${skill}/SKILL.md" ]] || fail "${file}: missing ${skill} in ${skills_dir}"
             [[ ! -L "${skills_dir}/${skill}" ]] || fail "${file}: ${skill} is a symlink in ${skills_dir}"
@@ -171,9 +178,13 @@ for file in "${matt_setup_scripts[@]}"; do
         default_pi_skills="${matt_tmp}/home/.pi/agent/skills"
         codex_skills="${matt_tmp}/home/.agents/skills"
         custom_pi_skills="${matt_tmp}/custom-pi/skills"
+        managed_skills_dirs=("${default_pi_skills}" "${codex_skills}" "${custom_pi_skills}")
+        if [[ "${file}" != "pi.sh" ]]; then
+            managed_skills_dirs+=("${matt_tmp}/home/.config/opencode/skills")
+        fi
         mkdir -p "${default_pi_skills}" "${codex_skills}" "${custom_pi_skills}" "${matt_tmp}/managed-target"
         touch "${matt_tmp}/managed-target/sentinel"
-        for skills_dir in "${default_pi_skills}" "${codex_skills}" "${custom_pi_skills}"; do
+        for skills_dir in "${managed_skills_dirs[@]}"; do
             mkdir -p "${skills_dir}/keep-me"
             touch "${skills_dir}/keep-me/SKILL.md"
             for skill in setup-matt-pocock-skills diagnosing-bugs improve-codebase-architecture grill-with-docs diagnose zoom-out; do
@@ -193,7 +204,7 @@ for file in "${matt_setup_scripts[@]}"; do
                 setup_matt_pocock_skills > /dev/null
             '
 
-        for skills_dir in "${default_pi_skills}" "${codex_skills}" "${custom_pi_skills}"; do
+        for skills_dir in "${managed_skills_dirs[@]}"; do
             for skill in setup-matt-pocock-skills diagnosing-bugs tdd improve-codebase-architecture grill-with-docs diagnose zoom-out; do
                 [[ ! -e "${skills_dir}/${skill}" && ! -L "${skills_dir}/${skill}" ]] || fail "${file}: ${ban_name} left ${skill} in ${skills_dir}"
             done

@@ -8,19 +8,21 @@ Every setup run writes a local log under `~/.local/log/machine-setup` and makes 
 
 ## AI Coding Agents
 
-Every setup script installs or updates the main AI development tools. The supported systems are macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows. The tools include Claude Code CLI and Codex CLI, Notion CLI (`ntn`), Gemini CLI, Pi, and RTK. Setup also installs the tintinweb Pi subagents. It installs the Pi MCP adapter, Pi Claude bridge, and Pi goal/autoresearch extensions.
+Every setup script installs or updates the main AI development tools. The supported systems are macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows. The tools include Claude Code CLI and Codex CLI, Notion CLI (`ntn`), Gemini CLI, Pi, opencode, and RTK. Setup also installs the tintinweb Pi subagents. It installs the Pi MCP adapter, Pi Claude bridge, and Pi goal/autoresearch extensions.
 
-Setup installs the managed Matt Pocock engineering skills for Pi and Codex on personal and work machines. Codex reads its copies from `~/.agents/skills`. Work machines also install Google Cloud CLI.
+Setup installs the managed Matt Pocock engineering skills for Pi, Codex, and opencode on personal and work machines. Codex reads its copies from `~/.agents/skills`, and opencode reads its copies from `~/.config/opencode/skills`. Work machines also install Google Cloud CLI.
 
-Set `WORK_MACHINE=1` in `~/.env.local` for work machines. Set `BAN_CLAUDE_CODE=1` to skip Claude Code CLI setup. Set `BAN_RTK=1` to skip RTK setup. Set `BAN_PI_SUBAGENTS=1` to keep the tintinweb Pi subagents inactive. Set `BAN_PI_MCP_ADAPTER=1` to keep the Pi MCP adapter inactive. Set `BAN_PI_GOAL_AUTORESEARCH=1` to keep the Pi goal/autoresearch extensions inactive.
+Set `WORK_MACHINE=1` in `~/.env.local` for work machines. Set `BAN_CLAUDE_CODE=1` to skip Claude Code CLI setup. Set `BAN_OPENCODE=1` to skip opencode setup. Set `BAN_RTK=1` to skip RTK setup. Set `BAN_PI_SUBAGENTS=1` to keep the tintinweb Pi subagents inactive. Set `BAN_PI_MCP_ADAPTER=1` to keep the Pi MCP adapter inactive. Set `BAN_PI_GOAL_AUTORESEARCH=1` to keep the Pi goal/autoresearch extensions inactive.
 
 Set `BAN_MATT_POCOCK_SKILLS=1` to remove the managed Matt Pocock skills and keep them inactive. The older `BAN_MATT_POCKOCK_SKILLS=1` spelling also works.
 
-Every setup run installs the latest [Simple English](https://github.com/AminBlg/SimpleEnglish) skill globally for Claude Code, Codex, Gemini CLI, and Pi. The installation is non-interactive and uses copied files for cross-platform compatibility. Codex and Gemini CLI discover the shared user copy at `~/.agents/skills/simple-english`; Claude Code and Pi use their agent-specific copies. `CLAUDE_CONFIG_DIR` and `PI_CODING_AGENT_DIR` select custom Claude Code and Pi locations when they are set. Simple English is required on personal and work machines and has no setup opt-out.
+Every setup run installs the latest [Simple English](https://github.com/AminBlg/SimpleEnglish) skill globally for Claude Code, Codex, Gemini CLI, opencode, and Pi. The installation is non-interactive and uses copied files for cross-platform compatibility. Codex and Gemini CLI discover the shared user copy at `~/.agents/skills/simple-english`; Claude Code and Pi use their agent-specific copies. `CLAUDE_CONFIG_DIR` and `PI_CODING_AGENT_DIR` select custom Claude Code and Pi locations when they are set. Simple English is required on personal and work machines and has no setup opt-out.
 
 Claude Code is installed with Anthropic's native installer rather than npm/Bun. Setup only ensures the `claude` CLI exists; run Claude Code's normal login/account flow before using Fable. If setup warns that another `claude` command shadows the native binary, resolve PATH/package shadowing or use the native path shown in the warning before authenticating.
 
 Codex CLI is installed per user with OpenAI's standalone installer on Ubuntu, WSL, Raspberry Pi, and Bazzite, from Homebrew's native `codex` cask on macOS, and from OpenAI's native GitHub release binary on Windows. The per-user Linux install keeps `codex` in `~/.local/bin`, so headless Paseo can use it without trusting another user's shared Homebrew prefix. Setup removes the older Bun package and smoke-tests the binary with Node stripped from PATH.
+
+opencode is installed from Homebrew's `anomalyco/tap/opencode` formula where brew exists (macOS, WSL, Bazzite, and Ubuntu with brew) and from Anomaly's official installer otherwise. The installer keeps `opencode` in `~/.opencode/bin` and runs with `--no-modify-path`, because chezmoi owns shell configuration and the opencode configuration at `~/.config/opencode/opencode.json`. Setup removes the older Bun `opencode-ai` package, warns when the Synthetic or z.ai API keys are missing from `~/.env.local`, and leaves provider configuration to the dotfiles. Windows machines get opencode through WSL; Raspberry Pi setup does not install it.
 
 Setup removes legacy global Impeccable skill copies and Cursor subagent files that earlier versions installed. It leaves project-scoped Impeccable data and hooks untouched.
 

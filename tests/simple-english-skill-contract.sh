@@ -7,11 +7,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=198
-    [ubuntu.sh]=220
-    [wsl.sh]=164
+    [mac.sh]=199
+    [ubuntu.sh]=221
+    [wsl.sh]=165
     [pi.sh]=181
-    [bazzite.sh]=80
+    [bazzite.sh]=81
+)
+declare -A expected_banners=(
+    [mac.sh]='Install opencode across agent machines'
+    [ubuntu.sh]='Install opencode across agent machines'
+    [wsl.sh]='Install opencode across agent machines'
+    [pi.sh]='Install Matt Pocock skills for Codex and Pi'
+    [bazzite.sh]='Install opencode across agent machines'
 )
 
 fail() {
@@ -93,6 +100,10 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_function_contains "${file}" setup_simple_english_skill '^        --agent codex [\\]$' 'Codex target'
     assert_function_contains "${file}" setup_simple_english_skill '^        --agent gemini-cli [\\]$' 'Gemini CLI target'
     assert_function_contains "${file}" setup_simple_english_skill '^        --agent pi [\\]$' 'Pi target'
+    if [[ "${file}" != "pi.sh" ]]; then
+        assert_function_contains "${file}" setup_simple_english_skill '^        --agent opencode [\\]$' 'opencode target'
+        assert_function_contains "${file}" setup_simple_english_skill '\$\{HOME\}/\.config/opencode/skills/simple-english/SKILL\.md' 'opencode skill validation'
+    fi
     assert_function_contains "${file}" setup_simple_english_skill '^        --skill simple-english [\\]$' 'specific skill selection'
     assert_function_contains "${file}" setup_simple_english_skill '^        --copy [\\]$' 'copied installation mode'
     assert_function_contains "${file}" setup_simple_english_skill '^        --yes < /dev/null' 'non-interactive confirmation and stdin'
@@ -105,7 +116,7 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '^[[:space:]]+(if ! )?setup_simple_english_skill' 'Simple English main wiring'
     assert_order "${file}" '^[[:space:]]+if install_pi_cli; then$' '^[[:space:]]+(if ! )?setup_simple_english_skill' 'Simple English installation after agent provisioning'
     assert_order "${file}" '^[[:space:]]+(if ! )?setup_simple_english_skill' '^[[:space:]]+remove_impeccable_resources$' 'Simple English validation before cleanup'
-    assert_contains "${file}" "Version ${expected_versions[${file}]} \\| Last changed: Install Matt Pocock skills for Codex and Pi" 'updated version banner'
+    assert_contains "${file}" "Version ${expected_versions[${file}]} \\| Last changed: ${expected_banners[${file}]}" 'updated version banner'
 done
 
 assert_contains win.ps1 '^function Test-SkillsCliNodeRuntimeReady' 'PowerShell Node.js runtime check'
@@ -150,6 +161,7 @@ for file in "${bash_setup_scripts[@]}"; do
                 for skill_file in \
                     "${CLAUDE_CONFIG_DIR}/skills/simple-english/SKILL.md" \
                     "${HOME}/.agents/skills/simple-english/SKILL.md" \
+                    "${HOME}/.config/opencode/skills/simple-english/SKILL.md" \
                     "${HOME}/.pi/agent/skills/simple-english/SKILL.md"; do
                     mkdir -p "$(dirname "${skill_file}")"
                     printf "%s\n" "---" "name: simple-english" "---" > "${skill_file}"
@@ -163,13 +175,19 @@ for file in "${bash_setup_scripts[@]}"; do
     call_count=$(wc -l < "${test_root}/calls")
     [[ "${call_count}" -eq 2 ]] || fail "${file}: installer did not update on both setup runs"
     expected_args='--yes skills@latest add AminBlg/SimpleEnglish --global --agent claude-code --agent codex --agent gemini-cli --agent pi --skill simple-english --copy --yes'
+    skill_files=(
+        "${claude_home}/skills/simple-english/SKILL.md"
+        "${test_home}/.agents/skills/simple-english/SKILL.md"
+        "${pi_home}/skills/simple-english/SKILL.md"
+    )
+    if [[ "${file}" != "pi.sh" ]]; then
+        expected_args='--yes skills@latest add AminBlg/SimpleEnglish --global --agent claude-code --agent codex --agent gemini-cli --agent opencode --agent pi --skill simple-english --copy --yes'
+        skill_files+=("${test_home}/.config/opencode/skills/simple-english/SKILL.md")
+    fi
     if grep -Fvx -- "${expected_args}" "${test_root}/calls" > /dev/null; then
         fail "${file}: installer used unexpected arguments"
     fi
-    for skill_file in \
-        "${claude_home}/skills/simple-english/SKILL.md" \
-        "${test_home}/.agents/skills/simple-english/SKILL.md" \
-        "${pi_home}/skills/simple-english/SKILL.md"; do
+    for skill_file in "${skill_files[@]}"; do
         [[ -f "${skill_file}" ]] || fail "${file}: missing mocked artifact ${skill_file}"
         [[ ! -L "$(dirname "${skill_file}")" ]] || fail "${file}: ${skill_file} was installed as a symlink"
     done
