@@ -119,7 +119,6 @@ function New-TokenPlaceholders {
 # BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
-# BAN_RTK=1
 # ZAI_API_KEY=<your z.ai API key>
 # BAN_CLAUDE_CODE=1
 "@ | Set-Content -Path $envLocalPath
@@ -1094,143 +1093,470 @@ function Install-PortlessCli {
     }
 }
 
-# Check whether the installed rtk is Rust Token Killer, not the unrelated Rust Type Kit.
-function Test-RtkCliReady {
-    $rtkCommand = Get-Command rtk -ErrorAction SilentlyContinue
-    if (-not $rtkCommand) {
+# Remove the managed footprint of the retired RTK tool.
+function Test-RtkTokenKiller {
+    param([Parameter(Mandatory=$true)][string]$Binary)
+
+    if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) {
         return $false
     }
 
     try {
-        & $rtkCommand.Source gain *> $null
-        return ($LASTEXITCODE -eq 0)
+        & $Binary gain *> $null
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        }
+
+        $output = (& $Binary --help 2>&1 | Out-String)
+        return ($output -match 'Rust Token Killer|token-optimized|Initialize rtk instructions')
     }
     catch {
-        return $false
+        try {
+            $content = [System.IO.File]::ReadAllText($Binary)
+            return ($content -match 'Rust Token Killer|rtk-ai/rtk')
+        }
+        catch {
+            return $false
+        }
     }
 }
 
-function Add-RtkToPath {
-    param([Parameter(Mandatory=$true)][string]$RtkDir)
+function Test-RtkPathExists {
+    param([Parameter(Mandatory=$true)][string]$Path)
 
-    if ($env:PATH -notlike "*$RtkDir*") {
-        $env:PATH = "$RtkDir;$env:PATH"
-    }
-
-    $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-    if ($currentPath -notlike "*$RtkDir*") {
-        if ([string]::IsNullOrWhiteSpace($currentPath)) {
-            [Environment]::SetEnvironmentVariable("PATH", $RtkDir, "User")
-        }
-        else {
-            [Environment]::SetEnvironmentVariable("PATH", "$currentPath;$RtkDir", "User")
-        }
-        Write-Success "Added RTK CLI to PATH."
-    }
+    return ($null -ne (Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue))
 }
 
-# Function to install RTK (Rust Token Killer) for token-optimized agent command output.
-function Install-RtkCli {
-    if (Test-EnvLocalFlag "BAN_RTK") {
-        Write-Debug "BAN_RTK=1, skipping RTK setup."
+function Remove-RtkPathStrict {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    if (-not (Test-RtkPathExists -Path $Path)) {
         return
     }
 
-    $rtkDir = Join-Path $env:LOCALAPPDATA "rtk\bin"
-    if (Test-Path $rtkDir) {
-        Add-RtkToPath -RtkDir $rtkDir
-    }
-
-    $hadRtk = Test-RtkCliReady
-    if ($hadRtk) {
-        Write-Message "Updating RTK CLI..."
-    }
-    elseif (Get-Command rtk -ErrorAction SilentlyContinue) {
-        Write-Warning "An rtk command exists, but it does not look like Rust Token Killer. Installing the rtk-ai binary to a user-local directory."
-    }
-    else {
-        Write-Message "Installing RTK CLI..."
-    }
-
-    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("rtk-" + [System.Guid]::NewGuid().ToString())
     try {
-        New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/rtk-ai/rtk/releases/latest"
-        $asset = $release.assets | Where-Object { $_.name -eq "rtk-x86_64-pc-windows-msvc.zip" } | Select-Object -First 1
-        if (-not $asset) {
-            throw "Could not find Windows RTK release asset."
-        }
-
-        $zipPath = Join-Path $tempDir "rtk.zip"
-        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath
-        Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
-
-        $rtkExe = Get-ChildItem -Path $tempDir -Filter "rtk.exe" -Recurse | Select-Object -First 1
-        if (-not $rtkExe) {
-            throw "Downloaded RTK archive did not contain rtk.exe."
-        }
-
-        New-Item -ItemType Directory -Force -Path $rtkDir | Out-Null
-        Copy-Item -Path $rtkExe.FullName -Destination (Join-Path $rtkDir "rtk.exe") -Force
-        Add-RtkToPath -RtkDir $rtkDir
-
-        if (Test-RtkCliReady) {
-            Write-Success "RTK CLI installed/updated."
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
         }
         else {
-            Write-Warning "RTK installed, but 'rtk gain' did not verify the expected binary."
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
         }
     }
     catch {
-        if ($hadRtk) {
-            Write-Warning "Failed to update RTK CLI; existing install remains available: $($_.Exception.Message)"
+        throw "Failed to remove retired RTK path: $Path. $($_.Exception.Message)"
+    }
+
+    if (Test-RtkPathExists -Path $Path) {
+        throw "Retired RTK path remains after cleanup: $Path"
+    }
+
+    $script:RtkCleanupHadResources = $true
+}
+
+function Set-RtkFileContent {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$Content
+    )
+
+    $current = [System.IO.File]::ReadAllText($Path)
+    if ($current -ceq $Content) {
+        return
+    }
+
+    try {
+        [System.IO.File]::WriteAllText(
+            $Path,
+            $Content,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+    }
+    catch {
+        throw "Failed to update shared agent file during RTK cleanup: $Path. $($_.Exception.Message)"
+    }
+
+    $script:RtkCleanupHadResources = $true
+}
+
+function Test-RtkGeneratedGeminiMd {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    $inCode = $false
+    $sawTitle = $false
+    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+        if ($line -match '^```') {
+            $inCode = -not $inCode
+            continue
+        }
+        if ($inCode) {
+            if ($line -match '^\s*$|^\s*(rtk|which\s+rtk)(\s|$)') {
+                continue
+            }
+            return $false
+        }
+        if ($line -match '^\s*$') {
+            continue
+        }
+        if ($line -match '^# RTK([\s-]|$)') {
+            $sawTitle = $true
+            continue
+        }
+        if ($line -match '^## (Meta Commands|Installation Verification|Hook-Based Usage)') {
+            continue
+        }
+        if ($line -match '^\*\*Usage\*\*:|^⚠️ \*\*Name collision\*\*:') {
+            continue
+        }
+        if ($line -match '^(All other commands|Example:|Refer to CLAUDE\.md)') {
+            continue
+        }
+        return $false
+    }
+
+    return ($sawTitle -and -not $inCode)
+}
+
+function Assert-RtkGeminiMdSafe {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+
+    $content = [System.IO.File]::ReadAllText($Path)
+    if ($content -notmatch '(?i)(^|[^A-Za-z0-9_])rtk([^A-Za-z0-9_]|$)|Rust Token Killer') {
+        return
+    }
+
+    $script:RtkCleanupHadResources = $true
+    if (Test-RtkGeneratedGeminiMd -Path $Path) {
+        $script:RtkCleanupRemoveGeminiMd = $true
+        return
+    }
+
+    throw "RTK cleanup found mixed user and RTK content in shared file: $Path. Move the user content out of this file, then run setup again."
+}
+
+function Remove-RtkInstructionText {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$ManagedReference
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+
+    $content = [System.IO.File]::ReadAllText($Path)
+    if ($content -notmatch '(?m)^\s*@RTK\.md\s*$|^\s*@.*[/\\]RTK\.md\s*$|<!--\s*rtk-instructions') {
+        return
+    }
+
+    $output = [System.Collections.Generic.List[string]]::new()
+    $inRtkBlock = $false
+    $normalizedReference = $ManagedReference -replace '\\', '/'
+    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+        $trimmed = $line.Trim()
+        $normalizedLine = $trimmed -replace '\\', '/'
+        if ($trimmed -match '^<!--\s*rtk-instructions') {
+            $inRtkBlock = $true
+            continue
+        }
+        if ($inRtkBlock) {
+            if ($trimmed -eq '<!-- /rtk-instructions -->') {
+                $inRtkBlock = $false
+            }
+            continue
+        }
+        if ($trimmed -eq '@RTK.md' -or $normalizedLine -eq $normalizedReference) {
+            continue
+        }
+        $output.Add($line)
+    }
+
+    if ($inRtkBlock) {
+        throw "RTK cleanup found an incomplete managed block in: $Path"
+    }
+
+    $newContent = $output -join [Environment]::NewLine
+    if ($content.EndsWith("`n")) {
+        $newContent += [Environment]::NewLine
+    }
+    Set-RtkFileContent -Path $Path -Content $newContent
+}
+
+function Remove-RtkPiInstructions {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+
+    $lines = [System.IO.File]::ReadAllLines($Path)
+    $heading = '## RTK token-optimized commands'
+    $start = [Array]::IndexOf($lines, $heading)
+    if ($start -lt 0) {
+        return
+    }
+
+    $end = $lines.Count
+    for ($index = $start + 1; $index -lt $lines.Count; $index++) {
+        if ($lines[$index] -match '^## ') {
+            $end = $index
+            break
+        }
+    }
+
+    $expected = @(
+        '## RTK token-optimized commands',
+        '',
+        '- RTK (`rtk-ai/rtk`) is installed by the machine setup scripts when available. Prefer `rtk <command>` for noisy shell commands with supported filters (`git`, `gh`, tests, build/lint tools, package managers, file/search commands) unless full raw output is required.',
+        '- Bypass RTK for one command with `RTK_DISABLED=1 <command>` or by running the raw command directly when exact output formatting matters.',
+        ''
+    )
+    $section = @($lines[$start..($end - 1)])
+    if (($section -join "`n") -cne ($expected -join "`n")) {
+        throw "RTK cleanup found mixed user and RTK content in shared file: $Path. Move the user content out of the RTK section, then run setup again."
+    }
+
+    $output = [System.Collections.Generic.List[string]]::new()
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($index -ge $start -and $index -lt $end) {
+            continue
+        }
+        $output.Add($lines[$index])
+    }
+
+    $content = [System.IO.File]::ReadAllText($Path)
+    $newContent = $output -join [Environment]::NewLine
+    if ($content.EndsWith("`n")) {
+        $newContent += [Environment]::NewLine
+    }
+    Set-RtkFileContent -Path $Path -Content $newContent
+}
+
+function Remove-RtkJsonHooks {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$HookKey,
+        [Parameter(Mandatory=$true)][string]$CommandPattern
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+
+    $content = [System.IO.File]::ReadAllText($Path)
+    if ($content -notmatch $CommandPattern) {
+        return
+    }
+
+    try {
+        $settings = $content | ConvertFrom-Json
+    }
+    catch {
+        throw "Failed to parse shared agent settings during RTK cleanup: $Path. $($_.Exception.Message)"
+    }
+
+    $hooksProperty = $settings.PSObject.Properties['hooks']
+    if ($null -eq $hooksProperty) {
+        return
+    }
+    $hookEntriesProperty = $settings.hooks.PSObject.Properties[$HookKey]
+    if ($null -eq $hookEntriesProperty) {
+        return
+    }
+
+    $kept = [System.Collections.Generic.List[object]]::new()
+    $removed = $false
+    foreach ($entry in @($hookEntriesProperty.Value)) {
+        $managed = $false
+        foreach ($hook in @($entry.hooks)) {
+            if ($null -ne $hook.command -and [string]$hook.command -match $CommandPattern) {
+                $managed = $true
+                break
+            }
+        }
+        if ($managed) {
+            $removed = $true
         }
         else {
-            Write-Warning "Failed to install RTK CLI: $($_.Exception.Message)"
+            $kept.Add($entry)
         }
+    }
+
+    if (-not $removed) {
+        return
+    }
+
+    if ($kept.Count -eq 0) {
+        $settings.hooks.PSObject.Properties.Remove($HookKey)
+    }
+    else {
+        $settings.hooks.$HookKey = @($kept)
+    }
+    if ($settings.hooks.PSObject.Properties.Count -eq 0) {
+        $settings.PSObject.Properties.Remove('hooks')
+    }
+
+    $newContent = $settings | ConvertTo-Json -Depth 100
+    $newContent += [Environment]::NewLine
+    Set-RtkFileContent -Path $Path -Content $newContent
+}
+
+function Invoke-RtkUpstreamUninstall {
+    param(
+        [Parameter(Mandatory=$true)][string]$Binary,
+        [Parameter(Mandatory=$true)][ValidateSet('codex', 'gemini')][string]$Mode,
+        [string]$ConfigDir
+    )
+
+    $originalCodexHome = $env:CODEX_HOME
+    try {
+        if ($Mode -eq 'codex') {
+            $env:CODEX_HOME = $ConfigDir
+            $output = & $Binary init -g --codex --uninstall 2>&1
+        }
+        else {
+            $output = & $Binary init -g --gemini --uninstall 2>&1
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Debug "RTK $Mode uninstall was not available; using deterministic cleanup. $($output | Out-String)"
+        }
+    }
+    catch {
+        Write-Debug "RTK $Mode uninstall was not available; using deterministic cleanup. $($_.Exception.Message)"
     }
     finally {
-        if (Test-Path $tempDir) {
-            Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        $env:CODEX_HOME = $originalCodexHome
     }
 }
 
-# Configure RTK integrations for installed AI agents. Non-fatal by design.
-function Setup-RtkIntegrations {
-    if (Test-EnvLocalFlag "BAN_RTK") {
-        Write-Debug "BAN_RTK=1, skipping RTK integrations."
+function Remove-RtkPathEntry {
+    param([Parameter(Mandatory=$true)][string]$RtkDir)
+
+    $normalizedRtkDir = $RtkDir.TrimEnd('\', '/')
+    $processEntries = @($env:PATH -split ';' | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and $_.TrimEnd('\', '/') -ine $normalizedRtkDir
+    })
+    $newProcessPath = $processEntries -join ';'
+    if ($newProcessPath -cne $env:PATH) {
+        $env:PATH = $newProcessPath
+        $script:RtkCleanupHadResources = $true
+    }
+
+    $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+    if ([string]::IsNullOrWhiteSpace($userPath)) {
         return
     }
+    $userEntries = @($userPath -split ';' | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and $_.TrimEnd('\', '/') -ine $normalizedRtkDir
+    })
+    $newUserPath = $userEntries -join ';'
+    if ($newUserPath -cne $userPath) {
+        [Environment]::SetEnvironmentVariable('PATH', $newUserPath, 'User')
+        $script:RtkCleanupHadResources = $true
+    }
+}
 
-    if (-not (Test-RtkCliReady)) {
-        Write-Warning "RTK CLI is not available; skipping RTK integrations."
-        return
+function Remove-RtkResources {
+    $profileRoot = [System.IO.Path]::GetFullPath($env:USERPROFILE)
+    $rtkDir = Join-Path $env:LOCALAPPDATA 'rtk\bin'
+    $managedBinary = Join-Path $rtkDir 'rtk.exe'
+    $binaryIsRtk = $false
+    $script:RtkCleanupHadResources = $false
+    $script:RtkCleanupRemoveGeminiMd = $false
+
+    $claudeDirs = @((Join-Path $profileRoot '.claude'))
+    if (-not [string]::IsNullOrWhiteSpace($env:CLAUDE_CONFIG_DIR)) {
+        $claudeDirs += $env:CLAUDE_CONFIG_DIR
+    }
+    $claudeDirs = @($claudeDirs | Select-Object -Unique)
+
+    $codexDirs = @((Join-Path $profileRoot '.codex'))
+    if (-not [string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
+        $codexDirs += $env:CODEX_HOME
+    }
+    $codexDirs = @($codexDirs | Select-Object -Unique)
+
+    $piDirs = @((Join-Path $profileRoot '.pi\agent'))
+    if (-not [string]::IsNullOrWhiteSpace($env:PI_CODING_AGENT_DIR)) {
+        $piDirs += $env:PI_CODING_AGENT_DIR
+    }
+    $piDirs = @($piDirs | Select-Object -Unique)
+
+    $geminiDir = Join-Path $profileRoot '.gemini'
+    $geminiMd = Join-Path $geminiDir 'GEMINI.md'
+    Assert-RtkGeminiMdSafe -Path $geminiMd
+    foreach ($piDir in $piDirs) {
+        Remove-RtkPiInstructions -Path (Join-Path $piDir 'AGENTS.md')
     }
 
-    # Automated setup should not prompt for telemetry consent. Users can opt in later with `rtk telemetry enable`.
-    & rtk telemetry disable *> $null
-
-    if (Get-Command gemini -ErrorAction SilentlyContinue) {
-        Write-Debug "Native Windows RTK Gemini hook setup is Unix-shell based; use WSL for transparent Gemini rewrites."
-    }
-    else {
-        Write-Debug "Gemini CLI not installed; skipping RTK Gemini integration."
-    }
-
-    if (Get-Command codex -ErrorAction SilentlyContinue) {
-        Write-Message "Configuring RTK for Codex CLI..."
-        $output = & rtk init -g --codex 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Success "RTK configured for Codex CLI."
+    if (Test-RtkPathExists -Path $managedBinary) {
+        if (Test-RtkTokenKiller -Binary $managedBinary) {
+            $binaryIsRtk = $true
+            $script:RtkCleanupHadResources = $true
         }
         else {
-            Write-Warning "Failed to configure RTK for Codex CLI."
-            if ($output) { Write-Debug ($output | Out-String) }
+            Write-Warning "Preserving unrelated or unverified rtk command at $managedBinary."
         }
     }
+
+    if ($binaryIsRtk) {
+        foreach ($codexDir in $codexDirs) {
+            Invoke-RtkUpstreamUninstall -Binary $managedBinary -Mode codex -ConfigDir $codexDir
+        }
+        if (-not (Test-Path -LiteralPath $geminiMd -PathType Leaf) -or $script:RtkCleanupRemoveGeminiMd) {
+            Invoke-RtkUpstreamUninstall -Binary $managedBinary -Mode gemini
+        }
+        else {
+            Write-Debug 'Preserving unrelated Gemini instructions and using deterministic RTK cleanup.'
+        }
+    }
+
+    foreach ($claudeDir in $claudeDirs) {
+        Remove-RtkInstructionText -Path (Join-Path $claudeDir 'CLAUDE.md') -ManagedReference '@RTK.md'
+        Remove-RtkJsonHooks -Path (Join-Path $claudeDir 'settings.json') -HookKey 'PreToolUse' -CommandPattern 'rtk hook claude|rtk-rewrite\.sh'
+        Remove-RtkPathStrict -Path (Join-Path $claudeDir 'RTK.md')
+        Remove-RtkPathStrict -Path (Join-Path $claudeDir 'hooks\rtk-rewrite.sh')
+        Remove-RtkPathStrict -Path (Join-Path $claudeDir 'hooks\.rtk-hook.sha256')
+    }
+
+    foreach ($codexDir in $codexDirs) {
+        Remove-RtkInstructionText -Path (Join-Path $codexDir 'AGENTS.md') -ManagedReference "@$codexDir\RTK.md"
+        Remove-RtkPathStrict -Path (Join-Path $codexDir 'RTK.md')
+    }
+
+    Remove-RtkJsonHooks -Path (Join-Path $geminiDir 'settings.json') -HookKey 'BeforeTool' -CommandPattern 'rtk hook gemini|rtk-hook-gemini\.sh'
+    Remove-RtkPathStrict -Path (Join-Path $geminiDir 'hooks\rtk-hook-gemini.sh')
+    Remove-RtkPathStrict -Path (Join-Path $geminiDir 'hooks\.rtk-hook.sha256')
+    if ($script:RtkCleanupRemoveGeminiMd) {
+        Remove-RtkPathStrict -Path $geminiMd
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
+        Remove-RtkPathStrict -Path (Join-Path $env:APPDATA 'rtk')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $localRtkRoot = Join-Path $env:LOCALAPPDATA 'rtk'
+        if ($binaryIsRtk) {
+            Remove-RtkPathStrict -Path $localRtkRoot
+        }
+        elseif (Test-RtkPathExists -Path $localRtkRoot) {
+            $children = @(Get-ChildItem -LiteralPath $localRtkRoot -Force -ErrorAction SilentlyContinue | Where-Object { $_.FullName -ne $rtkDir })
+            foreach ($child in $children) {
+                Remove-RtkPathStrict -Path $child.FullName
+            }
+        }
+    }
+    Remove-RtkPathEntry -RtkDir $rtkDir
+
+    if ($script:RtkCleanupHadResources) {
+        Write-Success 'Legacy RTK resources removed.'
+    }
     else {
-        Write-Debug "Codex CLI not installed; skipping RTK Codex integration."
+        Write-Debug 'No legacy RTK resources found.'
     }
 }
 
@@ -3193,7 +3519,7 @@ function Invoke-WindowsSetupTasks {
     $simpleEnglishSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 123 | Last changed: Install Pi companion packages" -ForegroundColor DarkGray
+    Write-Host "Version 124 | Last changed: Remove RTK and clean legacy resources" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -3228,8 +3554,7 @@ function Invoke-WindowsSetupTasks {
     Install-GeminiCli
     Install-CodexCli
     Install-PortlessCli
-    Install-RtkCli
-    Setup-RtkIntegrations
+    Remove-RtkResources
     if (-not (Setup-MattPocockSkills)) {
         $mattPocockSetupFailed = $true
     }

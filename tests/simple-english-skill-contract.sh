@@ -7,18 +7,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=202
-    [ubuntu.sh]=225
-    [wsl.sh]=169
-    [pi.sh]=185
-    [bazzite.sh]=84
+    [mac.sh]=203
+    [ubuntu.sh]=226
+    [wsl.sh]=170
+    [pi.sh]=186
+    [bazzite.sh]=85
 )
 declare -A expected_banners=(
-    [mac.sh]='Install Pi companion packages'
-    [ubuntu.sh]='Install Pi companion packages'
-    [wsl.sh]='Install Pi companion packages'
-    [pi.sh]='Install Pi companion packages'
-    [bazzite.sh]='Install Pi companion packages'
+    [mac.sh]='Remove RTK and clean legacy resources'
+    [ubuntu.sh]='Remove RTK and clean legacy resources'
+    [wsl.sh]='Remove RTK and clean legacy resources'
+    [pi.sh]='Remove RTK and clean legacy resources'
+    [bazzite.sh]='Remove RTK and clean legacy resources'
 )
 
 fail() {
@@ -136,7 +136,7 @@ assert_contains win.ps1 '\$env:CLAUDE_CONFIG_DIR' 'PowerShell CLAUDE_CONFIG_DIR 
 assert_contains win.ps1 '\$env:PI_CODING_AGENT_DIR' 'PowerShell PI_CODING_AGENT_DIR support'
 assert_contains win.ps1 '\.agents\\skills\\simple-english\\SKILL\.md' 'PowerShell shared Codex and Gemini skill validation'
 assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal failure propagation'
-assert_contains win.ps1 'Version 123 \| Last changed: Install Pi companion packages' 'PowerShell version banner'
+assert_contains win.ps1 'Version 124 \| Last changed: Remove RTK and clean legacy resources' 'PowerShell version banner'
 assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+Remove-ImpeccableResources$' 'PowerShell validation before cleanup'
 

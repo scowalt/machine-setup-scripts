@@ -253,7 +253,6 @@ create_env_local() {
 # BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
-# BAN_RTK=1
 # SYNTHETIC_API_KEY=<your Synthetic API key>
 # ZAI_API_KEY=<your z.ai API key>
 # BAN_CLAUDE_CODE=1
@@ -1982,114 +1981,385 @@ install_claude_code() {
 }
 
 
-# Verify the installed rtk is Rust Token Killer, not the unrelated Rust Type Kit.
-rtk_cli_ready() {
-    command -v rtk &> /dev/null && rtk gain > /dev/null 2>&1
+# Remove the managed footprint of the retired RTK tool.
+rtk_binary_is_token_killer() {
+    local _binary="$1"
+    local _output=""
+
+    [[ -x "${_binary}" ]] || return 1
+
+    if "${_binary}" gain > /dev/null 2>&1; then
+        return 0
+    fi
+
+    _output=$("${_binary}" --help 2>&1 || true)
+    if grep -Eiq 'Rust Token Killer|token-optimized|Initialize rtk instructions' <<< "${_output}"; then
+        return 0
+    fi
+
+    grep -aEiq -m 1 'Rust Token Killer|rtk-ai/rtk' "${_binary}" 2>/dev/null
 }
 
-# Install RTK (Rust Token Killer) for token-optimized agent command output.
-install_rtk_cli() {
-    if [[ "${BAN_RTK:-}" == "1" ]]; then
-        print_debug "BAN_RTK=1, skipping RTK setup."
-        return
+rtk_note_path() {
+    local _path="$1"
+
+    if [[ -e "${_path}" || -L "${_path}" ]]; then
+        _rtk_cleanup_had_resources=1
+    fi
+}
+
+rtk_remove_path() {
+    local _path="$1"
+
+    if [[ ! -e "${_path}" && ! -L "${_path}" ]]; then
+        return 0
     fi
 
-    export PATH="${HOME}/.local/bin:${PATH}"
-
-    local had_rtk=0
-    if rtk_cli_ready; then
-        had_rtk=1
-        print_message "Updating RTK CLI..."
-    elif command -v rtk &> /dev/null; then
-        print_warning "An rtk command exists, but it does not look like Rust Token Killer. Installing the rtk-ai binary to ~/.local/bin."
-    else
-        print_message "Installing RTK CLI..."
+    if ! rm -rf -- "${_path:?}"; then
+        print_error "Failed to remove retired RTK path: ${_path}"
+        return 1
     fi
 
-    local install_script
-    if ! install_script=$(curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh 2>&1); then
-        if [[ "${had_rtk}" == "1" ]]; then
-            print_warning "Failed to update RTK CLI; existing install remains available."
+    if [[ -e "${_path}" || -L "${_path}" ]]; then
+        print_error "Retired RTK path remains after cleanup: ${_path}"
+        return 1
+    fi
+
+    _rtk_cleanup_had_resources=1
+}
+
+rtk_match_file_mode() {
+    local _source="$1"
+    local _target="$2"
+    local _mode=""
+
+    if chmod --reference="${_source}" "${_target}" 2>/dev/null; then
+        return 0
+    fi
+
+    _mode=$(stat -f '%Lp' "${_source}" 2>/dev/null || true)
+    [[ -n "${_mode}" ]] && chmod "${_mode}" "${_target}"
+}
+
+rtk_replace_file_if_changed() {
+    local _file="$1"
+    local _temporary="$2"
+
+    if cmp -s "${_file}" "${_temporary}"; then
+        rm -f -- "${_temporary}"
+        return 0
+    fi
+
+    if ! rtk_match_file_mode "${_file}" "${_temporary}"; then
+        rm -f -- "${_temporary}"
+        print_error "Failed to preserve permissions while cleaning RTK from: ${_file}"
+        return 1
+    fi
+
+    if ! mv -f -- "${_temporary}" "${_file}"; then
+        rm -f -- "${_temporary}"
+        print_error "Failed to update shared agent file during RTK cleanup: ${_file}"
+        return 1
+    fi
+
+    _rtk_cleanup_had_resources=1
+}
+
+rtk_gemini_md_is_generated() {
+    local _file="$1"
+
+    awk '
+        BEGIN { in_code = 0; saw_title = 0; invalid = 0 }
+        /^```/ { in_code = !in_code; next }
+        in_code {
+            if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*(rtk|which[[:space:]]+rtk)([[:space:]]|$)/) next
+            invalid = 1
+            next
+        }
+        /^[[:space:]]*$/ { next }
+        /^# RTK([[:space:]-]|$)/ { saw_title = 1; next }
+        /^## (Meta Commands|Installation Verification|Hook-Based Usage)/ { next }
+        /^\*\*Usage\*\*:/ { next }
+        /^⚠️ \*\*Name collision\*\*:/ { next }
+        /^(All other commands|Example:|Refer to CLAUDE\.md)/ { next }
+        { invalid = 1 }
+        END { exit !(saw_title && !invalid && !in_code) }
+    ' "${_file}"
+}
+
+rtk_assert_gemini_md_safe() {
+    local _file="$1"
+
+    [[ -f "${_file}" ]] || return 0
+    if ! grep -Eiq '(^|[^[:alnum:]_])rtk([^[:alnum:]_]|$)|Rust Token Killer' "${_file}"; then
+        return 0
+    fi
+
+    _rtk_cleanup_had_resources=1
+    if rtk_gemini_md_is_generated "${_file}"; then
+        _rtk_cleanup_remove_gemini_md=1
+        return 0
+    fi
+
+    print_error "RTK cleanup found mixed user and RTK content in shared file: ${_file}"
+    print_error "Move the user content out of this file, then run setup again."
+    return 1
+}
+
+rtk_clean_instruction_file() {
+    local _file="$1"
+    local _reference="$2"
+    local _temporary=""
+
+    [[ -f "${_file}" ]] || return 0
+    if ! grep -Eq '^[[:space:]]*@RTK\.md[[:space:]]*$|^[[:space:]]*@.*/RTK\.md[[:space:]]*$|<!--[[:space:]]*rtk-instructions' "${_file}"; then
+        return 0
+    fi
+
+    _temporary=$(mktemp "${_file}.rtk-cleanup.XXXXXX") || {
+        print_error "Failed to create a temporary file for RTK cleanup: ${_file}"
+        return 1
+    }
+
+    if ! awk -v managed_reference="${_reference}" '
+        BEGIN { in_rtk_block = 0 }
+        {
+            trimmed = $0
+            sub(/^[[:space:]]+/, "", trimmed)
+            sub(/[[:space:]]+$/, "", trimmed)
+
+            if (trimmed ~ /^<!--[[:space:]]*rtk-instructions/) {
+                in_rtk_block = 1
+                next
+            }
+            if (in_rtk_block) {
+                if (trimmed == "<!-- /rtk-instructions -->") in_rtk_block = 0
+                next
+            }
+            if (trimmed == "@RTK.md" || trimmed == managed_reference) next
+            print
+        }
+        END { if (in_rtk_block) exit 42 }
+    ' "${_file}" > "${_temporary}"; then
+        rm -f -- "${_temporary}"
+        print_error "RTK cleanup found an incomplete managed block in: ${_file}"
+        return 1
+    fi
+
+    rtk_replace_file_if_changed "${_file}" "${_temporary}"
+}
+
+rtk_clean_pi_instructions() {
+    local _file="$1"
+    local _section=""
+    local _expected=""
+    local _temporary=""
+
+    [[ -f "${_file}" ]] || return 0
+    if ! grep -Fq '## RTK token-optimized commands' "${_file}"; then
+        return 0
+    fi
+
+    _section=$(awk '
+        $0 == "## RTK token-optimized commands" { capture = 1 }
+        capture && $0 ~ /^## / && $0 != "## RTK token-optimized commands" { exit }
+        capture { print }
+    ' "${_file}")
+    _expected=$(cat <<'RTK_PI_SECTION'
+## RTK token-optimized commands
+
+- RTK (`rtk-ai/rtk`) is installed by the machine setup scripts when available. Prefer `rtk <command>` for noisy shell commands with supported filters (`git`, `gh`, tests, build/lint tools, package managers, file/search commands) unless full raw output is required.
+- Bypass RTK for one command with `RTK_DISABLED=1 <command>` or by running the raw command directly when exact output formatting matters.
+RTK_PI_SECTION
+)
+
+    if [[ "${_section}" != "${_expected}" ]]; then
+        print_error "RTK cleanup found mixed user and RTK content in shared file: ${_file}"
+        print_error "Move the user content out of the RTK section, then run setup again."
+        return 1
+    fi
+
+    _temporary=$(mktemp "${_file}.rtk-cleanup.XXXXXX") || {
+        print_error "Failed to create a temporary file for RTK cleanup: ${_file}"
+        return 1
+    }
+
+    awk '
+        $0 == "## RTK token-optimized commands" { skip = 1; next }
+        skip && /^## / { skip = 0 }
+        !skip { print }
+    ' "${_file}" > "${_temporary}"
+
+    rtk_replace_file_if_changed "${_file}" "${_temporary}"
+}
+
+rtk_clean_json_hooks() {
+    local _file="$1"
+    local _hook_key="$2"
+    local _grep_pattern="$3"
+    local _command_pattern="$4"
+    local _temporary=""
+
+    [[ -f "${_file}" ]] || return 0
+    if ! grep -Eq "${_grep_pattern}" "${_file}"; then
+        return 0
+    fi
+    if ! command -v jq > /dev/null 2>&1; then
+        print_error "jq is required to remove RTK from shared agent settings: ${_file}"
+        return 1
+    fi
+
+    _temporary=$(mktemp "${_file}.rtk-cleanup.XXXXXX") || {
+        print_error "Failed to create a temporary file for RTK cleanup: ${_file}"
+        return 1
+    }
+
+    if ! jq --arg hook_key "${_hook_key}" --arg command_pattern "${_command_pattern}" '
+        def has_managed_command:
+            [.hooks[]? | .command? | strings | test($command_pattern)] | any;
+
+        if ((.hooks? | type) == "object" and (.hooks[$hook_key]? | type) == "array") then
+            .hooks[$hook_key] |= map(select((has_managed_command | not)))
         else
-            print_warning "Failed to download RTK installer."
-        fi
-        print_debug "${install_script}"
-        return
+            .
+        end |
+        if ((.hooks? | type) == "object" and (.hooks[$hook_key]? | type) == "array" and (.hooks[$hook_key] | length) == 0) then
+            del(.hooks[$hook_key])
+        else
+            .
+        end |
+        if ((.hooks? | type) == "object" and (.hooks | length) == 0) then del(.hooks) else . end
+    ' "${_file}" > "${_temporary}"; then
+        rm -f -- "${_temporary}"
+        print_error "Failed to parse shared agent settings during RTK cleanup: ${_file}"
+        return 1
     fi
 
-    local install_output
-    if install_output=$(RTK_INSTALL_DIR="${HOME}/.local/bin" sh -c "${install_script}" 2>&1); then
+    rtk_replace_file_if_changed "${_file}" "${_temporary}"
+}
+
+rtk_run_upstream_uninstall() {
+    local _binary="$1"
+    local _mode="$2"
+    local _config_dir="${3:-}"
+    local _output=""
+
+    case "${_mode}" in
+        codex)
+            if ! _output=$(CODEX_HOME="${_config_dir}" "${_binary}" init -g --codex --uninstall < /dev/null 2>&1); then
+                print_debug "RTK Codex uninstall was not available; using deterministic cleanup. ${_output}"
+            fi
+            ;;
+        gemini)
+            if ! _output=$("${_binary}" init -g --gemini --uninstall < /dev/null 2>&1); then
+                print_debug "RTK Gemini uninstall was not available; using deterministic cleanup. ${_output}"
+            fi
+            ;;
+        *)
+            print_error "Unknown RTK uninstall mode: ${_mode}"
+            return 1
+            ;;
+    esac
+}
+
+remove_rtk_resources() {
+    local _managed_binary="${HOME}/.local/bin/rtk"
+    local _binary_is_rtk=0
+    local _dir=""
+    local _path=""
+    local -a _claude_dirs=("${HOME}/.claude")
+    local -a _codex_dirs=("${HOME}/.codex")
+    local -a _pi_dirs=("${HOME}/.pi/agent")
+    local -a _data_dirs=(
+        "${HOME}/.config/rtk"
+        "${HOME}/.local/share/rtk"
+        "${XDG_CONFIG_HOME:-${HOME}/.config}/rtk"
+        "${XDG_DATA_HOME:-${HOME}/.local/share}/rtk"
+    )
+    _rtk_cleanup_had_resources=0
+    _rtk_cleanup_remove_gemini_md=0
+
+    if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+        _claude_dirs+=("${CLAUDE_CONFIG_DIR}")
+    fi
+    if [[ -n "${CODEX_HOME:-}" ]]; then
+        _codex_dirs+=("${CODEX_HOME}")
+    fi
+    if [[ -n "${PI_CODING_AGENT_DIR:-}" ]]; then
+        _pi_dirs+=("${PI_CODING_AGENT_DIR}")
+    fi
+    if [[ "$(uname -s 2>/dev/null || true)" == "Darwin" ]]; then
+        _data_dirs+=("${HOME}/Library/Application Support/rtk")
+    fi
+
+    rtk_assert_gemini_md_safe "${HOME}/.gemini/GEMINI.md" || return 1
+    for _dir in "${_pi_dirs[@]}"; do
+        rtk_clean_pi_instructions "${_dir}/AGENTS.md" || return 1
+    done
+
+    if [[ -e "${_managed_binary}" || -L "${_managed_binary}" ]]; then
+        if rtk_binary_is_token_killer "${_managed_binary}"; then
+            _binary_is_rtk=1
+            _rtk_cleanup_had_resources=1
+        else
+            print_warning "Preserving unrelated or unverified rtk command at ${_managed_binary}."
+        fi
+    fi
+
+    if [[ "${_binary_is_rtk}" -eq 1 ]]; then
+        for _dir in "${_codex_dirs[@]}"; do
+            rtk_run_upstream_uninstall "${_managed_binary}" codex "${_dir}"
+        done
+        if [[ ! -f "${HOME}/.gemini/GEMINI.md" || "${_rtk_cleanup_remove_gemini_md}" -eq 1 ]]; then
+            rtk_run_upstream_uninstall "${_managed_binary}" gemini
+        else
+            print_debug "Preserving unrelated Gemini instructions and using deterministic RTK cleanup."
+        fi
+    fi
+
+    for _dir in "${_claude_dirs[@]}"; do
+        rtk_clean_instruction_file "${_dir}/CLAUDE.md" '@RTK.md' || return 1
+        rtk_clean_json_hooks \
+            "${_dir}/settings.json" \
+            'PreToolUse' \
+            'rtk hook claude|rtk-rewrite\.sh' \
+            '(^|[/\\])rtk-rewrite\.sh([[:space:]]|$)|^rtk hook claude([[:space:]]|$)' || return 1
+        rtk_remove_path "${_dir}/RTK.md" || return 1
+        rtk_remove_path "${_dir}/hooks/rtk-rewrite.sh" || return 1
+        rtk_remove_path "${_dir}/hooks/.rtk-hook.sha256" || return 1
+    done
+
+    for _dir in "${_codex_dirs[@]}"; do
+        rtk_clean_instruction_file "${_dir}/AGENTS.md" "@${_dir}/RTK.md" || return 1
+        rtk_remove_path "${_dir}/RTK.md" || return 1
+    done
+
+    rtk_clean_json_hooks \
+        "${HOME}/.gemini/settings.json" \
+        'BeforeTool' \
+        'rtk hook gemini|rtk-hook-gemini\.sh' \
+        '(^|[/\\])rtk-hook-gemini\.sh([[:space:]]|$)|^rtk hook gemini([[:space:]]|$)' || return 1
+    rtk_remove_path "${HOME}/.gemini/hooks/rtk-hook-gemini.sh" || return 1
+    rtk_remove_path "${HOME}/.gemini/hooks/.rtk-hook.sha256" || return 1
+    if [[ "${_rtk_cleanup_remove_gemini_md}" -eq 1 ]]; then
+        rtk_remove_path "${HOME}/.gemini/GEMINI.md" || return 1
+    fi
+    rtk_remove_path "${HOME}/.config/opencode/plugins/rtk.ts" || return 1
+
+    for _path in "${_data_dirs[@]}"; do
+        rtk_note_path "${_path}"
+        rtk_remove_path "${_path}" || return 1
+    done
+
+    if [[ "${_binary_is_rtk}" -eq 1 ]]; then
+        rtk_remove_path "${_managed_binary}" || return 1
         hash -r 2>/dev/null || true
-        if rtk_cli_ready; then
-            print_success "RTK CLI installed/updated."
-        else
-            print_warning "RTK installer completed, but 'rtk gain' did not verify the expected binary."
-            print_debug "${install_output}"
-        fi
+    fi
+
+    if [[ "${_rtk_cleanup_had_resources}" -eq 1 ]]; then
+        print_success "Legacy RTK resources removed."
     else
-        if [[ "${had_rtk}" == "1" ]]; then
-            print_warning "Failed to update RTK CLI; existing install remains available."
-        else
-            print_warning "Failed to install RTK CLI."
-        fi
-        print_debug "${install_output}"
-    fi
-}
-
-# Configure RTK integrations for installed AI agents. Non-fatal by design.
-setup_rtk_integrations() {
-    if [[ "${BAN_RTK:-}" == "1" ]]; then
-        print_debug "BAN_RTK=1, skipping RTK integrations."
-        return
-    fi
-
-    export PATH="${HOME}/.local/bin:${PATH}"
-    export PATH="${HOME}/.opencode/bin:${PATH}"
-
-    if ! rtk_cli_ready; then
-        print_warning "RTK CLI is not available; skipping RTK integrations."
-        return
-    fi
-
-    # Automated setup should not prompt for telemetry consent. Users can opt in later with `rtk telemetry enable`.
-    rtk telemetry disable > /dev/null 2>&1 || true
-
-    local init_output
-
-    if command -v gemini &> /dev/null; then
-        print_message "Configuring RTK for Gemini CLI..."
-        if init_output=$(rtk init -g --gemini --auto-patch < /dev/null 2>&1); then
-            print_success "RTK configured for Gemini CLI."
-        else
-            print_warning "Failed to configure RTK for Gemini CLI."
-            print_debug "${init_output}"
-        fi
-    else
-        print_debug "Gemini CLI not installed; skipping RTK Gemini integration."
-    fi
-
-    if command -v codex &> /dev/null; then
-        print_message "Configuring RTK for Codex CLI..."
-        if init_output=$(rtk init -g --codex < /dev/null 2>&1); then
-            print_success "RTK configured for Codex CLI."
-        else
-            print_warning "Failed to configure RTK for Codex CLI."
-            print_debug "${init_output}"
-        fi
-    else
-        print_debug "Codex CLI not installed; skipping RTK Codex integration."
-    fi
-
-    if command -v opencode &> /dev/null; then
-        print_message "Configuring RTK for opencode..."
-        if init_output=$(rtk init -g --opencode < /dev/null 2>&1); then
-            print_success "RTK configured for opencode."
-        else
-            print_warning "Failed to configure RTK for opencode."
-            print_debug "${init_output}"
-        fi
-    else
-        print_debug "opencode not installed; skipping RTK opencode integration."
+        print_debug "No legacy RTK resources found."
     fi
 }
 
@@ -5120,7 +5390,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 202 | Last changed: Install Pi companion packages${NC}"
+    echo -e "${GRAY}Version 203 | Last changed: Remove RTK and clean legacy resources${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5298,8 +5568,7 @@ HELPER_EOF
     validate_opencode_keys
     install_portless_cli
     install_ntn_cli
-    install_rtk_cli
-    setup_rtk_integrations
+    remove_rtk_resources || return 1
     if ! setup_matt_pocock_skills; then
         _setup_had_errors=1
     fi

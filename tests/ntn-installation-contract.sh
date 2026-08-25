@@ -103,7 +103,7 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_function_not_contains "${file}" install_ntn_cli 'bun|npm' 'Node package-manager dependency'
     assert_function_not_contains "${file}" install_ntn_cli 'ntn login|ntn completions' 'authentication or completion automation'
     assert_order "${file}" '^[[:space:]]+install_codex_cli([[:space:]]+\|\|[[:space:]]+return 1)?$' '^[[:space:]]+install_ntn_cli$' 'Codex before Notion CLI'
-    assert_order "${file}" '^[[:space:]]+install_ntn_cli$' '^[[:space:]]+install_rtk_cli$' 'Notion CLI before RTK'
+    assert_order "${file}" '^[[:space:]]+install_ntn_cli$' '^[[:space:]]+remove_rtk_resources[[:space:]]+\|\|[[:space:]]+return 1$' 'Notion CLI before retired RTK cleanup'
 done
 
 assert_contains win.ps1 '"Notion\.ntn"' 'official Notion CLI WinGet package'
