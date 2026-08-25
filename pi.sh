@@ -4337,7 +4337,10 @@ matt_pocock_skills() {
         diagnosing-bugs \
         tdd \
         improve-codebase-architecture \
-        grill-with-docs
+        grill-with-docs \
+        grilling \
+        domain-modeling \
+        codebase-design
 }
 
 # Setup-managed skill names retired or renamed upstream.
@@ -5145,7 +5148,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 182 | Last changed: Remove tintinweb Pi subagents plugin (uninstall on rerun)"
+    echo -e "${GRAY}Version 183 | Last changed: Install Matt Pocock skill dependencies"
 
     if ! acquire_setup_lock; then
         return 1

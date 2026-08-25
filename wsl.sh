@@ -2528,7 +2528,10 @@ matt_pocock_skills() {
         diagnosing-bugs \
         tdd \
         improve-codebase-architecture \
-        grill-with-docs
+        grill-with-docs \
+        grilling \
+        domain-modeling \
+        codebase-design
 }
 
 # Setup-managed skill names retired or renamed upstream.
@@ -3675,7 +3678,7 @@ run_setup_tasks() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 166 | Last changed: Remove tintinweb Pi subagents plugin (uninstall on rerun)${NC}"
+    echo -e "${GRAY}Version 167 | Last changed: Install Matt Pocock skill dependencies${NC}"
 
     if ! acquire_setup_lock; then
         return 1
