@@ -1698,7 +1698,6 @@ function Install-SimpleEnglishSkill {
         "--agent", "claude-code",
         "--agent", "codex",
         "--agent", "gemini-cli",
-        "--agent", "pi",
         "--skill", "simple-english",
         "--copy",
         "--yes"
@@ -1713,37 +1712,11 @@ function Install-SimpleEnglishSkill {
         return $false
     }
 
-    $defaultPiDir = Join-Path $env:USERPROFILE ".pi\agent"
-    $activePiDir = if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { $defaultPiDir }
-    $defaultPiSkill = Join-Path $defaultPiDir "skills\simple-english"
-    $activePiSkill = Join-Path $activePiDir "skills\simple-english"
-
-    # The skills CLI does not currently honor PI_CODING_AGENT_DIR.
-    if ($activePiDir -ne $defaultPiDir) {
-        if (-not (Test-Path -LiteralPath (Join-Path $defaultPiSkill "SKILL.md") -PathType Leaf)) {
-            Write-Warning "Simple English was not installed at the default Pi skill path."
-            return $false
-        }
-
-        try {
-            New-Item -ItemType Directory -Force -Path (Join-Path $activePiDir "skills") | Out-Null
-            if (Test-Path -LiteralPath $activePiSkill) {
-                Remove-Item -LiteralPath $activePiSkill -Recurse -Force -ErrorAction Stop
-            }
-            Copy-Item -LiteralPath $defaultPiSkill -Destination $activePiSkill -Recurse -Force -ErrorAction Stop
-        }
-        catch {
-            Write-Warning "Failed to copy Simple English into PI_CODING_AGENT_DIR: $($_.Exception.Message)"
-            return $false
-        }
-    }
-
     $claudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
     # Codex and Gemini CLI both discover the skills CLI's shared user copy.
     $skillFiles = @(
         (Join-Path $claudeDir "skills\simple-english\SKILL.md"),
-        (Join-Path $env:USERPROFILE ".agents\skills\simple-english\SKILL.md"),
-        (Join-Path $activePiSkill "SKILL.md")
+        (Join-Path $env:USERPROFILE ".agents\skills\simple-english\SKILL.md")
     )
 
     foreach ($skillFile in $skillFiles) {
@@ -1753,7 +1726,7 @@ function Install-SimpleEnglishSkill {
         }
     }
 
-    Write-Success "Simple English installed/updated for Claude Code, Codex, Gemini CLI, and Pi."
+    Write-Success "Simple English installed/updated for Claude Code, Codex, Gemini CLI, and Pi through the shared skill path."
     if ($installOutput) { Write-Debug ($installOutput | Out-String) }
     return $true
 }
@@ -2695,6 +2668,109 @@ function Setup-PiCompanionPackages {
     }
 }
 
+# Return true only when two ordinary directories have identical file trees.
+function Test-DirectoryTreeEqual {
+    param(
+        [Parameter(Mandatory = $true)][string]$Left,
+        [Parameter(Mandatory = $true)][string]$Right
+    )
+
+    $leftItem = Get-Item -LiteralPath $Left -Force -ErrorAction SilentlyContinue
+    $rightItem = Get-Item -LiteralPath $Right -Force -ErrorAction SilentlyContinue
+    if ($null -eq $leftItem -or $null -eq $rightItem -or -not $leftItem.PSIsContainer -or -not $rightItem.PSIsContainer) { return $false }
+    if ((($leftItem.Attributes -bor $rightItem.Attributes) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+
+    $leftFiles = @(Get-ChildItem -LiteralPath $Left -Recurse -Force -ErrorAction SilentlyContinue)
+    $rightFiles = @(Get-ChildItem -LiteralPath $Right -Recurse -Force -ErrorAction SilentlyContinue)
+    if (@($leftFiles | Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -gt 0) { return $false }
+    if (@($rightFiles | Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -gt 0) { return $false }
+
+    $leftLeafFiles = @($leftFiles | Where-Object { -not $_.PSIsContainer })
+    $rightLeafFiles = @($rightFiles | Where-Object { -not $_.PSIsContainer })
+    if ($leftLeafFiles.Count -ne $rightLeafFiles.Count) { return $false }
+
+    foreach ($leftFile in $leftLeafFiles) {
+        $relativePath = $leftFile.FullName.Substring($leftItem.FullName.Length).TrimStart('\', '/')
+        $rightFile = Join-Path $Right $relativePath
+        if (-not (Test-Path -LiteralPath $rightFile -PathType Leaf)) { return $false }
+        if ((Get-FileHash -LiteralPath $leftFile.FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $rightFile -Algorithm SHA256).Hash) { return $false }
+    }
+    return $true
+}
+
+# Keep shared skills canonical for Pi and suppress stale direct/package collisions.
+function Set-PiSkillOwnership {
+    $defaultAgentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    $activeAgentDir = if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { $defaultAgentDir }
+    $canonicalDir = Join-Path $env:USERPROFILE ".agents\skills"
+    $agentDirs = @($defaultAgentDir)
+    if ($activeAgentDir -ne $defaultAgentDir) { $agentDirs += $activeAgentDir }
+    $sharedSkills = @(
+        "simple-english", "setup-matt-pocock-skills", "diagnosing-bugs", "tdd",
+        "improve-codebase-architecture", "grill-with-docs", "grilling", "domain-modeling", "codebase-design"
+    )
+    $managedExclusions = @(
+        "!$(Join-Path $canonicalDir 'pi-goal-writer')/**",
+        "!$(Join-Path $canonicalDir 'autoresearch-create')/**",
+        "!$(Join-Path $canonicalDir 'autoresearch-finalize')/**",
+        "!$(Join-Path $canonicalDir 'autoresearch-hooks')/**"
+    )
+
+    foreach ($agentDir in $agentDirs) {
+        foreach ($skill in $sharedSkills) {
+            $duplicate = Join-Path $agentDir "skills\$skill"
+            $canonical = Join-Path $canonicalDir $skill
+            $managedExclusions += "!$duplicate/**"
+            if ((Test-DirectoryTreeEqual -Left $canonical -Right $duplicate) -and (Remove-MattPocockSkillPath -Path $duplicate)) {
+                Write-Debug "Removed obsolete duplicate Pi skill: $duplicate"
+            }
+        }
+    }
+
+    New-Item -ItemType Directory -Force -Path $activeAgentDir | Out-Null
+    $settingsPath = Join-Path $activeAgentDir "settings.json"
+    $settingsJson = if (Test-Path $settingsPath) { Get-Content -LiteralPath $settingsPath -Raw } else { "{}" }
+    try { $settings = $settingsJson | ConvertFrom-Json } catch {
+        Write-Warning "Failed to parse Pi settings at $settingsPath. Leaving settings unchanged."
+        return $false
+    }
+    if ($null -eq $settings) { $settings = New-Object PSObject }
+    $skills = if ($settings.PSObject.Properties["skills"] -and $settings.skills -is [array]) { @($settings.skills) } else { @() }
+    foreach ($exclusion in $managedExclusions) {
+        if ($skills -notcontains $exclusion) { $skills += $exclusion }
+    }
+    Set-JsonProperty -Object $settings -Name "skills" -Value ([object[]]$skills)
+    try { $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $settingsPath -Encoding UTF8 } catch {
+        Write-Warning "Failed to configure Pi skill ownership at $settingsPath."
+        return $false
+    }
+    Write-Success "Pi skill ownership configured without removing shared harness copies."
+    return $true
+}
+
+# Configure pi-autoresearch without overriding Pi transcript search.
+function Set-PiAutoresearchShortcut {
+    $agentDir = if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { Join-Path $env:USERPROFILE ".pi\agent" }
+    $configDir = Join-Path $agentDir "extensions"
+    $configPath = Join-Path $configDir "pi-autoresearch.json"
+    New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+    $configJson = if (Test-Path $configPath) { Get-Content -LiteralPath $configPath -Raw } else { "{}" }
+    try { $config = $configJson | ConvertFrom-Json } catch {
+        Write-Warning "Failed to parse pi-autoresearch config at $configPath."
+        return $false
+    }
+    if ($null -eq $config) { $config = New-Object PSObject }
+    $shortcuts = if ($config.PSObject.Properties["shortcuts"] -and $null -ne $config.shortcuts) { $config.shortcuts } else { New-Object PSObject }
+    Set-JsonProperty -Object $shortcuts -Name "fullscreenDashboard" -Value "ctrl+shift+r"
+    Set-JsonProperty -Object $config -Name "shortcuts" -Value $shortcuts
+    try { $config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $configPath -Encoding UTF8 } catch {
+        Write-Warning "Failed to write pi-autoresearch config at $configPath."
+        return $false
+    }
+    Write-Success "pi-autoresearch dashboard shortcut set to Ctrl+Shift+R."
+    return $true
+}
+
 # Function to remove Pi goal/autoresearch package sources from settings when disabled
 function Remove-PiGoalAutoresearchSettings {
     if ($env:PI_CODING_AGENT_DIR) {
@@ -2806,6 +2882,10 @@ function Setup-PiGoalAutoresearch {
     }
     elseif (-not $hadFailure) {
         Write-Warning "Pi goal/autoresearch install completed, but package validation was inconclusive: $listText"
+    }
+
+    if (-not (Set-PiAutoresearchShortcut)) {
+        throw "Required pi-autoresearch shortcut setup failed."
     }
 }
 
@@ -2920,7 +3000,7 @@ function Remove-MattPocockSkills {
     return $true
 }
 
-# Install/update Matt Pocock engineering skills for Pi and Codex.
+# Install/update Matt Pocock engineering skills in the shared Codex/Pi path.
 function Setup-MattPocockSkills {
     $skills = @(
         "setup-matt-pocock-skills",
@@ -2945,25 +3025,14 @@ function Setup-MattPocockSkills {
 
     if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
         Write-Warning "npx is not available; cannot install Matt Pocock skills."
-        Write-Debug "Install Node.js >=22.20, then run: npx --yes skills@latest add mattpocock/skills --global --agent pi --agent codex --copy --yes"
+        Write-Debug "Install Node.js >=22.20, then run: npx --yes skills@latest add mattpocock/skills --global --agent codex --copy --yes"
         return $false
     }
 
-    $defaultAgentDir = Join-Path $env:USERPROFILE ".pi\agent"
-    if ($env:PI_CODING_AGENT_DIR) {
-        $activePiDir = $env:PI_CODING_AGENT_DIR
-    }
-    else {
-        $activePiDir = $defaultAgentDir
-    }
-
-    $defaultSkillsDir = Join-Path $defaultAgentDir "skills"
-    $activePiSkillsDir = Join-Path $activePiDir "skills"
     $codexSkillsDir = Join-Path $env:USERPROFILE ".agents\skills"
     $npxArgs = @(
         "--yes", "skills@latest", "add", "mattpocock/skills",
         "--global",
-        "--agent", "pi",
         "--agent", "codex",
         "--copy",
         "--yes"
@@ -2972,7 +3041,7 @@ function Setup-MattPocockSkills {
         $npxArgs += @("--skill", $skill)
     }
 
-    Write-Message "Installing/updating Matt Pocock skills for Pi and Codex..."
+    Write-Message "Installing/updating Matt Pocock skills for Pi and Codex through the shared skill path..."
     $global:LASTEXITCODE = 0
     $output = & npx @npxArgs 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -2981,39 +3050,8 @@ function Setup-MattPocockSkills {
         return $false
     }
 
-    $syncFailed = @()
-    if ($activePiDir -ne $defaultAgentDir) {
-        New-Item -ItemType Directory -Force -Path $activePiSkillsDir | Out-Null
-        foreach ($skill in $skills) {
-            $sourcePath = Join-Path $defaultSkillsDir $skill
-            $sourceSkillFile = Join-Path $sourcePath "SKILL.md"
-            $destPath = Join-Path $activePiSkillsDir $skill
-            $sourceItem = Get-Item -LiteralPath $sourcePath -Force -ErrorAction SilentlyContinue
-            $sourceSkillFileItem = Get-Item -LiteralPath $sourceSkillFile -Force -ErrorAction SilentlyContinue
-            $sourceIsLink = $null -ne $sourceItem -and (($sourceItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
-            $sourceSkillFileIsLink = $null -ne $sourceSkillFileItem -and (($sourceSkillFileItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
-            if ($null -ne $sourceItem -and $sourceItem.PSIsContainer -and $null -ne $sourceSkillFileItem -and -not $sourceSkillFileItem.PSIsContainer -and -not $sourceIsLink -and -not $sourceSkillFileIsLink) {
-                try {
-                    if (-not (Remove-MattPocockSkillPath -Path $destPath)) {
-                        throw "Could not safely remove existing destination skill."
-                    }
-                    Copy-Item -LiteralPath $sourcePath -Destination $destPath -Recurse -Force -ErrorAction Stop
-                }
-                catch {
-                    $syncFailed += $skill
-                }
-            }
-            else {
-                $syncFailed += $skill
-            }
-        }
-    }
-
     $missing = @()
-    $managedSkillsDirs = @($defaultSkillsDir, $codexSkillsDir)
-    if ($activePiSkillsDir -ne $defaultSkillsDir) {
-        $managedSkillsDirs += $activePiSkillsDir
-    }
+    $managedSkillsDirs = @($codexSkillsDir)
     foreach ($managedSkillsDir in $managedSkillsDirs) {
         foreach ($skill in $skills) {
             $skillDir = Join-Path $managedSkillsDir $skill
@@ -3028,10 +3066,6 @@ function Setup-MattPocockSkills {
         }
     }
 
-    if ($syncFailed.Count -gt 0) {
-        Write-Warning "Matt Pocock skills installed, but the custom Pi copy failed: $($syncFailed -join ', ')"
-        return $false
-    }
     if ($missing.Count -gt 0) {
         Write-Warning "Matt Pocock skills are missing required files: $($missing -join ', ')"
         return $false
@@ -3051,7 +3085,7 @@ function Setup-MattPocockSkills {
         return $false
     }
 
-    Write-Success "Matt Pocock skills installed/updated for Pi and Codex."
+    Write-Success "Matt Pocock skills installed/updated for Pi and Codex through the shared skill path."
     if ($output) { Write-Debug ($output | Out-String) }
     return $true
 }
@@ -3519,7 +3553,7 @@ function Invoke-WindowsSetupTasks {
     $simpleEnglishSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 124 | Last changed: Remove RTK and clean legacy resources" -ForegroundColor DarkGray
+    Write-Host "Version 125 | Last changed: Prevent duplicate Pi skills and shortcuts" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -3581,6 +3615,9 @@ function Invoke-WindowsSetupTasks {
     }
     if (-not (Install-SimpleEnglishSkill)) {
         $simpleEnglishSetupFailed = $true
+    }
+    if (-not (Set-PiSkillOwnership)) {
+        $piSetupFailed = $true
     }
     Remove-ImpeccableResources
     Remove-CompoundEngineeringResources

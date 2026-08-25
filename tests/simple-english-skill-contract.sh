@@ -7,18 +7,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=203
-    [ubuntu.sh]=226
-    [wsl.sh]=170
-    [pi.sh]=186
-    [bazzite.sh]=85
+    [mac.sh]=204
+    [ubuntu.sh]=227
+    [wsl.sh]=171
+    [pi.sh]=187
+    [bazzite.sh]=86
 )
 declare -A expected_banners=(
-    [mac.sh]='Remove RTK and clean legacy resources'
-    [ubuntu.sh]='Remove RTK and clean legacy resources'
-    [wsl.sh]='Remove RTK and clean legacy resources'
-    [pi.sh]='Remove RTK and clean legacy resources'
-    [bazzite.sh]='Remove RTK and clean legacy resources'
+    [mac.sh]='Prevent duplicate Pi skills and shortcuts'
+    [ubuntu.sh]='Prevent duplicate Pi skills and shortcuts'
+    [wsl.sh]='Prevent duplicate Pi skills and shortcuts'
+    [pi.sh]='Prevent duplicate Pi skills and shortcuts'
+    [bazzite.sh]='Prevent duplicate Pi skills and shortcuts'
 )
 
 fail() {
@@ -99,7 +99,7 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_function_contains "${file}" setup_simple_english_skill '^        --agent claude-code [\\]$' 'Claude Code target'
     assert_function_contains "${file}" setup_simple_english_skill '^        --agent codex [\\]$' 'Codex target'
     assert_function_contains "${file}" setup_simple_english_skill '^        --agent gemini-cli [\\]$' 'Gemini CLI target'
-    assert_function_contains "${file}" setup_simple_english_skill '^        --agent pi [\\]$' 'Pi target'
+    assert_function_not_contains "${file}" setup_simple_english_skill '^        --agent pi [\\]$' 'redundant direct Pi target'
     if [[ "${file}" != "pi.sh" ]]; then
         assert_function_contains "${file}" setup_simple_english_skill '^        --agent opencode [\\]$' 'opencode target'
         assert_function_contains "${file}" setup_simple_english_skill '\$\{HOME\}/\.config/opencode/skills/simple-english/SKILL\.md' 'opencode skill validation'
@@ -108,7 +108,7 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_function_contains "${file}" setup_simple_english_skill '^        --copy [\\]$' 'copied installation mode'
     assert_function_contains "${file}" setup_simple_english_skill '^        --yes < /dev/null' 'non-interactive confirmation and stdin'
     assert_function_contains "${file}" setup_simple_english_skill 'CLAUDE_CONFIG_DIR:-\$\{HOME\}/\.claude' 'CLAUDE_CONFIG_DIR support'
-    assert_function_contains "${file}" setup_simple_english_skill 'PI_CODING_AGENT_DIR:-\$\{_default_pi_dir\}' 'PI_CODING_AGENT_DIR support'
+    assert_function_not_contains "${file}" setup_simple_english_skill 'PI_CODING_AGENT_DIR' 'redundant custom Pi copy'
     assert_function_contains "${file}" setup_simple_english_skill '\$\{HOME\}/\.agents/skills/simple-english/SKILL\.md' 'shared Codex and Gemini skill validation'
     assert_function_contains "${file}" setup_simple_english_skill 'skills/simple-english/SKILL\.md' 'installed artifact validation'
     assert_function_not_contains "${file}" setup_simple_english_skill '\.codex/skills/simple-english|\.gemini/skills/simple-english' 'obsolete agent-specific validation path'
@@ -124,7 +124,7 @@ assert_contains win.ps1 '^function Enable-SkillsCliNodeRuntime' 'PowerShell Node
 assert_contains win.ps1 '^function Install-SimpleEnglishSkill' 'PowerShell Simple English installer'
 assert_contains win.ps1 '"skills@latest"' 'PowerShell latest skills CLI package'
 assert_contains win.ps1 '"AminBlg/SimpleEnglish"' 'PowerShell upstream skill source'
-for agent in claude-code codex gemini-cli pi; do
+for agent in claude-code codex gemini-cli; do
     assert_contains win.ps1 '"--agent", "'"${agent}"'"' "PowerShell ${agent} target"
 done
 assert_contains win.ps1 '"--skill", "simple-english"' 'PowerShell specific skill selection'
@@ -136,7 +136,7 @@ assert_contains win.ps1 '\$env:CLAUDE_CONFIG_DIR' 'PowerShell CLAUDE_CONFIG_DIR 
 assert_contains win.ps1 '\$env:PI_CODING_AGENT_DIR' 'PowerShell PI_CODING_AGENT_DIR support'
 assert_contains win.ps1 '\.agents\\skills\\simple-english\\SKILL\.md' 'PowerShell shared Codex and Gemini skill validation'
 assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal failure propagation'
-assert_contains win.ps1 'Version 124 \| Last changed: Remove RTK and clean legacy resources' 'PowerShell version banner'
+assert_contains win.ps1 'Version 125 \| Last changed: Prevent duplicate Pi skills and shortcuts' 'PowerShell version banner'
 assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+Remove-ImpeccableResources$' 'PowerShell validation before cleanup'
 
@@ -161,8 +161,7 @@ for file in "${bash_setup_scripts[@]}"; do
                 for skill_file in \
                     "${CLAUDE_CONFIG_DIR}/skills/simple-english/SKILL.md" \
                     "${HOME}/.agents/skills/simple-english/SKILL.md" \
-                    "${HOME}/.config/opencode/skills/simple-english/SKILL.md" \
-                    "${HOME}/.pi/agent/skills/simple-english/SKILL.md"; do
+                    "${HOME}/.config/opencode/skills/simple-english/SKILL.md"; do
                     mkdir -p "$(dirname "${skill_file}")"
                     printf "%s\n" "---" "name: simple-english" "---" > "${skill_file}"
                 done
@@ -174,14 +173,13 @@ for file in "${bash_setup_scripts[@]}"; do
 
     call_count=$(wc -l < "${test_root}/calls")
     [[ "${call_count}" -eq 2 ]] || fail "${file}: installer did not update on both setup runs"
-    expected_args='--yes skills@latest add AminBlg/SimpleEnglish --global --agent claude-code --agent codex --agent gemini-cli --agent pi --skill simple-english --copy --yes'
+    expected_args='--yes skills@latest add AminBlg/SimpleEnglish --global --agent claude-code --agent codex --agent gemini-cli --skill simple-english --copy --yes'
     skill_files=(
         "${claude_home}/skills/simple-english/SKILL.md"
         "${test_home}/.agents/skills/simple-english/SKILL.md"
-        "${pi_home}/skills/simple-english/SKILL.md"
     )
     if [[ "${file}" != "pi.sh" ]]; then
-        expected_args='--yes skills@latest add AminBlg/SimpleEnglish --global --agent claude-code --agent codex --agent gemini-cli --agent opencode --agent pi --skill simple-english --copy --yes'
+        expected_args='--yes skills@latest add AminBlg/SimpleEnglish --global --agent claude-code --agent codex --agent gemini-cli --agent opencode --skill simple-english --copy --yes'
         skill_files+=("${test_home}/.config/opencode/skills/simple-english/SKILL.md")
     fi
     if grep -Fvx -- "${expected_args}" "${test_root}/calls" > /dev/null; then
