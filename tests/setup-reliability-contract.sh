@@ -228,10 +228,36 @@ upload_count=$(wc -l < "${log_test_root}/upload-calls") || fail 'mac.sh: could n
 [[ "${upload_count}" -eq 1 ]] || fail 'mac.sh: collector failure triggered multiple attempts'
 rm -rf "${log_test_root}"
 
+# Apt-managed gcloud installations must skip the slow Python CLI startup. The
+# system package upgrade earlier in each script already updates this package.
+for file in "${linux_apt_scripts[@]}"; do
+    output=$(SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
+        source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+        dpkg-query() {
+            if [[ "${*: -1}" == "google-cloud-cli" ]]; then
+                printf "%s" "install ok installed"
+                return 0
+            fi
+            return 1
+        }
+        gcloud() {
+            sleep 1
+            printf "%s\n" "unexpected gcloud invocation"
+            return 1
+        }
+        update_gcloud_components
+    ')
+    grep -q 'managed by apt; skipping component update' <<< "${output}" || fail "${file}: apt-managed gcloud did not use the fast skip path"
+    if grep -q 'unexpected gcloud invocation' <<< "${output}"; then
+        fail "${file}: apt-managed gcloud launched the slow component manager"
+    fi
+done
+
 # Reproduce gcloud's wrapped package-manager message at the real function seam.
 for file in "${bash_setup_scripts[@]}"; do
     output=$(SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
         source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+        dpkg-query() { return 1; }
         gcloud() {
             printf "%s\n" "ERROR: The Google Cloud CLI" "component manager" "is disabled for this installation."
             return 1

@@ -3217,6 +3217,18 @@ update_gcloud_components() {
         return
     fi
 
+    local package=""
+    local package_status=""
+    if command -v dpkg-query &>/dev/null; then
+        for package in google-cloud-cli google-cloud-sdk; do
+            package_status=$(dpkg-query -W -f='${Status}' "${package}" 2>/dev/null || true)
+            if [[ "${package_status}" == "install ok installed" ]]; then
+                print_debug "Google Cloud CLI is managed by apt; skipping component update."
+                return
+            fi
+        done
+    fi
+
     local update_output
     local normalized_output
     print_message "Updating Google Cloud CLI components..."
@@ -3678,7 +3690,7 @@ run_setup_tasks() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 167 | Last changed: Install Matt Pocock skill dependencies${NC}"
+    echo -e "${GRAY}Version 168 | Last changed: Skip apt-managed gcloud component updates${NC}"
 
     if ! acquire_setup_lock; then
         return 1

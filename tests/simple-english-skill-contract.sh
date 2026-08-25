@@ -8,16 +8,16 @@ bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
     [mac.sh]=201
-    [ubuntu.sh]=223
-    [wsl.sh]=167
-    [pi.sh]=183
+    [ubuntu.sh]=224
+    [wsl.sh]=168
+    [pi.sh]=184
     [bazzite.sh]=83
 )
 declare -A expected_banners=(
     [mac.sh]='Install Matt Pocock skill dependencies'
-    [ubuntu.sh]='Install Matt Pocock skill dependencies'
-    [wsl.sh]='Install Matt Pocock skill dependencies'
-    [pi.sh]='Install Matt Pocock skill dependencies'
+    [ubuntu.sh]='Skip apt-managed gcloud component updates'
+    [wsl.sh]='Skip apt-managed gcloud component updates'
+    [pi.sh]='Skip apt-managed gcloud component updates'
     [bazzite.sh]='Install Matt Pocock skill dependencies'
 )
 
