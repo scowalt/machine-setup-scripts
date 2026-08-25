@@ -25,6 +25,238 @@ function global:Write-Success($message) { $script:Messages.Add("SUCCESS: $messag
 function global:Write-Warning($message) { $script:Messages.Add("WARNING: $message") }
 function global:Write-Debug($message) { $script:Messages.Add("DEBUG: $message") }
 
+# Retired RTK cleanup removes the managed footprint and preserves unrelated state.
+$originalRtkUserProfile = $env:USERPROFILE
+$originalRtkLocalAppData = $env:LOCALAPPDATA
+$originalRtkAppData = $env:APPDATA
+$originalRtkClaudeConfigDir = $env:CLAUDE_CONFIG_DIR
+$originalRtkCodexHome = $env:CODEX_HOME
+$originalRtkPiCodingAgentDir = $env:PI_CODING_AGENT_DIR
+$originalRtkProcessPath = $env:PATH
+$originalRtkUserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+$rtkTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "rtk-cleanup-$([guid]::NewGuid())"
+$env:USERPROFILE = Join-Path $rtkTestRoot "home"
+$env:LOCALAPPDATA = Join-Path $rtkTestRoot "local-app-data"
+$env:APPDATA = Join-Path $rtkTestRoot "app-data"
+$env:CLAUDE_CONFIG_DIR = Join-Path $rtkTestRoot "custom-claude"
+$env:CODEX_HOME = Join-Path $rtkTestRoot "custom-codex"
+$env:PI_CODING_AGENT_DIR = Join-Path $rtkTestRoot "custom-pi"
+$rtkDir = Join-Path $env:LOCALAPPDATA "rtk\bin"
+$managedRtkBinary = Join-Path $rtkDir "rtk.exe"
+
+function global:Test-RtkTokenKiller { return $true }
+function global:Invoke-RtkUpstreamUninstall { }
+
+function Set-RtkTestFile {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$Content
+    )
+
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
+    [System.IO.File]::WriteAllText($Path, $Content)
+}
+
+function Set-RtkTestPiFile {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    Set-RtkTestFile -Path $Path -Content @'
+# Global
+
+## RTK token-optimized commands
+
+- RTK (`rtk-ai/rtk`) is installed by the machine setup scripts when available. Prefer `rtk <command>` for noisy shell commands with supported filters (`git`, `gh`, tests, build/lint tools, package managers, file/search commands) unless full raw output is required.
+- Bypass RTK for one command with `RTK_DISABLED=1 <command>` or by running the raw command directly when exact output formatting matters.
+
+## Keep
+
+Keep this.
+'@
+}
+
+try {
+    Set-RtkTestFile -Path $managedRtkBinary -Content "managed"
+    Set-RtkTestFile -Path (Join-Path $env:APPDATA "rtk\history.db") -Content "history"
+    Set-RtkTestFile -Path (Join-Path $env:USERPROFILE ".env.local") -Content "BAN_RTK=1`n"
+
+    $defaultClaude = Join-Path $env:USERPROFILE ".claude"
+    foreach ($claudeDir in @($defaultClaude, $env:CLAUDE_CONFIG_DIR)) {
+        Set-RtkTestFile -Path (Join-Path $claudeDir "RTK.md") -Content "legacy"
+        Set-RtkTestFile -Path (Join-Path $claudeDir "hooks\rtk-rewrite.sh") -Content "legacy"
+        Set-RtkTestFile -Path (Join-Path $claudeDir "hooks\.rtk-hook.sha256") -Content "hash"
+        Set-RtkTestFile -Path (Join-Path $claudeDir "CLAUDE.md") -Content "# Keep`n`n@RTK.md`n"
+    }
+    $rtkSymlinkTarget = Join-Path $rtkTestRoot "rtk-symlink-target"
+    $rtkSymlinkSentinel = Join-Path $rtkSymlinkTarget "sentinel"
+    Set-RtkTestFile -Path $rtkSymlinkSentinel -Content "keep"
+    $defaultClaudeRtk = Join-Path $defaultClaude "RTK.md"
+    Remove-Item -LiteralPath $defaultClaudeRtk -Force
+    try {
+        New-Item -ItemType SymbolicLink -Path $defaultClaudeRtk -Target $rtkSymlinkTarget -ErrorAction Stop | Out-Null
+    }
+    catch {
+        Set-RtkTestFile -Path $defaultClaudeRtk -Content "legacy"
+    }
+    $claudeSettings = @{
+        model = "keep"
+        hooks = @{
+            PreToolUse = @(
+                @{ matcher = "Bash"; hooks = @(@{ type = "command"; command = "rtk hook claude" }) },
+                @{ matcher = "Keep"; hooks = @(@{ type = "command"; command = "keep hook" }) }
+            )
+        }
+    } | ConvertTo-Json -Depth 10
+    Set-RtkTestFile -Path (Join-Path $defaultClaude "settings.json") -Content $claudeSettings
+
+    $defaultCodex = Join-Path $env:USERPROFILE ".codex"
+    foreach ($codexDir in @($defaultCodex, $env:CODEX_HOME)) {
+        Set-RtkTestFile -Path (Join-Path $codexDir "RTK.md") -Content "legacy"
+        Set-RtkTestFile -Path (Join-Path $codexDir "AGENTS.md") -Content "# Keep`n`n@$codexDir\RTK.md`n"
+    }
+    $customCodexReference = "@$(($env:CODEX_HOME -replace '\\', '/'))/RTK.md"
+    Set-RtkTestFile -Path (Join-Path $env:CODEX_HOME "AGENTS.md") -Content "# Keep`n`n$customCodexReference`n"
+
+    $geminiDir = Join-Path $env:USERPROFILE ".gemini"
+    $geminiHook = Join-Path $geminiDir "hooks\rtk-hook-gemini.sh"
+    Set-RtkTestFile -Path (Join-Path $geminiDir "GEMINI.md") -Content @'
+# RTK - Rust Token Killer
+
+**Usage**: Token-optimized CLI proxy (cuts up to 90% of bash output)
+
+## Meta Commands (always use rtk directly)
+
+```bash
+rtk gain
+rtk proxy git status
+```
+
+## Installation Verification
+
+```bash
+rtk --version
+which rtk
+```
+
+## Hook-Based Usage
+
+All other commands are automatically rewritten by the Claude Code hook.
+Example: `git status` → `rtk git status`
+Refer to CLAUDE.md for full command reference.
+'@
+    Set-RtkTestFile -Path $geminiHook -Content "#!/bin/bash`nexec rtk hook gemini`n"
+    Set-RtkTestFile -Path (Join-Path $geminiDir "hooks\.rtk-hook.sha256") -Content "hash"
+    $geminiSettings = @{
+        theme = "keep"
+        hooks = @{
+            BeforeTool = @(
+                @{ matcher = "run_shell_command"; hooks = @(@{ type = "command"; command = $geminiHook }) },
+                @{ matcher = "keep"; hooks = @(@{ type = "command"; command = "keep hook" }) }
+            )
+        }
+    } | ConvertTo-Json -Depth 10
+    Set-RtkTestFile -Path (Join-Path $geminiDir "settings.json") -Content $geminiSettings
+
+    Set-RtkTestPiFile -Path (Join-Path $env:USERPROFILE ".pi\agent\AGENTS.md")
+    Set-RtkTestPiFile -Path (Join-Path $env:PI_CODING_AGENT_DIR "AGENTS.md")
+    $projectFilter = Join-Path $rtkTestRoot "project\.rtk\filters.toml"
+    Set-RtkTestFile -Path $projectFilter -Content "keep"
+
+    $env:PATH = "$rtkDir;$env:PATH"
+    [Environment]::SetEnvironmentVariable("PATH", "$rtkDir;$originalRtkUserPath", "User")
+
+    Remove-RtkResources
+    Remove-RtkResources
+
+    $removedRtkPaths = @(
+        $managedRtkBinary,
+        (Join-Path $env:APPDATA "rtk"),
+        (Join-Path $defaultClaude "RTK.md"),
+        (Join-Path $env:CLAUDE_CONFIG_DIR "RTK.md"),
+        (Join-Path $defaultCodex "RTK.md"),
+        (Join-Path $env:CODEX_HOME "RTK.md"),
+        (Join-Path $geminiDir "GEMINI.md"),
+        $geminiHook
+    )
+    foreach ($path in $removedRtkPaths) {
+        if (Test-RtkPathExists -Path $path) {
+            throw "Retired RTK cleanup left $path"
+        }
+    }
+
+    $cleanClaudeSettings = Get-Content -Raw (Join-Path $defaultClaude "settings.json") | ConvertFrom-Json
+    if ($cleanClaudeSettings.model -ne "keep" -or @($cleanClaudeSettings.hooks.PreToolUse).Count -ne 1 -or $cleanClaudeSettings.hooks.PreToolUse.matcher -ne "Keep") {
+        throw "Retired RTK cleanup damaged unrelated Claude settings"
+    }
+    $cleanGeminiSettings = Get-Content -Raw (Join-Path $geminiDir "settings.json") | ConvertFrom-Json
+    if ($cleanGeminiSettings.theme -ne "keep" -or @($cleanGeminiSettings.hooks.BeforeTool).Count -ne 1 -or $cleanGeminiSettings.hooks.BeforeTool.matcher -ne "keep") {
+        throw "Retired RTK cleanup damaged unrelated Gemini settings"
+    }
+    foreach ($piFile in @((Join-Path $env:USERPROFILE ".pi\agent\AGENTS.md"), (Join-Path $env:PI_CODING_AGENT_DIR "AGENTS.md"))) {
+        $piContent = Get-Content -Raw $piFile
+        if ($piContent -match "RTK|Rust Token Killer" -or $piContent -notmatch "Keep this") {
+            throw "Retired RTK cleanup damaged shared Pi instructions: $piFile"
+        }
+    }
+    if (-not (Test-Path -LiteralPath $projectFilter -PathType Leaf)) {
+        throw "Retired RTK cleanup removed a project-local filter"
+    }
+    if (-not (Test-Path -LiteralPath $rtkSymlinkSentinel -PathType Leaf)) {
+        throw "Retired RTK cleanup followed a symlink target"
+    }
+    if ((Get-Content -Raw (Join-Path $env:USERPROFILE ".env.local")) -notmatch "BAN_RTK=1") {
+        throw "Retired RTK cleanup changed the user environment file"
+    }
+    if (($env:PATH -split ";") -contains $rtkDir) {
+        throw "Retired RTK cleanup left the process PATH entry"
+    }
+    if (([Environment]::GetEnvironmentVariable("PATH", "User") -split ";") -contains $rtkDir) {
+        throw "Retired RTK cleanup left the user PATH entry"
+    }
+}
+finally {
+    $env:USERPROFILE = $originalRtkUserProfile
+    $env:LOCALAPPDATA = $originalRtkLocalAppData
+    $env:APPDATA = $originalRtkAppData
+    $env:CLAUDE_CONFIG_DIR = $originalRtkClaudeConfigDir
+    $env:CODEX_HOME = $originalRtkCodexHome
+    $env:PI_CODING_AGENT_DIR = $originalRtkPiCodingAgentDir
+    $env:PATH = $originalRtkProcessPath
+    [Environment]::SetEnvironmentVariable("PATH", $originalRtkUserPath, "User")
+    Remove-Item -Recurse -Force $rtkTestRoot -ErrorAction SilentlyContinue
+}
+
+# Mixed Gemini instructions stop cleanup and retain the shared file.
+$mixedRtkUserProfile = $env:USERPROFILE
+$mixedRtkLocalAppData = $env:LOCALAPPDATA
+$mixedRtkAppData = $env:APPDATA
+$mixedRtkRoot = Join-Path ([System.IO.Path]::GetTempPath()) "rtk-mixed-$([guid]::NewGuid())"
+$env:USERPROFILE = Join-Path $mixedRtkRoot "home"
+$env:LOCALAPPDATA = Join-Path $mixedRtkRoot "local-app-data"
+$env:APPDATA = Join-Path $mixedRtkRoot "app-data"
+$mixedGeminiFile = Join-Path $env:USERPROFILE ".gemini\GEMINI.md"
+try {
+    Set-RtkTestFile -Path $mixedGeminiFile -Content "# RTK - Rust Token Killer`n`n## Personal instructions`n`nKeep this user text.`n"
+    $mixedFailure = $null
+    try {
+        Remove-RtkResources
+    }
+    catch {
+        $mixedFailure = $_
+    }
+    if ($null -eq $mixedFailure -or $mixedFailure.Exception.Message -notmatch "mixed user and RTK content") {
+        throw "Retired RTK cleanup accepted mixed Gemini instructions"
+    }
+    if ((Get-Content -Raw $mixedGeminiFile) -notmatch "Keep this user text") {
+        throw "Retired RTK cleanup deleted mixed Gemini instructions"
+    }
+}
+finally {
+    $env:USERPROFILE = $mixedRtkUserProfile
+    $env:LOCALAPPDATA = $mixedRtkLocalAppData
+    $env:APPDATA = $mixedRtkAppData
+    Remove-Item -Recurse -Force $mixedRtkRoot -ErrorAction SilentlyContinue
+}
+
 # Legacy Impeccable cleanup removes only setup-owned paths and is idempotent.
 $originalCleanupUserProfile = $env:USERPROFILE
 $cleanupTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "impeccable-cleanup-$([guid]::NewGuid())"
