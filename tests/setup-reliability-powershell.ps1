@@ -189,7 +189,10 @@ $mattSkills = @(
     "diagnosing-bugs",
     "tdd",
     "improve-codebase-architecture",
-    "grill-with-docs"
+    "grill-with-docs",
+    "grilling",
+    "domain-modeling",
+    "codebase-design"
 )
 $script:MattPocockTestSkills = $mattSkills
 $mattManagedSkills = $mattSkills + @("diagnose", "zoom-out")
@@ -241,7 +244,7 @@ try {
         throw "Matt Pocock mocked installation failed"
     }
 
-    $expectedMattArguments = "--yes skills@latest add mattpocock/skills --global --agent pi --agent codex --copy --yes --skill setup-matt-pocock-skills --skill diagnosing-bugs --skill tdd --skill improve-codebase-architecture --skill grill-with-docs"
+    $expectedMattArguments = "--yes skills@latest add mattpocock/skills --global --agent pi --agent codex --copy --yes --skill setup-matt-pocock-skills --skill diagnosing-bugs --skill tdd --skill improve-codebase-architecture --skill grill-with-docs --skill grilling --skill domain-modeling --skill codebase-design"
     if ($script:MattPocockCalls.Count -ne 2 -or ($script:MattPocockCalls | Where-Object { $_ -ne $expectedMattArguments })) {
         throw "Matt Pocock installer did not update twice with the exact targets: $($script:MattPocockCalls -join '; ')"
     }

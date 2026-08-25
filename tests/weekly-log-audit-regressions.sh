@@ -83,10 +83,13 @@ for file in mac.sh ubuntu.sh wsl.sh pi.sh; do
 done
 assert_contains win.ps1 'Required Pi coding agent setup failed' 'fatal required Pi failure'
 
-# Matt Pocock's current inventory replaced diagnose with diagnosing-bugs and
-# retired zoom-out. Legacy copies remain explicitly tracked for safe cleanup.
+# Matt Pocock's current inventory includes the dependency closure required by
+# the managed workflow skills. Retired copies remain tracked for safe cleanup.
 for file in "${matt_setup_scripts[@]}"; do
     assert_contains "${file}" '^[[:space:]]*diagnosing-bugs([[:space:]\\]*$)?' 'current diagnosing-bugs skill'
+    assert_contains "${file}" '^[[:space:]]*grilling([[:space:]\\]*$)?' 'grilling dependency skill'
+    assert_contains "${file}" '^[[:space:]]*domain-modeling([[:space:]\\]*$)?' 'domain-modeling dependency skill'
+    assert_contains "${file}" '^[[:space:]]*codebase-design([[:space:]\\]*$)?' 'codebase-design dependency skill'
     assert_contains "${file}" '^matt_pocock_obsolete_skills\(\)' 'obsolete Matt Pocock skill inventory'
     assert_contains "${file}" '^setup_matt_pocock_skills\(\)' 'Pi and Codex Matt Pocock installer'
     assert_contains "${file}" '.*--agent pi --agent codex( --agent opencode)? --copy --yes' 'Pi and Codex skills CLI targets'
@@ -100,6 +103,9 @@ for file in "${matt_setup_scripts[@]}"; do
     fi
 done
 assert_contains win.ps1 '"diagnosing-bugs"' 'current PowerShell diagnosing-bugs skill'
+assert_contains win.ps1 '"grilling"' 'PowerShell grilling dependency skill'
+assert_contains win.ps1 '"domain-modeling"' 'PowerShell domain-modeling dependency skill'
+assert_contains win.ps1 '"codebase-design"' 'PowerShell codebase-design dependency skill'
 assert_contains win.ps1 '^function Setup-MattPocockSkills' 'PowerShell Pi and Codex Matt Pocock installer'
 assert_contains win.ps1 '"--agent", "codex"' 'PowerShell Codex target'
 # shellcheck disable=SC2016 # Preserve literal PowerShell variable syntax.
@@ -140,7 +146,7 @@ for file in "${matt_setup_scripts[@]}"; do
                 printf "%s\n" "$*" >> "${CALL_LOG}"
                 local skill skills_dir
                 for skills_dir in "${HOME}/.pi/agent/skills" "${HOME}/.agents/skills" "${HOME}/.config/opencode/skills"; do
-                    for skill in setup-matt-pocock-skills diagnosing-bugs tdd improve-codebase-architecture grill-with-docs; do
+                    for skill in setup-matt-pocock-skills diagnosing-bugs tdd improve-codebase-architecture grill-with-docs grilling domain-modeling codebase-design; do
                         mkdir -p "${skills_dir}/${skill}"
                         printf "%s\n" "---" "name: ${skill}" "---" > "${skills_dir}/${skill}/SKILL.md"
                     done
@@ -149,9 +155,9 @@ for file in "${matt_setup_scripts[@]}"; do
             setup_matt_pocock_skills > /dev/null
             setup_matt_pocock_skills > /dev/null
         '
-    expected_args='--yes skills@latest add mattpocock/skills --global --agent pi --agent codex --copy --yes --skill setup-matt-pocock-skills --skill diagnosing-bugs --skill tdd --skill improve-codebase-architecture --skill grill-with-docs'
+    expected_args='--yes skills@latest add mattpocock/skills --global --agent pi --agent codex --copy --yes --skill setup-matt-pocock-skills --skill diagnosing-bugs --skill tdd --skill improve-codebase-architecture --skill grill-with-docs --skill grilling --skill domain-modeling --skill codebase-design'
     if [[ "${file}" != "pi.sh" ]]; then
-        expected_args='--yes skills@latest add mattpocock/skills --global --agent pi --agent codex --agent opencode --copy --yes --skill setup-matt-pocock-skills --skill diagnosing-bugs --skill tdd --skill improve-codebase-architecture --skill grill-with-docs'
+        expected_args='--yes skills@latest add mattpocock/skills --global --agent pi --agent codex --agent opencode --copy --yes --skill setup-matt-pocock-skills --skill diagnosing-bugs --skill tdd --skill improve-codebase-architecture --skill grill-with-docs --skill grilling --skill domain-modeling --skill codebase-design'
     fi
     call_count=$(wc -l < "${matt_tmp}/calls")
     [[ "${call_count}" -eq 2 ]] || fail "${file}: installer did not update on both setup runs"
@@ -159,7 +165,7 @@ for file in "${matt_setup_scripts[@]}"; do
         fail "${file}: installer used unexpected arguments"
     fi
     for skills_dir in "${managed_skills_dirs[@]}"; do
-        for skill in setup-matt-pocock-skills diagnosing-bugs tdd improve-codebase-architecture grill-with-docs; do
+        for skill in setup-matt-pocock-skills diagnosing-bugs tdd improve-codebase-architecture grill-with-docs grilling domain-modeling codebase-design; do
             [[ -f "${skills_dir}/${skill}/SKILL.md" ]] || fail "${file}: missing ${skill} in ${skills_dir}"
             [[ ! -L "${skills_dir}/${skill}" ]] || fail "${file}: ${skill} is a symlink in ${skills_dir}"
         done
@@ -187,7 +193,7 @@ for file in "${matt_setup_scripts[@]}"; do
         for skills_dir in "${managed_skills_dirs[@]}"; do
             mkdir -p "${skills_dir}/keep-me"
             touch "${skills_dir}/keep-me/SKILL.md"
-            for skill in setup-matt-pocock-skills diagnosing-bugs improve-codebase-architecture grill-with-docs diagnose zoom-out; do
+            for skill in setup-matt-pocock-skills diagnosing-bugs improve-codebase-architecture grill-with-docs grilling domain-modeling codebase-design diagnose zoom-out; do
                 mkdir -p "${skills_dir}/${skill}"
                 touch "${skills_dir}/${skill}/SKILL.md"
             done
@@ -205,7 +211,7 @@ for file in "${matt_setup_scripts[@]}"; do
             '
 
         for skills_dir in "${managed_skills_dirs[@]}"; do
-            for skill in setup-matt-pocock-skills diagnosing-bugs tdd improve-codebase-architecture grill-with-docs diagnose zoom-out; do
+            for skill in setup-matt-pocock-skills diagnosing-bugs tdd improve-codebase-architecture grill-with-docs grilling domain-modeling codebase-design diagnose zoom-out; do
                 [[ ! -e "${skills_dir}/${skill}" && ! -L "${skills_dir}/${skill}" ]] || fail "${file}: ${ban_name} left ${skill} in ${skills_dir}"
             done
             [[ -f "${skills_dir}/keep-me/SKILL.md" ]] || fail "${file}: ${ban_name} removed a sibling skill"

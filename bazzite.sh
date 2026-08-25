@@ -4190,7 +4190,10 @@ matt_pocock_skills() {
         diagnosing-bugs \
         tdd \
         improve-codebase-architecture \
-        grill-with-docs
+        grill-with-docs \
+        grilling \
+        domain-modeling \
+        codebase-design
 }
 
 # Setup-managed skill names retired or renamed upstream.
@@ -4854,7 +4857,7 @@ finish_setup_log() {
 
 run_setup_tasks() {
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 82 | Last changed: Remove tintinweb Pi subagents plugin (uninstall on rerun)"
+    echo -e "${GRAY}Version 83 | Last changed: Install Matt Pocock skill dependencies"
 
     if ! acquire_setup_lock; then
         return 1

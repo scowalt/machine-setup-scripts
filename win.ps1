@@ -2505,7 +2505,10 @@ function Remove-MattPocockSkills {
         "diagnosing-bugs",
         "tdd",
         "improve-codebase-architecture",
-        "grill-with-docs"
+        "grill-with-docs",
+        "grilling",
+        "domain-modeling",
+        "codebase-design"
     )
     $obsoleteSkills = @("diagnose", "zoom-out")
     $skills += $obsoleteSkills
@@ -2571,7 +2574,10 @@ function Setup-MattPocockSkills {
         "diagnosing-bugs",
         "tdd",
         "improve-codebase-architecture",
-        "grill-with-docs"
+        "grill-with-docs",
+        "grilling",
+        "domain-modeling",
+        "codebase-design"
     )
     $obsoleteSkills = @("diagnose", "zoom-out")
 
@@ -3160,7 +3166,7 @@ function Invoke-WindowsSetupTasks {
     $simpleEnglishSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 121 | Last changed: Remove tintinweb Pi subagents plugin (uninstall on rerun)" -ForegroundColor DarkGray
+    Write-Host "Version 122 | Last changed: Install Matt Pocock skill dependencies" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
