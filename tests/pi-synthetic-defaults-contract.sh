@@ -58,7 +58,7 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '^seed_pi_synthetic_models\(\)' 'Pi Synthetic models seeding function'
     assert_contains "${file}" '^[[:space:]]+configure_pi_defaults$' 'Pi defaults main wiring'
     assert_contains "${file}" '^[[:space:]]+seed_pi_synthetic_models$' 'Pi Synthetic models main wiring'
-    assert_order "${file}" '^\s+configure_pi_defaults$' '^\s+setup_pi_subagents$' 'Pi defaults before extension setup'
+    assert_order "${file}" '^\s+configure_pi_defaults$' '^\s+remove_pi_subagents$' 'Pi defaults before extension setup'
     assert_contains "${file}" '\.defaultProvider = "synthetic"' 'forced Synthetic default provider'
     assert_contains "${file}" '\.defaultModel = "hf:moonshotai/Kimi-K3"' 'forced Kimi K3 default model'
     assert_contains "${file}" '\.defaultThinkingLevel = "high"' 'forced high thinking level'
@@ -72,6 +72,7 @@ assert_contains win.ps1 '^function Set-PiDefaults' 'PowerShell Pi defaults funct
 assert_contains win.ps1 '^function Seed-PiSyntheticModels' 'PowerShell Synthetic models seeding function'
 assert_contains win.ps1 '^\s+Set-PiDefaults$' 'PowerShell Pi defaults main wiring'
 assert_contains win.ps1 '^\s+Seed-PiSyntheticModels$' 'PowerShell Synthetic models main wiring'
+# shellcheck disable=SC2016 # Preserve literal PowerShell variable syntax.
 assert_contains win.ps1 '"defaultProvider", "synthetic"|"defaultProvider" -Value "synthetic"|Set-JsonProperty -Object \$settings -Name "defaultProvider"' 'PowerShell forced Synthetic default provider'
 assert_contains win.ps1 'hf:moonshotai/Kimi-K3' 'PowerShell Kimi K3 model id'
 assert_contains win.ps1 'SYNTHETIC_API_KEY' 'PowerShell API key lookup'

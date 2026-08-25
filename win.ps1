@@ -116,7 +116,6 @@ function New-TokenPlaceholders {
 # Machine/setup guards
 # HEADLESS=1
 # WORK_MACHINE=1
-# BAN_PI_SUBAGENTS=1
 # BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
@@ -2080,10 +2079,28 @@ function Remove-JsonProperty {
     }
 }
 
-# Function to update Pi settings for the tintinweb subagents extension
-function Update-PiSubagentsSettings {
-    param([ValidateSet("Install", "Remove")][string]$Mode = "Install")
+# Function to remove the tintinweb Pi subagents extension (idempotent, non-fatal)
+function Remove-PiSubagents {
+    if (Get-Command pi -ErrorAction SilentlyContinue) {
+        foreach ($package in @("npm:@tintinweb/pi-subagents", "npm:pi-subagents")) {
+            $output = & pi remove $package 2>&1
+            $removeExitCode = $LASTEXITCODE
+            $outputText = ($output | Out-String)
+            if ($removeExitCode -eq 0) {
+                Write-Success "Removed Pi subagents extension ($package)."
+            }
+            elseif ($outputText -match "no matching package found") {
+                Write-Debug "Pi subagents extension not installed ($package)."
+            }
+            else {
+                Write-Warning "Failed to remove Pi subagents extension ($package): $outputText"
+            }
+        }
+        return
+    }
 
+    # Fallback when the pi CLI is unavailable: strip both package sources
+    # directly from settings.json.
     if ($env:PI_CODING_AGENT_DIR) {
         $agentDir = $env:PI_CODING_AGENT_DIR
     }
@@ -2093,16 +2110,14 @@ function Update-PiSubagentsSettings {
 
     $settingsPath = Join-Path $agentDir "settings.json"
 
-    if (-not (Test-Path $agentDir)) {
-        New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
+    if (-not (Test-Path $settingsPath)) {
+        Write-Debug "Pi settings not found; Pi subagents extension not installed."
+        return
     }
 
-    $settingsJson = "{}"
-    if (Test-Path $settingsPath) {
-        $settingsJson = Get-Content -Path $settingsPath -Raw
-        if ([string]::IsNullOrWhiteSpace($settingsJson)) {
-            $settingsJson = "{}"
-        }
+    $settingsJson = Get-Content -Path $settingsPath -Raw
+    if ([string]::IsNullOrWhiteSpace($settingsJson)) {
+        $settingsJson = "{}"
     }
 
     try {
@@ -2113,7 +2128,7 @@ function Update-PiSubagentsSettings {
     }
     catch {
         Write-Warning "Failed to parse Pi settings at $settingsPath. Leaving settings unchanged."
-        return $false
+        return
     }
 
     $packages = @()
@@ -2131,25 +2146,13 @@ function Update-PiSubagentsSettings {
             $source = [string]$package.source
         }
 
-        if ($Mode -eq "Remove") {
-            if ($source -ne "npm:pi-subagents" -and $source -ne "npm:@tintinweb/pi-subagents") {
-                $filteredPackages += $package
-            }
-        }
-        else {
-            if ($source -ne "npm:pi-subagents") {
-                $filteredPackages += $package
-            }
+        if ($source -ne "npm:pi-subagents" -and $source -ne "npm:@tintinweb/pi-subagents") {
+            $filteredPackages += $package
         }
     }
 
-    if ($Mode -eq "Remove") {
-        if ($filteredPackages.Count -eq 0) {
-            Remove-JsonProperty -Object $settings -Name "packages"
-        }
-        else {
-            Set-JsonProperty -Object $settings -Name "packages" -Value ([object[]]$filteredPackages)
-        }
+    if ($filteredPackages.Count -eq 0) {
+        Remove-JsonProperty -Object $settings -Name "packages"
     }
     else {
         Set-JsonProperty -Object $settings -Name "packages" -Value ([object[]]$filteredPackages)
@@ -2157,58 +2160,10 @@ function Update-PiSubagentsSettings {
 
     try {
         $settings | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsPath -Encoding UTF8
+        Write-Success "Removed Pi subagents extension from Pi settings."
     }
     catch {
         Write-Warning "Failed to write Pi settings at $settingsPath."
-        return $false
-    }
-
-    return $true
-}
-
-# Function to install/update tintinweb Pi subagents extension
-function Setup-PiSubagents {
-    $package = "npm:@tintinweb/pi-subagents"
-
-    if (Test-EnvLocalFlag "BAN_PI_SUBAGENTS") {
-        if (Update-PiSubagentsSettings -Mode "Remove") {
-            Write-Success "Pi subagents extension disabled in Pi settings."
-        }
-        return
-    }
-
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        Write-Warning "npm not found. Cannot install Pi subagents."
-        Write-Debug "Install Node.js/npm, then run: pi install npm:@tintinweb/pi-subagents"
-        return
-    }
-
-    if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
-        Write-Warning "Pi coding agent not found. Cannot install Pi subagents."
-        return
-    }
-
-    if (-not (Update-PiSubagentsSettings -Mode "Install")) {
-        return
-    }
-
-    Write-Message "Installing/updating tintinweb Pi subagents..."
-    $output = & pi install $package 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        $listOutput = & pi list 2>&1
-        $listText = ($listOutput | Out-String)
-        $hasPackage = $listText.Contains($package)
-        $hasLegacyPackage = $listText -match '(^|\s)npm:pi-subagents(\s|$)'
-
-        if ($LASTEXITCODE -eq 0 -and $hasPackage -and -not $hasLegacyPackage) {
-            Write-Success "tintinweb Pi subagents installed/updated."
-        }
-        else {
-            Write-Warning "Pi subagents install completed, but package validation was inconclusive: $listText"
-        }
-    }
-    else {
-        Write-Warning "Failed to install tintinweb Pi subagents: $output"
     }
 }
 
@@ -3205,7 +3160,7 @@ function Invoke-WindowsSetupTasks {
     $simpleEnglishSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 120 | Last changed: Install Matt Pocock skills for Codex and Pi" -ForegroundColor DarkGray
+    Write-Host "Version 121 | Last changed: Remove tintinweb Pi subagents plugin (uninstall on rerun)" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -3249,16 +3204,14 @@ function Invoke-WindowsSetupTasks {
         Set-PiDefaults
         Seed-PiSyntheticModels
         Seed-PiZaiModels
-        Setup-PiSubagents
+        Remove-PiSubagents
         Setup-PiMcpAdapter
         Setup-PiClaudeBridge
         Setup-PiAskUser
         Setup-PiGoalAutoresearch
     }
     else {
-        if (Test-EnvLocalFlag "BAN_PI_SUBAGENTS") {
-            Setup-PiSubagents
-        }
+        Remove-PiSubagents
         if (Test-EnvLocalFlag "BAN_PI_MCP_ADAPTER") {
             Setup-PiMcpAdapter
         }

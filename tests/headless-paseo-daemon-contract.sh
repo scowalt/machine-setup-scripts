@@ -51,7 +51,7 @@ assert_order() {
 
 extract_paseo_block() {
     local file=$1
-    awk '/PASEO_MANAGED_MARKER=/{in_block=1} /# Update Pi settings for the tintinweb subagents extension/{in_block=0} in_block {print}' "${file}"
+    awk '/PASEO_MANAGED_MARKER=/{in_block=1} /# Remove Pi subagents extension/{in_block=0} in_block {print}' "${file}"
 }
 
 assert_child_listener_audit() {

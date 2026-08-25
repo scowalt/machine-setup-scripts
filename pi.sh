@@ -112,7 +112,6 @@ create_env_local() {
 # Machine/setup guards
 # HEADLESS=1
 # WORK_MACHINE=1
-# BAN_PI_SUBAGENTS=1
 # BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
@@ -4071,100 +4070,58 @@ setup_headless_paseo_daemon() {
     print_success "Headless Paseo daemon is service-managed and locally reachable. Use Paseo's normal pairing flow later if needed."
 }
 
-# Update Pi settings for the tintinweb subagents extension
-update_pi_subagents_settings() {
-    local _mode="${1:-install}"
+# Remove Pi subagents extension
+remove_pi_subagents() {
     local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
     local _settings_file="${_settings_dir}/settings.json"
+    local _package=""
+    local _output=""
     local _tmp=""
 
-    if ! command -v jq &> /dev/null; then
-        print_warning "jq not found. Cannot update Pi subagents settings."
-        return 1
+    if command -v pi &> /dev/null; then
+        for _package in "npm:@tintinweb/pi-subagents" "npm:pi-subagents"; do
+            if _output=$(pi remove "${_package}" 2>&1); then
+                print_success "Removed Pi subagents extension (${_package})."
+            elif grep -qi "no matching package found" <<< "${_output}"; then
+                print_debug "Pi subagents extension not installed (${_package})."
+            else
+                print_warning "Failed to remove Pi subagents extension (${_package}): ${_output}"
+            fi
+        done
+        return 0
     fi
 
-    mkdir -p "${_settings_dir}"
-
+    # Fallback when the pi CLI is unavailable: strip both package sources
+    # directly from settings.json.
     if [[ ! -f "${_settings_file}" ]]; then
-        printf '{}\n' > "${_settings_file}"
+        print_debug "Pi settings not found; Pi subagents extension not installed."
+        return 0
+    fi
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot remove Pi subagents from Pi settings."
+        return 0
     fi
 
     _tmp=$(mktemp)
-    if [[ "${_mode}" == "remove" ]]; then
-        if jq '
-            def package_source:
-                if type == "string" then .
-                elif type == "object" then (.source // "")
-                else ""
-                end;
-            def packages_array:
-                if (.packages | type) == "array" then .packages else [] end;
-            .packages = (packages_array | map(select((package_source != "npm:pi-subagents") and (package_source != "npm:@tintinweb/pi-subagents"))))
-            | if (.packages | length) == 0 then del(.packages) else . end
-        ' "${_settings_file}" > "${_tmp}"; then
-            mv "${_tmp}" "${_settings_file}"
-        else
-            rm -f "${_tmp}"
-            print_warning "Failed to update Pi settings at ${_settings_file}."
-            return 1
-        fi
+    if jq '
+        def package_source:
+            if type == "string" then .
+            elif type == "object" then (.source // "")
+            else ""
+            end;
+        def packages_array:
+            if (.packages | type) == "array" then .packages else [] end;
+        .packages = (packages_array | map(select((package_source != "npm:pi-subagents") and (package_source != "npm:@tintinweb/pi-subagents"))))
+        | if (.packages | length) == 0 then del(.packages) else . end
+    ' "${_settings_file}" > "${_tmp}"; then
+        mv "${_tmp}" "${_settings_file}"
+        print_success "Removed Pi subagents extension from Pi settings."
     else
-        if jq '
-            def package_source:
-                if type == "string" then .
-                elif type == "object" then (.source // "")
-                else ""
-                end;
-            def packages_array:
-                if (.packages | type) == "array" then .packages else [] end;
-            .packages = (packages_array | map(select(package_source != "npm:pi-subagents")))
-        ' "${_settings_file}" > "${_tmp}"; then
-            mv "${_tmp}" "${_settings_file}"
-        else
-            rm -f "${_tmp}"
-            print_warning "Failed to update Pi settings at ${_settings_file}."
-            return 1
-        fi
+        rm -f "${_tmp}"
+        print_warning "Failed to update Pi settings at ${_settings_file}."
     fi
-}
-
-# Install/update tintinweb Pi subagents extension
-setup_pi_subagents() {
-    local _package="npm:@tintinweb/pi-subagents"
-    local _output=""
-
-    if [[ "${BAN_PI_SUBAGENTS:-}" == "1" ]]; then
-        if update_pi_subagents_settings remove; then
-            print_success "Pi subagents extension disabled in Pi settings."
-        fi
-        return 0
-    fi
-
-    if ! command -v npm &> /dev/null; then
-        print_warning "npm not found. Cannot install Pi subagents."
-        print_debug "Install Node.js/npm, then run: pi install npm:@tintinweb/pi-subagents"
-        return 0
-    fi
-
-    if ! command -v pi &> /dev/null; then
-        print_warning "Pi coding agent not found. Cannot install Pi subagents."
-        return 0
-    fi
-
-    if ! update_pi_subagents_settings install; then
-        return 0
-    fi
-
-    print_message "Installing/updating tintinweb Pi subagents..."
-    if _output=$(pi install "${_package}" 2>&1); then
-        if _output=$(pi list 2>&1) && grep -q "npm:@tintinweb/pi-subagents" <<< "${_output}" && ! grep -q "npm:pi-subagents" <<< "${_output}"; then
-            print_success "tintinweb Pi subagents installed/updated."
-        else
-            print_warning "Pi subagents install completed, but package validation was inconclusive: ${_output}"
-        fi
-    else
-        print_warning "Failed to install tintinweb Pi subagents: ${_output}"
-    fi
+    return 0
 }
 
 # Remove Pi MCP adapter package source from settings when disabled
@@ -5188,7 +5145,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 181 | Last changed: Install Matt Pocock skills for Codex and Pi"
+    echo -e "${GRAY}Version 182 | Last changed: Remove tintinweb Pi subagents plugin (uninstall on rerun)"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5301,15 +5258,13 @@ run_setup_tasks() {
         configure_pi_defaults
         seed_pi_synthetic_models
         seed_pi_zai_models
-        setup_pi_subagents
+        remove_pi_subagents
         setup_pi_mcp_adapter
         setup_pi_claude_bridge
         setup_pi_ask_user
         setup_pi_goal_autoresearch
     else
-        if [[ "${BAN_PI_SUBAGENTS:-}" == "1" ]]; then
-            setup_pi_subagents
-        fi
+        remove_pi_subagents
         if [[ "${BAN_PI_MCP_ADAPTER:-}" == "1" ]]; then
             setup_pi_mcp_adapter
         fi
