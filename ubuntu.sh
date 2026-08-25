@@ -4146,33 +4146,54 @@ setup_pi_claude_bridge() {
     fi
 }
 
-# Install/update Pi Ask User extension
-setup_pi_ask_user() {
-    local _package="npm:pi-ask-user"
+# Remove legacy Pi Ask User and install/update Pi companion packages
+setup_pi_companion_packages() {
+    local _legacy_package="npm:pi-ask-user"
+    local -a _packages=(
+        "npm:@juicesharp/rpiv-ask-user-question"
+        "npm:pi-web-access"
+        "npm:@juicesharp/rpiv-todo"
+    )
+    local _package=""
     local _output=""
     local _list_output=""
 
     if ! command -v npm &> /dev/null; then
-        print_warning "npm not found. Cannot install Pi Ask User extension."
-        print_debug "Install Node.js/npm, then run: pi install npm:pi-ask-user"
+        print_warning "npm not found. Cannot install Pi companion packages."
+        print_debug "Install Node.js/npm, then install these Pi packages manually: ${_packages[*]}"
         return 0
     fi
 
     if ! command -v pi &> /dev/null; then
-        print_warning "Pi coding agent not found. Cannot install Pi Ask User extension."
+        print_warning "Pi coding agent not found. Cannot install Pi companion packages."
         return 0
     fi
 
-    print_message "Installing/updating Pi Ask User extension..."
-    if _output=$(pi install "${_package}" 2>&1); then
-        if _list_output=$(pi list 2>&1) && grep -q "npm:pi-ask-user" <<< "${_list_output}"; then
-            print_success "Pi Ask User extension installed/updated."
-        else
-            print_warning "Pi Ask User install completed, but package validation was inconclusive: ${_list_output}"
+    if _list_output=$(pi list 2>&1); then
+        if grep -Fq -- "${_legacy_package}" <<< "${_list_output}"; then
+            print_message "Removing legacy Pi Ask User package..."
+            if _output=$(pi remove "${_legacy_package}" 2>&1); then
+                print_success "Legacy Pi Ask User package removed."
+            else
+                print_warning "Failed to remove legacy Pi Ask User package: ${_output}"
+            fi
         fi
     else
-        print_warning "Failed to install Pi Ask User extension: ${_output}"
+        print_warning "Cannot inspect Pi packages before legacy cleanup: ${_list_output}"
     fi
+
+    for _package in "${_packages[@]}"; do
+        print_message "Installing/updating Pi package ${_package}..."
+        if _output=$(pi install "${_package}" 2>&1); then
+            if _list_output=$(pi list 2>&1) && grep -Fq -- "${_package}" <<< "${_list_output}"; then
+                print_success "Pi package ${_package} installed/updated."
+            else
+                print_warning "Pi package ${_package} install completed, but validation was inconclusive: ${_list_output}"
+            fi
+        else
+            print_warning "Failed to install Pi package ${_package}: ${_output}"
+        fi
+    done
 }
 
 # Remove Pi goal/autoresearch package sources from settings when disabled
@@ -5528,7 +5549,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 224 | Last changed: Skip apt-managed gcloud component updates"
+    echo -e "${GRAY}Version 225 | Last changed: Install Pi companion packages"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5696,7 +5717,7 @@ HELPER_EOF
         remove_pi_subagents
         setup_pi_mcp_adapter
         setup_pi_claude_bridge
-        setup_pi_ask_user
+        setup_pi_companion_packages
         setup_pi_goal_autoresearch
     else
         remove_pi_subagents

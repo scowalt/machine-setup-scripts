@@ -2310,35 +2310,62 @@ function Setup-PiClaudeBridge {
     }
 }
 
-# Function to install/update Pi Ask User extension
-function Setup-PiAskUser {
-    $package = "npm:pi-ask-user"
+# Function to remove legacy Pi Ask User and install/update Pi companion packages
+function Setup-PiCompanionPackages {
+    $legacyPackage = "npm:pi-ask-user"
+    $packages = @(
+        "npm:@juicesharp/rpiv-ask-user-question"
+        "npm:pi-web-access"
+        "npm:@juicesharp/rpiv-todo"
+    )
 
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        Write-Warning "npm not found. Cannot install Pi Ask User extension."
-        Write-Debug "Install Node.js/npm, then run: pi install npm:pi-ask-user"
+        Write-Warning "npm not found. Cannot install Pi companion packages."
+        Write-Debug "Install Node.js/npm, then install these Pi packages manually: $($packages -join ', ')"
         return
     }
 
     if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
-        Write-Warning "Pi coding agent not found. Cannot install Pi Ask User extension."
+        Write-Warning "Pi coding agent not found. Cannot install Pi companion packages."
         return
     }
 
-    Write-Message "Installing/updating Pi Ask User extension..."
-    $output = & pi install $package 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        $listOutput = & pi list 2>&1
-        $listText = ($listOutput | Out-String)
-        if ($LASTEXITCODE -eq 0 -and $listText.Contains($package)) {
-            Write-Success "Pi Ask User extension installed/updated."
-        }
-        else {
-            Write-Warning "Pi Ask User install completed, but package validation was inconclusive: $listText"
+    $listOutput = & pi list 2>&1
+    $listExitCode = $LASTEXITCODE
+    $listText = ($listOutput | Out-String)
+    if ($listExitCode -eq 0) {
+        if ($listText.Contains($legacyPackage)) {
+            Write-Message "Removing legacy Pi Ask User package..."
+            $output = & pi remove $legacyPackage 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Success "Legacy Pi Ask User package removed."
+            }
+            else {
+                Write-Warning "Failed to remove legacy Pi Ask User package: $output"
+            }
         }
     }
     else {
-        Write-Warning "Failed to install Pi Ask User extension: $output"
+        Write-Warning "Cannot inspect Pi packages before legacy cleanup: $listText"
+    }
+
+    foreach ($package in $packages) {
+        Write-Message "Installing/updating Pi package $package..."
+        $output = & pi install $package 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $listOutput = & pi list 2>&1
+            $listExitCode = $LASTEXITCODE
+            $listText = ($listOutput | Out-String)
+            if ($listExitCode -eq 0 -and $listText.Contains($package)) {
+                Write-Success "Pi package $package installed/updated."
+            }
+            else {
+                Write-Warning "Pi package $package install completed, but validation was inconclusive: $listText"
+            }
+        }
+        else {
+            Write-Warning "Failed to install Pi package ${package}: $output"
+        }
     }
 }
 
@@ -3166,7 +3193,7 @@ function Invoke-WindowsSetupTasks {
     $simpleEnglishSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 122 | Last changed: Install Matt Pocock skill dependencies" -ForegroundColor DarkGray
+    Write-Host "Version 123 | Last changed: Install Pi companion packages" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -3213,7 +3240,7 @@ function Invoke-WindowsSetupTasks {
         Remove-PiSubagents
         Setup-PiMcpAdapter
         Setup-PiClaudeBridge
-        Setup-PiAskUser
+        Setup-PiCompanionPackages
         Setup-PiGoalAutoresearch
     }
     else {
