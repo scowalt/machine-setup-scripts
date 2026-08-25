@@ -325,8 +325,8 @@ finally {
     Remove-Item -Recurse -Force $cleanupTestRoot -ErrorAction SilentlyContinue
 }
 
-# Simple English provisioning updates on every run, validates custom harness
-# locations, and synchronizes Pi without removing sibling skills.
+# Simple English provisioning updates on every run and validates the canonical
+# shared path without creating a direct Pi copy.
 $originalSimpleEnglishUserProfile = $env:USERPROFILE
 $originalClaudeConfigDir = $env:CLAUDE_CONFIG_DIR
 $originalCodexHome = $env:CODEX_HOME
@@ -345,8 +345,7 @@ function global:npx {
     $script:SimpleEnglishCalls.Add(($Arguments -join " "))
     $skillFiles = @(
         (Join-Path $env:CLAUDE_CONFIG_DIR "skills\simple-english\SKILL.md"),
-        (Join-Path $env:USERPROFILE ".agents\skills\simple-english\SKILL.md"),
-        (Join-Path $env:USERPROFILE ".pi\agent\skills\simple-english\SKILL.md")
+        (Join-Path $env:USERPROFILE ".agents\skills\simple-english\SKILL.md")
     )
     foreach ($skillFile in $skillFiles) {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $skillFile) | Out-Null
@@ -365,15 +364,14 @@ try {
         throw "Simple English mocked installation failed"
     }
 
-    $expectedArguments = "--yes skills@latest add AminBlg/SimpleEnglish --global --agent claude-code --agent codex --agent gemini-cli --agent pi --skill simple-english --copy --yes"
+    $expectedArguments = "--yes skills@latest add AminBlg/SimpleEnglish --global --agent claude-code --agent codex --agent gemini-cli --skill simple-english --copy --yes"
     if ($script:SimpleEnglishCalls.Count -ne 2 -or ($script:SimpleEnglishCalls | Where-Object { $_ -ne $expectedArguments })) {
         throw "Simple English installer did not update twice with the exact targets: $($script:SimpleEnglishCalls -join '; ')"
     }
 
     $installedSkillFiles = @(
         (Join-Path $env:CLAUDE_CONFIG_DIR "skills\simple-english\SKILL.md"),
-        (Join-Path $env:USERPROFILE ".agents\skills\simple-english\SKILL.md"),
-        (Join-Path $env:PI_CODING_AGENT_DIR "skills\simple-english\SKILL.md")
+        (Join-Path $env:USERPROFILE ".agents\skills\simple-english\SKILL.md")
     )
     foreach ($skillFile in $installedSkillFiles) {
         if (-not (Test-Path -LiteralPath $skillFile -PathType Leaf)) {
@@ -400,8 +398,8 @@ finally {
     Remove-Item -Recurse -Force $simpleEnglishTestRoot -ErrorAction SilentlyContinue
 }
 
-# Matt Pocock provisioning targets Pi and Codex on all machines. It uses the
-# canonical Codex path and synchronizes a custom Pi directory.
+# Matt Pocock provisioning uses the canonical shared Codex/Pi path on all
+# machines and does not create a custom direct Pi copy.
 $originalMattUserProfile = $env:USERPROFILE
 $originalMattCodexHome = $env:CODEX_HOME
 $originalMattPiCodingAgentDir = $env:PI_CODING_AGENT_DIR
@@ -476,11 +474,11 @@ try {
         throw "Matt Pocock mocked installation failed"
     }
 
-    $expectedMattArguments = "--yes skills@latest add mattpocock/skills --global --agent pi --agent codex --copy --yes --skill setup-matt-pocock-skills --skill diagnosing-bugs --skill tdd --skill improve-codebase-architecture --skill grill-with-docs --skill grilling --skill domain-modeling --skill codebase-design"
+    $expectedMattArguments = "--yes skills@latest add mattpocock/skills --global --agent codex --copy --yes --skill setup-matt-pocock-skills --skill diagnosing-bugs --skill tdd --skill improve-codebase-architecture --skill grill-with-docs --skill grilling --skill domain-modeling --skill codebase-design"
     if ($script:MattPocockCalls.Count -ne 2 -or ($script:MattPocockCalls | Where-Object { $_ -ne $expectedMattArguments })) {
         throw "Matt Pocock installer did not update twice with the exact targets: $($script:MattPocockCalls -join '; ')"
     }
-    foreach ($skillsDir in $mattSkillsDirs) {
+    foreach ($skillsDir in @($codexMattSkills)) {
         foreach ($skill in $mattSkills) {
             if (-not (Test-Path -LiteralPath (Join-Path $skillsDir "$skill\SKILL.md") -PathType Leaf)) {
                 throw "Matt Pocock validation missed $skill in $skillsDir"

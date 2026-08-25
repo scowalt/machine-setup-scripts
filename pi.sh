@@ -2493,16 +2493,11 @@ ensure_skills_cli_node_runtime() {
 # Install/update Simple English for every supported AI coding harness.
 setup_simple_english_skill() {
     local _install_output=""
-    local _default_pi_dir="${HOME}/.pi/agent"
-    local _active_pi_dir="${PI_CODING_AGENT_DIR:-${_default_pi_dir}}"
-    local _default_pi_skill="${_default_pi_dir}/skills/simple-english"
-    local _active_pi_skill="${_active_pi_dir}/skills/simple-english"
     local _skill_file=""
     # Codex and Gemini CLI both discover the skills CLI's shared user copy.
     local -a _skill_files=(
         "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/skills/simple-english/SKILL.md"
         "${HOME}/.agents/skills/simple-english/SKILL.md"
-        "${_active_pi_skill}/SKILL.md"
     )
 
     if ! ensure_skills_cli_node_runtime; then
@@ -2520,35 +2515,12 @@ setup_simple_english_skill() {
         --agent claude-code \
         --agent codex \
         --agent gemini-cli \
-        --agent pi \
         --skill simple-english \
         --copy \
         --yes < /dev/null 2>&1); then
         print_warning "Failed to install/update the Simple English skill."
         print_debug "${_install_output}"
         return 1
-    fi
-
-    # The skills CLI does not currently honor PI_CODING_AGENT_DIR.
-    if [[ "${_active_pi_dir}" != "${_default_pi_dir}" ]]; then
-        if [[ ! -f "${_default_pi_skill}/SKILL.md" ]]; then
-            print_warning "Simple English was not installed at the default Pi skill path."
-            return 1
-        fi
-        if ! mkdir -p "${_active_pi_dir}/skills"; then
-            print_warning "Failed to create the configured Pi skills directory."
-            return 1
-        fi
-        if [[ -e "${_active_pi_skill}" || -L "${_active_pi_skill}" ]]; then
-            if ! rm -rf -- "${_active_pi_skill}"; then
-                print_warning "Failed to replace Simple English in PI_CODING_AGENT_DIR."
-                return 1
-            fi
-        fi
-        if ! cp -R "${_default_pi_skill}" "${_active_pi_skill}"; then
-            print_warning "Failed to copy Simple English into PI_CODING_AGENT_DIR."
-            return 1
-        fi
     fi
 
     for _skill_file in "${_skill_files[@]}"; do
@@ -2558,7 +2530,7 @@ setup_simple_english_skill() {
         fi
     done
 
-    print_success "Simple English installed/updated for Claude Code, Codex, Gemini CLI, and Pi."
+    print_success "Simple English installed/updated for Claude Code, Codex, Gemini CLI, and Pi through the shared skill path."
     print_debug "${_install_output}"
 }
 
@@ -4572,6 +4544,98 @@ setup_pi_companion_packages() {
     done
 }
 
+# Keep shared skills canonical for Pi and suppress stale direct/package collisions.
+configure_pi_skill_ownership() {
+    local _default_agent_dir="${HOME}/.pi/agent"
+    local _active_agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
+    local _settings_file="${_active_agent_dir}/settings.json"
+    local _canonical_dir="${HOME}/.agents/skills"
+    local _agent_dir=""
+    local _skill=""
+    local _duplicate=""
+    local _managed_json=""
+    local _tmp=""
+    local -a _agent_dirs=("${_default_agent_dir}")
+    local -a _shared_exclusions=(
+        "!${_canonical_dir}/pi-goal-writer/**"
+        "!${_canonical_dir}/autoresearch-create/**"
+        "!${_canonical_dir}/autoresearch-finalize/**"
+        "!${_canonical_dir}/autoresearch-hooks/**"
+    )
+    local -a _shared_skills=(
+        simple-english setup-matt-pocock-skills diagnosing-bugs tdd
+        improve-codebase-architecture grill-with-docs grilling domain-modeling codebase-design
+    )
+    local -a _managed_exclusions=("${_shared_exclusions[@]}")
+
+    if [[ "${_active_agent_dir}" != "${_default_agent_dir}" ]]; then
+        _agent_dirs+=("${_active_agent_dir}")
+    fi
+
+    for _agent_dir in "${_agent_dirs[@]}"; do
+        for _skill in "${_shared_skills[@]}"; do
+            _duplicate="${_agent_dir}/skills/${_skill}"
+            _managed_exclusions+=("!${_duplicate}/**")
+            if [[ -d "${_duplicate}" && ! -L "${_duplicate}" && -d "${_canonical_dir}/${_skill}" && ! -L "${_canonical_dir}/${_skill}" ]] &&
+                diff -qr -- "${_canonical_dir}/${_skill}" "${_duplicate}" > /dev/null 2>&1; then
+                if rm -rf -- "${_duplicate:?}"; then
+                    print_debug "Removed obsolete duplicate Pi skill: ${_duplicate}"
+                else
+                    print_warning "Failed to remove obsolete duplicate Pi skill: ${_duplicate}"
+                fi
+            fi
+        done
+    done
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot configure Pi skill ownership."
+        return 1
+    fi
+
+    mkdir -p "${_active_agent_dir}"
+    [[ -f "${_settings_file}" ]] || printf '{}\n' > "${_settings_file}"
+    _managed_json=$(printf '%s\n' "${_managed_exclusions[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')
+    _tmp=$(mktemp)
+    if jq --argjson managed "${_managed_json}" '
+        .skills = (reduce $managed[] as $entry (
+            (if (.skills | type) == "array" then .skills else [] end);
+            if index($entry) then . else . + [$entry] end
+        ))
+    ' "${_settings_file}" > "${_tmp}"; then
+        mv "${_tmp}" "${_settings_file}"
+        print_success "Pi skill ownership configured without removing shared harness copies."
+    else
+        rm -f "${_tmp}"
+        print_warning "Failed to configure Pi skill ownership at ${_settings_file}."
+        return 1
+    fi
+}
+
+# Configure pi-autoresearch without overriding Pi transcript search.
+configure_pi_autoresearch_shortcut() {
+    local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _config_dir="${_agent_dir}/extensions"
+    local _config_file="${_config_dir}/pi-autoresearch.json"
+    local _tmp=""
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot configure the pi-autoresearch shortcut."
+        return 1
+    fi
+
+    mkdir -p "${_config_dir}"
+    [[ -f "${_config_file}" ]] || printf '{}\n' > "${_config_file}"
+    _tmp=$(mktemp)
+    if jq '.shortcuts.fullscreenDashboard = "ctrl+shift+r"' "${_config_file}" > "${_tmp}"; then
+        mv "${_tmp}" "${_config_file}"
+        print_success "pi-autoresearch dashboard shortcut set to Ctrl+Shift+R."
+    else
+        rm -f "${_tmp}"
+        print_warning "Failed to configure pi-autoresearch at ${_config_file}."
+        return 1
+    fi
+}
+
 # Remove Pi goal/autoresearch package sources from settings when disabled
 remove_pi_goal_autoresearch_settings() {
     local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
@@ -4643,6 +4707,8 @@ setup_pi_goal_autoresearch() {
     elif [[ "${_had_failure}" -eq 0 ]]; then
         print_warning "Pi goal/autoresearch install completed, but package validation was inconclusive: ${_list_output}"
     fi
+
+    configure_pi_autoresearch_shortcut || return 1
 }
 
 
@@ -4744,23 +4810,17 @@ remove_obsolete_matt_pocock_skills() {
     fi
 }
 
-# Install/update Matt Pocock engineering skills for Pi and Codex.
+# Install/update Matt Pocock engineering skills in the shared Codex/Pi path.
 setup_matt_pocock_skills() {
     local _repo="mattpocock/skills"
-    local _default_pi_dir="${HOME}/.pi/agent"
-    local _active_pi_dir="${PI_CODING_AGENT_DIR:-${_default_pi_dir}}"
-    local _default_pi_skills_dir="${_default_pi_dir}/skills"
-    local _active_pi_skills_dir="${_active_pi_dir}/skills"
     local _codex_skills_dir="${HOME}/.agents/skills"
     local _validation_dir=""
     local _skill=""
     local _output=""
     local _source_path=""
-    local _dest_path=""
-    local _args=(--yes skills@latest add "${_repo}" --global --agent pi --agent codex --copy --yes)
-    local _validation_dirs=("${_default_pi_skills_dir}" "${_codex_skills_dir}")
+    local _args=(--yes skills@latest add "${_repo}" --global --agent codex --copy --yes)
+    local _validation_dirs=("${_codex_skills_dir}")
     local _missing=()
-    local _sync_failed=()
 
     if matt_pocock_skills_disabled; then
         remove_matt_pocock_skills
@@ -4774,7 +4834,7 @@ setup_matt_pocock_skills() {
 
     if ! command -v npx &> /dev/null; then
         print_warning "npx is not available; cannot install Matt Pocock skills."
-        print_debug "Install Node.js >=22.20, then run: npx --yes skills@latest add mattpocock/skills --global --agent pi --agent codex --copy --yes"
+        print_debug "Install Node.js >=22.20, then run: npx --yes skills@latest add mattpocock/skills --global --agent codex --copy --yes"
         return 1
     fi
 
@@ -4789,28 +4849,6 @@ setup_matt_pocock_skills() {
         return 1
     fi
 
-    # The skills CLI does not currently honor PI_CODING_AGENT_DIR.
-    if [[ "${_active_pi_dir}" != "${_default_pi_dir}" ]]; then
-        if ! mkdir -p "${_active_pi_skills_dir}"; then
-            print_warning "Failed to create the configured Pi skills directory."
-            return 1
-        fi
-        while IFS= read -r _skill; do
-            _source_path="${_default_pi_skills_dir}/${_skill}"
-            _dest_path="${_active_pi_skills_dir}/${_skill}"
-            if [[ -d "${_source_path}" && ! -L "${_source_path}" && -f "${_source_path}/SKILL.md" && ! -L "${_source_path}/SKILL.md" ]]; then
-                if rm -rf -- "${_dest_path:?}" && cp -a "${_source_path}" "${_dest_path}"; then
-                    true
-                else
-                    _sync_failed+=("${_skill}")
-                fi
-            else
-                _sync_failed+=("${_skill}")
-            fi
-        done < <(matt_pocock_skills || true)
-        _validation_dirs+=("${_active_pi_skills_dir}")
-    fi
-
     for _validation_dir in "${_validation_dirs[@]}"; do
         while IFS= read -r _skill; do
             _source_path="${_validation_dir}/${_skill}"
@@ -4820,17 +4858,14 @@ setup_matt_pocock_skills() {
         done < <(matt_pocock_skills || true)
     done
 
-    if [[ "${#_sync_failed[@]}" -gt 0 ]]; then
-        print_warning "Matt Pocock skills installed, but the custom Pi copy failed: ${_sync_failed[*]}"
-        return 1
-    elif [[ "${#_missing[@]}" -gt 0 ]]; then
+    if [[ "${#_missing[@]}" -gt 0 ]]; then
         print_warning "Matt Pocock skills are missing required files: ${_missing[*]}"
         return 1
     elif ! remove_obsolete_matt_pocock_skills; then
         return 1
     fi
 
-    print_success "Matt Pocock skills installed/updated for Pi and Codex."
+    print_success "Matt Pocock skills installed/updated for Pi and Codex through the shared skill path."
     print_debug "${_output}"
 }
 
@@ -5464,7 +5499,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 186 | Last changed: Remove RTK and clean legacy resources"
+    echo -e "${GRAY}Version 187 | Last changed: Prevent duplicate Pi skills and shortcuts"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5594,6 +5629,9 @@ run_setup_tasks() {
     fi
 
     if ! setup_simple_english_skill; then
+        _setup_had_errors=1
+    fi
+    if ! configure_pi_skill_ownership; then
         _setup_had_errors=1
     fi
 
