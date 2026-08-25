@@ -6,6 +6,13 @@ cd "${repo_root}"
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
+declare -A expected_versions=(
+    [mac.sh]=197
+    [ubuntu.sh]=219
+    [wsl.sh]=163
+    [pi.sh]=180
+    [bazzite.sh]=79
+)
 
 fail() {
     printf '✗ %s\n' "$1" >&2
@@ -98,6 +105,7 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '^[[:space:]]+(if ! )?setup_simple_english_skill' 'Simple English main wiring'
     assert_order "${file}" '^[[:space:]]+if install_pi_cli; then$' '^[[:space:]]+(if ! )?setup_simple_english_skill' 'Simple English installation after agent provisioning'
     assert_order "${file}" '^[[:space:]]+(if ! )?setup_simple_english_skill' '^[[:space:]]+remove_impeccable_resources$' 'Simple English validation before cleanup'
+    assert_contains "${file}" "Version ${expected_versions[${file}]} \\| Last changed: Use Simple English without an output style" 'updated version banner'
 done
 
 assert_contains win.ps1 '^function Test-SimpleEnglishNodeRuntimeReady' 'PowerShell Node.js runtime check'
@@ -117,6 +125,7 @@ assert_contains win.ps1 '\$env:CLAUDE_CONFIG_DIR' 'PowerShell CLAUDE_CONFIG_DIR 
 assert_contains win.ps1 '\$env:PI_CODING_AGENT_DIR' 'PowerShell PI_CODING_AGENT_DIR support'
 assert_contains win.ps1 '\.agents\\skills\\simple-english\\SKILL\.md' 'PowerShell shared Codex and Gemini skill validation'
 assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal failure propagation'
+assert_contains win.ps1 'Version 119 \| Last changed: Use Simple English without an output style' 'PowerShell version banner'
 assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+Remove-ImpeccableResources$' 'PowerShell validation before cleanup'
 
@@ -181,6 +190,6 @@ done
 
 assert_contains README.md 'Every setup run installs the latest.*Simple English' 'latest-release setup documentation'
 assert_contains README.md 'Simple English is required on personal and work machines and has no setup opt-out' 'required all-machine behavior documentation'
-assert_contains CLAUDE.md 'latest Simple English skill is always installed globally' 'repository guidance'
+assert_contains CLAUDE.md 'always installs the latest Simple English skill globally' 'repository guidance'
 
 printf '✓ Simple English skill contract checks passed\n'
