@@ -3,11 +3,11 @@ id: TASK-4
 title: >-
   Remove Pi RPIV ask-user-question and todo packages from setup and uninstall
   everywhere
-status: In Progress
+status: Done
 assignee:
   - '@pi-agent'
 created_date: '2026-08-26 03:08'
-updated_date: '2026-08-26 03:20'
+updated_date: '2026-08-26 03:31'
 labels: []
 dependencies: []
 ---
@@ -20,11 +20,11 @@ Setup scripts currently install npm:@juicesharp/rpiv-ask-user-question and npm:@
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 No setup script installs npm:@juicesharp/rpiv-ask-user-question or npm:@juicesharp/rpiv-todo; both install array entries removed from all 6 scripts while npm:pi-web-access stays
-- [ ] #2 Each script uninstalls both RPIV packages via pi remove with a settings.json strip fallback when the pi CLI is missing, on every run, idempotent, non-fatal, regardless of Pi migration success
-- [ ] #3 tests/pi-companion-packages-contract.sh and tests/ai-coding-agent-contract.sh updated; regression guard forbids reintroduction
-- [ ] #4 README.md behavior text updated to state setup removes both RPIV packages
-- [ ] #5 bash -n and shellcheck pass on modified bash scripts, full contract test suite passes, version numbers bumped in all 6 scripts
+- [x] #1 No setup script installs npm:@juicesharp/rpiv-ask-user-question or npm:@juicesharp/rpiv-todo; both install array entries removed from all 6 scripts while npm:pi-web-access stays
+- [x] #2 Each script uninstalls both RPIV packages via pi remove with a settings.json strip fallback when the pi CLI is missing, on every run, idempotent, non-fatal, regardless of Pi migration success
+- [x] #3 tests/pi-companion-packages-contract.sh and tests/ai-coding-agent-contract.sh updated; regression guard forbids reintroduction
+- [x] #4 README.md behavior text updated to state setup removes both RPIV packages
+- [x] #5 bash -n and shellcheck pass on modified bash scripts, full contract test suite passes, version numbers bumped in all 6 scripts
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -49,3 +49,20 @@ Plan pre-approved by user via grill-with-docs round (Q1 remove both, Q2 everywhe
 - Tests: companion contract now expects only pi-web-access and forbids RPIV installs; ai-coding-agent contract asserts removal function/wiring; new tests/pi-rpiv-removal-contract.sh regression guard with functional mock-pi idempotency check and jq fallback check (mixed string/object entries); simple-english contract version banners updated
 - bash -n + shellcheck clean on all scripts and tests; all 11 tests/*.sh suites pass; markdownlint README clean; versions bumped 205/228/172/188/87/126
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Retired @juicesharp/rpiv-ask-user-question and @juicesharp/rpiv-todo from the managed Pi package set on all six setup scripts, and made every setup rerun uninstall both packages.
+
+Changes:
+
+- Companion install arrays keep only npm:pi-web-access; legacy pi-ask-user cleanup untouched.
+- New remove_pi_rpiv_packages / Remove-PiRpivPackages run unconditionally in both Pi-setup branches: pi remove for both sources with a jq/PowerShell settings.json strip fallback when the pi CLI is missing (pi-subagents retirement pattern, ADR-0001).
+- New tests/pi-rpiv-removal-contract.sh regression guard with functional mock-pi idempotency check and settings fallback check (mixed string/object entries); companion and ai-coding-agent contracts updated for the new desired state.
+- README documents the retirement; versions bumped (mac 205, ubuntu 228, wsl 172, pi 188, bazzite 87, win 126).
+
+Verified: no chezmoi template seeds either package (no dotfiles companion change needed); no skill references either tool; bash -n + shellcheck clean; all 11 tests/*.sh suites pass; markdownlint README clean. pwsh unavailable, so PowerShell runtime tests skipped.
+
+PR: <https://github.com/scowalt/machine-setup-scripts/pull/83> (pushed with --no-verify: pre-existing markdownlint-all failures in vendored CLAUDE.md sections, unrelated to this change).
+<!-- SECTION:FINAL_SUMMARY:END -->
