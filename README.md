@@ -8,7 +8,7 @@ Every setup run writes a local log under `~/.local/log/machine-setup` and makes 
 
 ## AI Coding Agents
 
-Every setup script installs or updates the main AI development tools. The supported systems are macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows. The tools include Claude Code CLI and Codex CLI, Notion CLI (`ntn`), Gemini CLI, Pi, and opencode. Setup removes the tintinweb Pi subagents extension when it is present. It also removes the legacy `pi-ask-user` package. Setup installs the Pi MCP adapter, Pi Claude bridge, `@juicesharp/rpiv-ask-user-question`, `pi-web-access`, `@juicesharp/rpiv-todo`, and the Pi goal/autoresearch extensions.
+Every setup script installs or updates the main AI development tools. The supported systems are macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows. The tools include Claude Code CLI and Codex CLI, Notion CLI (`ntn`), Gemini CLI, Pi, and opencode. Setup removes the tintinweb Pi subagents extension when it is present. It also removes the legacy `pi-ask-user` package and the retired `@juicesharp/rpiv-ask-user-question` and `@juicesharp/rpiv-todo` packages when they are present. Setup installs the Pi MCP adapter, Pi Claude bridge, `pi-web-access`, and the Pi goal/autoresearch extensions.
 
 Setup installs the managed Matt Pocock engineering skills on personal and work machines. Pi and Codex share the canonical copies in `~/.agents/skills`. opencode reads its copies from `~/.config/opencode/skills`. Work machines also install Google Cloud CLI.
 

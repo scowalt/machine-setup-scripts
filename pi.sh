@@ -4391,6 +4391,60 @@ remove_pi_subagents() {
     return 0
 }
 
+# Remove retired Pi RPIV packages (ask-user-question and todo)
+remove_pi_rpiv_packages() {
+    local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _settings_file="${_settings_dir}/settings.json"
+    local _package=""
+    local _output=""
+    local _tmp=""
+
+    if command -v pi &> /dev/null; then
+        for _package in "npm:@juicesharp/rpiv-ask-user-question" "npm:@juicesharp/rpiv-todo"; do
+            if _output=$(pi remove "${_package}" 2>&1); then
+                print_success "Removed Pi RPIV package (${_package})."
+            elif grep -qi "no matching package found" <<< "${_output}"; then
+                print_debug "Pi RPIV package not installed (${_package})."
+            else
+                print_warning "Failed to remove Pi RPIV package (${_package}): ${_output}"
+            fi
+        done
+        return 0
+    fi
+
+    # Fallback when the pi CLI is unavailable: strip both package sources
+    # directly from settings.json.
+    if [[ ! -f "${_settings_file}" ]]; then
+        print_debug "Pi settings not found; Pi RPIV packages not installed."
+        return 0
+    fi
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot remove Pi RPIV packages from Pi settings."
+        return 0
+    fi
+
+    _tmp=$(mktemp)
+    if jq '
+        def package_source:
+            if type == "string" then .
+            elif type == "object" then (.source // "")
+            else ""
+            end;
+        def packages_array:
+            if (.packages | type) == "array" then .packages else [] end;
+        .packages = (packages_array | map(select((package_source != "npm:@juicesharp/rpiv-ask-user-question") and (package_source != "npm:@juicesharp/rpiv-todo"))))
+        | if (.packages | length) == 0 then del(.packages) else . end
+    ' "${_settings_file}" > "${_tmp}"; then
+        mv "${_tmp}" "${_settings_file}"
+        print_success "Removed Pi RPIV packages from Pi settings."
+    else
+        rm -f "${_tmp}"
+        print_warning "Failed to update Pi settings at ${_settings_file}."
+    fi
+    return 0
+}
+
 # Remove Pi MCP adapter package source from settings when disabled
 remove_pi_mcp_adapter_settings() {
     local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
@@ -4494,13 +4548,11 @@ setup_pi_claude_bridge() {
     fi
 }
 
-# Remove legacy Pi Ask User and install/update Pi companion packages
+# Remove legacy Pi Ask User and install/update the Pi web access package
 setup_pi_companion_packages() {
     local _legacy_package="npm:pi-ask-user"
     local -a _packages=(
-        "npm:@juicesharp/rpiv-ask-user-question"
         "npm:pi-web-access"
-        "npm:@juicesharp/rpiv-todo"
     )
     local _package=""
     local _output=""
@@ -5499,7 +5551,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 187 | Last changed: Prevent duplicate Pi skills and shortcuts"
+    echo -e "${GRAY}Version 188 | Last changed: Remove retired Pi RPIV ask-user-question and todo packages"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5612,12 +5664,14 @@ run_setup_tasks() {
         seed_pi_synthetic_models
         seed_pi_zai_models
         remove_pi_subagents
+        remove_pi_rpiv_packages
         setup_pi_mcp_adapter
         setup_pi_claude_bridge
         setup_pi_companion_packages
         setup_pi_goal_autoresearch
     else
         remove_pi_subagents
+        remove_pi_rpiv_packages
         if [[ "${BAN_PI_MCP_ADAPTER:-}" == "1" ]]; then
             setup_pi_mcp_adapter
         fi

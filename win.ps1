@@ -2466,6 +2466,94 @@ function Remove-PiSubagents {
     }
 }
 
+# Function to remove retired Pi RPIV packages (ask-user-question and todo)
+function Remove-PiRpivPackages {
+    if (Get-Command pi -ErrorAction SilentlyContinue) {
+        foreach ($package in @("npm:@juicesharp/rpiv-ask-user-question", "npm:@juicesharp/rpiv-todo")) {
+            $output = & pi remove $package 2>&1
+            $removeExitCode = $LASTEXITCODE
+            $outputText = ($output | Out-String)
+            if ($removeExitCode -eq 0) {
+                Write-Success "Removed Pi RPIV package ($package)."
+            }
+            elseif ($outputText -match "no matching package found") {
+                Write-Debug "Pi RPIV package not installed ($package)."
+            }
+            else {
+                Write-Warning "Failed to remove Pi RPIV package ($package): $outputText"
+            }
+        }
+        return
+    }
+
+    # Fallback when the pi CLI is unavailable: strip both package sources
+    # directly from settings.json.
+    if ($env:PI_CODING_AGENT_DIR) {
+        $agentDir = $env:PI_CODING_AGENT_DIR
+    }
+    else {
+        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    }
+
+    $settingsPath = Join-Path $agentDir "settings.json"
+
+    if (-not (Test-Path $settingsPath)) {
+        Write-Debug "Pi settings not found; Pi RPIV packages not installed."
+        return
+    }
+
+    $settingsJson = Get-Content -Path $settingsPath -Raw
+    if ([string]::IsNullOrWhiteSpace($settingsJson)) {
+        $settingsJson = "{}"
+    }
+
+    try {
+        $settings = $settingsJson | ConvertFrom-Json
+        if ($null -eq $settings) {
+            $settings = New-Object PSObject
+        }
+    }
+    catch {
+        Write-Warning "Failed to parse Pi settings at $settingsPath. Leaving settings unchanged."
+        return
+    }
+
+    $packages = @()
+    if ($settings.PSObject.Properties["packages"]) {
+        $packages = @($settings.packages)
+    }
+
+    $filteredPackages = @()
+    foreach ($package in $packages) {
+        $source = ""
+        if ($package -is [string]) {
+            $source = $package
+        }
+        elseif ($null -ne $package -and $package.PSObject.Properties["source"]) {
+            $source = [string]$package.source
+        }
+
+        if ($source -ne "npm:@juicesharp/rpiv-ask-user-question" -and $source -ne "npm:@juicesharp/rpiv-todo") {
+            $filteredPackages += $package
+        }
+    }
+
+    if ($filteredPackages.Count -eq 0) {
+        Remove-JsonProperty -Object $settings -Name "packages"
+    }
+    else {
+        Set-JsonProperty -Object $settings -Name "packages" -Value ([object[]]$filteredPackages)
+    }
+
+    try {
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsPath -Encoding UTF8
+        Write-Success "Removed Pi RPIV packages from Pi settings."
+    }
+    catch {
+        Write-Warning "Failed to write Pi settings at $settingsPath."
+    }
+}
+
 # Function to remove Pi MCP adapter package source from settings when disabled
 function Remove-PiMcpAdapterSettings {
     if ($env:PI_CODING_AGENT_DIR) {
@@ -2609,13 +2697,11 @@ function Setup-PiClaudeBridge {
     }
 }
 
-# Function to remove legacy Pi Ask User and install/update Pi companion packages
+# Function to remove legacy Pi Ask User and install/update the Pi web access package
 function Setup-PiCompanionPackages {
     $legacyPackage = "npm:pi-ask-user"
     $packages = @(
-        "npm:@juicesharp/rpiv-ask-user-question"
         "npm:pi-web-access"
-        "npm:@juicesharp/rpiv-todo"
     )
 
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
@@ -3553,7 +3639,7 @@ function Invoke-WindowsSetupTasks {
     $simpleEnglishSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 125 | Last changed: Prevent duplicate Pi skills and shortcuts" -ForegroundColor DarkGray
+    Write-Host "Version 126 | Last changed: Remove retired Pi RPIV ask-user-question and todo packages" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -3597,6 +3683,7 @@ function Invoke-WindowsSetupTasks {
         Seed-PiSyntheticModels
         Seed-PiZaiModels
         Remove-PiSubagents
+        Remove-PiRpivPackages
         Setup-PiMcpAdapter
         Setup-PiClaudeBridge
         Setup-PiCompanionPackages
@@ -3604,6 +3691,7 @@ function Invoke-WindowsSetupTasks {
     }
     else {
         Remove-PiSubagents
+        Remove-PiRpivPackages
         if (Test-EnvLocalFlag "BAN_PI_MCP_ADAPTER") {
             Setup-PiMcpAdapter
         }
