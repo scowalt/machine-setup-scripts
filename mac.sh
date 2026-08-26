@@ -5149,6 +5149,63 @@ remove_compound_engineering_resources() {
     return 0
 }
 
+# Install the Tea workstation client on work machines.
+install_gitea_client() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Skipping Gitea client (not a work machine)."
+        return 0
+    fi
+
+    if ! command -v brew &> /dev/null; then
+        print_error "Homebrew is required to install the Gitea client on this platform."
+        return 1
+    fi
+
+    local brew_prefix=""
+    local managed_path=""
+    local original_command=""
+    local resolved_command=""
+    local version_output=""
+    brew_prefix=$(brew --prefix) || {
+        print_error "Could not resolve the Homebrew prefix for the Gitea client."
+        return 1
+    }
+    managed_path="${brew_prefix}/bin/tea"
+    original_command=$(PATH="${SETUP_ORIGINAL_PATH:-${PATH}}" command -v tea 2>/dev/null || true)
+    if [[ -n "${original_command}" && "${original_command}" != "${managed_path}" ]] && { [[ ! -e "${managed_path}" ]] || [[ ! "${original_command}" -ef "${managed_path}" ]]; }; then
+        print_error "A conflicting tea executable is earlier on PATH: ${original_command}"
+        print_debug "Remove it from PATH or move ${brew_prefix}/bin ahead of it, then rerun setup."
+        return 1
+    fi
+
+    if brew list --formula tea &> /dev/null; then
+        print_message "Updating Gitea client with Homebrew..."
+        if ! brew upgrade tea; then
+            print_error "Failed to update the Gitea client with Homebrew."
+            return 1
+        fi
+    else
+        print_message "Installing Gitea client with Homebrew..."
+        if ! brew install tea; then
+            print_error "Failed to install the Gitea client with Homebrew."
+            return 1
+        fi
+    fi
+
+    export PATH="${brew_prefix}/bin:${PATH}"
+    if [[ ! -x "${managed_path}" ]] || ! version_output=$("${managed_path}" --version 2>/dev/null) || [[ ! "${version_output}" =~ [0-9]+\.[0-9]+ ]]; then
+        print_error "Gitea client verification failed at ${managed_path}."
+        return 1
+    fi
+    resolved_command=$(command -v tea 2>/dev/null || true)
+    if [[ "${resolved_command}" != "${managed_path}" ]] && { [[ -z "${resolved_command}" || ! -e "${managed_path}" ]] || [[ ! "${resolved_command}" -ef "${managed_path}" ]]; }; then
+        print_error "The tea command resolves to ${resolved_command:-<missing>} instead of ${managed_path}."
+        return 1
+    fi
+
+    print_success "Gitea client is ready (${version_output})."
+}
+
 # Install Bun JavaScript runtime
 install_bun() {
     if [[ -d "${HOME}/.bun" ]]; then
@@ -5477,7 +5534,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 205 | Last changed: Remove retired Pi RPIV ask-user-question and todo packages${NC}"
+    echo -e "${GRAY}Version 206 | Last changed: Install Gitea client on work machines${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5645,6 +5702,7 @@ HELPER_EOF
     install_tmux_plugins
 
     print_section "Development Tools"
+    install_gitea_client || return 1
     install_bun
     setup_headless_paseo_daemon || return 1
     install_sfw

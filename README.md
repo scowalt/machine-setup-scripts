@@ -28,6 +28,16 @@ Setup removes legacy global Impeccable skill copies and Cursor subagent files th
 
 Notion CLI is installed with Notion's native installer on macOS and Linux and with WinGet on Windows. The native installer supports x64 and ARM64, while the Windows package supports x64 only; unsupported architectures warn and continue setup. Setup does not authenticate Notion CLI or configure shell completions. Run `ntn login` manually when you are ready to connect a workspace.
 
+## Work-machine Gitea client
+
+On work machines, `WORK_MACHINE=1` makes Tea (`tea`) a managed tool. Setup installs or updates the latest stable Tea release.
+
+Homebrew supplies Tea on supported systems. Windows and unsupported Raspberry Pi architectures use an official Gitea binary and its published SHA-256 checksum. Homebrew supplies Bash, Zsh, and Fish completions. Setup does not install other completion files.
+
+Setup does not authenticate Tea. It does not read, print, or synchronize Gitea tokens. Run `tea login add` once on each work machine.
+
+Tea stores the application token in its local configuration. Do not add this configuration to synchronized dotfiles.
+
 ## Connectivity tools
 
 Every machine setup script installs Portless CLI for Tailscale HTTPS tunnel helpers.

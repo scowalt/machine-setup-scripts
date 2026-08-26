@@ -8,6 +8,14 @@ The machine setup context defines the desired development environment on each su
 The set of tools and artifacts that must be present or absent after a setup run.
 _Avoid_: Target configuration, final setup
 
+**Work machine**:
+A supported machine classified for employer-related development. Work-only managed tools are part of its desired machine state; on other machines, those tools remain unmanaged.
+_Avoid_: Corporate machine, office machine
+
+**Gitea client**:
+The Tea command-line client used from a workstation to interact with Gitea instances.
+_Avoid_: Gitea CLI, Gitea server command
+
 **Managed tool**:
 A development tool whose installation, configuration, update, and removal are controlled by the setup scripts.
 _Avoid_: Provisioned tool, setup tool

@@ -7,18 +7,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=205
-    [ubuntu.sh]=228
-    [wsl.sh]=172
-    [pi.sh]=188
-    [bazzite.sh]=87
+    [mac.sh]=206
+    [ubuntu.sh]=229
+    [wsl.sh]=173
+    [pi.sh]=189
+    [bazzite.sh]=88
 )
 declare -A expected_banners=(
-    [mac.sh]='Remove retired Pi RPIV ask-user-question and todo packages'
-    [ubuntu.sh]='Remove retired Pi RPIV ask-user-question and todo packages'
-    [wsl.sh]='Remove retired Pi RPIV ask-user-question and todo packages'
-    [pi.sh]='Remove retired Pi RPIV ask-user-question and todo packages'
-    [bazzite.sh]='Remove retired Pi RPIV ask-user-question and todo packages'
+    [mac.sh]='Install Gitea client on work machines'
+    [ubuntu.sh]='Install Gitea client on work machines'
+    [wsl.sh]='Install Gitea client on work machines'
+    [pi.sh]='Install Gitea client on work machines'
+    [bazzite.sh]='Install Gitea client on work machines'
 )
 
 fail() {
@@ -136,7 +136,7 @@ assert_contains win.ps1 '\$env:CLAUDE_CONFIG_DIR' 'PowerShell CLAUDE_CONFIG_DIR 
 assert_contains win.ps1 '\$env:PI_CODING_AGENT_DIR' 'PowerShell PI_CODING_AGENT_DIR support'
 assert_contains win.ps1 '\.agents\\skills\\simple-english\\SKILL\.md' 'PowerShell shared Codex and Gemini skill validation'
 assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal failure propagation'
-assert_contains win.ps1 'Version 126 \| Last changed: Remove retired Pi RPIV ask-user-question and todo packages' 'PowerShell version banner'
+assert_contains win.ps1 'Version 127 \| Last changed: Install Gitea client on work machines' 'PowerShell version banner'
 assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+Remove-ImpeccableResources$' 'PowerShell validation before cleanup'
 

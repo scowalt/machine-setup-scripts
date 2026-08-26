@@ -40,12 +40,20 @@ $sparkles = [char]0x2728   # Sparkles for completion
 
 $script:SetupOriginalPath = $env:PATH
 $script:SetupOriginalClaudeCommand = $null
+$script:SetupOriginalTeaCommand = $null
 $script:SetupLogFile = $null
 $script:SetupTranscriptStarted = $false
 try {
     $setupOriginalClaude = Get-Command claude -ErrorAction SilentlyContinue
     if ($setupOriginalClaude) {
         $script:SetupOriginalClaudeCommand = $setupOriginalClaude.Source
+    }
+}
+catch {}
+try {
+    $setupOriginalTea = Get-Command tea -CommandType Application -ErrorAction SilentlyContinue
+    if ($setupOriginalTea) {
+        $script:SetupOriginalTeaCommand = if ($setupOriginalTea.Source) { $setupOriginalTea.Source } else { $setupOriginalTea.Path }
     }
 }
 catch {}
@@ -163,6 +171,103 @@ function Assert-HeadlessPaseoUnsupported {
     Write-Error "HEADLESS=1 requested, but native Windows cannot guarantee a no-login Paseo daemon with the foreground CLI."
     Write-Error "Use a supported native Linux setup script for strict Paseo headless support, or unset HEADLESS for Windows setup."
     throw "Unsupported HEADLESS=1 Paseo daemon setup on Windows"
+}
+
+# Install the Tea workstation client on work machines.
+function Install-GiteaClient {
+    if (-not (Test-EnvLocalFlag "WORK_MACHINE")) {
+        Write-Debug "Skipping Gitea client (not a work machine)."
+        return
+    }
+
+    $installDir = Join-Path $env:USERPROFILE ".local\bin"
+    $managedPath = Join-Path $installDir "tea.exe"
+    if (-not [string]::IsNullOrWhiteSpace($script:SetupOriginalTeaCommand)) {
+        $originalTeaPath = [System.IO.Path]::GetFullPath($script:SetupOriginalTeaCommand)
+        $managedTeaPath = [System.IO.Path]::GetFullPath($managedPath)
+        if (-not $originalTeaPath.Equals($managedTeaPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Error "A conflicting tea executable is earlier on PATH: $($script:SetupOriginalTeaCommand)"
+            Write-Debug "Remove it from PATH or move $installDir ahead of it, then rerun setup."
+            throw "Conflicting tea executable on PATH"
+        }
+    }
+
+    $processorArchitecture = $env:PROCESSOR_ARCHITEW6432
+    if ([string]::IsNullOrWhiteSpace($processorArchitecture)) {
+        $processorArchitecture = $env:PROCESSOR_ARCHITECTURE
+    }
+    $releaseArch = switch -Regex ($processorArchitecture) {
+        '^(AMD64|x86_64)$' { "amd64"; break }
+        '^(ARM64|aarch64)$' { "arm64"; break }
+        default { throw "No official Gitea client binary is available for Windows architecture $processorArchitecture." }
+    }
+
+    $apiUrl = "https://gitea.com/api/v1/repos/gitea/tea/releases/latest"
+    Write-Message "Finding the latest stable Gitea client release..."
+    $release = Invoke-RestMethod -Uri $apiUrl -TimeoutSec 30 -ErrorAction Stop
+    $tag = [string]$release.tag_name
+    if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+        throw "The latest Gitea client release did not contain a stable semantic version."
+    }
+
+    $version = $tag.Substring(1)
+    $asset = "tea-$version-windows-$releaseArch.exe"
+    $downloadRoot = "https://dl.gitea.com/tea/$version"
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "tea-install-$([guid]::NewGuid())"
+    $downloadedBinary = Join-Path $tempDir $asset
+    $checksumsPath = Join-Path $tempDir "checksums.txt"
+
+    try {
+        New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+        Write-Message "Downloading Gitea client $version..."
+        Invoke-WebRequest -Uri "$downloadRoot/$asset" -OutFile $downloadedBinary -TimeoutSec 120 -ErrorAction Stop
+        Invoke-WebRequest -Uri "$downloadRoot/checksums.txt" -OutFile $checksumsPath -TimeoutSec 30 -ErrorAction Stop
+
+        $checksumText = Get-Content -LiteralPath $checksumsPath -Raw -ErrorAction Stop
+        $assetPattern = [regex]::Escape($asset)
+        $checksumMatch = [regex]::Match($checksumText, "(?m)^([A-Fa-f0-9]{64})\s+$assetPattern\s*$")
+        if (-not $checksumMatch.Success) {
+            throw "Published SHA-256 checksum not found for $asset."
+        }
+        $expectedHash = $checksumMatch.Groups[1].Value
+        $actualHash = (Get-FileHash -LiteralPath $downloadedBinary -Algorithm SHA256 -ErrorAction Stop).Hash
+        if (-not $actualHash.Equals($expectedHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Gitea client SHA-256 verification failed for $asset."
+        }
+
+        New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+        Copy-Item -LiteralPath $downloadedBinary -Destination $managedPath -Force -ErrorAction Stop
+    }
+    finally {
+        Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    $processEntries = @($env:PATH -split ';' | Where-Object { $_ })
+    if (-not ($processEntries | Where-Object { [System.IO.Path]::GetFullPath($_).Equals([System.IO.Path]::GetFullPath($installDir), [System.StringComparison]::OrdinalIgnoreCase) })) {
+        $env:PATH = "$installDir;$env:PATH"
+    }
+    $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+    $userEntries = @()
+    if ($userPath) {
+        $userEntries = @($userPath -split ';' | Where-Object { $_ })
+    }
+    if (-not ($userEntries | Where-Object { [System.IO.Path]::GetFullPath($_).Equals([System.IO.Path]::GetFullPath($installDir), [System.StringComparison]::OrdinalIgnoreCase) })) {
+        $newUserPath = if ($userPath) { "$($userPath.TrimEnd(';'));$installDir" } else { $installDir }
+        [Environment]::SetEnvironmentVariable("PATH", $newUserPath, "User")
+        Write-Success "Added the Gitea client directory to PATH."
+    }
+
+    $versionOutput = & $managedPath --version 2>&1
+    if ($LASTEXITCODE -ne 0 -or ($versionOutput -join "`n") -notmatch '[0-9]+\.[0-9]+') {
+        throw "Gitea client verification failed at $managedPath."
+    }
+    $resolvedTea = Get-Command tea -CommandType Application -ErrorAction SilentlyContinue
+    if ($null -eq $resolvedTea -or -not ([System.IO.Path]::GetFullPath($resolvedTea.Source)).Equals([System.IO.Path]::GetFullPath($managedPath), [System.StringComparison]::OrdinalIgnoreCase)) {
+        $resolvedPath = if ($null -eq $resolvedTea) { "<missing>" } else { $resolvedTea.Source }
+        throw "The tea command resolves to $resolvedPath instead of $managedPath."
+    }
+
+    Write-Success "Gitea client is ready ($($versionOutput -join ' '))."
 }
 
 # Install the appropriate secrets manager based on machine type
@@ -3639,7 +3744,7 @@ function Invoke-WindowsSetupTasks {
     $simpleEnglishSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 126 | Last changed: Remove retired Pi RPIV ask-user-question and todo packages" -ForegroundColor DarkGray
+    Write-Host "Version 127 | Last changed: Install Gitea client on work machines" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -3669,6 +3774,7 @@ function Invoke-WindowsSetupTasks {
     Set-WindowsTerminalConfiguration
     
     Write-Section "Additional Development Tools"
+    Install-GiteaClient
     Install-SocketFirewall
     Install-ClaudeCode
     Install-GeminiCli

@@ -1435,6 +1435,183 @@ install_mise() {
     fi
 }
 
+# Stop before installation when an unrelated tea command shadows the managed
+# executable on the PATH that started setup.
+gitea_client_assert_no_path_conflict() {
+    local managed_path="$1"
+    local original_command=""
+
+    original_command=$(PATH="${SETUP_ORIGINAL_PATH:-${PATH}}" command -v tea 2>/dev/null || true)
+    if [[ -z "${original_command}" || "${original_command}" == "${managed_path}" ]]; then
+        return 0
+    fi
+    if [[ -e "${managed_path}" && "${original_command}" -ef "${managed_path}" ]]; then
+        return 0
+    fi
+
+    print_error "A conflicting tea executable is earlier on PATH: ${original_command}"
+    print_debug "Remove it from PATH or move $(dirname "${managed_path}") ahead of it, then rerun setup."
+    return 1
+}
+
+gitea_client_verify() {
+    local managed_path="$1"
+    local managed_dir=""
+    local resolved_command=""
+    local version_output=""
+
+    managed_dir=$(dirname "${managed_path}")
+    export PATH="${managed_dir}:${PATH}"
+    if [[ ! -x "${managed_path}" ]] || ! version_output=$("${managed_path}" --version 2>/dev/null) || [[ ! "${version_output}" =~ [0-9]+\.[0-9]+ ]]; then
+        print_error "Gitea client verification failed at ${managed_path}."
+        return 1
+    fi
+    resolved_command=$(command -v tea 2>/dev/null || true)
+    if [[ "${resolved_command}" != "${managed_path}" ]] && { [[ -z "${resolved_command}" || ! -e "${managed_path}" ]] || [[ ! "${resolved_command}" -ef "${managed_path}" ]]; }; then
+        print_error "The tea command resolves to ${resolved_command:-<missing>} instead of ${managed_path}."
+        return 1
+    fi
+
+    print_success "Gitea client is ready (${version_output})."
+}
+
+install_gitea_client_with_homebrew() {
+    if ! command -v brew &> /dev/null; then
+        print_error "Homebrew is required to install the Gitea client on this architecture."
+        return 1
+    fi
+
+    local brew_prefix=""
+    local managed_path=""
+    brew_prefix=$(brew --prefix) || {
+        print_error "Could not resolve the Homebrew prefix for the Gitea client."
+        return 1
+    }
+    managed_path="${brew_prefix}/bin/tea"
+    gitea_client_assert_no_path_conflict "${managed_path}" || return 1
+
+    if brew list --formula tea &> /dev/null; then
+        print_message "Updating Gitea client with Homebrew..."
+        if ! brew upgrade tea; then
+            print_error "Failed to update the Gitea client with Homebrew."
+            return 1
+        fi
+    else
+        print_message "Installing Gitea client with Homebrew..."
+        if ! brew install tea; then
+            print_error "Failed to install the Gitea client with Homebrew."
+            return 1
+        fi
+    fi
+
+    gitea_client_verify "${managed_path}"
+}
+
+# Download and install an official Tea binary in an isolated temporary
+# directory. The subshell keeps cleanup local and runs it on every return path.
+install_gitea_client_standalone() (
+    local release_arch="$1"
+    local api_url="https://gitea.com/api/v1/repos/gitea/tea/releases/latest"
+    local asset=""
+    local asset_path=""
+    local checksums_path=""
+    local download_root="https://dl.gitea.com/tea"
+    local expected_hash=""
+    local actual_hash=""
+    local actual_hash_line=""
+    local install_dir="${HOME}/.local/bin"
+    local managed_path="${install_dir}/tea"
+    local release_json=""
+    local tag=""
+    local temp_dir=""
+    local version=""
+
+    gitea_client_assert_no_path_conflict "${managed_path}" || return 1
+    temp_dir=$(mktemp -d) || {
+        print_error "Could not create a temporary directory for the Gitea client download."
+        return 1
+    }
+    trap 'rm -rf -- "${temp_dir}"' EXIT
+
+    print_message "Finding the latest stable Gitea client release..."
+    if ! release_json=$(curl --fail --silent --show-error --location --connect-timeout 10 --max-time 30 "${api_url}"); then
+        print_error "Failed to query the latest stable Gitea client release."
+        return 1
+    fi
+    tag=$(printf '%s' "${release_json}" | jq -r '.tag_name // empty')
+    if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        print_error "The latest Gitea client release did not contain a stable semantic version."
+        return 1
+    fi
+    version="${tag#v}"
+    asset="tea-${version}-linux-${release_arch}"
+    asset_path="${temp_dir}/${asset}"
+    checksums_path="${temp_dir}/checksums.txt"
+
+    print_message "Downloading Gitea client ${version}..."
+    if ! curl --fail --silent --show-error --location --connect-timeout 10 --max-time 120 \
+        "${download_root}/${version}/${asset}" -o "${asset_path}"; then
+        print_error "Failed to download the official Gitea client binary."
+        return 1
+    fi
+    if ! curl --fail --silent --show-error --location --connect-timeout 10 --max-time 30 \
+        "${download_root}/${version}/checksums.txt" -o "${checksums_path}"; then
+        print_error "Failed to download the published Gitea client checksums."
+        return 1
+    fi
+
+    expected_hash=$(awk -v asset="${asset}" '$2 == asset { print tolower($1); exit }' "${checksums_path}")
+    if ! actual_hash_line=$(sha256sum "${asset_path}"); then
+        print_error "Failed to calculate the Gitea client SHA-256 digest."
+        return 1
+    fi
+    actual_hash=$(printf '%s\n' "${actual_hash_line}" | awk '{ print tolower($1) }')
+    if [[ -z "${expected_hash}" || "${actual_hash}" != "${expected_hash}" ]]; then
+        print_error "Gitea client SHA-256 verification failed for ${asset}."
+        return 1
+    fi
+
+    if ! mkdir -p "${install_dir}" || ! install -m 0755 "${asset_path}" "${managed_path}"; then
+        print_error "Failed to install the Gitea client at ${managed_path}."
+        return 1
+    fi
+
+    gitea_client_verify "${managed_path}"
+)
+
+# Install the Tea workstation client on work machines.
+install_gitea_client() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Skipping Gitea client (not a work machine)."
+        return 0
+    fi
+
+    local machine_arch=""
+    machine_arch=$(uname -m) || {
+        print_error "Could not determine the machine architecture for the Gitea client."
+        return 1
+    }
+
+    case "${machine_arch}" in
+        x86_64|amd64|aarch64|arm64)
+            install_gitea_client_with_homebrew
+            ;;
+        armv7l|armv7*)
+            install_gitea_client_standalone arm-7
+            ;;
+        armv6l|armv6*)
+            install_gitea_client_standalone arm-6
+            ;;
+        armv5l|armv5*)
+            install_gitea_client_standalone arm-5
+            ;;
+        *)
+            print_error "No official Gitea client binary is available for architecture ${machine_arch}."
+            return 1
+            ;;
+    esac
+}
+
 # Install Bun JavaScript runtime and package manager
 install_bun() {
     if command -v bun &> /dev/null; then
@@ -5551,7 +5728,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 188 | Last changed: Remove retired Pi RPIV ask-user-question and todo packages"
+    echo -e "${GRAY}Version 189 | Last changed: Install Gitea client on work machines"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5584,6 +5761,7 @@ run_setup_tasks() {
 
     print_section "Development Tools"
     install_homebrew
+    install_gitea_client || return 1
     install_brew_packages
     install_1password_cli
     install_secrets_manager
