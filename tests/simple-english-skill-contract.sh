@@ -7,18 +7,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=204
-    [ubuntu.sh]=227
-    [wsl.sh]=171
-    [pi.sh]=187
-    [bazzite.sh]=86
+    [mac.sh]=205
+    [ubuntu.sh]=228
+    [wsl.sh]=172
+    [pi.sh]=188
+    [bazzite.sh]=87
 )
 declare -A expected_banners=(
-    [mac.sh]='Prevent duplicate Pi skills and shortcuts'
-    [ubuntu.sh]='Prevent duplicate Pi skills and shortcuts'
-    [wsl.sh]='Prevent duplicate Pi skills and shortcuts'
-    [pi.sh]='Prevent duplicate Pi skills and shortcuts'
-    [bazzite.sh]='Prevent duplicate Pi skills and shortcuts'
+    [mac.sh]='Remove retired Pi RPIV ask-user-question and todo packages'
+    [ubuntu.sh]='Remove retired Pi RPIV ask-user-question and todo packages'
+    [wsl.sh]='Remove retired Pi RPIV ask-user-question and todo packages'
+    [pi.sh]='Remove retired Pi RPIV ask-user-question and todo packages'
+    [bazzite.sh]='Remove retired Pi RPIV ask-user-question and todo packages'
 )
 
 fail() {
@@ -136,7 +136,7 @@ assert_contains win.ps1 '\$env:CLAUDE_CONFIG_DIR' 'PowerShell CLAUDE_CONFIG_DIR 
 assert_contains win.ps1 '\$env:PI_CODING_AGENT_DIR' 'PowerShell PI_CODING_AGENT_DIR support'
 assert_contains win.ps1 '\.agents\\skills\\simple-english\\SKILL\.md' 'PowerShell shared Codex and Gemini skill validation'
 assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal failure propagation'
-assert_contains win.ps1 'Version 125 \| Last changed: Prevent duplicate Pi skills and shortcuts' 'PowerShell version banner'
+assert_contains win.ps1 'Version 126 \| Last changed: Remove retired Pi RPIV ask-user-question and todo packages' 'PowerShell version banner'
 assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+Remove-ImpeccableResources$' 'PowerShell validation before cleanup'
 

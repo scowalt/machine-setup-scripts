@@ -75,19 +75,26 @@ MOCK_PI
         fail "${file}: legacy Pi Ask User package remains installed"
     fi
 
+    count=$(grep -Fxc -- 'npm:pi-web-access' "${package_state}" || true)
+    [[ "${count}" -eq 1 ]] || fail "${file}: expected one installed entry for npm:pi-web-access, found ${count}"
+
+    # Regression guard: the retired RPIV packages must never be installed.
     for package in \
         'npm:@juicesharp/rpiv-ask-user-question' \
-        'npm:pi-web-access' \
         'npm:@juicesharp/rpiv-todo'; do
-        count=$(grep -Fxc -- "${package}" "${package_state}" || true)
-        [[ "${count}" -eq 1 ]] || fail "${file}: expected one installed entry for ${package}, found ${count}"
+        if grep -Fxq -- "${package}" "${package_state}"; then
+            fail "${file}: retired RPIV package ${package} is installed"
+        fi
+        if grep -Fxq "install ${package}" "${command_log}"; then
+            fail "${file}: attempted to install retired RPIV package ${package}"
+        fi
     done
 
     remove_count=$(grep -Fxc 'remove npm:pi-ask-user' "${command_log}" || true)
     [[ "${remove_count}" -eq 1 ]] || fail "${file}: expected one legacy package removal, found ${remove_count}"
 
     remove_line=$(grep -nFx 'remove npm:pi-ask-user' "${command_log}" | cut -d: -f1)
-    install_line=$(grep -nFx 'install npm:@juicesharp/rpiv-ask-user-question' "${command_log}" | head -n 1 | cut -d: -f1)
+    install_line=$(grep -nFx 'install npm:pi-web-access' "${command_log}" | head -n 1 | cut -d: -f1)
     [[ "${remove_line}" -lt "${install_line}" ]] || fail "${file}: installed the replacement before removing the legacy package"
 
     rm -rf "${test_root}"
