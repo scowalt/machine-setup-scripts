@@ -1,11 +1,11 @@
 ---
 id: TASK-5
 title: Stop markdownlint pre-push failures on vendored CLAUDE.md
-status: In Progress
+status: Done
 assignee:
   - '@pi-agent'
 created_date: '2026-08-26 03:27'
-updated_date: '2026-08-26 03:31'
+updated_date: '2026-08-26 15:21'
 labels: []
 dependencies: []
 ---
