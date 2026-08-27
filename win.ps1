@@ -3427,7 +3427,7 @@ function Remove-CompoundEngineeringResources {
     $profileRoot = [System.IO.Path]::GetFullPath($env:USERPROFILE)
     $defaultAgentDir = Join-Path $profileRoot ".pi\agent"
     $agentDirs = @()
-    $compoundSkillPattern = '^(ce-agent-native-architecture|ce-agent-native-audit|ce-brainstorm|ce-clean-gone-branches|ce-code-review|ce-commit|ce-commit-push-pr|ce-compound|ce-compound-refresh|ce-debug|ce-demo-reel|ce-dhh-rails-style|ce-doc-review|ce-frontend-design|ce-gemini-imagegen|ce-ideate|ce-optimize|ce-plan|ce-polish-beta|ce-product-pulse|ce-proof|ce-release-notes|ce-report-bug|ce-resolve-pr-feedback|ce-riffrec-feedback-analysis|ce-sessions|ce-setup|ce-simplify-code|ce-slack-research|ce-strategy|ce-test-browser|ce-test-xcode|ce-work|ce-work-beta|ce-worktree)$'
+    $compoundSkillPattern = '^(ce-agent-native-architecture|ce-agent-native-audit|ce-brainstorm|ce-clean-gone-branches|ce-code-review|ce-commit|ce-commit-push-pr|ce-compound|ce-compound-refresh|ce-debug|ce-demo-reel|ce-dhh-rails-style|ce-doc-review|ce-frontend-design|ce-gemini-imagegen|ce-ideate|ce-optimize|ce-plan|ce-polish-beta|ce-product-pulse|ce-proof|ce-release-notes|ce-report-bug|ce-resolve-pr-feedback|ce-riffrec-feedback-analysis|ce-sessions|ce-setup|ce-simplify-code|ce-slack-research|ce-strategy|ce-test-browser|ce-test-xcode|ce-work|ce-work-beta|ce-worktree|lfg)$'
     $compoundAgentPattern = '^(ce-adversarial-document-reviewer|ce-adversarial-reviewer|ce-agent-native-reviewer|ce-ankane-readme-writer|ce-api-contract-reviewer|ce-architecture-strategist|ce-best-practices-researcher|ce-code-simplicity-reviewer|ce-coherence-reviewer|ce-correctness-reviewer|ce-data-integrity-guardian|ce-data-migration-expert|ce-data-migrations-reviewer|ce-deployment-verification-agent|ce-design-implementation-reviewer|ce-design-iterator|ce-design-lens-reviewer|ce-dhh-rails-reviewer|ce-feasibility-reviewer|ce-figma-design-sync|ce-framework-docs-researcher|ce-git-history-analyzer|ce-issue-intelligence-analyst|ce-julik-frontend-races-reviewer|ce-kieran-python-reviewer|ce-kieran-rails-reviewer|ce-kieran-typescript-reviewer|ce-learnings-researcher|ce-maintainability-reviewer|ce-pattern-recognition-specialist|ce-performance-oracle|ce-performance-reviewer|ce-pr-comment-resolver|ce-previous-comments-reviewer|ce-product-lens-reviewer|ce-project-standards-reviewer|ce-reliability-reviewer|ce-repo-research-analyst|ce-schema-drift-detector|ce-scope-guardian-reviewer|ce-security-lens-reviewer|ce-security-reviewer|ce-security-sentinel|ce-session-historian|ce-slack-researcher|ce-spec-flow-analyzer|ce-swift-ios-reviewer|ce-testing-reviewer|ce-web-researcher)$'
     $compoundRepo = Join-Path $profileRoot ".local\share\compound-engineering-plugin"
     $sharedSkillsDir = Join-Path $profileRoot ".agents\skills"
@@ -3514,6 +3514,33 @@ function Remove-CompoundEngineeringResources {
                 catch {
                     $failed += $resource.FullName
                 }
+            }
+        }
+
+        # The Pi plugin installer leaves its install manifest behind. The
+        # manifest is part of the legacy installation and must be removed too.
+        $manifestDir = Join-Path $agentDir "compound-engineering"
+        if (Test-Path -LiteralPath $manifestDir) {
+            try {
+                $manifestItem = Get-Item -LiteralPath $manifestDir -Force -ErrorAction Stop
+                if ($manifestItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                    Remove-Item -LiteralPath $manifestDir -Force -ErrorAction Stop
+                    $removed = $true
+                }
+                elseif ($manifestItem.PSIsContainer -and (Test-SafeProfileDirectory -Path $manifestDir -ProfileRoot $profileRoot)) {
+                    Remove-Item -LiteralPath $manifestDir -Recurse -Force -ErrorAction Stop
+                    $removed = $true
+                }
+                elseif (-not $manifestItem.PSIsContainer) {
+                    Remove-Item -LiteralPath $manifestDir -Force -ErrorAction Stop
+                    $removed = $true
+                }
+                else {
+                    Write-Warning "Skipping Compound Engineering manifest cleanup through a reparse point or outside the Windows user profile: $manifestDir"
+                }
+            }
+            catch {
+                $failed += $manifestDir
             }
         }
 
@@ -3767,7 +3794,7 @@ function Invoke-WindowsSetupTasks {
     $simpleEnglishSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 128 | Last changed: Warn at end of setup when a reboot is pending" -ForegroundColor DarkGray
+    Write-Host "Version 129 | Last changed: Remove leftover Compound Engineering lfg skill and install manifest" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
