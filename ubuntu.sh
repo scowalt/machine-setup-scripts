@@ -4952,7 +4952,8 @@ compound_pi_skill_names() {
         ce-test-xcode \
         ce-work \
         ce-work-beta \
-        ce-worktree
+        ce-worktree \
+        lfg
 }
 
 compound_pi_agent_names() {
@@ -5165,6 +5166,22 @@ remove_compound_engineering_resources() {
                     fi
                 done
             done < <(compound_pi_agent_names || true)
+        fi
+
+        # The Pi plugin installer leaves its install manifest behind. The
+        # manifest is part of the legacy installation and must be removed too.
+        _resource_path="${_agent_dir}/compound-engineering"
+        if [[ -e "${_resource_path}" || -L "${_resource_path}" ]]; then
+            if [[ -d "${_resource_path}" || -L "${_resource_path}" ]]; then
+                rm -rf -- "${_resource_path}"
+            else
+                rm -f -- "${_resource_path}"
+            fi
+            if [[ ! -e "${_resource_path}" && ! -L "${_resource_path}" ]]; then
+                _removed=1
+            else
+                _failed+=("${_resource_path}")
+            fi
         fi
 
         _agents_path="${_agent_dir}/AGENTS.md"
@@ -5986,7 +6003,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 230 | Last changed: Warn at end of setup when a reboot is pending"
+    echo -e "${GRAY}Version 231 | Last changed: Remove leftover Compound Engineering lfg skill and install manifest"
 
     if ! acquire_setup_lock; then
         return 1

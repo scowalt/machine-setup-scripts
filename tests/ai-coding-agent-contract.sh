@@ -96,6 +96,11 @@ for file in "${bash_setup_scripts[@]}"; do
         '.cursor/agents/impeccable-finish-reviewer.md'; do
         assert_contains "${file}" "${path}" "legacy Impeccable cleanup path ${path}"
     done
+    assert_contains "${file}" '^remove_compound_engineering_resources\(\)' 'legacy Compound Engineering cleanup function'
+    assert_contains "${file}" '^[[:space:]]+remove_compound_engineering_resources$' 'legacy Compound Engineering cleanup wiring'
+    assert_order "${file}" '^[[:space:]]+remove_impeccable_resources$' '^[[:space:]]+remove_compound_engineering_resources$' 'Compound Engineering cleanup grouped with legacy Impeccable cleanup'
+    assert_contains "${file}" '^[[:space:]]+lfg$' 'legacy Compound Engineering lfg skill in cleanup list'
+    assert_contains "${file}" '_resource_path="\$\{_agent_dir\}/compound-engineering"' 'legacy Compound Engineering install manifest cleanup path'
 done
 
 for file in "${opencode_scripts[@]}"; do
@@ -169,6 +174,11 @@ for path in \
     '\.cursor\\agents\\impeccable-finish-reviewer\.md'; do
     assert_contains win.ps1 "${path}" "legacy Impeccable cleanup path ${path}"
 done
+assert_contains win.ps1 'function Remove-CompoundEngineeringResources' 'legacy Compound Engineering cleanup function'
+assert_contains win.ps1 '^[[:space:]]+Remove-CompoundEngineeringResources$' 'legacy Compound Engineering cleanup wiring'
+assert_order win.ps1 '^[[:space:]]+Remove-ImpeccableResources$' '^[[:space:]]+Remove-CompoundEngineeringResources$' 'Compound Engineering cleanup grouped with legacy Impeccable cleanup'
+assert_contains win.ps1 '\|lfg\)' 'legacy Compound Engineering lfg skill in cleanup pattern'
+assert_contains win.ps1 'Join-Path [$]agentDir "compound-engineering"' 'legacy Compound Engineering install manifest cleanup path'
 
 assert_contains README.md 'macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows' 'all-machine AI coding agent statement'
 assert_contains README.md 'Claude Code CLI and Codex CLI' 'Claude/Codex README contract'
@@ -230,6 +240,57 @@ for file in "${bash_setup_scripts[@]}"; do
     [[ -f "${cleanup_home}/.agents/skills/keep-me/SKILL.md" ]] || fail "${file}: cleanup removed a sibling skill"
     [[ -f "${cleanup_home}/.cursor/agents/keep-me.md" ]] || fail "${file}: cleanup removed a sibling Cursor agent"
     [[ -f "${symlink_target}/sentinel" ]] || fail "${file}: cleanup followed the Impeccable symlink target"
+    rm -rf "${cleanup_test_root}"
+done
+
+for file in "${bash_setup_scripts[@]}"; do
+    cleanup_test_root=$(mktemp -d)
+    cleanup_home="${cleanup_test_root}/home"
+    symlink_target="${cleanup_test_root}/symlink-target"
+    compound_repo="${cleanup_home}/.local/share/compound-engineering-plugin"
+    mkdir -p \
+        "${cleanup_home}/.agents/skills/keep-me" \
+        "${cleanup_home}/.pi/agent/skills/lfg" \
+        "${cleanup_home}/.pi/agent/skills/ce-plan" \
+        "${cleanup_home}/.pi/agent/skills/keep-me" \
+        "${cleanup_home}/.pi/agent/agents" \
+        "${cleanup_home}/.pi/agent/compound-engineering" \
+        "${compound_repo}/skills/lfg" \
+        "${symlink_target}"
+    touch \
+        "${cleanup_home}/.agents/skills/keep-me/SKILL.md" \
+        "${cleanup_home}/.pi/agent/skills/lfg/SKILL.md" \
+        "${cleanup_home}/.pi/agent/skills/ce-plan/SKILL.md" \
+        "${cleanup_home}/.pi/agent/skills/keep-me/SKILL.md" \
+        "${cleanup_home}/.pi/agent/agents/ce-web-researcher.md" \
+        "${cleanup_home}/.pi/agent/agents/keep-me.md" \
+        "${compound_repo}/skills/lfg/SKILL.md" \
+        "${symlink_target}/sentinel"
+    printf '%s\n' '{"skills":["lfg"]}' > "${cleanup_home}/.pi/agent/compound-engineering/install-manifest.json"
+    ln -s "${compound_repo}/skills/lfg" "${cleanup_home}/.agents/skills/lfg"
+    ln -s "${symlink_target}" "${cleanup_home}/.agents/skills/external-link"
+
+    SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" \
+        HOME="${cleanup_home}" PI_CODING_AGENT_DIR="" bash -c '
+        source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+        remove_compound_engineering_resources
+        remove_compound_engineering_resources
+    '
+
+    for path in \
+        "${cleanup_home}/.agents/skills/lfg" \
+        "${cleanup_home}/.pi/agent/skills/lfg" \
+        "${cleanup_home}/.pi/agent/skills/ce-plan" \
+        "${cleanup_home}/.pi/agent/agents/ce-web-researcher.md" \
+        "${cleanup_home}/.pi/agent/compound-engineering" \
+        "${compound_repo}"; do
+        [[ ! -e "${path}" && ! -L "${path}" ]] || fail "${file}: legacy Compound Engineering cleanup left ${path}"
+    done
+    [[ -f "${cleanup_home}/.agents/skills/keep-me/SKILL.md" ]] || fail "${file}: Compound Engineering cleanup removed a sibling shared skill"
+    [[ -f "${cleanup_home}/.pi/agent/skills/keep-me/SKILL.md" ]] || fail "${file}: Compound Engineering cleanup removed a sibling Pi skill"
+    [[ -f "${cleanup_home}/.pi/agent/agents/keep-me.md" ]] || fail "${file}: Compound Engineering cleanup removed a sibling Pi agent"
+    [[ -L "${cleanup_home}/.agents/skills/external-link" ]] || fail "${file}: Compound Engineering cleanup removed an unrelated shared skill link"
+    [[ -f "${symlink_target}/sentinel" ]] || fail "${file}: Compound Engineering cleanup followed a shared skill symlink target"
     rm -rf "${cleanup_test_root}"
 done
 

@@ -7,18 +7,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=207
-    [ubuntu.sh]=230
-    [wsl.sh]=174
-    [pi.sh]=190
-    [bazzite.sh]=89
+    [mac.sh]=208
+    [ubuntu.sh]=231
+    [wsl.sh]=175
+    [pi.sh]=191
+    [bazzite.sh]=90
 )
 declare -A expected_banners=(
-    [mac.sh]='Warn at end of setup when a reboot is pending'
-    [ubuntu.sh]='Warn at end of setup when a reboot is pending'
-    [wsl.sh]='Warn at end of setup when a reboot is pending'
-    [pi.sh]='Warn at end of setup when a reboot is pending'
-    [bazzite.sh]='Warn at end of setup when a reboot is pending'
+    [mac.sh]='Remove leftover Compound Engineering lfg skill and install manifest'
+    [ubuntu.sh]='Remove leftover Compound Engineering lfg skill and install manifest'
+    [wsl.sh]='Remove leftover Compound Engineering lfg skill and install manifest'
+    [pi.sh]='Remove leftover Compound Engineering lfg skill and install manifest'
+    [bazzite.sh]='Remove leftover Compound Engineering lfg skill and install manifest'
 )
 
 fail() {
@@ -136,7 +136,7 @@ assert_contains win.ps1 '\$env:CLAUDE_CONFIG_DIR' 'PowerShell CLAUDE_CONFIG_DIR 
 assert_contains win.ps1 '\$env:PI_CODING_AGENT_DIR' 'PowerShell PI_CODING_AGENT_DIR support'
 assert_contains win.ps1 '\.agents\\skills\\simple-english\\SKILL\.md' 'PowerShell shared Codex and Gemini skill validation'
 assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal failure propagation'
-assert_contains win.ps1 'Version 128 \| Last changed: Warn at end of setup when a reboot is pending' 'PowerShell version banner'
+assert_contains win.ps1 'Version 129 \| Last changed: Remove leftover Compound Engineering lfg skill and install manifest' 'PowerShell version banner'
 assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+Remove-ImpeccableResources$' 'PowerShell validation before cleanup'
 
