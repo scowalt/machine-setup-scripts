@@ -4120,12 +4120,36 @@ finish_setup_log() {
     return "${setup_status}"
 }
 
+# Warn if the WSL instance has a restart pending. Informational only; never
+# affects the run's exit status. The pending-reboot state is for the WSL
+# instance, not the Windows host (win.ps1 reports host state). Note: an instance
+# restart cannot apply new kernels; the WSL kernel ships with Windows.
+check_pending_reboot() {
+    if [[ ! -f /var/run/reboot-required ]]; then
+        print_debug "No WSL instance restart pending."
+        return 0
+    fi
+
+    print_warning "WSL instance restart pending. Run 'wsl --shutdown' in Windows PowerShell, then reopen WSL."
+
+    if [[ -f /var/run/reboot-required.pkgs ]]; then
+        local pkg pkgs
+        pkgs=$(head -n 5 /var/run/reboot-required.pkgs 2> /dev/null) || pkgs=""
+        if [[ -n "${pkgs}" ]]; then
+            print_debug "Packages that triggered it (up to 5):"
+            while IFS= read -r pkg; do
+                print_debug "  ${pkg}"
+            done <<< "${pkgs}"
+        fi
+    fi
+}
+
 run_setup_tasks() {
     local _setup_had_errors=0
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 173 | Last changed: Install Gitea client on work machines${NC}"
+    echo -e "${GRAY}Version 174 | Last changed: Warn at end of setup when a reboot is pending${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -4266,6 +4290,8 @@ run_setup_tasks() {
     if ! update_packages; then
         _setup_had_errors=1
     fi
+
+    check_pending_reboot
 
     if [[ "${_setup_had_errors}" -eq 0 ]]; then
         printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}"

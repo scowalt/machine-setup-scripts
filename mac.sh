@@ -5528,13 +5528,44 @@ enable_screen_sharing() {
     print_debug "Screen Sharing is enabled and accepting connections."
 }
 
+# Warn if the machine appears to have a reboot pending. Best-effort only:
+# macOS exposes no documented pending-restart API, so detection combines the
+# staged-update state in /Library/Updates/index.plist (e.g. InstallAtLogout,
+# written when a user defers an update restart) with restart/shutdown markers
+# in `softwareupdate --list`. Informational; never affects the exit status.
+check_pending_reboot() {
+    local signals=0
+
+    local updates_index=""
+    if [[ -f /Library/Updates/index.plist ]]; then
+        updates_index=$(/usr/bin/defaults read /Library/Updates/index.plist 2> /dev/null) || updates_index=""
+    fi
+    if [[ -n "${updates_index}" ]] && grep -qE 'InstallAtLogout|InstallAtStartup|RestartRequired' <<< "${updates_index}"; then
+        print_debug "Staged macOS update found in /Library/Updates/index.plist."
+        signals=$((signals + 1))
+    fi
+
+    local software_updates
+    software_updates=$(softwareupdate --list 2> /dev/null) || software_updates=""
+    if printf '%s' "${software_updates}" | grep -qiE '\[(restart|shutdown)\]|Action: (restart|shutdown)'; then
+        print_debug "softwareupdate lists updates marked as requiring a restart or shutdown."
+        signals=$((signals + 1))
+    fi
+
+    if [[ ${signals} -gt 0 ]]; then
+        print_warning "A restart appears to be needed for pending macOS updates. Restart this Mac when convenient."
+    else
+        print_debug "No reboot pending."
+    fi
+}
+
 run_setup_tasks() {
     local _setup_had_errors=0
 
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 206 | Last changed: Install Gitea client on work machines${NC}"
+    echo -e "${GRAY}Version 207 | Last changed: Warn at end of setup when a reboot is pending${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5756,6 +5787,7 @@ HELPER_EOF
         update_brew
     fi
 
+    check_pending_reboot
 
     if [[ "${_setup_had_errors}" -eq 0 ]]; then
         printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}"

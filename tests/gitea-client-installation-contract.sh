@@ -296,7 +296,7 @@ done
 # User-facing setup metadata and authentication handoff stay consistent across
 # platforms.
 for file in "${bash_setup_scripts[@]}" win.ps1; do
-    assert_contains "${file}" 'Last changed: Install Gitea client on work machines' 'Gitea client version banner'
+    assert_contains "${file}" 'Last changed: Warn at end of setup when a reboot is pending' 'current version banner'
 done
 assert_contains README.md 'WORK_MACHINE=1.*Tea' 'work-machine Tea management documentation'
 # shellcheck disable=SC2016 # Match the literal command in Markdown.

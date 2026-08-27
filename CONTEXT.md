@@ -31,3 +31,7 @@ _Avoid_: Banned tool, removed tool
 **Shared agent file**:
 An agent file that can contain both managed text and user text.
 _Avoid_: Managed file, configuration blob
+
+**Pending reboot**:
+The machine state in which already-applied updates only take effect after a restart. Detection is best-effort per platform. On WSL it refers to a restart of the WSL instance, not of the Windows host.
+_Avoid_: Restart required, reboot flag
