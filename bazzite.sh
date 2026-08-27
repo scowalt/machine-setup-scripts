@@ -5290,9 +5290,51 @@ finish_setup_log() {
     return "${setup_status}"
 }
 
+# Warn if the machine has a reboot pending. Informational only; never affects
+# the run's exit status. Bazzite is rpm-ostree based: system updates stage a
+# new deployment that only becomes active after reboot. The Debian-style
+# /var/run/reboot-required sentinel is checked as a fallback.
+check_pending_reboot() {
+    local staged_version=""
+
+    if command -v rpm-ostree > /dev/null 2>&1; then
+        local ostree_status
+        ostree_status=$(rpm-ostree status --json 2> /dev/null) || ostree_status=""
+        if [[ -n "${ostree_status}" ]]; then
+            if command -v python3 > /dev/null 2>&1; then
+                staged_version=$(printf '%s' "${ostree_status}" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for deployment in data.get("deployments", []):
+    if deployment.get("staged"):
+        print(deployment.get("version") or deployment.get("id") or "")
+        break
+' 2> /dev/null) || staged_version=""
+            elif printf '%s' "${ostree_status}" | grep -qE '"staged"[[:space:]]*:[[:space:]]*true'; then
+                staged_version="unknown"
+            fi
+        fi
+    fi
+
+    if [[ -n "${staged_version}" ]]; then
+        print_warning "Machine reboot pending: staged system deployment ${staged_version} becomes active after restart."
+        return 0
+    fi
+
+    if [[ -f /var/run/reboot-required ]]; then
+        print_warning "Machine reboot pending. Restart this machine for applied updates to take effect."
+        return 0
+    fi
+
+    print_debug "No reboot pending."
+}
+
 run_setup_tasks() {
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 88 | Last changed: Install Gitea client on work machines"
+    echo -e "${GRAY}Version 89 | Last changed: Warn at end of setup when a reboot is pending"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5460,6 +5502,8 @@ HELPER_EOF
 
     print_section "Final Updates"
     update_brew || return 1
+
+    check_pending_reboot
 
     printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}"
 }

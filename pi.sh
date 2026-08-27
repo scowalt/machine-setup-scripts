@@ -5724,11 +5724,34 @@ finish_setup_log() {
     return "${setup_status}"
 }
 
+# Warn if the machine has a reboot pending. Informational only; never affects
+# the run's exit status. Detection: the Debian /var/run/reboot-required
+# sentinel; the matching .pkgs file names the packages that triggered it.
+check_pending_reboot() {
+    if [[ ! -f /var/run/reboot-required ]]; then
+        print_debug "No reboot pending."
+        return 0
+    fi
+
+    print_warning "Machine reboot pending. Restart this machine for applied updates to take effect."
+
+    if [[ -f /var/run/reboot-required.pkgs ]]; then
+        local pkg pkgs
+        pkgs=$(head -n 5 /var/run/reboot-required.pkgs 2> /dev/null) || pkgs=""
+        if [[ -n "${pkgs}" ]]; then
+            print_debug "Packages that triggered it (up to 5):"
+            while IFS= read -r pkg; do
+                print_debug "  ${pkg}"
+            done <<< "${pkgs}"
+        fi
+    fi
+}
+
 run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 189 | Last changed: Install Gitea client on work machines"
+    echo -e "${GRAY}Version 190 | Last changed: Warn at end of setup when a reboot is pending"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5880,6 +5903,8 @@ run_setup_tasks() {
     install_iterm2_shell_integration
 
     print_section "Final Updates"
+
+    check_pending_reboot
 
     if [[ "${_setup_had_errors}" -eq 0 ]]; then
         printf '\n%b%b✨ Setup complete! Please log out and log back in for all changes to take effect.%b\n\n' "${GREEN}" "${BOLD}" "${NC}"

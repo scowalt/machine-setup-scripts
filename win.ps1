@@ -3664,6 +3664,29 @@ function Install-WindowsUpdates {
 }
 
 # Function to setup ~/Code directory
+# Report whether the machine has a reboot pending. Informational only; never
+# affects the run's exit status. Checks the standard pending-reboot registry
+# locations and reports which of them triggered.
+function Test-PendingReboot {
+    $reasons = @()
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') {
+        $reasons += 'Component Based Servicing'
+    }
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') {
+        $reasons += 'Windows Update'
+    }
+    $pendingRename = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name 'PendingFileRenameOperations' -ErrorAction SilentlyContinue
+    if ($null -ne $pendingRename -and $null -ne $pendingRename.PendingFileRenameOperations) {
+        $reasons += 'pending file rename operations'
+    }
+    if ($reasons.Count -gt 0) {
+        Write-Warning "Machine reboot pending ($($reasons -join ', ')). Restart this PC for applied updates to take effect."
+    }
+    else {
+        Write-Debug "No reboot pending."
+    }
+}
+
 function Setup-CodeDirectory {
     $codeDir = "$env:USERPROFILE\Code"
 
@@ -3744,7 +3767,7 @@ function Invoke-WindowsSetupTasks {
     $simpleEnglishSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 127 | Last changed: Install Gitea client on work machines" -ForegroundColor DarkGray
+    Write-Host "Version 128 | Last changed: Warn at end of setup when a reboot is pending" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -3820,6 +3843,8 @@ function Invoke-WindowsSetupTasks {
     Write-Section "System Updates"
     Install-WingetUpdates
     Install-WindowsUpdates # this should always be LAST since it may prompt a system reboot
+
+    Test-PendingReboot
 
     if ($piSetupFailed) {
         throw "Required Pi coding agent setup failed."
