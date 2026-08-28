@@ -295,7 +295,10 @@ done
 
 # User-facing setup metadata and authentication handoff stay consistent across
 # platforms.
-for file in "${bash_setup_scripts[@]}" win.ps1; do
+for file in mac.sh ubuntu.sh wsl.sh bazzite.sh; do
+    assert_contains "${file}" 'Last changed: Remove abandoned coding agent setup' 'current version banner'
+done
+for file in pi.sh win.ps1; do
     assert_contains "${file}" 'Last changed: Remove leftover Compound Engineering lfg skill and install manifest' 'current version banner'
 done
 assert_contains README.md 'WORK_MACHINE=1.*Tea' 'work-machine Tea management documentation'

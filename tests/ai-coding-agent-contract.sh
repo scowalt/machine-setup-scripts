@@ -6,7 +6,6 @@ cd "${repo_root}"
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 linux_codex_scripts=(ubuntu.sh wsl.sh pi.sh bazzite.sh)
-opencode_scripts=(mac.sh ubuntu.sh wsl.sh bazzite.sh)
 
 fail() {
     printf '✗ %s\n' "$1" >&2
@@ -103,26 +102,14 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '_resource_path="\$\{_agent_dir\}/compound-engineering"' 'legacy Compound Engineering install manifest cleanup path'
 done
 
-for file in "${opencode_scripts[@]}"; do
-    assert_contains "${file}" '^install_opencode\(\)' 'opencode installer function'
-    assert_contains "${file}" '^validate_opencode_keys\(\)' 'opencode key validation function'
-    assert_contains "${file}" '^[[:space:]]+install_opencode([[:space:]]+\|\|[[:space:]]+return 1)?$' 'opencode main wiring'
-    assert_contains "${file}" '^[[:space:]]+validate_opencode_keys$' 'opencode key validation wiring'
-    assert_contains "${file}" 'BAN_OPENCODE' 'opencode opt-out'
-    assert_contains "${file}" 'bun remove -g opencode-ai' 'legacy Bun opencode package cleanup'
-    assert_contains "${file}" 'brew install anomalyco/tap/opencode' 'opencode Homebrew formula install'
-    assert_contains "${file}" 'brew upgrade opencode' 'opencode Homebrew formula upgrade'
-    assert_contains "${file}" 'https://opencode\.ai/install' 'official opencode installer download'
-    assert_contains "${file}" '--no-modify-path' 'opencode installer keeps chezmoi shell files untouched'
-    assert_contains "${file}" '--agent opencode' 'skills CLI opencode target'
-    assert_contains "${file}" '\.config/opencode/skills' 'opencode skill directory management'
-    assert_order "${file}" '^[[:space:]]+install_opencode([[:space:]]+\|\|[[:space:]]+return 1)?$' '^[[:space:]]+remove_rtk_resources[[:space:]]+\|\|[[:space:]]+return 1$' 'opencode installed before retired RTK cleanup'
+# opencode is retired via passive abandonment: no setup script installs,
+# validates, or mentions it beyond the permanent RTK plugin path.
+for file in "${bash_setup_scripts[@]}"; do
+    assert_not_contains "${file}" 'install_opencode|validate_opencode_keys|BAN_OPENCODE|--agent opencode|opencode-ai|anomalyco/tap/opencode|opencode\.ai/install|config/opencode/skills' 'retired opencode setup'
 done
-assert_not_contains pi.sh 'install_opencode|BAN_OPENCODE' 'opencode setup'
 assert_not_contains win.ps1 'opencode|OpenCode' 'opencode setup'
 
-assert_contains README.md 'anomalyco/tap/opencode' 'opencode Homebrew formula documentation'
-assert_contains README.md 'BAN_OPENCODE' 'opencode opt-out documentation'
+assert_not_contains README.md 'opencode|OpenCode' 'retired opencode documentation'
 
 assert_contains mac.sh 'brew (install|upgrade) --cask codex' 'native Codex Homebrew cask install'
 for file in "${linux_codex_scripts[@]}"; do
