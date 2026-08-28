@@ -7,18 +7,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=208
-    [ubuntu.sh]=231
-    [wsl.sh]=175
+    [mac.sh]=209
+    [ubuntu.sh]=232
+    [wsl.sh]=176
     [pi.sh]=191
-    [bazzite.sh]=90
+    [bazzite.sh]=91
 )
 declare -A expected_banners=(
-    [mac.sh]='Remove leftover Compound Engineering lfg skill and install manifest'
-    [ubuntu.sh]='Remove leftover Compound Engineering lfg skill and install manifest'
-    [wsl.sh]='Remove leftover Compound Engineering lfg skill and install manifest'
+    [mac.sh]='Remove abandoned coding agent setup'
+    [ubuntu.sh]='Remove abandoned coding agent setup'
+    [wsl.sh]='Remove abandoned coding agent setup'
     [pi.sh]='Remove leftover Compound Engineering lfg skill and install manifest'
-    [bazzite.sh]='Remove leftover Compound Engineering lfg skill and install manifest'
+    [bazzite.sh]='Remove abandoned coding agent setup'
 )
 
 fail() {
@@ -100,10 +100,7 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_function_contains "${file}" setup_simple_english_skill '^        --agent codex [\\]$' 'Codex target'
     assert_function_contains "${file}" setup_simple_english_skill '^        --agent gemini-cli [\\]$' 'Gemini CLI target'
     assert_function_not_contains "${file}" setup_simple_english_skill '^        --agent pi [\\]$' 'redundant direct Pi target'
-    if [[ "${file}" != "pi.sh" ]]; then
-        assert_function_contains "${file}" setup_simple_english_skill '^        --agent opencode [\\]$' 'opencode target'
-        assert_function_contains "${file}" setup_simple_english_skill '\$\{HOME\}/\.config/opencode/skills/simple-english/SKILL\.md' 'opencode skill validation'
-    fi
+    assert_function_not_contains "${file}" setup_simple_english_skill 'opencode' 'retired opencode target'
     assert_function_contains "${file}" setup_simple_english_skill '^        --skill simple-english [\\]$' 'specific skill selection'
     assert_function_contains "${file}" setup_simple_english_skill '^        --copy [\\]$' 'copied installation mode'
     assert_function_contains "${file}" setup_simple_english_skill '^        --yes < /dev/null' 'non-interactive confirmation and stdin'
@@ -160,8 +157,7 @@ for file in "${bash_setup_scripts[@]}"; do
                 local skill_file
                 for skill_file in \
                     "${CLAUDE_CONFIG_DIR}/skills/simple-english/SKILL.md" \
-                    "${HOME}/.agents/skills/simple-english/SKILL.md" \
-                    "${HOME}/.config/opencode/skills/simple-english/SKILL.md"; do
+                    "${HOME}/.agents/skills/simple-english/SKILL.md"; do
                     mkdir -p "$(dirname "${skill_file}")"
                     printf "%s\n" "---" "name: simple-english" "---" > "${skill_file}"
                 done
@@ -178,10 +174,6 @@ for file in "${bash_setup_scripts[@]}"; do
         "${claude_home}/skills/simple-english/SKILL.md"
         "${test_home}/.agents/skills/simple-english/SKILL.md"
     )
-    if [[ "${file}" != "pi.sh" ]]; then
-        expected_args='--yes skills@latest add AminBlg/SimpleEnglish --global --agent claude-code --agent codex --agent gemini-cli --agent opencode --skill simple-english --copy --yes'
-        skill_files+=("${test_home}/.config/opencode/skills/simple-english/SKILL.md")
-    fi
     if grep -Fvx -- "${expected_args}" "${test_root}/calls" > /dev/null; then
         fail "${file}: installer used unexpected arguments"
     fi
