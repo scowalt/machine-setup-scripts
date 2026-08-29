@@ -7,18 +7,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=209
-    [ubuntu.sh]=232
-    [wsl.sh]=176
-    [pi.sh]=191
-    [bazzite.sh]=91
+    [mac.sh]=210
+    [ubuntu.sh]=233
+    [wsl.sh]=177
+    [pi.sh]=192
+    [bazzite.sh]=92
 )
 declare -A expected_banners=(
-    [mac.sh]='Remove abandoned coding agent setup'
-    [ubuntu.sh]='Remove abandoned coding agent setup'
-    [wsl.sh]='Remove abandoned coding agent setup'
-    [pi.sh]='Remove leftover Compound Engineering lfg skill and install manifest'
-    [bazzite.sh]='Remove abandoned coding agent setup'
+    [mac.sh]='Remove retired Attention-kind guidance'
+    [ubuntu.sh]='Remove retired Attention-kind guidance'
+    [wsl.sh]='Remove retired Attention-kind guidance'
+    [pi.sh]='Remove retired Attention-kind guidance'
+    [bazzite.sh]='Remove retired Attention-kind guidance'
 )
 
 fail() {
@@ -133,7 +133,7 @@ assert_contains win.ps1 '\$env:CLAUDE_CONFIG_DIR' 'PowerShell CLAUDE_CONFIG_DIR 
 assert_contains win.ps1 '\$env:PI_CODING_AGENT_DIR' 'PowerShell PI_CODING_AGENT_DIR support'
 assert_contains win.ps1 '\.agents\\skills\\simple-english\\SKILL\.md' 'PowerShell shared Codex and Gemini skill validation'
 assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal failure propagation'
-assert_contains win.ps1 'Version 129 \| Last changed: Remove leftover Compound Engineering lfg skill and install manifest' 'PowerShell version banner'
+assert_contains win.ps1 'Version 130 \| Last changed: Remove retired Attention-kind guidance' 'PowerShell version banner'
 assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+Remove-ImpeccableResources$' 'PowerShell validation before cleanup'
 

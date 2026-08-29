@@ -2250,6 +2250,212 @@ ensure_pi_node_runtime() {
     return 1
 }
 
+# Remove the managed footprint of the retired Attention-kind guidance.
+attention_span_cleanup_prepare_file_mode() {
+    local _staged_file="$1"
+    local _target_file="$2"
+    local _mode=""
+
+    if [[ -e "${_target_file}" ]]; then
+        _mode=$(stat -c '%a' "${_target_file}" 2>/dev/null || stat -f '%Lp' "${_target_file}" 2>/dev/null || true)
+    fi
+    if [[ -n "${_mode}" ]]; then
+        chmod "${_mode}" "${_staged_file}"
+    else
+        chmod 600 "${_staged_file}"
+    fi
+}
+
+attention_span_cleanup_style_is_safe() {
+    local _style_file="$1"
+
+    [[ -e "${_style_file}" || -L "${_style_file}" ]] || return 0
+    [[ -L "${_style_file}" || -f "${_style_file}" ]] || {
+        print_warning "Attention-kind style target is not a file or symlink: ${_style_file}"
+        return 1
+    }
+}
+
+attention_span_cleanup_settings_is_safe() {
+    local _settings_file="$1"
+
+    [[ -e "${_settings_file}" || -L "${_settings_file}" ]] || return 0
+    if [[ -L "${_settings_file}" ]]; then
+        print_warning "Cannot safely remove Attention-kind from symlinked Claude settings: ${_settings_file}"
+        return 1
+    fi
+    if [[ ! -f "${_settings_file}" ]]; then
+        print_warning "Claude settings target is not a regular file: ${_settings_file}"
+        return 1
+    fi
+    if ! command -v jq > /dev/null 2>&1; then
+        print_warning "jq is required to remove Attention-kind from Claude settings: ${_settings_file}"
+        return 1
+    fi
+    if ! jq -e 'type == "object"' "${_settings_file}" > /dev/null 2>&1; then
+        print_warning "Claude settings are not a valid JSON object: ${_settings_file}"
+        return 1
+    fi
+}
+
+attention_span_cleanup_managed_file_is_safe() {
+    local _target_file="$1"
+    local _begin_marker="<!-- attention-span:start -->"
+    local _end_marker="<!-- attention-span:end -->"
+    local _begin_count=0
+    local _end_count=0
+    local _begin_line=""
+    local _end_line=""
+
+    [[ -e "${_target_file}" || -L "${_target_file}" ]] || return 0
+    if [[ -L "${_target_file}" ]]; then
+        print_warning "Cannot safely remove Attention-kind from symlinked shared instructions: ${_target_file}"
+        return 1
+    fi
+    if [[ ! -f "${_target_file}" ]]; then
+        print_warning "Shared instruction target is not a regular file: ${_target_file}"
+        return 1
+    fi
+
+    _begin_count=$(grep -Fxc -- "${_begin_marker}" "${_target_file}" || true)
+    _end_count=$(grep -Fxc -- "${_end_marker}" "${_target_file}" || true)
+    if [[ "${_begin_count}" -eq 0 && "${_end_count}" -eq 0 ]]; then
+        return 0
+    fi
+    if [[ "${_begin_count}" -ne 1 || "${_end_count}" -ne 1 ]]; then
+        print_warning "Attention-kind markers are malformed in ${_target_file}; leaving it unchanged."
+        return 1
+    fi
+
+    _begin_line=$(grep -nFx -- "${_begin_marker}" "${_target_file}" || true)
+    _begin_line=${_begin_line%%:*}
+    _end_line=$(grep -nFx -- "${_end_marker}" "${_target_file}" || true)
+    _end_line=${_end_line%%:*}
+    if [[ "${_begin_line}" -ge "${_end_line}" ]]; then
+        print_warning "Attention-kind markers are malformed in ${_target_file}; leaving it unchanged."
+        return 1
+    fi
+}
+
+attention_span_cleanup_remove_style() {
+    local _style_file="$1"
+
+    [[ -e "${_style_file}" || -L "${_style_file}" ]] || return 0
+    if ! rm -f -- "${_style_file}" || [[ -e "${_style_file}" || -L "${_style_file}" ]]; then
+        print_warning "Failed to remove retired Attention-kind style: ${_style_file}"
+        return 1
+    fi
+    _attention_span_cleanup_removed=1
+}
+
+attention_span_cleanup_remove_setting() {
+    local _settings_file="$1"
+    local _tmp_file=""
+
+    attention_span_cleanup_settings_is_safe "${_settings_file}" || return 1
+    [[ -f "${_settings_file}" ]] || return 0
+    if ! jq -e '.outputStyle? == "Attention-kind"' "${_settings_file}" > /dev/null; then
+        return 0
+    fi
+    if ! _tmp_file=$(mktemp "${_settings_file}.XXXXXX"); then
+        print_warning "Could not create a temporary file for Claude settings cleanup: ${_settings_file}"
+        return 1
+    fi
+    if jq 'del(.outputStyle)' "${_settings_file}" > "${_tmp_file}" &&
+        attention_span_cleanup_prepare_file_mode "${_tmp_file}" "${_settings_file}" &&
+        mv -f -- "${_tmp_file}" "${_settings_file}"; then
+        _attention_span_cleanup_removed=1
+        return 0
+    fi
+
+    rm -f -- "${_tmp_file}"
+    print_warning "Failed to remove Attention-kind from Claude settings: ${_settings_file}"
+    return 1
+}
+
+attention_span_cleanup_remove_managed_block() {
+    local _target_file="$1"
+    local _begin_marker="<!-- attention-span:start -->"
+    local _end_marker="<!-- attention-span:end -->"
+    local _tmp_file=""
+
+    attention_span_cleanup_managed_file_is_safe "${_target_file}" || return 1
+    [[ -f "${_target_file}" ]] || return 0
+    if ! grep -Fqx -- "${_begin_marker}" "${_target_file}"; then
+        return 0
+    fi
+    if ! _tmp_file=$(mktemp "${_target_file}.XXXXXX"); then
+        print_warning "Could not create a temporary file for Attention-kind cleanup: ${_target_file}"
+        return 1
+    fi
+    if awk -v begin="${_begin_marker}" -v end="${_end_marker}" '
+        $0 == begin { in_block = 1; next }
+        $0 == end && in_block { in_block = 0; next }
+        !in_block { print }
+        END { exit in_block ? 1 : 0 }
+    ' "${_target_file}" > "${_tmp_file}" &&
+        attention_span_cleanup_prepare_file_mode "${_tmp_file}" "${_target_file}" &&
+        mv -f -- "${_tmp_file}" "${_target_file}"; then
+        _attention_span_cleanup_removed=1
+        return 0
+    fi
+
+    rm -f -- "${_tmp_file}"
+    print_warning "Failed to safely remove Attention-kind from ${_target_file}."
+    return 1
+}
+
+remove_attention_span_resources() {
+    local _default_claude_dir="${HOME}/.claude"
+    local _active_claude_dir="${CLAUDE_CONFIG_DIR:-${_default_claude_dir}}"
+    local _default_codex_dir="${HOME}/.codex"
+    local _active_codex_dir="${CODEX_HOME:-${_default_codex_dir}}"
+    local _default_pi_dir="${HOME}/.pi/agent"
+    local _active_pi_dir="${PI_CODING_AGENT_DIR:-${_default_pi_dir}}"
+    local _dir=""
+    local _managed_file=""
+    local -a _claude_dirs=("${_default_claude_dir}")
+    local -a _codex_dirs=("${_default_codex_dir}")
+    local -a _pi_dirs=("${_default_pi_dir}")
+    local -a _managed_files=()
+    _attention_span_cleanup_removed=0
+
+    [[ "${_active_claude_dir}" == "${_default_claude_dir}" ]] || _claude_dirs+=("${_active_claude_dir}")
+    [[ "${_active_codex_dir}" == "${_default_codex_dir}" ]] || _codex_dirs+=("${_active_codex_dir}")
+    [[ "${_active_pi_dir}" == "${_default_pi_dir}" ]] || _pi_dirs+=("${_active_pi_dir}")
+
+    for _dir in "${_codex_dirs[@]}"; do
+        _managed_files+=("${_dir}/AGENTS.md")
+    done
+    _managed_files+=("${HOME}/.gemini/GEMINI.md")
+    for _dir in "${_pi_dirs[@]}"; do
+        _managed_files+=("${_dir}/APPEND_SYSTEM.md")
+    done
+
+    # Preflight every target before changing any file.
+    for _dir in "${_claude_dirs[@]}"; do
+        attention_span_cleanup_style_is_safe "${_dir}/output-styles/attention-kind.md" || return 1
+        attention_span_cleanup_settings_is_safe "${_dir}/settings.json" || return 1
+    done
+    for _managed_file in "${_managed_files[@]}"; do
+        attention_span_cleanup_managed_file_is_safe "${_managed_file}" || return 1
+    done
+
+    for _dir in "${_claude_dirs[@]}"; do
+        attention_span_cleanup_remove_style "${_dir}/output-styles/attention-kind.md" || return 1
+        attention_span_cleanup_remove_setting "${_dir}/settings.json" || return 1
+    done
+    for _managed_file in "${_managed_files[@]}"; do
+        attention_span_cleanup_remove_managed_block "${_managed_file}" || return 1
+    done
+
+    if [[ "${_attention_span_cleanup_removed}" -eq 1 ]]; then
+        print_success "Retired Attention-kind guidance removed."
+    else
+        print_debug "No retired Attention-kind guidance found."
+    fi
+}
+
 # Check whether the active Node.js runtime can run the current skills CLI.
 skills_cli_node_runtime_ready() {
     command -v node &> /dev/null || return 1
@@ -5868,7 +6074,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 232 | Last changed: Remove abandoned coding agent setup"
+    echo -e "${GRAY}Version 233 | Last changed: Remove retired Attention-kind guidance"
 
     if ! acquire_setup_lock; then
         return 1
@@ -6024,6 +6230,7 @@ HELPER_EOF
     install_portless_cli
     install_ntn_cli
     remove_rtk_resources || return 1
+    remove_attention_span_resources || return 1
     if ! setup_matt_pocock_skills; then
         _setup_had_errors=1
     fi

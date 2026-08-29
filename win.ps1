@@ -1724,6 +1724,242 @@ function Enable-PiNodeRuntime {
     return $false
 }
 
+# Remove the managed footprint of the retired Attention-kind guidance.
+function Get-AttentionSpanCleanupDirectories {
+    param(
+        [Parameter(Mandatory=$true)][string]$DefaultDirectory,
+        [AllowEmptyString()][string]$ActiveDirectory
+    )
+
+    $directories = [System.Collections.Generic.List[string]]::new()
+    foreach ($candidate in @($DefaultDirectory, $ActiveDirectory)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+        try {
+            $resolved = [System.IO.Path]::GetFullPath($candidate)
+        }
+        catch {
+            throw "Could not safely resolve an Attention-kind cleanup directory: $candidate"
+        }
+        if (-not $directories.Contains($resolved)) {
+            $directories.Add($resolved)
+        }
+    }
+    return $directories.ToArray()
+}
+
+function Assert-AttentionSpanStyleIsSafe {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) {
+        return
+    }
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        return
+    }
+    if ($item.PSIsContainer) {
+        throw "Attention-kind style target is not a file or symlink: $Path"
+    }
+}
+
+function Assert-AttentionSpanSettingsAreSafe {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) {
+        return
+    }
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Cannot safely remove Attention-kind from symlinked Claude settings: $Path"
+    }
+    if ($item.PSIsContainer) {
+        throw "Claude settings target is not a regular file: $Path"
+    }
+
+    try {
+        $content = [System.IO.File]::ReadAllText($Path)
+        if ([string]::IsNullOrWhiteSpace($content)) {
+            throw "empty settings"
+        }
+        $settings = $content | ConvertFrom-Json -ErrorAction Stop
+        if ($settings -isnot [System.Management.Automation.PSCustomObject]) {
+            throw "settings are not an object"
+        }
+    }
+    catch {
+        throw "Claude settings are not a valid JSON object: $Path"
+    }
+}
+
+function Assert-AttentionSpanManagedFileIsSafe {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) {
+        return
+    }
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Cannot safely remove Attention-kind from symlinked shared instructions: $Path"
+    }
+    if ($item.PSIsContainer) {
+        throw "Shared instruction target is not a regular file: $Path"
+    }
+
+    [string[]]$lines = @([System.IO.File]::ReadAllLines($Path))
+    $beginMarker = "<!-- attention-span:start -->"
+    $endMarker = "<!-- attention-span:end -->"
+    $beginIndexes = @($lines | ForEach-Object -Begin { $index = 0 } -Process {
+        $current = $index
+        $index++
+        if ($_ -ceq $beginMarker) { $current }
+    })
+    $endIndexes = @($lines | ForEach-Object -Begin { $index = 0 } -Process {
+        $current = $index
+        $index++
+        if ($_ -ceq $endMarker) { $current }
+    })
+
+    if ($beginIndexes.Count -eq 0 -and $endIndexes.Count -eq 0) {
+        return
+    }
+    if ($beginIndexes.Count -ne 1 -or $endIndexes.Count -ne 1 -or $beginIndexes[0] -ge $endIndexes[0]) {
+        throw "Attention-kind markers are malformed in $Path; leaving it unchanged."
+    }
+}
+
+function Set-AttentionSpanCleanupFile {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][AllowEmptyString()][string]$Content
+    )
+
+    $temporaryPath = Join-Path (Split-Path -Parent $Path) ".attention-cleanup-$([guid]::NewGuid()).tmp"
+    try {
+        $encoding = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($temporaryPath, $Content, $encoding)
+        Move-Item -LiteralPath $temporaryPath -Destination $Path -Force -ErrorAction Stop
+    }
+    catch {
+        Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        throw "Failed to atomically update Attention-kind cleanup target: $Path. $($_.Exception.Message)"
+    }
+}
+
+function Remove-AttentionSpanStyle {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    Assert-AttentionSpanStyleIsSafe -Path $Path
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) {
+        return
+    }
+    try {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+    }
+    catch {
+        throw "Failed to remove retired Attention-kind style: $Path. $($_.Exception.Message)"
+    }
+    if ($null -ne (Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
+        throw "Retired Attention-kind style remains after cleanup: $Path"
+    }
+    $script:AttentionSpanCleanupRemoved = $true
+}
+
+function Remove-AttentionSpanSetting {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    Assert-AttentionSpanSettingsAreSafe -Path $Path
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+    $settings = [System.IO.File]::ReadAllText($Path) | ConvertFrom-Json -ErrorAction Stop
+    $property = @($settings.PSObject.Properties | Where-Object { $_.Name -ceq "outputStyle" } | Select-Object -First 1)
+    if ($property.Count -eq 0 -or $property[0].Value -cne "Attention-kind") {
+        return
+    }
+
+    $settings.PSObject.Properties.Remove("outputStyle")
+    $json = ($settings | ConvertTo-Json -Depth 100) + [Environment]::NewLine
+    Set-AttentionSpanCleanupFile -Path $Path -Content $json
+    $script:AttentionSpanCleanupRemoved = $true
+}
+
+function Remove-AttentionSpanManagedBlock {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    Assert-AttentionSpanManagedFileIsSafe -Path $Path
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+    [string[]]$lines = @([System.IO.File]::ReadAllLines($Path))
+    $beginMarker = "<!-- attention-span:start -->"
+    $endMarker = "<!-- attention-span:end -->"
+    $beginIndex = [Array]::IndexOf($lines, $beginMarker)
+    if ($beginIndex -lt 0) {
+        return
+    }
+    $endIndex = [Array]::IndexOf($lines, $endMarker)
+    $updatedLines = [System.Collections.Generic.List[string]]::new()
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($index -lt $beginIndex -or $index -gt $endIndex) {
+            $updatedLines.Add($lines[$index])
+        }
+    }
+
+    $content = if ($updatedLines.Count -eq 0) {
+        ""
+    }
+    else {
+        [string]::Join([Environment]::NewLine, $updatedLines) + [Environment]::NewLine
+    }
+    Set-AttentionSpanCleanupFile -Path $Path -Content $content
+    $script:AttentionSpanCleanupRemoved = $true
+}
+
+function Remove-AttentionSpanResources {
+    $defaultClaudeDir = Join-Path $env:USERPROFILE ".claude"
+    $defaultCodexDir = Join-Path $env:USERPROFILE ".codex"
+    $defaultPiDir = Join-Path $env:USERPROFILE ".pi\agent"
+    $claudeDirs = @(Get-AttentionSpanCleanupDirectories -DefaultDirectory $defaultClaudeDir -ActiveDirectory $env:CLAUDE_CONFIG_DIR)
+    $codexDirs = @(Get-AttentionSpanCleanupDirectories -DefaultDirectory $defaultCodexDir -ActiveDirectory $env:CODEX_HOME)
+    $piDirs = @(Get-AttentionSpanCleanupDirectories -DefaultDirectory $defaultPiDir -ActiveDirectory $env:PI_CODING_AGENT_DIR)
+    $managedFiles = @()
+    foreach ($directory in $codexDirs) {
+        $managedFiles += Join-Path $directory "AGENTS.md"
+    }
+    $managedFiles += Join-Path (Join-Path $env:USERPROFILE ".gemini") "GEMINI.md"
+    foreach ($directory in $piDirs) {
+        $managedFiles += Join-Path $directory "APPEND_SYSTEM.md"
+    }
+    $script:AttentionSpanCleanupRemoved = $false
+
+    # Preflight every target before changing any file.
+    foreach ($directory in $claudeDirs) {
+        Assert-AttentionSpanStyleIsSafe -Path (Join-Path $directory "output-styles\attention-kind.md")
+        Assert-AttentionSpanSettingsAreSafe -Path (Join-Path $directory "settings.json")
+    }
+    foreach ($managedFile in $managedFiles) {
+        Assert-AttentionSpanManagedFileIsSafe -Path $managedFile
+    }
+
+    foreach ($directory in $claudeDirs) {
+        Remove-AttentionSpanStyle -Path (Join-Path $directory "output-styles\attention-kind.md")
+        Remove-AttentionSpanSetting -Path (Join-Path $directory "settings.json")
+    }
+    foreach ($managedFile in $managedFiles) {
+        Remove-AttentionSpanManagedBlock -Path $managedFile
+    }
+
+    if ($script:AttentionSpanCleanupRemoved) {
+        Write-Success "Retired Attention-kind guidance removed."
+    }
+    else {
+        Write-Debug "No retired Attention-kind guidance found."
+    }
+}
+
 # Check whether the active Node.js runtime can run the current skills CLI.
 function Test-SkillsCliNodeRuntimeReady {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
@@ -3794,7 +4030,7 @@ function Invoke-WindowsSetupTasks {
     $simpleEnglishSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 129 | Last changed: Remove leftover Compound Engineering lfg skill and install manifest" -ForegroundColor DarkGray
+    Write-Host "Version 130 | Last changed: Remove retired Attention-kind guidance" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -3831,6 +4067,7 @@ function Invoke-WindowsSetupTasks {
     Install-CodexCli
     Install-PortlessCli
     Remove-RtkResources
+    Remove-AttentionSpanResources
     if (-not (Setup-MattPocockSkills)) {
         $mattPocockSetupFailed = $true
     }
