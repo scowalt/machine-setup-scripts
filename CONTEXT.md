@@ -28,6 +28,10 @@ _Avoid_: Installation, tool data
 A former managed tool whose managed footprint must be absent from the desired machine state.
 _Avoid_: Banned tool, removed tool
 
+**Attention-kind guidance**:
+A retired managed tool that changed agent responses across supported AI coding harnesses.
+_Avoid_: Attention system agent, Attention plugin
+
 **Shared agent file**:
 An agent file that can contain both managed text and user text.
 _Avoid_: Managed file, configuration blob
