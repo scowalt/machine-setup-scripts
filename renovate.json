@@ -1,6 +1,28 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:best-practices"
+  ],
+  "timezone": "America/New_York",
+  "schedule": [
+    "* 0-5 * * 1"
+  ],
+  "dependencyDashboard": true,
+  "minimumReleaseAge": "3 days",
+  "semanticCommits": "enabled",
+  "automerge": false,
+  "lockFileMaintenance": {
+    "enabled": false
+  },
+  "prHourlyLimit": 1,
+  "prConcurrentLimit": 3,
+  "packageRules": [
+    {
+      "description": "Require Dependency Dashboard approval for major updates",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "dependencyDashboardApproval": true
+    }
   ]
 }
