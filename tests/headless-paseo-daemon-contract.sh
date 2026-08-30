@@ -51,7 +51,7 @@ assert_order() {
 
 extract_paseo_block() {
     local file=$1
-    awk '/PASEO_MANAGED_MARKER=/{in_block=1} /# Update Pi settings for the tintinweb subagents extension/{in_block=0} in_block {print}' "${file}"
+    awk '/PASEO_MANAGED_MARKER=/{in_block=1} /# Remove Pi subagents extension/{in_block=0} in_block {print}' "${file}"
 }
 
 assert_child_listener_audit() {
@@ -204,6 +204,54 @@ assert_systemctl_user_environment() {
     )
 }
 
+assert_bun_global_paseo_identity_check() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+    mkdir -p "${tmp_dir}/bun-bin" "${tmp_dir}/cache-layout-without-package-name"
+    printf '#!/usr/bin/env bash\n' > "${tmp_dir}/cache-layout-without-package-name/paseo-entry"
+    chmod 700 "${tmp_dir}/cache-layout-without-package-name/paseo-entry"
+    ln -s "../cache-layout-without-package-name/paseo-entry" "${tmp_dir}/bun-bin/paseo"
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        paseo_command_matches_bun_global \
+            "${tmp_dir}/cache-layout-without-package-name/paseo-entry" \
+            "${tmp_dir}/bun-bin" || fail "ubuntu.sh: rejected Bun's Paseo executable when its resolved path omitted the package name"
+
+        if paseo_command_matches_bun_global /bin/true "${tmp_dir}/bun-bin"; then
+            fail "ubuntu.sh: accepted an executable outside Bun's global paseo command"
+        fi
+    )
+}
+
+assert_untrusted_optional_service_path_is_filtered() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+    mkdir -p "${tmp_dir}/trusted-bin" "${tmp_dir}/other-user-brew-bin"
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+
+        paseo_path_is_group_or_world_writable() {
+            return 1
+        }
+        paseo_path_owner_is_trusted() {
+            [[ "$1" != "${tmp_dir}/other-user-brew-bin" ]]
+        }
+
+        filtered_path=$(paseo_trusted_service_path \
+            "${tmp_dir}/trusted-bin:${tmp_dir}/other-user-brew-bin" 2>/dev/null)
+        [[ "${filtered_path}" == "${tmp_dir}/trusted-bin" ]] || \
+            fail "ubuntu.sh: did not filter an optional service PATH component owned by another user"
+    )
+}
+
 assert_managed_daemon_is_preserved() {
     local tmp_dir
 
@@ -275,6 +323,167 @@ assert_unchanged_service_is_not_restarted() {
         PASEO_PACKAGE_CHANGED=1
         install_paseo_systemd_user_service
         grep -qF -- "--user restart ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}" || fail "ubuntu.sh: did not restart Paseo after a package change"
+    )
+}
+
+assert_wedged_service_is_recovered() {
+    local tmp_dir
+    local reset_count
+    local kill_count
+    local restart_line
+    local start_line
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        HOME="${tmp_dir}/home"
+        PASEO_SERVICE_PATH=/usr/bin
+        PASEO_ACTIVE_CHECK_ATTEMPTS=1
+        PASEO_TEST_ACTIVE=1
+        PASEO_TEST_SYSTEMCTL_LOG="${tmp_dir}/recovery-systemctl.log"
+
+        paseo_enable_lingering_strict() { return 0; }
+        sleep() { :; }
+        paseo_systemctl_user() {
+            printf '%s\n' "$*" >> "${PASEO_TEST_SYSTEMCTL_LOG}"
+            case "$*" in
+                "is-active ${PASEO_SERVICE_NAME}") [[ "${PASEO_TEST_ACTIVE}" == "1" ]] ;;
+                "restart ${PASEO_SERVICE_NAME}") PASEO_TEST_ACTIVE=0; return 1 ;;
+                "start ${PASEO_SERVICE_NAME}") PASEO_TEST_ACTIVE=1 ;;
+                "is-enabled ${PASEO_SERVICE_NAME}") return 0 ;;
+                *) return 0 ;;
+            esac
+        }
+
+        install_paseo_systemd_user_service
+
+        assert_order "${PASEO_TEST_SYSTEMCTL_LOG}" \
+            "reset-failed ${PASEO_SERVICE_NAME}" \
+            "kill ${PASEO_SERVICE_NAME} --kill-whom=all" \
+            'wedged-service reset before orphan-cgroup cleanup'
+        assert_order "${PASEO_TEST_SYSTEMCTL_LOG}" \
+            "kill ${PASEO_SERVICE_NAME} --kill-whom=all" \
+            "restart ${PASEO_SERVICE_NAME}" \
+            'orphan-cgroup cleanup before changed-service restart'
+        restart_line=$(grep -nFx "restart ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}" | head -n 1 | cut -d: -f1)
+        start_line=$(grep -nFx "start ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}" | head -n 1 | cut -d: -f1)
+        [[ "${restart_line}" -lt "${start_line}" ]] || fail 'ubuntu.sh: fallback start did not follow the inactive changed-service restart'
+
+        reset_count=$(grep -cF "reset-failed ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}")
+        kill_count=$(grep -cF "kill ${PASEO_SERVICE_NAME} --kill-whom=all" "${PASEO_TEST_SYSTEMCTL_LOG}")
+        [[ "${reset_count}" -eq 2 ]] || fail "ubuntu.sh: expected two reset-failed recovery attempts, saw ${reset_count}"
+        [[ "${kill_count}" -eq 2 ]] || fail "ubuntu.sh: expected two orphan-cgroup sweeps, saw ${kill_count}"
+        [[ "${PASEO_TEST_ACTIVE}" == "1" ]] || fail 'ubuntu.sh: fallback recovery did not activate the Paseo service'
+    )
+}
+
+assert_failed_initial_start_is_recovered() {
+    local tmp_dir
+    local start_count
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        HOME="${tmp_dir}/home"
+        PASEO_SERVICE_PATH=/usr/bin
+        PASEO_ACTIVE_CHECK_ATTEMPTS=1
+        PASEO_TEST_ACTIVE=0
+        PASEO_TEST_START_COUNT=0
+        PASEO_TEST_SYSTEMCTL_LOG="${tmp_dir}/initial-start-systemctl.log"
+
+        paseo_enable_lingering_strict() { return 0; }
+        sleep() { :; }
+        paseo_systemctl_user() {
+            printf '%s\n' "$*" >> "${PASEO_TEST_SYSTEMCTL_LOG}"
+            case "$*" in
+                "is-active ${PASEO_SERVICE_NAME}") [[ "${PASEO_TEST_ACTIVE}" == "1" ]] ;;
+                "start ${PASEO_SERVICE_NAME}")
+                    PASEO_TEST_START_COUNT=$((PASEO_TEST_START_COUNT + 1))
+                    if [[ "${PASEO_TEST_START_COUNT}" -eq 1 ]]; then
+                        return 1
+                    fi
+                    PASEO_TEST_ACTIVE=1
+                    ;;
+                "is-enabled ${PASEO_SERVICE_NAME}") return 0 ;;
+                *) return 0 ;;
+            esac
+        }
+
+        install_paseo_systemd_user_service
+
+        start_count=$(grep -cFx "start ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}")
+        [[ "${start_count}" -eq 2 ]] || fail "ubuntu.sh: expected recovery after a failed initial start, saw ${start_count} start attempts"
+        grep -qF "reset-failed ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}" || \
+            fail 'ubuntu.sh: failed initial start did not reset the unit before retrying'
+        grep -qF "kill ${PASEO_SERVICE_NAME} --kill-whom=all" "${PASEO_TEST_SYSTEMCTL_LOG}" || \
+            fail 'ubuntu.sh: failed initial start did not sweep the orphan cgroup before retrying'
+        [[ "${PASEO_TEST_ACTIVE}" == "1" ]] || fail 'ubuntu.sh: failed initial start was not recovered'
+    )
+}
+
+assert_failed_recovery_captures_status() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        HOME="${tmp_dir}/home"
+        PASEO_SERVICE_PATH=/usr/bin
+        PASEO_ACTIVE_CHECK_ATTEMPTS=1
+        PASEO_TEST_SYSTEMCTL_LOG="${tmp_dir}/failed-recovery-systemctl.log"
+
+        paseo_enable_lingering_strict() { return 0; }
+        paseo_managed_service_is_active() { return 0; }
+        sleep() { :; }
+        paseo_systemctl_user() {
+            printf '%s\n' "$*" >> "${PASEO_TEST_SYSTEMCTL_LOG}"
+            case "$*" in
+                "is-active ${PASEO_SERVICE_NAME}") return 1 ;;
+                "is-enabled ${PASEO_SERVICE_NAME}") return 0 ;;
+                "status ${PASEO_SERVICE_NAME} --no-pager") printf 'failed\n' ;;
+                *) return 0 ;;
+            esac
+        }
+
+        if install_paseo_systemd_user_service; then
+            fail 'ubuntu.sh: accepted a Paseo service that stayed inactive after recovery'
+        fi
+        grep -qF "status ${PASEO_SERVICE_NAME} --no-pager" "${PASEO_TEST_SYSTEMCTL_LOG}" || \
+            fail 'ubuntu.sh: failed Paseo recovery did not capture systemd status'
+    )
+}
+
+assert_failed_cleanup_preserves_enablement() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        PASEO_MANAGED_SERVICE_TOUCHED=1
+        PASEO_TEST_SYSTEMCTL_LOG="${tmp_dir}/cleanup-systemctl.log"
+
+        paseo_systemctl_user() {
+            printf '%s\n' "$*" >> "${PASEO_TEST_SYSTEMCTL_LOG}"
+        }
+
+        cleanup_paseo_managed_service Linux
+        grep -qF "stop ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}" || \
+            fail 'ubuntu.sh: failed verification cleanup did not stop the touched service'
+        if grep -qF "disable ${PASEO_SERVICE_NAME}" "${PASEO_TEST_SYSTEMCTL_LOG}"; then
+            fail 'ubuntu.sh: failed verification cleanup disabled the Paseo service'
+        fi
     )
 }
 
@@ -413,12 +622,14 @@ for file in "${supported_bash[@]}"; do
     assert_contains "${file}" 'paseo_service_process_pids' 'listener audit checks service process tree'
     assert_contains "${file}" 'children\[_ppid\]' 'listener audit discovers child processes'
     assert_contains "${file}" 'paseo_effective_service_path\(\)' 'defined effective service PATH helper'
+    assert_contains "${file}" 'paseo_command_matches_bun_global' 'Bun global command identity validation'
     assert_contains "${file}" 'paseo_run_with_timeout' 'bounded Paseo health checks'
     assert_contains "${file}" 'cannot audit listeners' 'fail-closed listener audit'
     assert_contains "${file}" 'cannot verify managed service ownership' 'fail-closed owner check'
     assert_contains "${file}" 'group/world-writable' 'unsafe executable path guard'
     assert_contains "${file}" 'paseo_harden_user_path_chain' 'user-owned install path permission hardening'
     assert_contains "${file}" 'paseo_existing_service_path' 'service PATH filters missing components'
+    assert_contains "${file}" 'paseo_trusted_service_path' 'service PATH filters untrusted optional components'
     assert_contains "${file}" 'chmod go-w' 'permission hardening removes group/world write bits'
     assert_contains "${file}" 'perm -020.*perm -002|perm -002.*perm -020' 'group-or-world writable detection'
 
@@ -451,6 +662,12 @@ for file in "${supported_linux[@]}"; do
     assert_contains "${file}" 'paseo_systemctl_user enable' 'systemd service enablement'
     assert_contains "${file}" 'paseo_systemctl_user restart' 'systemd service start/restart'
     assert_contains "${file}" 'paseo_managed_service_is_active' 'managed service activity detection'
+    assert_contains "${file}" 'paseo_managed_service_is_active_strict' 'is-active verification with retry'
+    assert_contains "${file}" 'paseo_systemctl_user reset-failed' 'failed-unit state reset'
+    assert_contains "${file}" 'paseo_systemctl_user kill.*--kill-whom=all' 'orphan-cgroup cleanup'
+    assert_contains "${file}" 'paseo_systemctl_user status.*--no-pager' 'failed-recovery systemd diagnostics'
+    assert_not_contains "${file}" 'paseo_systemctl_user disable' 'failure cleanup that disables the managed service'
+    assert_contains "${file}" '\--machine=.*@' 'machined-mediated user manager fallback'
     assert_contains "${file}" 'cmp -s.*_service_file' 'idempotent service definition comparison'
     assert_contains "${file}" 'leaving the active daemon running' 'unchanged active daemon preservation'
     assert_contains "${file}" 'WantedBy=default.target' 'systemd user-service boot target'
@@ -458,6 +675,8 @@ for file in "${supported_linux[@]}"; do
 done
 
 assert_contains mac.sh 'PASEO_MACOS_HEADLESS_CANARY' 'macOS canary gate'
+assert_contains mac.sh 'Skipping headless Paseo daemon setup: macOS support is pending no-login validation' 'macOS non-canary HEADLESS=1 skip warning'
+assert_order mac.sh 'Skipping headless Paseo daemon setup: macOS support is pending no-login validation' 'paseo_macos_preflight || return 1' 'canary skip happens before the preflight in setup_headless_paseo_daemon'
 assert_contains mac.sh '/Library/LaunchDaemons/\$\{PASEO_LAUNCHD_LABEL\}\.plist' 'macOS LaunchDaemon path'
 assert_contains mac.sh '<key>UserName</key>' 'LaunchDaemon target user'
 assert_contains mac.sh 'launchctl bootstrap system' 'LaunchDaemon bootstrap'
@@ -477,6 +696,26 @@ assert_contains win.ps1 'Assert-HeadlessPaseoUnsupported' 'Windows unsupported H
 assert_contains win.ps1 'native Windows cannot guarantee a no-login Paseo daemon' 'Windows clear unsupported message'
 assert_order win.ps1 '    Assert-HeadlessPaseoUnsupported' '    New-TokenPlaceholders' 'Windows fails before env placeholder mutation'
 
+assert_macos_headless_noncanary_is_nonfatal() {
+    (
+        # Source mac.sh without invoking its entry point (main "$@").
+        # shellcheck source=../mac.sh
+        source <(sed 's/^main "\$@"$/:/' ./mac.sh)
+
+        HEADLESS=1
+        PASEO_MACOS_HEADLESS_CANARY=0
+        uname() { printf 'Darwin\n'; }
+        paseo_macos_preflight() {
+            fail 'mac.sh: ran the macOS Paseo preflight when the canary gate was not set'
+        }
+        install_paseo_cli() {
+            fail 'mac.sh: mutated the Paseo install when the canary gate was not set'
+        }
+
+        setup_headless_paseo_daemon
+    )
+}
+
 assert_contains README.md 'Headless Paseo daemon' 'README headless Paseo section'
 assert_contains README.md 'ubuntu\.sh.*pi\.sh.*bazzite\.sh' 'README supported native Linux scripts'
 assert_contains README.md 'macOS.*PASEO_MACOS_HEADLESS_CANARY=1' 'README macOS canary status'
@@ -486,9 +725,16 @@ assert_contains README.md 'does not run or print pairing material' 'README no-pa
 assert_child_listener_audit
 assert_lingering_sudo_gate
 assert_systemctl_user_environment
+assert_bun_global_paseo_identity_check
+assert_untrusted_optional_service_path_is_filtered
 assert_managed_daemon_is_preserved
 assert_unchanged_service_is_not_restarted
+assert_wedged_service_is_recovered
+assert_failed_initial_start_is_recovered
+assert_failed_recovery_captures_status
+assert_failed_cleanup_preserves_enablement
 assert_managed_launchdaemon_is_preserved
 assert_unchanged_launchdaemon_is_not_restarted
+assert_macos_headless_noncanary_is_nonfatal
 
 printf '✓ headless Paseo daemon contract checks passed\n'

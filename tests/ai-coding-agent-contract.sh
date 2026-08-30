@@ -5,6 +5,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
+linux_codex_scripts=(ubuntu.sh wsl.sh pi.sh bazzite.sh)
 
 fail() {
     printf '✗ %s\n' "$1" >&2
@@ -16,8 +17,18 @@ assert_contains() {
     local pattern=$2
     local description=$3
 
-    if ! grep -Eq "${pattern}" "${file}"; then
+    if ! grep -Eq -- "${pattern}" "${file}"; then
         fail "${file}: missing ${description} (${pattern})"
+    fi
+}
+
+assert_not_contains() {
+    local file=$1
+    local pattern=$2
+    local description=$3
+
+    if grep -Eq -- "${pattern}" "${file}"; then
+        fail "${file}: unexpectedly contains ${description} (${pattern})"
     fi
 }
 
@@ -47,33 +58,227 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '^install_claude_code\(\)' 'Claude Code installer function'
     assert_contains "${file}" '^install_codex_cli\(\)' 'Codex CLI installer function'
     assert_contains "${file}" '^[[:space:]]+install_claude_code$' 'Claude Code main wiring'
-    assert_contains "${file}" '^[[:space:]]+install_codex_cli$' 'Codex CLI main wiring'
+    assert_contains "${file}" '^[[:space:]]+install_codex_cli([[:space:]]+\|\|[[:space:]]+return 1)?$' 'Codex CLI main wiring'
     assert_contains "${file}" 'https://claude\.ai/install\.sh' 'Claude Code native installer download'
-    assert_contains "${file}" 'bun install -g @openai/codex' 'Codex CLI Bun package install'
+    assert_contains "${file}" 'bun remove -g @openai/codex' 'legacy Bun Codex cleanup'
+    assert_contains "${file}" '(codex|native_path).* --version 2>/dev/null' 'Codex CLI no-Node smoke test'
     assert_contains "${file}" '^setup_pi_claude_bridge\(\)' 'Pi Claude bridge setup function'
     assert_contains "${file}" 'npm:pi-claude-bridge' 'Pi Claude bridge package source'
     assert_contains "${file}" '^[[:space:]]+setup_pi_claude_bridge$' 'Pi Claude bridge main wiring'
-    assert_order "${file}" '^[[:space:]]+install_bun$' '^[[:space:]]+install_codex_cli$' 'Bun installed before Codex CLI'
-    assert_order "${file}" '^[[:space:]]+install_codex_cli$' '^[[:space:]]+setup_rtk_integrations$' 'Codex CLI installed before RTK integration'
+    assert_order "${file}" '^[[:space:]]+install_codex_cli([[:space:]]+\|\|[[:space:]]+return 1)?$' '^[[:space:]]+remove_rtk_resources[[:space:]]+\|\|[[:space:]]+return 1$' 'Codex CLI installed before retired RTK cleanup'
     assert_order "${file}" '^[[:space:]]+if install_pi_cli; then$' '^[[:space:]]+setup_pi_claude_bridge$' 'Pi installed before Pi Claude bridge'
+    assert_contains "${file}" '^setup_pi_mcp_adapter\(\)' 'Pi MCP adapter setup function'
+    assert_contains "${file}" 'npm:pi-mcp-adapter' 'Pi MCP adapter package source'
+    assert_contains "${file}" '^[[:space:]]+setup_pi_mcp_adapter$' 'Pi MCP adapter main wiring'
+    assert_contains "${file}" '^setup_pi_companion_packages\(\)' 'Pi companion package setup function'
+    assert_contains "${file}" 'npm:pi-ask-user' 'legacy Pi Ask User package source'
+    assert_contains "${file}" 'pi remove "\$\{_legacy_package\}"' 'legacy Pi Ask User package removal'
+    assert_contains "${file}" '^remove_pi_rpiv_packages\(\)' 'Pi RPIV packages removal function'
+    assert_contains "${file}" 'npm:pi-web-access' 'Pi Web Access package source'
+    assert_contains "${file}" '^[[:space:]]+remove_pi_rpiv_packages$' 'Pi RPIV packages removal main wiring'
+    assert_contains "${file}" '^[[:space:]]+setup_pi_companion_packages$' 'Pi companion package main wiring'
+    assert_order "${file}" '^[[:space:]]+setup_pi_claude_bridge$' '^[[:space:]]+setup_pi_companion_packages$' 'Pi companion package setup after Pi Claude bridge'
+    assert_contains "${file}" '^remove_impeccable_resources\(\)' 'legacy Impeccable cleanup function'
+    assert_contains "${file}" '^[[:space:]]+remove_impeccable_resources$' 'legacy Impeccable cleanup wiring'
+    assert_order "${file}" '^[[:space:]]+if install_pi_cli; then$' '^[[:space:]]+remove_impeccable_resources$' 'Pi setup runs before legacy Impeccable cleanup'
+    assert_not_contains "${file}" 'install_impeccable_skill|impeccable@latest install' 'Impeccable installer'
+    assert_not_contains "${file}" 'BAN_IMPECCABLE' 'retired Impeccable opt-out'
+    for path in \
+        '.claude/skills/impeccable' \
+        '.agents/skills/impeccable' \
+        '.cursor/skills/impeccable' \
+        '.gemini/skills/impeccable' \
+        '.pi/agent/skills/impeccable' \
+        '.cursor/agents/impeccable-manual-edit-applier.md' \
+        '.cursor/agents/impeccable-asset-producer.md' \
+        '.cursor/agents/impeccable-documenter.md' \
+        '.cursor/agents/impeccable-finish-reviewer.md'; do
+        assert_contains "${file}" "${path}" "legacy Impeccable cleanup path ${path}"
+    done
+    assert_contains "${file}" '^remove_compound_engineering_resources\(\)' 'legacy Compound Engineering cleanup function'
+    assert_contains "${file}" '^[[:space:]]+remove_compound_engineering_resources$' 'legacy Compound Engineering cleanup wiring'
+    assert_order "${file}" '^[[:space:]]+remove_impeccable_resources$' '^[[:space:]]+remove_compound_engineering_resources$' 'Compound Engineering cleanup grouped with legacy Impeccable cleanup'
+    assert_contains "${file}" '^[[:space:]]+lfg$' 'legacy Compound Engineering lfg skill in cleanup list'
+    assert_contains "${file}" '_resource_path="\$\{_agent_dir\}/compound-engineering"' 'legacy Compound Engineering install manifest cleanup path'
+done
+
+# opencode is retired via passive abandonment: no setup script installs,
+# validates, or mentions it beyond the permanent RTK plugin path.
+for file in "${bash_setup_scripts[@]}"; do
+    assert_not_contains "${file}" 'install_opencode|validate_opencode_keys|BAN_OPENCODE|--agent opencode|opencode-ai|anomalyco/tap/opencode|opencode\.ai/install|config/opencode/skills' 'retired opencode setup'
+done
+assert_not_contains win.ps1 'opencode|OpenCode' 'opencode setup'
+
+assert_not_contains README.md 'opencode|OpenCode' 'retired opencode documentation'
+
+assert_contains mac.sh 'brew (install|upgrade) --cask codex' 'native Codex Homebrew cask install'
+for file in "${linux_codex_scripts[@]}"; do
+    assert_contains "${file}" 'https://chatgpt\.com/codex/install\.sh' 'official Codex standalone installer download'
+    assert_contains "${file}" 'CODEX_NON_INTERACTIVE=1' 'non-interactive Codex standalone install'
+    assert_contains "${file}" 'native_path="\$\{HOME\}/\.local/bin/codex"' 'per-user Codex executable path'
+    assert_not_contains "${file}" 'brew (install|upgrade) --cask codex' 'shared Homebrew Codex installation'
 done
 
 assert_contains win.ps1 'function Install-ClaudeCode' 'Claude Code installer function'
 assert_contains win.ps1 'function Install-CodexCli' 'Codex CLI installer function'
 assert_contains win.ps1 '^[[:space:]]+Install-ClaudeCode$' 'Claude Code main wiring'
 assert_contains win.ps1 '^[[:space:]]+Install-CodexCli$' 'Codex CLI main wiring'
-assert_contains win.ps1 '"Oven-sh\.Bun"' 'Bun WinGet package for Codex CLI'
 assert_contains win.ps1 'https://claude\.ai/install\.ps1' 'Claude Code native installer download'
-assert_contains win.ps1 'bun install -g @openai/codex' 'Codex CLI Bun package install'
+assert_contains win.ps1 'github\.com/openai/codex/releases/latest/download/' 'Codex CLI native release download'
+assert_contains win.ps1 'codex-.*pc-windows-msvc\.exe\.zip' 'Codex Windows release asset'
+assert_contains win.ps1 'bun remove -g .@openai/codex.' 'legacy Bun Codex cleanup'
+assert_contains win.ps1 'codexExe --version' 'Codex CLI no-Node smoke test'
 assert_contains win.ps1 'function Setup-PiClaudeBridge' 'Pi Claude bridge setup function'
 assert_contains win.ps1 'npm:pi-claude-bridge' 'Pi Claude bridge package source'
 assert_contains win.ps1 '^[[:space:]]+Setup-PiClaudeBridge$' 'Pi Claude bridge main wiring'
-assert_order win.ps1 '^[[:space:]]+Install-WingetPackages$' '^[[:space:]]+Install-CodexCli$' 'Bun package install before Codex CLI'
-assert_order win.ps1 '^[[:space:]]+Install-CodexCli$' '^[[:space:]]+Setup-RtkIntegrations$' 'Codex CLI installed before RTK integration'
+assert_order win.ps1 '^[[:space:]]+Install-CodexCli$' '^[[:space:]]+Remove-RtkResources$' 'Codex CLI installed before retired RTK cleanup'
 assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+Setup-PiClaudeBridge$' 'Pi installed before Pi Claude bridge'
+assert_contains win.ps1 'function Setup-PiMcpAdapter' 'Pi MCP adapter setup function'
+assert_contains win.ps1 'npm:pi-mcp-adapter' 'Pi MCP adapter package source'
+assert_contains win.ps1 '^[[:space:]]+Setup-PiMcpAdapter$' 'Pi MCP adapter main wiring'
+assert_contains win.ps1 'function Setup-PiCompanionPackages' 'Pi companion package setup function'
+assert_contains win.ps1 'npm:pi-ask-user' 'legacy Pi Ask User package source'
+assert_contains win.ps1 '& pi remove [$]legacyPackage' 'legacy Pi Ask User package removal'
+assert_contains win.ps1 'function Remove-PiRpivPackages' 'PowerShell Pi RPIV packages removal function'
+assert_contains win.ps1 'npm:pi-web-access' 'Pi Web Access package source'
+assert_contains win.ps1 '^[[:space:]]+Remove-PiRpivPackages$' 'PowerShell Pi RPIV packages removal main wiring'
+assert_contains win.ps1 '^[[:space:]]+Setup-PiCompanionPackages$' 'Pi companion package main wiring'
+assert_order win.ps1 '^[[:space:]]+Setup-PiClaudeBridge$' '^[[:space:]]+Setup-PiCompanionPackages$' 'Pi companion package setup after Pi Claude bridge'
+assert_contains win.ps1 'function Remove-ImpeccableResources' 'legacy Impeccable cleanup function'
+assert_contains win.ps1 '^[[:space:]]+Remove-ImpeccableResources$' 'legacy Impeccable cleanup wiring'
+assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+Remove-ImpeccableResources$' 'Pi setup runs before legacy Impeccable cleanup'
+assert_not_contains win.ps1 'Install-ImpeccableSkill|impeccable@latest install' 'Impeccable installer'
+assert_not_contains win.ps1 'BAN_IMPECCABLE' 'retired Impeccable opt-out'
+for path in \
+    '\.claude\\skills\\impeccable' \
+    '\.agents\\skills\\impeccable' \
+    '\.cursor\\skills\\impeccable' \
+    '\.gemini\\skills\\impeccable' \
+    '\.pi\\agent\\skills\\impeccable' \
+    '\.cursor\\agents\\impeccable-manual-edit-applier\.md' \
+    '\.cursor\\agents\\impeccable-asset-producer\.md' \
+    '\.cursor\\agents\\impeccable-documenter\.md' \
+    '\.cursor\\agents\\impeccable-finish-reviewer\.md'; do
+    assert_contains win.ps1 "${path}" "legacy Impeccable cleanup path ${path}"
+done
+assert_contains win.ps1 'function Remove-CompoundEngineeringResources' 'legacy Compound Engineering cleanup function'
+assert_contains win.ps1 '^[[:space:]]+Remove-CompoundEngineeringResources$' 'legacy Compound Engineering cleanup wiring'
+assert_order win.ps1 '^[[:space:]]+Remove-ImpeccableResources$' '^[[:space:]]+Remove-CompoundEngineeringResources$' 'Compound Engineering cleanup grouped with legacy Impeccable cleanup'
+assert_contains win.ps1 '\|lfg\)' 'legacy Compound Engineering lfg skill in cleanup pattern'
+assert_contains win.ps1 'Join-Path [$]agentDir "compound-engineering"' 'legacy Compound Engineering install manifest cleanup path'
 
 assert_contains README.md 'macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows' 'all-machine AI coding agent statement'
 assert_contains README.md 'Claude Code CLI and Codex CLI' 'Claude/Codex README contract'
+assert_contains README.md "OpenAI's standalone installer" 'per-user Linux Codex installer documentation'
+assert_contains README.md '\.local/bin' 'Paseo-compatible Codex path documentation'
 assert_contains README.md 'Pi Claude bridge' 'Pi Claude bridge README contract'
+assert_contains README.md 'retired .@juicesharp/rpiv-ask-user-question. and .@juicesharp/rpiv-todo. packages' 'retired RPIV packages README contract'
+assert_contains README.md 'pi-web-access' 'Pi Web Access README contract'
+assert_contains README.md 'removes legacy global Impeccable skill copies' 'legacy Impeccable cleanup documentation'
+assert_not_contains README.md 'Impeccable design skill|BAN_IMPECCABLE' 'retired Impeccable setup documentation'
+assert_not_contains CLAUDE.md 'BAN_IMPECCABLE' 'retired Impeccable setup guidance'
 
-printf '✓ AI coding agent installation contract checks passed\n'
+source_without_main='s/^main "\$@"$/:/'
+for file in "${bash_setup_scripts[@]}"; do
+    cleanup_test_root=$(mktemp -d)
+    cleanup_home="${cleanup_test_root}/home"
+    symlink_target="${cleanup_test_root}/symlink-target"
+    mkdir -p \
+        "${cleanup_home}/.claude/skills" \
+        "${cleanup_home}/.agents/skills/impeccable" \
+        "${cleanup_home}/.agents/skills/keep-me" \
+        "${cleanup_home}/.cursor/skills/impeccable" \
+        "${cleanup_home}/.gemini/skills/impeccable" \
+        "${cleanup_home}/.pi/agent/skills/impeccable" \
+        "${cleanup_home}/.cursor/agents" \
+        "${symlink_target}"
+    touch \
+        "${cleanup_home}/.agents/skills/impeccable/SKILL.md" \
+        "${cleanup_home}/.agents/skills/keep-me/SKILL.md" \
+        "${cleanup_home}/.cursor/skills/impeccable/SKILL.md" \
+        "${cleanup_home}/.gemini/skills/impeccable/SKILL.md" \
+        "${cleanup_home}/.pi/agent/skills/impeccable/SKILL.md" \
+        "${cleanup_home}/.cursor/agents/impeccable-manual-edit-applier.md" \
+        "${cleanup_home}/.cursor/agents/impeccable-asset-producer.md" \
+        "${cleanup_home}/.cursor/agents/impeccable-documenter.md" \
+        "${cleanup_home}/.cursor/agents/impeccable-finish-reviewer.md" \
+        "${cleanup_home}/.cursor/agents/keep-me.md" \
+        "${symlink_target}/sentinel"
+    ln -s "${symlink_target}" "${cleanup_home}/.claude/skills/impeccable"
+
+    SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" HOME="${cleanup_home}" bash -c '
+        source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+        remove_impeccable_resources
+        remove_impeccable_resources
+    '
+
+    for path in \
+        "${cleanup_home}/.claude/skills/impeccable" \
+        "${cleanup_home}/.agents/skills/impeccable" \
+        "${cleanup_home}/.cursor/skills/impeccable" \
+        "${cleanup_home}/.gemini/skills/impeccable" \
+        "${cleanup_home}/.pi/agent/skills/impeccable" \
+        "${cleanup_home}/.cursor/agents/impeccable-manual-edit-applier.md" \
+        "${cleanup_home}/.cursor/agents/impeccable-asset-producer.md" \
+        "${cleanup_home}/.cursor/agents/impeccable-documenter.md" \
+        "${cleanup_home}/.cursor/agents/impeccable-finish-reviewer.md"; do
+        [[ ! -e "${path}" && ! -L "${path}" ]] || fail "${file}: legacy Impeccable cleanup left ${path}"
+    done
+    [[ -f "${cleanup_home}/.agents/skills/keep-me/SKILL.md" ]] || fail "${file}: cleanup removed a sibling skill"
+    [[ -f "${cleanup_home}/.cursor/agents/keep-me.md" ]] || fail "${file}: cleanup removed a sibling Cursor agent"
+    [[ -f "${symlink_target}/sentinel" ]] || fail "${file}: cleanup followed the Impeccable symlink target"
+    rm -rf "${cleanup_test_root}"
+done
+
+for file in "${bash_setup_scripts[@]}"; do
+    cleanup_test_root=$(mktemp -d)
+    cleanup_home="${cleanup_test_root}/home"
+    symlink_target="${cleanup_test_root}/symlink-target"
+    compound_repo="${cleanup_home}/.local/share/compound-engineering-plugin"
+    mkdir -p \
+        "${cleanup_home}/.agents/skills/keep-me" \
+        "${cleanup_home}/.pi/agent/skills/lfg" \
+        "${cleanup_home}/.pi/agent/skills/ce-plan" \
+        "${cleanup_home}/.pi/agent/skills/keep-me" \
+        "${cleanup_home}/.pi/agent/agents" \
+        "${cleanup_home}/.pi/agent/compound-engineering" \
+        "${compound_repo}/skills/lfg" \
+        "${symlink_target}"
+    touch \
+        "${cleanup_home}/.agents/skills/keep-me/SKILL.md" \
+        "${cleanup_home}/.pi/agent/skills/lfg/SKILL.md" \
+        "${cleanup_home}/.pi/agent/skills/ce-plan/SKILL.md" \
+        "${cleanup_home}/.pi/agent/skills/keep-me/SKILL.md" \
+        "${cleanup_home}/.pi/agent/agents/ce-web-researcher.md" \
+        "${cleanup_home}/.pi/agent/agents/keep-me.md" \
+        "${compound_repo}/skills/lfg/SKILL.md" \
+        "${symlink_target}/sentinel"
+    printf '%s\n' '{"skills":["lfg"]}' > "${cleanup_home}/.pi/agent/compound-engineering/install-manifest.json"
+    ln -s "${compound_repo}/skills/lfg" "${cleanup_home}/.agents/skills/lfg"
+    ln -s "${symlink_target}" "${cleanup_home}/.agents/skills/external-link"
+
+    SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" \
+        HOME="${cleanup_home}" PI_CODING_AGENT_DIR="" bash -c '
+        source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+        remove_compound_engineering_resources
+        remove_compound_engineering_resources
+    '
+
+    for path in \
+        "${cleanup_home}/.agents/skills/lfg" \
+        "${cleanup_home}/.pi/agent/skills/lfg" \
+        "${cleanup_home}/.pi/agent/skills/ce-plan" \
+        "${cleanup_home}/.pi/agent/agents/ce-web-researcher.md" \
+        "${cleanup_home}/.pi/agent/compound-engineering" \
+        "${compound_repo}"; do
+        [[ ! -e "${path}" && ! -L "${path}" ]] || fail "${file}: legacy Compound Engineering cleanup left ${path}"
+    done
+    [[ -f "${cleanup_home}/.agents/skills/keep-me/SKILL.md" ]] || fail "${file}: Compound Engineering cleanup removed a sibling shared skill"
+    [[ -f "${cleanup_home}/.pi/agent/skills/keep-me/SKILL.md" ]] || fail "${file}: Compound Engineering cleanup removed a sibling Pi skill"
+    [[ -f "${cleanup_home}/.pi/agent/agents/keep-me.md" ]] || fail "${file}: Compound Engineering cleanup removed a sibling Pi agent"
+    [[ -L "${cleanup_home}/.agents/skills/external-link" ]] || fail "${file}: Compound Engineering cleanup removed an unrelated shared skill link"
+    [[ -f "${symlink_target}/sentinel" ]] || fail "${file}: Compound Engineering cleanup followed a shared skill symlink target"
+    rm -rf "${cleanup_test_root}"
+done
+
+printf '✓ AI coding agent contract checks passed\n'

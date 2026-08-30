@@ -18,6 +18,10 @@ print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 
 SETUP_ORIGINAL_PATH="${PATH}"
 SETUP_ORIGINAL_CLAUDE_COMMAND=$(command -v claude 2>/dev/null || true)
+SETUP_LOG_FILE=""
+SETUP_LOG_TEE_PID=""
+SETUP_LOGGING_ACTIVE=0
+DOTFILES_ACCESS_METHOD=""
 
 # Acquire a non-blocking per-user setup lock so overlapping setup runs don't
 # corrupt shared global package directories (npm, Bun, Homebrew, etc.). The lock
@@ -108,11 +112,11 @@ create_env_local() {
 # Machine/setup guards
 # HEADLESS=1
 # WORK_MACHINE=1
-# BAN_PI_SUBAGENTS=1
 # BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
-# BAN_RTK=1
+# SYNTHETIC_API_KEY=<your Synthetic API key>
+# ZAI_API_KEY=<your z.ai API key>
 # BAN_CLAUDE_CODE=1
 EOF
         chmod 600 "${HOME}/.env.local"
@@ -147,6 +151,29 @@ can_sudo() {
     [[ "${_has_sudo}" == "1" ]]
 }
 
+# Fetch GitHub SSH keys with bounded retries and reject empty responses.
+fetch_github_ssh_keys() {
+    local _keys_url="${1:-https://github.com/scowalt.keys}"
+    local _attempt=1
+    local _keys=""
+
+    while [[ "${_attempt}" -le 3 ]]; do
+        if _keys=$(curl --fail --silent --show-error --location \
+            --connect-timeout 10 --max-time 20 "${_keys_url}") && \
+            grep -q '[^[:space:]]' <<< "${_keys}"; then
+            printf '%s\n' "${_keys}"
+            return 0
+        fi
+
+        if [[ "${_attempt}" -lt 3 ]]; then
+            sleep 2
+        fi
+        _attempt=$((_attempt + 1))
+    done
+
+    return 1
+}
+
 # Check if user has a personal SSH key registered with GitHub
 has_verified_ssh_key() {
     local local_key=""
@@ -163,8 +190,8 @@ has_verified_ssh_key() {
 
     # Verify key is registered with GitHub
     local existing_keys
-    existing_keys=$(curl -s https://github.com/scowalt.keys 2>/dev/null) || return 1
-    [[ -n "${local_key}" ]] && echo "${existing_keys}" | grep -q "${local_key}"
+    existing_keys=$(fetch_github_ssh_keys 2>/dev/null) || return 1
+    [[ -n "${local_key}" ]] && awk -v expected="${local_key}" 'NF >= 2 && $2 == expected { found=1 } END { exit !found }' <<< "${existing_keys}"
 }
 
 # Ensure the script is not run as root
@@ -183,14 +210,14 @@ ensure_not_root() {
         echo "  # Switch to the new user and re-run this script"
         echo "  su - scowalt"
         echo ""
-        exit 1
+        return 1
     fi
 }
 
 # Bootstrap SSH config for deploy key access to dotfiles
 bootstrap_ssh_config() {
     # Ensure github-dotfiles host alias exists for deploy key access
-    if ! grep -q "Host github-dotfiles" ~/.ssh/config 2>/dev/null; then
+    if ! awk 'tolower($1) == "host" { for (i=2; i<=NF; i++) if ($i == "github-dotfiles") found=1 } END { exit !found }' ~/.ssh/config 2>/dev/null; then
         print_message "Bootstrapping SSH config for dotfiles access..."
         mkdir -p ~/.ssh
         chmod 700 ~/.ssh
@@ -267,6 +294,7 @@ setup_dotfiles_deploy_key() {
         _ssh_test_output=$(ssh -i "${key_file}" -o StrictHostKeyChecking=accept-new -T git@github.com < /dev/null 2>&1) || true
         if echo "${_ssh_test_output}" | grep -q "successfully authenticated"; then
             print_success "Deploy key works! Continuing setup..."
+            DOTFILES_ACCESS_METHOD="deploy"
             return 0
         fi
 
@@ -294,6 +322,7 @@ setup_dotfiles_deploy_key() {
 
 # Check if we have access to scowalt/dotfiles via any available method
 check_dotfiles_access() {
+    DOTFILES_ACCESS_METHOD=""
     print_message "Checking access to scowalt/dotfiles..."
 
     # Method 1: User with verified SSH key on GitHub
@@ -303,6 +332,7 @@ check_dotfiles_access() {
         _ssh_output=$(ssh -T git@github.com < /dev/null 2>&1) || true
         if echo "${_ssh_output}" | grep -q "successfully authenticated"; then
             print_debug "Access via SSH (verified key)"
+            DOTFILES_ACCESS_METHOD="ssh"
             return 0
         fi
     fi
@@ -317,6 +347,7 @@ check_dotfiles_access() {
         _deploy_ssh_output=$(ssh -i ~/.ssh/dotfiles-deploy-key -T git@github.com < /dev/null 2>&1) || true
         if echo "${_deploy_ssh_output}" | grep -q "successfully authenticated"; then
             print_debug "Access via deploy key"
+            DOTFILES_ACCESS_METHOD="deploy"
             return 0
         else
             print_warning "Deploy key exists but cannot authenticate with GitHub"
@@ -426,26 +457,74 @@ check_raspberry_pi() {
 }
 
 
+apt_kept_back_packages() {
+    awk '
+        /The following packages have been kept back:|The following upgrades have been deferred due to phasing:/ { capture=1; next }
+        capture && /^  / {
+            for (i=1; i<=NF; i++) {
+                printf "%s%s", separator, $i
+                separator=" "
+            }
+            next
+        }
+        capture { capture=0 }
+        END { if (separator != "") print "" }
+    '
+}
+
 # Update dependencies with Raspberry Pi specific optimizations
 update_dependencies() {
+    local _upgrade_output=""
+    local _upgrade_status=0
+    local _kept_back=""
+    local _tmux_hold_added=0
+    local _apt_holds=""
+
     if ! can_sudo; then
         print_warning "No sudo access - skipping system updates."
         return
     fi
 
     print_message "Updating package lists (this may take a while on Raspberry Pi)..."
-    sudo apt update
+    if ! sudo apt update; then
+        print_error "Failed to update package lists."
+        return 1
+    fi
 
-    # Hold tmux during upgrades to prevent killing existing sessions.
-    sudo apt-mark hold tmux 2>/dev/null || true
+    # Hold tmux during upgrades without changing a pre-existing user hold.
+    _apt_holds=$(apt-mark showhold 2>/dev/null || true)
+    if dpkg -s tmux > /dev/null 2>&1 && ! grep -Fxq tmux <<< "${_apt_holds}"; then
+        if ! sudo apt-mark hold tmux 2>/dev/null; then
+            print_error "Failed to hold tmux before the package upgrade."
+            return 1
+        fi
+        _tmux_hold_added=1
+    fi
     print_message "Upgrading packages (this may take a while)..."
-    sudo apt upgrade -y
-    sudo apt-mark unhold tmux 2>/dev/null || true
+    _upgrade_output=$(sudo LC_ALL=C apt upgrade --with-new-pkgs -y 2>&1) || _upgrade_status=$?
+    printf '%s\n' "${_upgrade_output}"
+    if [[ "${_tmux_hold_added}" -eq 1 ]] && ! sudo apt-mark unhold tmux 2>/dev/null; then
+        print_error "Failed to remove the temporary tmux hold after the package upgrade."
+        return 1
+    fi
+
+    if [[ "${_upgrade_status}" -ne 0 ]]; then
+        print_error "Package upgrade failed."
+        return "${_upgrade_status}"
+    fi
 
     print_message "Removing unnecessary packages..."
-    sudo apt autoremove -y
+    if ! sudo apt autoremove -y; then
+        print_warning "Package upgrade completed, but autoremove failed."
+        return 1
+    fi
 
-    print_success "Package lists updated."
+    _kept_back=$(apt_kept_back_packages <<< "${_upgrade_output}")
+    if [[ -n "${_kept_back}" ]]; then
+        print_warning "Packages remain kept back after upgrade: ${_kept_back}"
+    else
+        print_success "System packages updated."
+    fi
 }
 
 # Update and install core dependencies with Raspberry Pi considerations
@@ -559,8 +638,8 @@ verify_github_key() {
 
     # Pull remote keys (fail hard if the request itself fails)
     local remote_keys
-    if ! remote_keys="$(curl -fsSL "${keys_url}")"; then
-        print_error "Failed to download keys from ${keys_url}"
+    if ! remote_keys="$(fetch_github_ssh_keys "${keys_url}")"; then
+        print_error "Failed to download SSH keys from ${keys_url} after three attempts; key registration could not be verified."
         return 1
     fi
 
@@ -569,9 +648,7 @@ verify_github_key() {
     local_key_value=$(awk '{print $2}' ~/.ssh/id_rsa.pub)
 
     # Search the list returned by GitHub
-    local awk_output
-    awk_output=$(echo "${remote_keys}" | awk '{print $2}')
-    if echo "${awk_output}" | grep -qx "${local_key_value}"; then
+    if awk -v expected="${local_key_value}" 'NF >= 2 && $2 == expected { found=1 } END { exit !found }' <<< "${remote_keys}"; then
         print_success "Local key is recognized by GitHub."
     else
         print_error "Your public key is NOT registered with GitHub!"
@@ -642,6 +719,40 @@ install_starship() {
     fi
 }
 
+# Enable Tailscale SSH idempotently and verify the resulting preference.
+tailscale_ssh_is_enabled() {
+    local _prefs=""
+    _prefs=$(tailscale debug prefs 2>/dev/null || true)
+    grep -Eq '"RunSSH"[[:space:]]*:[[:space:]]*true' <<< "${_prefs}"
+}
+
+setup_tailscale_ssh() {
+    if ! command -v tailscale &> /dev/null; then
+        print_debug "Tailscale not installed, skipping SSH setup."
+        return 0
+    fi
+
+    if tailscale_ssh_is_enabled; then
+        print_debug "Tailscale SSH is already enabled."
+        return 0
+    fi
+    if ! can_sudo; then
+        print_error "No sudo access; cannot enable Tailscale SSH."
+        return 1
+    fi
+
+    print_message "Enabling Tailscale SSH…"
+    if ! sudo tailscale set --ssh; then
+        print_error "Failed to enable Tailscale SSH."
+        return 1
+    fi
+    if ! tailscale_ssh_is_enabled; then
+        print_error "Tailscale accepted the SSH setting, but RunSSH is still disabled."
+        return 1
+    fi
+    print_success "Tailscale SSH enabled."
+}
+
 install_tailscale() {
     # --- Install if not present ---
     if ! command -v tailscale &>/dev/null; then
@@ -692,15 +803,7 @@ install_tailscale() {
     fi
 
     # --- Ensure Tailscale SSH is enabled ---
-    local run_ssh
-    run_ssh=$(tailscale debug prefs 2>/dev/null | grep -o '"RunSSH":[a-z]*' | cut -d: -f2 || true)
-    if [[ "${run_ssh}" != "true" ]]; then
-        print_message "Enabling Tailscale SSH…"
-        sudo tailscale set --ssh
-        print_success "Tailscale SSH enabled."
-    else
-        print_debug "Tailscale SSH is already enabled."
-    fi
+    setup_tailscale_ssh || return 1
 
     # --- Verify SSH is accessible (ACL check) ---
     local tailscale_ip
@@ -789,6 +892,18 @@ update_gcloud_components() {
     if ! command -v gcloud &>/dev/null; then
         print_debug "Google Cloud CLI not installed; skipping component update."
         return
+    fi
+
+    local package=""
+    local package_status=""
+    if command -v dpkg-query &>/dev/null; then
+        for package in google-cloud-cli google-cloud-sdk; do
+            package_status=$(dpkg-query -W -f='${Status}' "${package}" 2>/dev/null || true)
+            if [[ "${package_status}" == "install ok installed" ]]; then
+                print_debug "Google Cloud CLI is managed by apt; skipping component update."
+                return
+            fi
+        done
     fi
 
     local update_output
@@ -965,47 +1080,82 @@ initialize_chezmoi() {
 
     if [[ ! -d "${chez_src}" ]]; then
         print_message "Initializing chezmoi with scowalt/dotfiles…"
-        if has_verified_ssh_key; then
-            # User with verified SSH key uses default SSH for push access
-            if ! ${chezmoi_cmd} init --apply --force scowalt/dotfiles --ssh; then
-                print_error "Failed to initialize chezmoi. Check SSH key and network connectivity."
+        case "${DOTFILES_ACCESS_METHOD}" in
+            ssh)
+                if ! "${chezmoi_cmd}" init --apply --force scowalt/dotfiles --ssh; then
+                    print_error "Failed to initialize chezmoi with the verified SSH key."
+                    return 1
+                fi
+                ;;
+            token)
+                if ! "${chezmoi_cmd}" init --apply --force "https://github.com/scowalt/dotfiles.git"; then
+                    print_error "Failed to initialize chezmoi with the verified GitHub token."
+                    return 1
+                fi
+                ;;
+            deploy)
+                if ! "${chezmoi_cmd}" init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
+                    print_error "Failed to initialize chezmoi with the verified deploy key."
+                    return 1
+                fi
+                ;;
+            *)
+                print_error "Cannot initialize chezmoi without a verified dotfiles access method."
                 return 1
-            fi
-        else
-            # Other users use SSH via deploy key (github-dotfiles alias)
-            if ! ${chezmoi_cmd} init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
-                print_error "Failed to initialize chezmoi. Check deploy key setup."
-                return 1
-            fi
-        fi
+                ;;
+        esac
         print_success "chezmoi initialized with scowalt/dotfiles."
     else
         print_debug "chezmoi already initialized."
     fi
 }
 
-# Fix chezmoi remote URL when switching from personal SSH to deploy key
+# Reconcile chezmoi's remote with the strongest verified SSH credential.
 fix_chezmoi_remote_for_deploy_key() {
     local chez_src="${HOME}/.local/share/chezmoi"
+    local current_remote=""
+    local desired_remote=""
+    local personal_key=""
+    local ssh_output=""
     [[ ! -d "${chez_src}/.git" ]] && return 0
 
-    # Only fix if we're NOT using a verified personal SSH key
+    current_remote=$(git -C "${chez_src}" remote get-url origin 2>/dev/null) || return 0
     if has_verified_ssh_key; then
+        if [[ -f "${HOME}/.ssh/id_rsa" ]]; then
+            personal_key="${HOME}/.ssh/id_rsa"
+        elif [[ -f "${HOME}/.ssh/id_ed25519" ]]; then
+            personal_key="${HOME}/.ssh/id_ed25519"
+        fi
+        if [[ -n "${personal_key}" ]]; then
+            ssh_output=$(ssh -o IdentitiesOnly=yes -i "${personal_key}" -T git@github.com < /dev/null 2>&1) || true
+            if grep -q "successfully authenticated" <<< "${ssh_output}"; then
+                desired_remote="git@github.com:scowalt/dotfiles.git"
+            fi
+        fi
+    fi
+    if [[ -z "${desired_remote}" && -f "${HOME}/.ssh/dotfiles-deploy-key" ]]; then
+        ssh_output=$(ssh -o IdentitiesOnly=yes -i "${HOME}/.ssh/dotfiles-deploy-key" -T git@github.com < /dev/null 2>&1) || true
+        if grep -q "successfully authenticated" <<< "${ssh_output}"; then
+            desired_remote="git@github-dotfiles:scowalt/dotfiles.git"
+        fi
+    fi
+    if [[ -z "${desired_remote}" ]]; then
+        print_warning "Could not verify an SSH credential for the chezmoi remote; leaving it unchanged."
         return 0
     fi
 
-    # Check current remote URL
-    local current_remote
-    current_remote=$(git -C "${chez_src}" remote get-url origin 2>/dev/null) || return 0
+    [[ "${current_remote}" == "${desired_remote}" ]] && return 0
+    case "${current_remote}" in
+        git@github.com:scowalt/dotfiles.git|git@github-dotfiles:scowalt/dotfiles.git) ;;
+        *) return 0 ;;
+    esac
 
-    # If using github.com directly, switch to github-dotfiles alias for deploy key
-    if [[ "${current_remote}" == "git@github.com:scowalt/dotfiles.git" ]]; then
-        print_message "Updating chezmoi remote URL for deploy key access..."
-        if git -C "${chez_src}" remote set-url origin "git@github-dotfiles:scowalt/dotfiles.git"; then
-            print_success "Chezmoi remote URL updated to use deploy key."
-        else
-            print_warning "Failed to update chezmoi remote URL."
-        fi
+    print_message "Reconciling chezmoi remote with available SSH credentials..."
+    if git -C "${chez_src}" remote set-url origin "${desired_remote}"; then
+        print_success "Chezmoi remote URL updated."
+    else
+        print_warning "Failed to update chezmoi remote URL."
+        return 1
     fi
 }
 
@@ -1285,6 +1435,183 @@ install_mise() {
     fi
 }
 
+# Stop before installation when an unrelated tea command shadows the managed
+# executable on the PATH that started setup.
+gitea_client_assert_no_path_conflict() {
+    local managed_path="$1"
+    local original_command=""
+
+    original_command=$(PATH="${SETUP_ORIGINAL_PATH:-${PATH}}" command -v tea 2>/dev/null || true)
+    if [[ -z "${original_command}" || "${original_command}" == "${managed_path}" ]]; then
+        return 0
+    fi
+    if [[ -e "${managed_path}" && "${original_command}" -ef "${managed_path}" ]]; then
+        return 0
+    fi
+
+    print_error "A conflicting tea executable is earlier on PATH: ${original_command}"
+    print_debug "Remove it from PATH or move $(dirname "${managed_path}") ahead of it, then rerun setup."
+    return 1
+}
+
+gitea_client_verify() {
+    local managed_path="$1"
+    local managed_dir=""
+    local resolved_command=""
+    local version_output=""
+
+    managed_dir=$(dirname "${managed_path}")
+    export PATH="${managed_dir}:${PATH}"
+    if [[ ! -x "${managed_path}" ]] || ! version_output=$("${managed_path}" --version 2>/dev/null) || [[ ! "${version_output}" =~ [0-9]+\.[0-9]+ ]]; then
+        print_error "Gitea client verification failed at ${managed_path}."
+        return 1
+    fi
+    resolved_command=$(command -v tea 2>/dev/null || true)
+    if [[ "${resolved_command}" != "${managed_path}" ]] && { [[ -z "${resolved_command}" || ! -e "${managed_path}" ]] || [[ ! "${resolved_command}" -ef "${managed_path}" ]]; }; then
+        print_error "The tea command resolves to ${resolved_command:-<missing>} instead of ${managed_path}."
+        return 1
+    fi
+
+    print_success "Gitea client is ready (${version_output})."
+}
+
+install_gitea_client_with_homebrew() {
+    if ! command -v brew &> /dev/null; then
+        print_error "Homebrew is required to install the Gitea client on this architecture."
+        return 1
+    fi
+
+    local brew_prefix=""
+    local managed_path=""
+    brew_prefix=$(brew --prefix) || {
+        print_error "Could not resolve the Homebrew prefix for the Gitea client."
+        return 1
+    }
+    managed_path="${brew_prefix}/bin/tea"
+    gitea_client_assert_no_path_conflict "${managed_path}" || return 1
+
+    if brew list --formula tea &> /dev/null; then
+        print_message "Updating Gitea client with Homebrew..."
+        if ! brew upgrade tea; then
+            print_error "Failed to update the Gitea client with Homebrew."
+            return 1
+        fi
+    else
+        print_message "Installing Gitea client with Homebrew..."
+        if ! brew install tea; then
+            print_error "Failed to install the Gitea client with Homebrew."
+            return 1
+        fi
+    fi
+
+    gitea_client_verify "${managed_path}"
+}
+
+# Download and install an official Tea binary in an isolated temporary
+# directory. The subshell keeps cleanup local and runs it on every return path.
+install_gitea_client_standalone() (
+    local release_arch="$1"
+    local api_url="https://gitea.com/api/v1/repos/gitea/tea/releases/latest"
+    local asset=""
+    local asset_path=""
+    local checksums_path=""
+    local download_root="https://dl.gitea.com/tea"
+    local expected_hash=""
+    local actual_hash=""
+    local actual_hash_line=""
+    local install_dir="${HOME}/.local/bin"
+    local managed_path="${install_dir}/tea"
+    local release_json=""
+    local tag=""
+    local temp_dir=""
+    local version=""
+
+    gitea_client_assert_no_path_conflict "${managed_path}" || return 1
+    temp_dir=$(mktemp -d) || {
+        print_error "Could not create a temporary directory for the Gitea client download."
+        return 1
+    }
+    trap 'rm -rf -- "${temp_dir}"' EXIT
+
+    print_message "Finding the latest stable Gitea client release..."
+    if ! release_json=$(curl --fail --silent --show-error --location --connect-timeout 10 --max-time 30 "${api_url}"); then
+        print_error "Failed to query the latest stable Gitea client release."
+        return 1
+    fi
+    tag=$(printf '%s' "${release_json}" | jq -r '.tag_name // empty')
+    if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        print_error "The latest Gitea client release did not contain a stable semantic version."
+        return 1
+    fi
+    version="${tag#v}"
+    asset="tea-${version}-linux-${release_arch}"
+    asset_path="${temp_dir}/${asset}"
+    checksums_path="${temp_dir}/checksums.txt"
+
+    print_message "Downloading Gitea client ${version}..."
+    if ! curl --fail --silent --show-error --location --connect-timeout 10 --max-time 120 \
+        "${download_root}/${version}/${asset}" -o "${asset_path}"; then
+        print_error "Failed to download the official Gitea client binary."
+        return 1
+    fi
+    if ! curl --fail --silent --show-error --location --connect-timeout 10 --max-time 30 \
+        "${download_root}/${version}/checksums.txt" -o "${checksums_path}"; then
+        print_error "Failed to download the published Gitea client checksums."
+        return 1
+    fi
+
+    expected_hash=$(awk -v asset="${asset}" '$2 == asset { print tolower($1); exit }' "${checksums_path}")
+    if ! actual_hash_line=$(sha256sum "${asset_path}"); then
+        print_error "Failed to calculate the Gitea client SHA-256 digest."
+        return 1
+    fi
+    actual_hash=$(printf '%s\n' "${actual_hash_line}" | awk '{ print tolower($1) }')
+    if [[ -z "${expected_hash}" || "${actual_hash}" != "${expected_hash}" ]]; then
+        print_error "Gitea client SHA-256 verification failed for ${asset}."
+        return 1
+    fi
+
+    if ! mkdir -p "${install_dir}" || ! install -m 0755 "${asset_path}" "${managed_path}"; then
+        print_error "Failed to install the Gitea client at ${managed_path}."
+        return 1
+    fi
+
+    gitea_client_verify "${managed_path}"
+)
+
+# Install the Tea workstation client on work machines.
+install_gitea_client() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
+        print_debug "Skipping Gitea client (not a work machine)."
+        return 0
+    fi
+
+    local machine_arch=""
+    machine_arch=$(uname -m) || {
+        print_error "Could not determine the machine architecture for the Gitea client."
+        return 1
+    }
+
+    case "${machine_arch}" in
+        x86_64|amd64|aarch64|arm64)
+            install_gitea_client_with_homebrew
+            ;;
+        armv7l|armv7*)
+            install_gitea_client_standalone arm-7
+            ;;
+        armv6l|armv6*)
+            install_gitea_client_standalone arm-6
+            ;;
+        armv5l|armv5*)
+            install_gitea_client_standalone arm-5
+            ;;
+        *)
+            print_error "No official Gitea client binary is available for architecture ${machine_arch}."
+            return 1
+            ;;
+    esac
+}
+
 # Install Bun JavaScript runtime and package manager
 install_bun() {
     if command -v bun &> /dev/null; then
@@ -1363,26 +1690,77 @@ install_gemini_cli() {
     fi
 }
 
-# Install/update Codex CLI (OpenAI's AI coding agent)
+# Install/update Codex CLI with OpenAI's per-user standalone installer.
 install_codex_cli() {
+    local bun_packages=""
+    local curl_bin=""
+    local installer=""
+    local install_status=0
+    local native_path="${HOME}/.local/bin/codex"
+    local resolved_codex=""
+    local version_output=""
+    local safe_path=""
+
     print_message "Installing/updating Codex CLI..."
 
-    # Ensure bun is available
-    if [[ -d "${HOME}/.bun" ]]; then
-        export PATH="${HOME}/.bun/bin:${PATH}"
+    if command -v bun &> /dev/null; then
+        bun_packages=$(bun pm ls -g 2>/dev/null || true)
+        if grep -Fq "@openai/codex" <<< "${bun_packages}"; then
+            print_message "Removing Node-dependent Bun Codex package..."
+            if ! bun remove -g @openai/codex > /dev/null; then
+                print_error "Failed to remove Bun's @openai/codex package."
+                return 1
+            fi
+        fi
+    fi
+    hash -r 2>/dev/null || true
+
+    if ! curl_bin=$(claude_code_trusted_curl); then
+        print_error "Trusted system curl not found. Cannot download the Codex installer."
+        return 1
     fi
 
-    if ! command -v bun &> /dev/null; then
-        print_warning "Bun not found. Cannot install Codex CLI."
-        print_debug "Install Bun first, then run: bun install -g @openai/codex"
-        return
+    if ! installer=$(mktemp); then
+        print_error "Failed to create a temporary file for the Codex installer."
+        return 1
+    fi
+    if ! claude_code_run_safely "${curl_bin}" -fsSL --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 2 -o "${installer}" "https://chatgpt.com/codex/install.sh"; then
+        rm -f "${installer}"
+        print_error "Failed to download the Codex installer."
+        return 1
     fi
 
-    if bun install -g @openai/codex; then
-        print_success "Codex CLI installed/updated."
+    chmod 700 "${installer}"
+    if claude_code_run_safely /usr/bin/env CODEX_NON_INTERACTIVE=1 /bin/sh "${installer}"; then
+        install_status=0
     else
-        print_error "Failed to install Codex CLI."
+        install_status=$?
     fi
+    rm -f "${installer}"
+    if [[ "${install_status}" -ne 0 ]]; then
+        print_error "Codex installer failed with exit code ${install_status}."
+        return 1
+    fi
+
+    export PATH="${HOME}/.local/bin:${PATH}"
+    hash -r 2>/dev/null || true
+    resolved_codex=$(command -v codex 2>/dev/null || true)
+    if [[ ! -x "${native_path}" ]]; then
+        print_error "Codex installer completed, but ${native_path} is missing."
+        return 1
+    fi
+    if [[ -z "${resolved_codex}" || ! "${resolved_codex}" -ef "${native_path}" ]]; then
+        print_error "Codex is shadowed by ${resolved_codex:-<missing>}; expected ${native_path}."
+        return 1
+    fi
+
+    safe_path="/nonexistent"
+    if ! version_output=$(/usr/bin/env -u NODE_PATH -u NODE_OPTIONS HOME="${HOME}" PATH="${safe_path}" "${native_path}" --version 2>/dev/null) || [[ -z "${version_output}" ]]; then
+        print_error "Native Codex CLI smoke test failed without Node.js on PATH."
+        return 1
+    fi
+
+    print_success "Codex CLI installed/updated (${version_output})."
 }
 
 # Install/update Notion CLI.
@@ -1797,101 +2175,385 @@ install_claude_code() {
 }
 
 
-# Verify the installed rtk is Rust Token Killer, not the unrelated Rust Type Kit.
-rtk_cli_ready() {
-    command -v rtk &> /dev/null && rtk gain > /dev/null 2>&1
+# Remove the managed footprint of the retired RTK tool.
+rtk_binary_is_token_killer() {
+    local _binary="$1"
+    local _output=""
+
+    [[ -x "${_binary}" ]] || return 1
+
+    if "${_binary}" gain > /dev/null 2>&1; then
+        return 0
+    fi
+
+    _output=$("${_binary}" --help 2>&1 || true)
+    if grep -Eiq 'Rust Token Killer|token-optimized|Initialize rtk instructions' <<< "${_output}"; then
+        return 0
+    fi
+
+    grep -aEiq -m 1 'Rust Token Killer|rtk-ai/rtk' "${_binary}" 2>/dev/null
 }
 
-# Install RTK (Rust Token Killer) for token-optimized agent command output.
-install_rtk_cli() {
-    if [[ "${BAN_RTK:-}" == "1" ]]; then
-        print_debug "BAN_RTK=1, skipping RTK setup."
-        return
+rtk_note_path() {
+    local _path="$1"
+
+    if [[ -e "${_path}" || -L "${_path}" ]]; then
+        _rtk_cleanup_had_resources=1
+    fi
+}
+
+rtk_remove_path() {
+    local _path="$1"
+
+    if [[ ! -e "${_path}" && ! -L "${_path}" ]]; then
+        return 0
     fi
 
-    export PATH="${HOME}/.local/bin:${PATH}"
-
-    local had_rtk=0
-    if rtk_cli_ready; then
-        had_rtk=1
-        print_message "Updating RTK CLI..."
-    elif command -v rtk &> /dev/null; then
-        print_warning "An rtk command exists, but it does not look like Rust Token Killer. Installing the rtk-ai binary to ~/.local/bin."
-    else
-        print_message "Installing RTK CLI..."
+    if ! rm -rf -- "${_path:?}"; then
+        print_error "Failed to remove retired RTK path: ${_path}"
+        return 1
     fi
 
-    local install_script
-    if ! install_script=$(curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh 2>&1); then
-        if [[ "${had_rtk}" == "1" ]]; then
-            print_warning "Failed to update RTK CLI; existing install remains available."
+    if [[ -e "${_path}" || -L "${_path}" ]]; then
+        print_error "Retired RTK path remains after cleanup: ${_path}"
+        return 1
+    fi
+
+    _rtk_cleanup_had_resources=1
+}
+
+rtk_match_file_mode() {
+    local _source="$1"
+    local _target="$2"
+    local _mode=""
+
+    if chmod --reference="${_source}" "${_target}" 2>/dev/null; then
+        return 0
+    fi
+
+    _mode=$(stat -f '%Lp' "${_source}" 2>/dev/null || true)
+    [[ -n "${_mode}" ]] && chmod "${_mode}" "${_target}"
+}
+
+rtk_replace_file_if_changed() {
+    local _file="$1"
+    local _temporary="$2"
+
+    if cmp -s "${_file}" "${_temporary}"; then
+        rm -f -- "${_temporary}"
+        return 0
+    fi
+
+    if ! rtk_match_file_mode "${_file}" "${_temporary}"; then
+        rm -f -- "${_temporary}"
+        print_error "Failed to preserve permissions while cleaning RTK from: ${_file}"
+        return 1
+    fi
+
+    if ! mv -f -- "${_temporary}" "${_file}"; then
+        rm -f -- "${_temporary}"
+        print_error "Failed to update shared agent file during RTK cleanup: ${_file}"
+        return 1
+    fi
+
+    _rtk_cleanup_had_resources=1
+}
+
+rtk_gemini_md_is_generated() {
+    local _file="$1"
+
+    awk '
+        BEGIN { in_code = 0; saw_title = 0; invalid = 0 }
+        /^```/ { in_code = !in_code; next }
+        in_code {
+            if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*(rtk|which[[:space:]]+rtk)([[:space:]]|$)/) next
+            invalid = 1
+            next
+        }
+        /^[[:space:]]*$/ { next }
+        /^# RTK([[:space:]-]|$)/ { saw_title = 1; next }
+        /^## (Meta Commands|Installation Verification|Hook-Based Usage)/ { next }
+        /^\*\*Usage\*\*:/ { next }
+        /^⚠️ \*\*Name collision\*\*:/ { next }
+        /^(All other commands|Example:|Refer to CLAUDE\.md)/ { next }
+        { invalid = 1 }
+        END { exit !(saw_title && !invalid && !in_code) }
+    ' "${_file}"
+}
+
+rtk_assert_gemini_md_safe() {
+    local _file="$1"
+
+    [[ -f "${_file}" ]] || return 0
+    if ! grep -Eiq '(^|[^[:alnum:]_])rtk([^[:alnum:]_]|$)|Rust Token Killer' "${_file}"; then
+        return 0
+    fi
+
+    _rtk_cleanup_had_resources=1
+    if rtk_gemini_md_is_generated "${_file}"; then
+        _rtk_cleanup_remove_gemini_md=1
+        return 0
+    fi
+
+    print_error "RTK cleanup found mixed user and RTK content in shared file: ${_file}"
+    print_error "Move the user content out of this file, then run setup again."
+    return 1
+}
+
+rtk_clean_instruction_file() {
+    local _file="$1"
+    local _reference="$2"
+    local _temporary=""
+
+    [[ -f "${_file}" ]] || return 0
+    if ! grep -Eq '^[[:space:]]*@RTK\.md[[:space:]]*$|^[[:space:]]*@.*/RTK\.md[[:space:]]*$|<!--[[:space:]]*rtk-instructions' "${_file}"; then
+        return 0
+    fi
+
+    _temporary=$(mktemp "${_file}.rtk-cleanup.XXXXXX") || {
+        print_error "Failed to create a temporary file for RTK cleanup: ${_file}"
+        return 1
+    }
+
+    if ! awk -v managed_reference="${_reference}" '
+        BEGIN { in_rtk_block = 0 }
+        {
+            trimmed = $0
+            sub(/^[[:space:]]+/, "", trimmed)
+            sub(/[[:space:]]+$/, "", trimmed)
+
+            if (trimmed ~ /^<!--[[:space:]]*rtk-instructions/) {
+                in_rtk_block = 1
+                next
+            }
+            if (in_rtk_block) {
+                if (trimmed == "<!-- /rtk-instructions -->") in_rtk_block = 0
+                next
+            }
+            if (trimmed == "@RTK.md" || trimmed == managed_reference) next
+            print
+        }
+        END { if (in_rtk_block) exit 42 }
+    ' "${_file}" > "${_temporary}"; then
+        rm -f -- "${_temporary}"
+        print_error "RTK cleanup found an incomplete managed block in: ${_file}"
+        return 1
+    fi
+
+    rtk_replace_file_if_changed "${_file}" "${_temporary}"
+}
+
+rtk_clean_pi_instructions() {
+    local _file="$1"
+    local _section=""
+    local _expected=""
+    local _temporary=""
+
+    [[ -f "${_file}" ]] || return 0
+    if ! grep -Fq '## RTK token-optimized commands' "${_file}"; then
+        return 0
+    fi
+
+    _section=$(awk '
+        $0 == "## RTK token-optimized commands" { capture = 1 }
+        capture && $0 ~ /^## / && $0 != "## RTK token-optimized commands" { exit }
+        capture { print }
+    ' "${_file}")
+    _expected=$(cat <<'RTK_PI_SECTION'
+## RTK token-optimized commands
+
+- RTK (`rtk-ai/rtk`) is installed by the machine setup scripts when available. Prefer `rtk <command>` for noisy shell commands with supported filters (`git`, `gh`, tests, build/lint tools, package managers, file/search commands) unless full raw output is required.
+- Bypass RTK for one command with `RTK_DISABLED=1 <command>` or by running the raw command directly when exact output formatting matters.
+RTK_PI_SECTION
+)
+
+    if [[ "${_section}" != "${_expected}" ]]; then
+        print_error "RTK cleanup found mixed user and RTK content in shared file: ${_file}"
+        print_error "Move the user content out of the RTK section, then run setup again."
+        return 1
+    fi
+
+    _temporary=$(mktemp "${_file}.rtk-cleanup.XXXXXX") || {
+        print_error "Failed to create a temporary file for RTK cleanup: ${_file}"
+        return 1
+    }
+
+    awk '
+        $0 == "## RTK token-optimized commands" { skip = 1; next }
+        skip && /^## / { skip = 0 }
+        !skip { print }
+    ' "${_file}" > "${_temporary}"
+
+    rtk_replace_file_if_changed "${_file}" "${_temporary}"
+}
+
+rtk_clean_json_hooks() {
+    local _file="$1"
+    local _hook_key="$2"
+    local _grep_pattern="$3"
+    local _command_pattern="$4"
+    local _temporary=""
+
+    [[ -f "${_file}" ]] || return 0
+    if ! grep -Eq "${_grep_pattern}" "${_file}"; then
+        return 0
+    fi
+    if ! command -v jq > /dev/null 2>&1; then
+        print_error "jq is required to remove RTK from shared agent settings: ${_file}"
+        return 1
+    fi
+
+    _temporary=$(mktemp "${_file}.rtk-cleanup.XXXXXX") || {
+        print_error "Failed to create a temporary file for RTK cleanup: ${_file}"
+        return 1
+    }
+
+    if ! jq --arg hook_key "${_hook_key}" --arg command_pattern "${_command_pattern}" '
+        def has_managed_command:
+            [.hooks[]? | .command? | strings | test($command_pattern)] | any;
+
+        if ((.hooks? | type) == "object" and (.hooks[$hook_key]? | type) == "array") then
+            .hooks[$hook_key] |= map(select((has_managed_command | not)))
         else
-            print_warning "Failed to download RTK installer."
-        fi
-        print_debug "${install_script}"
-        return
+            .
+        end |
+        if ((.hooks? | type) == "object" and (.hooks[$hook_key]? | type) == "array" and (.hooks[$hook_key] | length) == 0) then
+            del(.hooks[$hook_key])
+        else
+            .
+        end |
+        if ((.hooks? | type) == "object" and (.hooks | length) == 0) then del(.hooks) else . end
+    ' "${_file}" > "${_temporary}"; then
+        rm -f -- "${_temporary}"
+        print_error "Failed to parse shared agent settings during RTK cleanup: ${_file}"
+        return 1
     fi
 
-    local install_output
-    if install_output=$(RTK_INSTALL_DIR="${HOME}/.local/bin" sh -c "${install_script}" 2>&1); then
+    rtk_replace_file_if_changed "${_file}" "${_temporary}"
+}
+
+rtk_run_upstream_uninstall() {
+    local _binary="$1"
+    local _mode="$2"
+    local _config_dir="${3:-}"
+    local _output=""
+
+    case "${_mode}" in
+        codex)
+            if ! _output=$(CODEX_HOME="${_config_dir}" "${_binary}" init -g --codex --uninstall < /dev/null 2>&1); then
+                print_debug "RTK Codex uninstall was not available; using deterministic cleanup. ${_output}"
+            fi
+            ;;
+        gemini)
+            if ! _output=$("${_binary}" init -g --gemini --uninstall < /dev/null 2>&1); then
+                print_debug "RTK Gemini uninstall was not available; using deterministic cleanup. ${_output}"
+            fi
+            ;;
+        *)
+            print_error "Unknown RTK uninstall mode: ${_mode}"
+            return 1
+            ;;
+    esac
+}
+
+remove_rtk_resources() {
+    local _managed_binary="${HOME}/.local/bin/rtk"
+    local _binary_is_rtk=0
+    local _dir=""
+    local _path=""
+    local -a _claude_dirs=("${HOME}/.claude")
+    local -a _codex_dirs=("${HOME}/.codex")
+    local -a _pi_dirs=("${HOME}/.pi/agent")
+    local -a _data_dirs=(
+        "${HOME}/.config/rtk"
+        "${HOME}/.local/share/rtk"
+        "${XDG_CONFIG_HOME:-${HOME}/.config}/rtk"
+        "${XDG_DATA_HOME:-${HOME}/.local/share}/rtk"
+    )
+    _rtk_cleanup_had_resources=0
+    _rtk_cleanup_remove_gemini_md=0
+
+    if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+        _claude_dirs+=("${CLAUDE_CONFIG_DIR}")
+    fi
+    if [[ -n "${CODEX_HOME:-}" ]]; then
+        _codex_dirs+=("${CODEX_HOME}")
+    fi
+    if [[ -n "${PI_CODING_AGENT_DIR:-}" ]]; then
+        _pi_dirs+=("${PI_CODING_AGENT_DIR}")
+    fi
+    if [[ "$(uname -s 2>/dev/null || true)" == "Darwin" ]]; then
+        _data_dirs+=("${HOME}/Library/Application Support/rtk")
+    fi
+
+    rtk_assert_gemini_md_safe "${HOME}/.gemini/GEMINI.md" || return 1
+    for _dir in "${_pi_dirs[@]}"; do
+        rtk_clean_pi_instructions "${_dir}/AGENTS.md" || return 1
+    done
+
+    if [[ -e "${_managed_binary}" || -L "${_managed_binary}" ]]; then
+        if rtk_binary_is_token_killer "${_managed_binary}"; then
+            _binary_is_rtk=1
+            _rtk_cleanup_had_resources=1
+        else
+            print_warning "Preserving unrelated or unverified rtk command at ${_managed_binary}."
+        fi
+    fi
+
+    if [[ "${_binary_is_rtk}" -eq 1 ]]; then
+        for _dir in "${_codex_dirs[@]}"; do
+            rtk_run_upstream_uninstall "${_managed_binary}" codex "${_dir}"
+        done
+        if [[ ! -f "${HOME}/.gemini/GEMINI.md" || "${_rtk_cleanup_remove_gemini_md}" -eq 1 ]]; then
+            rtk_run_upstream_uninstall "${_managed_binary}" gemini
+        else
+            print_debug "Preserving unrelated Gemini instructions and using deterministic RTK cleanup."
+        fi
+    fi
+
+    for _dir in "${_claude_dirs[@]}"; do
+        rtk_clean_instruction_file "${_dir}/CLAUDE.md" '@RTK.md' || return 1
+        rtk_clean_json_hooks \
+            "${_dir}/settings.json" \
+            'PreToolUse' \
+            'rtk hook claude|rtk-rewrite\.sh' \
+            '(^|[/\\])rtk-rewrite\.sh([[:space:]]|$)|^rtk hook claude([[:space:]]|$)' || return 1
+        rtk_remove_path "${_dir}/RTK.md" || return 1
+        rtk_remove_path "${_dir}/hooks/rtk-rewrite.sh" || return 1
+        rtk_remove_path "${_dir}/hooks/.rtk-hook.sha256" || return 1
+    done
+
+    for _dir in "${_codex_dirs[@]}"; do
+        rtk_clean_instruction_file "${_dir}/AGENTS.md" "@${_dir}/RTK.md" || return 1
+        rtk_remove_path "${_dir}/RTK.md" || return 1
+    done
+
+    rtk_clean_json_hooks \
+        "${HOME}/.gemini/settings.json" \
+        'BeforeTool' \
+        'rtk hook gemini|rtk-hook-gemini\.sh' \
+        '(^|[/\\])rtk-hook-gemini\.sh([[:space:]]|$)|^rtk hook gemini([[:space:]]|$)' || return 1
+    rtk_remove_path "${HOME}/.gemini/hooks/rtk-hook-gemini.sh" || return 1
+    rtk_remove_path "${HOME}/.gemini/hooks/.rtk-hook.sha256" || return 1
+    if [[ "${_rtk_cleanup_remove_gemini_md}" -eq 1 ]]; then
+        rtk_remove_path "${HOME}/.gemini/GEMINI.md" || return 1
+    fi
+    rtk_remove_path "${HOME}/.config/opencode/plugins/rtk.ts" || return 1
+
+    for _path in "${_data_dirs[@]}"; do
+        rtk_note_path "${_path}"
+        rtk_remove_path "${_path}" || return 1
+    done
+
+    if [[ "${_binary_is_rtk}" -eq 1 ]]; then
+        rtk_remove_path "${_managed_binary}" || return 1
         hash -r 2>/dev/null || true
-        if rtk_cli_ready; then
-            print_success "RTK CLI installed/updated."
-        else
-            print_warning "RTK installer completed, but 'rtk gain' did not verify the expected binary."
-            print_debug "${install_output}"
-        fi
+    fi
+
+    if [[ "${_rtk_cleanup_had_resources}" -eq 1 ]]; then
+        print_success "Legacy RTK resources removed."
     else
-        if [[ "${had_rtk}" == "1" ]]; then
-            print_warning "Failed to update RTK CLI; existing install remains available."
-        else
-            print_warning "Failed to install RTK CLI."
-        fi
-        print_debug "${install_output}"
-    fi
-}
-
-# Configure RTK integrations for installed AI agents. Non-fatal by design.
-setup_rtk_integrations() {
-    if [[ "${BAN_RTK:-}" == "1" ]]; then
-        print_debug "BAN_RTK=1, skipping RTK integrations."
-        return
-    fi
-
-    export PATH="${HOME}/.local/bin:${PATH}"
-
-    if ! rtk_cli_ready; then
-        print_warning "RTK CLI is not available; skipping RTK integrations."
-        return
-    fi
-
-    # Automated setup should not prompt for telemetry consent. Users can opt in later with `rtk telemetry enable`.
-    rtk telemetry disable > /dev/null 2>&1 || true
-
-    local init_output
-
-    if command -v gemini &> /dev/null; then
-        print_message "Configuring RTK for Gemini CLI..."
-        if init_output=$(rtk init -g --gemini --auto-patch < /dev/null 2>&1); then
-            print_success "RTK configured for Gemini CLI."
-        else
-            print_warning "Failed to configure RTK for Gemini CLI."
-            print_debug "${init_output}"
-        fi
-    else
-        print_debug "Gemini CLI not installed; skipping RTK Gemini integration."
-    fi
-
-    if command -v codex &> /dev/null; then
-        print_message "Configuring RTK for Codex CLI..."
-        if init_output=$(rtk init -g --codex < /dev/null 2>&1); then
-            print_success "RTK configured for Codex CLI."
-        else
-            print_warning "Failed to configure RTK for Codex CLI."
-            print_debug "${init_output}"
-        fi
-    else
-        print_debug "Codex CLI not installed; skipping RTK Codex integration."
+        print_debug "No legacy RTK resources found."
     fi
 }
 
@@ -1948,6 +2610,355 @@ ensure_pi_node_runtime() {
 
     print_warning "Node.js >=20.6 is still not active after installing ${_runtime}."
     return 1
+}
+
+# Remove the managed footprint of the retired Attention-kind guidance.
+attention_span_cleanup_prepare_file_mode() {
+    local _staged_file="$1"
+    local _target_file="$2"
+    local _mode=""
+
+    if [[ -e "${_target_file}" ]]; then
+        _mode=$(stat -c '%a' "${_target_file}" 2>/dev/null || stat -f '%Lp' "${_target_file}" 2>/dev/null || true)
+    fi
+    if [[ -n "${_mode}" ]]; then
+        chmod "${_mode}" "${_staged_file}"
+    else
+        chmod 600 "${_staged_file}"
+    fi
+}
+
+attention_span_cleanup_style_is_safe() {
+    local _style_file="$1"
+
+    [[ -e "${_style_file}" || -L "${_style_file}" ]] || return 0
+    [[ -L "${_style_file}" || -f "${_style_file}" ]] || {
+        print_warning "Attention-kind style target is not a file or symlink: ${_style_file}"
+        return 1
+    }
+}
+
+attention_span_cleanup_settings_is_safe() {
+    local _settings_file="$1"
+
+    [[ -e "${_settings_file}" || -L "${_settings_file}" ]] || return 0
+    if [[ -L "${_settings_file}" ]]; then
+        print_warning "Cannot safely remove Attention-kind from symlinked Claude settings: ${_settings_file}"
+        return 1
+    fi
+    if [[ ! -f "${_settings_file}" ]]; then
+        print_warning "Claude settings target is not a regular file: ${_settings_file}"
+        return 1
+    fi
+    if ! command -v jq > /dev/null 2>&1; then
+        print_warning "jq is required to remove Attention-kind from Claude settings: ${_settings_file}"
+        return 1
+    fi
+    if ! jq -e 'type == "object"' "${_settings_file}" > /dev/null 2>&1; then
+        print_warning "Claude settings are not a valid JSON object: ${_settings_file}"
+        return 1
+    fi
+}
+
+attention_span_cleanup_managed_file_is_safe() {
+    local _target_file="$1"
+    local _begin_marker="<!-- attention-span:start -->"
+    local _end_marker="<!-- attention-span:end -->"
+    local _begin_count=0
+    local _end_count=0
+    local _begin_line=""
+    local _end_line=""
+
+    [[ -e "${_target_file}" || -L "${_target_file}" ]] || return 0
+    if [[ -L "${_target_file}" ]]; then
+        print_warning "Cannot safely remove Attention-kind from symlinked shared instructions: ${_target_file}"
+        return 1
+    fi
+    if [[ ! -f "${_target_file}" ]]; then
+        print_warning "Shared instruction target is not a regular file: ${_target_file}"
+        return 1
+    fi
+
+    _begin_count=$(grep -Fxc -- "${_begin_marker}" "${_target_file}" || true)
+    _end_count=$(grep -Fxc -- "${_end_marker}" "${_target_file}" || true)
+    if [[ "${_begin_count}" -eq 0 && "${_end_count}" -eq 0 ]]; then
+        return 0
+    fi
+    if [[ "${_begin_count}" -ne 1 || "${_end_count}" -ne 1 ]]; then
+        print_warning "Attention-kind markers are malformed in ${_target_file}; leaving it unchanged."
+        return 1
+    fi
+
+    _begin_line=$(grep -nFx -- "${_begin_marker}" "${_target_file}" || true)
+    _begin_line=${_begin_line%%:*}
+    _end_line=$(grep -nFx -- "${_end_marker}" "${_target_file}" || true)
+    _end_line=${_end_line%%:*}
+    if [[ "${_begin_line}" -ge "${_end_line}" ]]; then
+        print_warning "Attention-kind markers are malformed in ${_target_file}; leaving it unchanged."
+        return 1
+    fi
+}
+
+attention_span_cleanup_remove_style() {
+    local _style_file="$1"
+
+    [[ -e "${_style_file}" || -L "${_style_file}" ]] || return 0
+    if ! rm -f -- "${_style_file}" || [[ -e "${_style_file}" || -L "${_style_file}" ]]; then
+        print_warning "Failed to remove retired Attention-kind style: ${_style_file}"
+        return 1
+    fi
+    _attention_span_cleanup_removed=1
+}
+
+attention_span_cleanup_remove_setting() {
+    local _settings_file="$1"
+    local _tmp_file=""
+
+    attention_span_cleanup_settings_is_safe "${_settings_file}" || return 1
+    [[ -f "${_settings_file}" ]] || return 0
+    if ! jq -e '.outputStyle? == "Attention-kind"' "${_settings_file}" > /dev/null; then
+        return 0
+    fi
+    if ! _tmp_file=$(mktemp "${_settings_file}.XXXXXX"); then
+        print_warning "Could not create a temporary file for Claude settings cleanup: ${_settings_file}"
+        return 1
+    fi
+    if jq 'del(.outputStyle)' "${_settings_file}" > "${_tmp_file}" &&
+        attention_span_cleanup_prepare_file_mode "${_tmp_file}" "${_settings_file}" &&
+        mv -f -- "${_tmp_file}" "${_settings_file}"; then
+        _attention_span_cleanup_removed=1
+        return 0
+    fi
+
+    rm -f -- "${_tmp_file}"
+    print_warning "Failed to remove Attention-kind from Claude settings: ${_settings_file}"
+    return 1
+}
+
+attention_span_cleanup_remove_managed_block() {
+    local _target_file="$1"
+    local _begin_marker="<!-- attention-span:start -->"
+    local _end_marker="<!-- attention-span:end -->"
+    local _tmp_file=""
+
+    attention_span_cleanup_managed_file_is_safe "${_target_file}" || return 1
+    [[ -f "${_target_file}" ]] || return 0
+    if ! grep -Fqx -- "${_begin_marker}" "${_target_file}"; then
+        return 0
+    fi
+    if ! _tmp_file=$(mktemp "${_target_file}.XXXXXX"); then
+        print_warning "Could not create a temporary file for Attention-kind cleanup: ${_target_file}"
+        return 1
+    fi
+    if awk -v begin="${_begin_marker}" -v end="${_end_marker}" '
+        $0 == begin { in_block = 1; next }
+        $0 == end && in_block { in_block = 0; next }
+        !in_block { print }
+        END { exit in_block ? 1 : 0 }
+    ' "${_target_file}" > "${_tmp_file}" &&
+        attention_span_cleanup_prepare_file_mode "${_tmp_file}" "${_target_file}" &&
+        mv -f -- "${_tmp_file}" "${_target_file}"; then
+        _attention_span_cleanup_removed=1
+        return 0
+    fi
+
+    rm -f -- "${_tmp_file}"
+    print_warning "Failed to safely remove Attention-kind from ${_target_file}."
+    return 1
+}
+
+remove_attention_span_resources() {
+    local _default_claude_dir="${HOME}/.claude"
+    local _active_claude_dir="${CLAUDE_CONFIG_DIR:-${_default_claude_dir}}"
+    local _default_codex_dir="${HOME}/.codex"
+    local _active_codex_dir="${CODEX_HOME:-${_default_codex_dir}}"
+    local _default_pi_dir="${HOME}/.pi/agent"
+    local _active_pi_dir="${PI_CODING_AGENT_DIR:-${_default_pi_dir}}"
+    local _dir=""
+    local _managed_file=""
+    local -a _claude_dirs=("${_default_claude_dir}")
+    local -a _codex_dirs=("${_default_codex_dir}")
+    local -a _pi_dirs=("${_default_pi_dir}")
+    local -a _managed_files=()
+    _attention_span_cleanup_removed=0
+
+    [[ "${_active_claude_dir}" == "${_default_claude_dir}" ]] || _claude_dirs+=("${_active_claude_dir}")
+    [[ "${_active_codex_dir}" == "${_default_codex_dir}" ]] || _codex_dirs+=("${_active_codex_dir}")
+    [[ "${_active_pi_dir}" == "${_default_pi_dir}" ]] || _pi_dirs+=("${_active_pi_dir}")
+
+    for _dir in "${_codex_dirs[@]}"; do
+        _managed_files+=("${_dir}/AGENTS.md")
+    done
+    _managed_files+=("${HOME}/.gemini/GEMINI.md")
+    for _dir in "${_pi_dirs[@]}"; do
+        _managed_files+=("${_dir}/APPEND_SYSTEM.md")
+    done
+
+    # Preflight every target before changing any file.
+    for _dir in "${_claude_dirs[@]}"; do
+        attention_span_cleanup_style_is_safe "${_dir}/output-styles/attention-kind.md" || return 1
+        attention_span_cleanup_settings_is_safe "${_dir}/settings.json" || return 1
+    done
+    for _managed_file in "${_managed_files[@]}"; do
+        attention_span_cleanup_managed_file_is_safe "${_managed_file}" || return 1
+    done
+
+    for _dir in "${_claude_dirs[@]}"; do
+        attention_span_cleanup_remove_style "${_dir}/output-styles/attention-kind.md" || return 1
+        attention_span_cleanup_remove_setting "${_dir}/settings.json" || return 1
+    done
+    for _managed_file in "${_managed_files[@]}"; do
+        attention_span_cleanup_remove_managed_block "${_managed_file}" || return 1
+    done
+
+    if [[ "${_attention_span_cleanup_removed}" -eq 1 ]]; then
+        print_success "Retired Attention-kind guidance removed."
+    else
+        print_debug "No retired Attention-kind guidance found."
+    fi
+}
+
+# Check whether the active Node.js runtime can run the current skills CLI.
+skills_cli_node_runtime_ready() {
+    command -v node &> /dev/null || return 1
+    node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 20) ? 0 : 1)' >/dev/null 2>&1
+}
+
+# Ensure the skills CLI runs on its required Node.js version.
+ensure_skills_cli_node_runtime() {
+    local _runtime="node@24"
+
+    if skills_cli_node_runtime_ready; then
+        print_debug "Node.js $(node --version || true) is ready for the skills CLI."
+        return 0
+    fi
+
+    if [[ -d "${HOME}/.local/bin" ]]; then
+        export PATH="${HOME}/.local/bin:${PATH}"
+    fi
+
+    if [[ -d "${HOME}/.mise/bin" ]]; then
+        export PATH="${HOME}/.mise/bin:${PATH}"
+    fi
+
+    if ! command -v mise &> /dev/null; then
+        print_warning "Node.js >=22.20 is required for the skills CLI, but mise is not available to install it."
+        print_debug "Install mise, then run: mise use -g -y ${_runtime}"
+        return 1
+    fi
+
+    print_message "Ensuring Node.js 24 runtime for the skills CLI..."
+    if ! mise use -g -y "${_runtime}" > /dev/null; then
+        print_warning "Failed to install/configure ${_runtime} with mise."
+        return 1
+    fi
+
+    local _mise_env=""
+    if ! _mise_env=$(mise env -C "${HOME}" -s bash "${_runtime}"); then
+        print_warning "Failed to generate mise environment for ${_runtime}."
+        return 1
+    fi
+
+    if ! eval "${_mise_env}"; then
+        print_warning "Failed to activate ${_runtime} with mise."
+        return 1
+    fi
+
+    if skills_cli_node_runtime_ready; then
+        print_success "Node.js $(node --version || true) is ready for the skills CLI."
+        return 0
+    fi
+
+    print_warning "Node.js >=22.20 is still not active after installing ${_runtime}."
+    return 1
+}
+
+# Install/update Simple English for every supported AI coding harness.
+setup_simple_english_skill() {
+    local _install_output=""
+    local _skill_file=""
+    # Codex and Gemini CLI both discover the skills CLI's shared user copy.
+    local -a _skill_files=(
+        "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/skills/simple-english/SKILL.md"
+        "${HOME}/.agents/skills/simple-english/SKILL.md"
+    )
+
+    if ! ensure_skills_cli_node_runtime; then
+        return 1
+    fi
+
+    if ! command -v npx &> /dev/null; then
+        print_warning "npx is not available; cannot install the Simple English skill."
+        return 1
+    fi
+
+    print_message "Installing/updating Simple English across AI harnesses..."
+    if ! _install_output=$(npx --yes skills@latest add AminBlg/SimpleEnglish \
+        --global \
+        --agent claude-code \
+        --agent codex \
+        --agent gemini-cli \
+        --skill simple-english \
+        --copy \
+        --yes < /dev/null 2>&1); then
+        print_warning "Failed to install/update the Simple English skill."
+        print_debug "${_install_output}"
+        return 1
+    fi
+
+    for _skill_file in "${_skill_files[@]}"; do
+        if [[ ! -f "${_skill_file}" ]]; then
+            print_warning "Simple English validation failed: missing ${_skill_file}."
+            return 1
+        fi
+    done
+
+    print_success "Simple English installed/updated for Claude Code, Codex, Gemini CLI, and Pi through the shared skill path."
+    print_debug "${_install_output}"
+}
+
+# Remove setup-managed Impeccable resources without affecting sibling agent tooling.
+remove_impeccable_resources() {
+    local -a _paths=(
+        "${HOME}/.claude/skills/impeccable"
+        "${HOME}/.agents/skills/impeccable"
+        "${HOME}/.cursor/skills/impeccable"
+        "${HOME}/.gemini/skills/impeccable"
+        "${HOME}/.pi/agent/skills/impeccable"
+        "${HOME}/.cursor/agents/impeccable-manual-edit-applier.md"
+        "${HOME}/.cursor/agents/impeccable-asset-producer.md"
+        "${HOME}/.cursor/agents/impeccable-documenter.md"
+        "${HOME}/.cursor/agents/impeccable-finish-reviewer.md"
+    )
+    local -a _failed=()
+    local _path=""
+    local _removed=0
+
+    for _path in "${_paths[@]}"; do
+        if [[ ! -e "${_path}" && ! -L "${_path}" ]]; then
+            continue
+        fi
+
+        if [[ -L "${_path}" ]] || [[ ! -d "${_path}" ]]; then
+            if rm -f -- "${_path}"; then
+                _removed=1
+            else
+                _failed+=("${_path}")
+            fi
+        elif rm -rf -- "${_path}"; then
+            _removed=1
+        else
+            _failed+=("${_path}")
+        fi
+    done
+
+    if (( ${#_failed[@]} > 0 )); then
+        print_warning "Failed to remove legacy Impeccable resources: ${_failed[*]}"
+    elif (( _removed == 1 )); then
+        print_success "Legacy Impeccable resources removed."
+    else
+        print_debug "No legacy Impeccable resources found."
+    fi
 }
 
 # Resolve the Pi command target across Linux, macOS, and WSL.
@@ -2053,6 +3064,341 @@ cleanup_noncanonical_pi_installs() {
     fi
 }
 
+# Force Pi defaults: Kimi K3 (Synthetic) as the default model, or GLM-5.3
+# (z.ai GLM Coding Plan) on work machines that have a z.ai API key.
+# Chezmoi owns ~/.pi/agent/settings.json long-term; this seeds the desired
+# state on fresh machines and repairs drift where dotfiles are not applied.
+configure_pi_defaults() {
+    local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _settings_file="${_agent_dir}/settings.json"
+    local _tmp=""
+    local _jq_expr=""
+    local _default_desc="Kimi K3 (Synthetic)"
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot set Pi default model in ${_settings_file}."
+        return 1
+    fi
+
+    mkdir -p "${_agent_dir}"
+    if [[ -L "${_settings_file}" ]]; then
+        print_debug "Pi settings at ${_settings_file} are symlinked (chezmoi-managed); writing defaults through the link."
+    elif [[ ! -f "${_settings_file}" ]]; then
+        printf '{}\n' > "${_settings_file}"
+    fi
+
+    if ! _tmp=$(mktemp); then
+        print_warning "Could not create a temporary file for Pi defaults at ${_settings_file}."
+        return 1
+    fi
+
+    if [[ "${WORK_MACHINE:-}" == "1" ]] && pi_zai_key_available; then
+        _default_desc="GLM-5.3 (z.ai)"
+        _jq_expr='
+            .defaultProvider = "zai"
+            | .defaultModel = "glm-5.3"
+            | .defaultThinkingLevel = "high"
+        '
+    else
+        _jq_expr='
+            .defaultProvider = "synthetic"
+            | .defaultModel = "hf:moonshotai/Kimi-K3"
+            | .defaultThinkingLevel = "high"
+        '
+    fi
+
+    if jq "${_jq_expr}" "${_settings_file}" > "${_tmp}"; then
+        if cat "${_tmp}" > "${_settings_file}"; then
+            rm -f "${_tmp}"
+            print_success "Pi default model set to ${_default_desc} with high thinking."
+            return 0
+        fi
+        rm -f "${_tmp}"
+        print_warning "Failed to write Pi defaults to ${_settings_file}."
+        return 1
+    fi
+
+    rm -f "${_tmp}"
+    print_warning "Failed to parse Pi settings at ${_settings_file}; leaving defaults unchanged."
+    return 1
+}
+
+# shellcheck disable=SC2312
+# Read a KEY=VALUE pair from ~/.env.local (strips optional export/quotes).
+read_env_local_value() {
+    local _key="$1"
+    local _env_file="${HOME}/.env.local"
+    local _line=""
+    local _value=""
+
+    [[ -f "${_env_file}" ]] || return 1
+
+    _line=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${_key}=" "${_env_file}" | tail -n 1) || return 1
+    _value="${_line#*=}"
+    _value="${_value#\"}" && _value="${_value%\"}"
+    _value="${_value#\'}" && _value="${_value%\'}"
+    [[ -n "${_value}" ]] || return 1
+    printf '%s\n' "${_value}"
+}
+
+# Check whether a z.ai API key is available from ~/.env.local or from an
+# existing z.ai provider block in Pi's models.json.
+pi_zai_key_available() {
+    local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _models_file="${_agent_dir}/models.json"
+
+    if read_env_local_value "ZAI_API_KEY" > /dev/null 2>&1; then
+        return 0
+    fi
+    if [[ -f "${_models_file}" ]] \
+        && jq -e '.providers.zai.apiKey // empty | length > 0' "${_models_file}" > /dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+# Seed the Synthetic provider block (Kimi K3) into Pi's models.json.
+# The API key comes from SYNTHETIC_API_KEY in ~/.env.local; it is never
+# stored in this repository. Existing synthetic keys are preserved.
+seed_pi_synthetic_models() {
+    local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _models_file="${_agent_dir}/models.json"
+    local _api_key=""
+    local _tmp=""
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot seed Synthetic provider in ${_models_file}."
+        return 1
+    fi
+
+    if [[ -f "${_models_file}" ]] && jq -e '.providers.synthetic.apiKey // empty | length > 0' "${_models_file}" > /dev/null 2>&1; then
+        print_debug "Synthetic provider with an API key already configured in ${_models_file}."
+        return 0
+    fi
+
+    if ! _api_key=$(read_env_local_value "SYNTHETIC_API_KEY"); then
+        print_warning "SYNTHETIC_API_KEY not set in ~/.env.local. Kimi K3 (Synthetic) is the Pi default but has no API key yet; add the key and rerun setup."
+        return 1
+    fi
+
+    mkdir -p "${_agent_dir}"
+    if [[ ! -f "${_models_file}" ]]; then
+        printf '{"providers":{}}\n' > "${_models_file}"
+    fi
+
+    if ! _tmp=$(mktemp); then
+        print_warning "Could not create a temporary file for Pi models at ${_models_file}."
+        return 1
+    fi
+
+    if jq --arg apiKey "${_api_key}" '
+        .providers = (.providers // {})
+        | .providers.synthetic = {
+            baseUrl: "https://api.synthetic.new/v1",
+            api: "openai-completions",
+            apiKey: ((.providers.synthetic.apiKey // "") | if length > 0 then . else $apiKey end),
+            compat: {
+                supportsDeveloperRole: false,
+                supportsStore: false,
+                maxTokensField: "max_tokens",
+                supportsStrictMode: false,
+                deferredToolsMode: "kimi"
+            },
+            models: [
+                {
+                    id: "hf:moonshotai/Kimi-K3",
+                    name: "Kimi K3 (Synthetic)",
+                    reasoning: true,
+                    thinkingLevelMap: {
+                        off: null,
+                        minimal: null,
+                        low: "low",
+                        medium: null,
+                        high: "high",
+                        xhigh: null,
+                        max: "max"
+                    },
+                    input: ["text", "image"],
+                    contextWindow: 512000,
+                    maxTokens: 131072,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    compat: {
+                        supportsReasoningEffort: true,
+                        thinkingFormat: "openai",
+                        requiresReasoningContentOnAssistantMessages: true
+                    }
+                }
+            ]
+        }
+    ' "${_models_file}" > "${_tmp}"; then
+        if cat "${_tmp}" > "${_models_file}" && chmod 600 "${_models_file}"; then
+            rm -f "${_tmp}"
+            print_success "Synthetic provider (Kimi K3) seeded in ${_models_file}."
+            return 0
+        fi
+        rm -f "${_tmp}"
+        print_warning "Failed to write Synthetic provider to ${_models_file}."
+        return 1
+    fi
+
+    rm -f "${_tmp}"
+    print_warning "Failed to parse Pi models at ${_models_file}; leaving it unchanged."
+    return 1
+}
+# Seed the z.ai provider block (GLM Coding Plan) into Pi's models.json.
+# The API key comes from ZAI_API_KEY in ~/.env.local; it is never stored in
+# this repository. Existing z.ai keys are preserved. Seeding follows key
+# presence: any machine with the key gets the provider, and only work
+# machines are warned when the key is missing.
+seed_pi_zai_models() {
+    local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _models_file="${_agent_dir}/models.json"
+    local _api_key=""
+    local _tmp=""
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot seed z.ai provider in ${_models_file}."
+        return 1
+    fi
+
+    if [[ -f "${_models_file}" ]] && jq -e '.providers.zai.apiKey // empty | length > 0' "${_models_file}" > /dev/null 2>&1; then
+        print_debug "z.ai provider with an API key already configured in ${_models_file}."
+        return 0
+    fi
+
+    if ! _api_key=$(read_env_local_value "ZAI_API_KEY"); then
+        if [[ "${WORK_MACHINE:-}" == "1" ]]; then
+            print_warning "ZAI_API_KEY not set in ~/.env.local. Work machines default Pi to GLM-5.3 (z.ai) but there is no API key yet; add the key and rerun setup."
+            return 1
+        fi
+        print_debug "ZAI_API_KEY not set in ~/.env.local; skipping z.ai provider seeding."
+        return 0
+    fi
+
+    mkdir -p "${_agent_dir}"
+    if [[ ! -f "${_models_file}" ]]; then
+        printf '{"providers":{}}\n' > "${_models_file}"
+    fi
+
+    if ! _tmp=$(mktemp); then
+        print_warning "Could not create a temporary file for Pi models at ${_models_file}."
+        return 1
+    fi
+
+    if jq --arg apiKey "${_api_key}" '
+        .providers = (.providers // {})
+        | .providers.zai = {
+            baseUrl: "https://api.z.ai/api/coding/paas/v4",
+            api: "openai-completions",
+            apiKey: ((.providers.zai.apiKey // "") | if length > 0 then . else $apiKey end),
+            compat: {
+                supportsDeveloperRole: false,
+                supportsStore: false,
+                maxTokensField: "max_tokens",
+                supportsStrictMode: false
+            },
+            models: [
+                {
+                    id: "glm-5.3",
+                    name: "GLM-5.3 (z.ai)",
+                    reasoning: true,
+                    thinkingLevelMap: {
+                        off: null,
+                        minimal: null,
+                        low: "low",
+                        medium: null,
+                        high: "high",
+                        xhigh: null,
+                        max: "max"
+                    },
+                    input: ["text"],
+                    contextWindow: 1000000,
+                    maxTokens: 131072,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    compat: {
+                        supportsReasoningEffort: true,
+                        thinkingFormat: "openai"
+                    }
+                },
+                {
+                    id: "glm-5-turbo",
+                    name: "GLM-5-Turbo (z.ai)",
+                    reasoning: true,
+                    thinkingLevelMap: {
+                        off: "none",
+                        minimal: "minimal",
+                        low: "low",
+                        medium: "medium",
+                        high: "high",
+                        xhigh: "xhigh",
+                        max: "max"
+                    },
+                    input: ["text"],
+                    contextWindow: 200000,
+                    maxTokens: 131072,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    compat: {
+                        supportsReasoningEffort: true,
+                        thinkingFormat: "openai"
+                    }
+                },
+                {
+                    id: "glm-4.7",
+                    name: "GLM-4.7 (z.ai)",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 200000,
+                    maxTokens: 131072,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    compat: {
+                        supportsReasoningEffort: false,
+                        thinkingFormat: "openai"
+                    }
+                }
+            ]
+        }
+    ' "${_models_file}" > "${_tmp}"; then
+        if cat "${_tmp}" > "${_models_file}" && chmod 600 "${_models_file}"; then
+            rm -f "${_tmp}"
+            print_success "z.ai provider (GLM Coding Plan) seeded in ${_models_file}."
+            return 0
+        fi
+        rm -f "${_tmp}"
+        print_warning "Failed to write z.ai provider to ${_models_file}."
+        return 1
+    fi
+
+    rm -f "${_tmp}"
+    print_warning "Failed to parse Pi models at ${_models_file}; leaving it unchanged."
+    return 1
+}
+
+# Validate and repair npm's effective user configuration before setup mutates
+# any npm-owned package tree. npm handles registry-scoped auth migration without
+# exposing configuration values in the setup log.
+NPM_CONFIGURATION_COMMAND=""
+ensure_npm_configuration() {
+    local _npm_command=""
+
+    _npm_command=$(command -v npm 2>/dev/null || true)
+    if [[ -z "${_npm_command}" ]]; then
+        print_warning "npm not found. Cannot validate npm configuration."
+        return 1
+    fi
+    if [[ "${NPM_CONFIGURATION_COMMAND}" == "${_npm_command}" ]]; then
+        return 0
+    fi
+
+    if ! npm config fix > /dev/null 2>&1 || ! npm config list --location=user > /dev/null 2>&1; then
+        print_error "npm configuration is invalid and automatic repair failed."
+        print_debug "Run 'npm config fix', review the user npmrc, and rerun setup."
+        return 1
+    fi
+
+    NPM_CONFIGURATION_COMMAND="${_npm_command}"
+    print_debug "npm configuration validated."
+}
+
 # Install/update Pi coding agent
 install_pi_cli() {
     local _new_package="@earendil-works/pi-coding-agent"
@@ -2087,6 +3433,8 @@ install_pi_cli() {
         print_debug "Install Node.js/npm, then run: npm install -g --ignore-scripts --prefix \"${_local_prefix}\" ${_new_package}@latest"
         return 1
     fi
+
+    ensure_npm_configuration || return 1
 
     # Remove old npm-package ownership before installing so npm can claim ~/.local/bin/pi.
     npm uninstall -g --prefix "${_local_prefix}" "${_old_package}" > /dev/null 2>&1 || true
@@ -2255,6 +3603,15 @@ paseo_command_target() {
     else
         printf '%s\n' "${_cmd}"
     fi
+}
+
+paseo_command_matches_bun_global() {
+    local _paseo_target="$1"
+    local _bun_global_bin="$2"
+    local _bun_paseo="${_bun_global_bin}/paseo"
+
+    [[ -n "${_paseo_target}" && -n "${_bun_global_bin}" && -e "${_bun_paseo}" ]] || return 1
+    [[ "${_paseo_target}" -ef "${_bun_paseo}" ]]
 }
 
 paseo_runtime_target() {
@@ -2517,6 +3874,29 @@ paseo_validate_service_path_components() {
     done < <(printf '%s\n' "${_path_value}" | tr ':' '\n' || true)
 }
 
+paseo_trusted_service_path() {
+    local _path_value="$1"
+    local _component=""
+    local _result=""
+
+    while IFS= read -r _component; do
+        [[ -n "${_component}" && -d "${_component}" ]] || continue
+
+        if ! paseo_validate_service_path_components "${_component}" >/dev/null 2>&1; then
+            print_warning "Skipping untrusted optional Paseo service PATH component: ${_component}" >&2
+            continue
+        fi
+
+        if [[ -z "${_result}" ]]; then
+            _result="${_component}"
+        else
+            _result="${_result}:${_component}"
+        fi
+    done < <(printf '%s\n' "${_path_value}" | tr ':' '\n' || true)
+
+    printf '%s\n' "${_result}"
+}
+
 install_paseo_cli() {
     local _global_packages=""
     local _paseo_target=""
@@ -2570,23 +3950,17 @@ install_paseo_cli() {
         return 1
     fi
 
-    if [[ "${_paseo_target}" == *"/node_modules/paseo/"* ]] || [[ "${_paseo_target}" == *"/node_modules/paseo/bin"* ]]; then
-        print_error "Paseo command resolves to the unrelated unscoped paseo package: ${_paseo_target}"
-        return 1
-    fi
-
-    if [[ "${_paseo_target}" == *"/node_modules/"* && "${_paseo_target}" != *"${PASEO_PACKAGE}"* ]]; then
-        print_error "Paseo command resolves to an unexpected package target: ${_paseo_target}"
-        return 1
-    fi
-
     _bun_global_bin=$(bun pm bin -g 2>/dev/null || true)
     if [[ -z "${_bun_global_bin}" ]]; then
         print_error "Paseo install validation failed: Bun global bin path could not be resolved."
         return 1
     fi
-    if [[ "${_paseo_target}" != *"${PASEO_PACKAGE}"* && "${_paseo_target}" != "${_bun_global_bin}/"* ]]; then
-        print_error "Paseo command resolves outside Bun's global bin and scoped package target: ${_paseo_target}"
+    if ! paseo_command_matches_bun_global "${_paseo_target}" "${_bun_global_bin}"; then
+        if [[ "${_paseo_target}" == *"/node_modules/paseo/"* ]] || [[ "${_paseo_target}" == *"/node_modules/paseo/bin"* ]]; then
+            print_error "Paseo command resolves to the unrelated unscoped paseo package: ${_paseo_target}"
+        else
+            print_error "Paseo command does not match Bun's global paseo executable: ${_paseo_target}"
+        fi
         return 1
     fi
 
@@ -2605,13 +3979,14 @@ install_paseo_cli() {
     PASEO_VALIDATED_NODE="${_node_target}"
     _node_dir=$(dirname "${_node_target}")
     _service_path=$(paseo_service_path)
-    _service_path="${_node_dir}:${_service_path}"
-    PASEO_SERVICE_PATH=$(paseo_existing_service_path "${_service_path}")
+    _service_path=$(paseo_existing_service_path "${_service_path}")
+    paseo_harden_service_path_components "${_service_path}" || return 1
+    _service_path=$(paseo_trusted_service_path "${_service_path}")
+    PASEO_SERVICE_PATH="${_node_dir}${_service_path:+:${_service_path}}"
     if [[ -z "${PASEO_SERVICE_PATH}" ]]; then
         print_error "Paseo service PATH validation failed: no existing PATH components remain."
         return 1
     fi
-    paseo_harden_service_path_components "${PASEO_SERVICE_PATH}" || return 1
     paseo_validate_service_path_components "${PASEO_SERVICE_PATH}" || return 1
 
     if ! _version_output=$(HOME="${HOME}" PATH="${PASEO_SERVICE_PATH}:${PATH}" "${_paseo_target}" --version 2>/dev/null); then
@@ -2698,17 +4073,49 @@ paseo_managed_service_is_active() {
     paseo_systemctl_user is-active "${PASEO_SERVICE_NAME}" >/dev/null 2>&1
 }
 
+# systemd --user bus-backed control. When D-Bus is unavailable or stale (e.g.
+# after lingering sessions close PAM sessions and systemd --runtime-dir is
+# removed), fall back to the machined-mediated control channel
+# (`--machine=<user>@ --user`) which works for any user manager systemd
+# has spawned.
 paseo_systemctl_user() {
     local _uid=""
     local _runtime_dir=""
+    local _user=""
 
     _uid=$(id -u 2>/dev/null || true)
     [[ "${_uid}" =~ ^[0-9]+$ ]] || return 1
     _runtime_dir="/run/user/${_uid}"
 
-    XDG_RUNTIME_DIR="${_runtime_dir}" \
+    if XDG_RUNTIME_DIR="${_runtime_dir}" \
         DBUS_SESSION_BUS_ADDRESS="unix:path=${_runtime_dir}/bus" \
-        systemctl --user "$@"
+        systemctl --user "$@" 2>/dev/null; then
+        return 0
+    fi
+
+    _user=$(whoami 2>/dev/null || true)
+    if [[ -z "${_user}" ]]; then
+        return 1
+    fi
+
+    systemctl --machine="${_user}@" --user "$@" 2>/dev/null
+}
+
+paseo_managed_service_is_active_strict() {
+    local _attempt=0
+    local _max_attempts=${PASEO_ACTIVE_CHECK_ATTEMPTS:-5}
+    local _delay=${PASEO_ACTIVE_CHECK_DELAY:-1}
+
+    while [[ ${_attempt} -lt ${_max_attempts} ]]; do
+        if paseo_systemctl_user is-active "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
+            return 0
+        fi
+        _attempt=$(( _attempt + 1 ))
+        if [[ ${_attempt} -lt ${_max_attempts} ]]; then
+            sleep "${_delay}" || true
+        fi
+    done
+    return 1
 }
 
 stop_existing_paseo_daemon() {
@@ -3218,14 +4625,19 @@ EOF
     if ! paseo_managed_service_is_active; then
         PASEO_MANAGED_SERVICE_TOUCHED=1
         if ! paseo_systemctl_user start "${PASEO_SERVICE_NAME}"; then
-            print_error "Failed to start ${PASEO_SERVICE_NAME}."
-            return 1
+            print_debug "Initial start of ${PASEO_SERVICE_NAME} reported an error; attempting recovery."
         fi
     elif [[ "${PASEO_PACKAGE_CHANGED}" == "1" || "${PASEO_DAEMON_WRAPPER_CHANGED}" == "1" || "${PASEO_SYSTEMD_SERVICE_CHANGED}" == "1" ]]; then
         PASEO_MANAGED_SERVICE_TOUCHED=1
+        if ! paseo_systemctl_user reset-failed "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
+            print_debug "reset-failed reported an error (unit may not be failed); continuing."
+        fi
+        # Kill any leftover orphan processes in the Paseo cgroup before restarting;
+        # otherwise systemd can refuse the new start (exit-code 219/cgroup).
+        paseo_systemctl_user kill "${PASEO_SERVICE_NAME}" --kill-whom=all >/dev/null 2>&1 || true
+        sleep 1
         if ! paseo_systemctl_user restart "${PASEO_SERVICE_NAME}"; then
-            print_error "Failed to restart ${PASEO_SERVICE_NAME} after a Paseo package or service change."
-            return 1
+            print_debug "Initial restart of ${PASEO_SERVICE_NAME} reported an error; attempting recovery."
         fi
     else
         print_debug "Paseo package, wrapper, and service definition are unchanged; leaving the active daemon running."
@@ -3233,11 +4645,24 @@ EOF
 
     if ! paseo_systemctl_user is-enabled "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
         print_error "${PASEO_SERVICE_NAME} is not enabled after setup."
+        print_debug "Inspect privately with: systemctl --user is-enabled ${PASEO_SERVICE_NAME}"
         return 1
     fi
 
-    if ! paseo_systemctl_user is-active "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
+    if ! paseo_managed_service_is_active_strict; then
+        # Give the service one last chance: reset failed state, sweep orphan
+        # processes, and start it before declaring failure.
+        paseo_systemctl_user reset-failed "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
+        paseo_systemctl_user kill "${PASEO_SERVICE_NAME}" --kill-whom=all >/dev/null 2>&1 || true
+        sleep 1
+        paseo_systemctl_user start "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
+        PASEO_MANAGED_SERVICE_TOUCHED=1
+    fi
+
+    if ! paseo_managed_service_is_active_strict; then
         print_error "${PASEO_SERVICE_NAME} is not active after setup."
+        print_debug "State captured from systemd:"
+        paseo_systemctl_user status "${PASEO_SERVICE_NAME}" --no-pager 2>&1 | head -10 | sed 's/^/  /' || true
         print_debug "Inspect privately with: journalctl --user -u ${PASEO_SERVICE_NAME} --no-pager"
         return 1
     fi
@@ -3255,7 +4680,6 @@ cleanup_paseo_managed_service() {
     case "${_platform}" in
         Linux)
             paseo_systemctl_user stop "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
-            paseo_systemctl_user disable "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
             ;;
         *) ;;
     esac
@@ -3296,100 +4720,112 @@ setup_headless_paseo_daemon() {
     print_success "Headless Paseo daemon is service-managed and locally reachable. Use Paseo's normal pairing flow later if needed."
 }
 
-# Update Pi settings for the tintinweb subagents extension
-update_pi_subagents_settings() {
-    local _mode="${1:-install}"
+# Remove Pi subagents extension
+remove_pi_subagents() {
     local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
     local _settings_file="${_settings_dir}/settings.json"
+    local _package=""
+    local _output=""
     local _tmp=""
 
-    if ! command -v jq &> /dev/null; then
-        print_warning "jq not found. Cannot update Pi subagents settings."
-        return 1
+    if command -v pi &> /dev/null; then
+        for _package in "npm:@tintinweb/pi-subagents" "npm:pi-subagents"; do
+            if _output=$(pi remove "${_package}" 2>&1); then
+                print_success "Removed Pi subagents extension (${_package})."
+            elif grep -qi "no matching package found" <<< "${_output}"; then
+                print_debug "Pi subagents extension not installed (${_package})."
+            else
+                print_warning "Failed to remove Pi subagents extension (${_package}): ${_output}"
+            fi
+        done
+        return 0
     fi
 
-    mkdir -p "${_settings_dir}"
-
+    # Fallback when the pi CLI is unavailable: strip both package sources
+    # directly from settings.json.
     if [[ ! -f "${_settings_file}" ]]; then
-        printf '{}\n' > "${_settings_file}"
+        print_debug "Pi settings not found; Pi subagents extension not installed."
+        return 0
+    fi
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot remove Pi subagents from Pi settings."
+        return 0
     fi
 
     _tmp=$(mktemp)
-    if [[ "${_mode}" == "remove" ]]; then
-        if jq '
-            def package_source:
-                if type == "string" then .
-                elif type == "object" then (.source // "")
-                else ""
-                end;
-            def packages_array:
-                if (.packages | type) == "array" then .packages else [] end;
-            .packages = (packages_array | map(select((package_source != "npm:pi-subagents") and (package_source != "npm:@tintinweb/pi-subagents"))))
-            | if (.packages | length) == 0 then del(.packages) else . end
-        ' "${_settings_file}" > "${_tmp}"; then
-            mv "${_tmp}" "${_settings_file}"
-        else
-            rm -f "${_tmp}"
-            print_warning "Failed to update Pi settings at ${_settings_file}."
-            return 1
-        fi
+    if jq '
+        def package_source:
+            if type == "string" then .
+            elif type == "object" then (.source // "")
+            else ""
+            end;
+        def packages_array:
+            if (.packages | type) == "array" then .packages else [] end;
+        .packages = (packages_array | map(select((package_source != "npm:pi-subagents") and (package_source != "npm:@tintinweb/pi-subagents"))))
+        | if (.packages | length) == 0 then del(.packages) else . end
+    ' "${_settings_file}" > "${_tmp}"; then
+        mv "${_tmp}" "${_settings_file}"
+        print_success "Removed Pi subagents extension from Pi settings."
     else
-        if jq '
-            def package_source:
-                if type == "string" then .
-                elif type == "object" then (.source // "")
-                else ""
-                end;
-            def packages_array:
-                if (.packages | type) == "array" then .packages else [] end;
-            .packages = (packages_array | map(select(package_source != "npm:pi-subagents")))
-        ' "${_settings_file}" > "${_tmp}"; then
-            mv "${_tmp}" "${_settings_file}"
-        else
-            rm -f "${_tmp}"
-            print_warning "Failed to update Pi settings at ${_settings_file}."
-            return 1
-        fi
+        rm -f "${_tmp}"
+        print_warning "Failed to update Pi settings at ${_settings_file}."
     fi
+    return 0
 }
 
-# Install/update tintinweb Pi subagents extension
-setup_pi_subagents() {
-    local _package="npm:@tintinweb/pi-subagents"
+# Remove retired Pi RPIV packages (ask-user-question and todo)
+remove_pi_rpiv_packages() {
+    local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _settings_file="${_settings_dir}/settings.json"
+    local _package=""
     local _output=""
+    local _tmp=""
 
-    if [[ "${BAN_PI_SUBAGENTS:-}" == "1" ]]; then
-        if update_pi_subagents_settings remove; then
-            print_success "Pi subagents extension disabled in Pi settings."
-        fi
+    if command -v pi &> /dev/null; then
+        for _package in "npm:@juicesharp/rpiv-ask-user-question" "npm:@juicesharp/rpiv-todo"; do
+            if _output=$(pi remove "${_package}" 2>&1); then
+                print_success "Removed Pi RPIV package (${_package})."
+            elif grep -qi "no matching package found" <<< "${_output}"; then
+                print_debug "Pi RPIV package not installed (${_package})."
+            else
+                print_warning "Failed to remove Pi RPIV package (${_package}): ${_output}"
+            fi
+        done
         return 0
     fi
 
-    if ! command -v npm &> /dev/null; then
-        print_warning "npm not found. Cannot install Pi subagents."
-        print_debug "Install Node.js/npm, then run: pi install npm:@tintinweb/pi-subagents"
+    # Fallback when the pi CLI is unavailable: strip both package sources
+    # directly from settings.json.
+    if [[ ! -f "${_settings_file}" ]]; then
+        print_debug "Pi settings not found; Pi RPIV packages not installed."
         return 0
     fi
 
-    if ! command -v pi &> /dev/null; then
-        print_warning "Pi coding agent not found. Cannot install Pi subagents."
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot remove Pi RPIV packages from Pi settings."
         return 0
     fi
 
-    if ! update_pi_subagents_settings install; then
-        return 0
-    fi
-
-    print_message "Installing/updating tintinweb Pi subagents..."
-    if _output=$(pi install "${_package}" 2>&1); then
-        if _output=$(pi list 2>&1) && grep -q "npm:@tintinweb/pi-subagents" <<< "${_output}" && ! grep -q "npm:pi-subagents" <<< "${_output}"; then
-            print_success "tintinweb Pi subagents installed/updated."
-        else
-            print_warning "Pi subagents install completed, but package validation was inconclusive: ${_output}"
-        fi
+    _tmp=$(mktemp)
+    if jq '
+        def package_source:
+            if type == "string" then .
+            elif type == "object" then (.source // "")
+            else ""
+            end;
+        def packages_array:
+            if (.packages | type) == "array" then .packages else [] end;
+        .packages = (packages_array | map(select((package_source != "npm:@juicesharp/rpiv-ask-user-question") and (package_source != "npm:@juicesharp/rpiv-todo"))))
+        | if (.packages | length) == 0 then del(.packages) else . end
+    ' "${_settings_file}" > "${_tmp}"; then
+        mv "${_tmp}" "${_settings_file}"
+        print_success "Removed Pi RPIV packages from Pi settings."
     else
-        print_warning "Failed to install tintinweb Pi subagents: ${_output}"
+        rm -f "${_tmp}"
+        print_warning "Failed to update Pi settings at ${_settings_file}."
     fi
+    return 0
 }
 
 # Remove Pi MCP adapter package source from settings when disabled
@@ -3495,6 +4931,146 @@ setup_pi_claude_bridge() {
     fi
 }
 
+# Remove legacy Pi Ask User and install/update the Pi web access package
+setup_pi_companion_packages() {
+    local _legacy_package="npm:pi-ask-user"
+    local -a _packages=(
+        "npm:pi-web-access"
+    )
+    local _package=""
+    local _output=""
+    local _list_output=""
+
+    if ! command -v npm &> /dev/null; then
+        print_warning "npm not found. Cannot install Pi companion packages."
+        print_debug "Install Node.js/npm, then install these Pi packages manually: ${_packages[*]}"
+        return 0
+    fi
+
+    if ! command -v pi &> /dev/null; then
+        print_warning "Pi coding agent not found. Cannot install Pi companion packages."
+        return 0
+    fi
+
+    if _list_output=$(pi list 2>&1); then
+        if grep -Fq -- "${_legacy_package}" <<< "${_list_output}"; then
+            print_message "Removing legacy Pi Ask User package..."
+            if _output=$(pi remove "${_legacy_package}" 2>&1); then
+                print_success "Legacy Pi Ask User package removed."
+            else
+                print_warning "Failed to remove legacy Pi Ask User package: ${_output}"
+            fi
+        fi
+    else
+        print_warning "Cannot inspect Pi packages before legacy cleanup: ${_list_output}"
+    fi
+
+    for _package in "${_packages[@]}"; do
+        print_message "Installing/updating Pi package ${_package}..."
+        if _output=$(pi install "${_package}" 2>&1); then
+            if _list_output=$(pi list 2>&1) && grep -Fq -- "${_package}" <<< "${_list_output}"; then
+                print_success "Pi package ${_package} installed/updated."
+            else
+                print_warning "Pi package ${_package} install completed, but validation was inconclusive: ${_list_output}"
+            fi
+        else
+            print_warning "Failed to install Pi package ${_package}: ${_output}"
+        fi
+    done
+}
+
+# Keep shared skills canonical for Pi and suppress stale direct/package collisions.
+configure_pi_skill_ownership() {
+    local _default_agent_dir="${HOME}/.pi/agent"
+    local _active_agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
+    local _settings_file="${_active_agent_dir}/settings.json"
+    local _canonical_dir="${HOME}/.agents/skills"
+    local _agent_dir=""
+    local _skill=""
+    local _duplicate=""
+    local _managed_json=""
+    local _tmp=""
+    local -a _agent_dirs=("${_default_agent_dir}")
+    local -a _shared_exclusions=(
+        "!${_canonical_dir}/pi-goal-writer/**"
+        "!${_canonical_dir}/autoresearch-create/**"
+        "!${_canonical_dir}/autoresearch-finalize/**"
+        "!${_canonical_dir}/autoresearch-hooks/**"
+    )
+    local -a _shared_skills=(
+        simple-english setup-matt-pocock-skills diagnosing-bugs tdd
+        improve-codebase-architecture grill-with-docs grilling domain-modeling codebase-design
+    )
+    local -a _managed_exclusions=("${_shared_exclusions[@]}")
+
+    if [[ "${_active_agent_dir}" != "${_default_agent_dir}" ]]; then
+        _agent_dirs+=("${_active_agent_dir}")
+    fi
+
+    for _agent_dir in "${_agent_dirs[@]}"; do
+        for _skill in "${_shared_skills[@]}"; do
+            _duplicate="${_agent_dir}/skills/${_skill}"
+            _managed_exclusions+=("!${_duplicate}/**")
+            if [[ -d "${_duplicate}" && ! -L "${_duplicate}" && -d "${_canonical_dir}/${_skill}" && ! -L "${_canonical_dir}/${_skill}" ]] &&
+                diff -qr -- "${_canonical_dir}/${_skill}" "${_duplicate}" > /dev/null 2>&1; then
+                if rm -rf -- "${_duplicate:?}"; then
+                    print_debug "Removed obsolete duplicate Pi skill: ${_duplicate}"
+                else
+                    print_warning "Failed to remove obsolete duplicate Pi skill: ${_duplicate}"
+                fi
+            fi
+        done
+    done
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot configure Pi skill ownership."
+        return 1
+    fi
+
+    mkdir -p "${_active_agent_dir}"
+    [[ -f "${_settings_file}" ]] || printf '{}\n' > "${_settings_file}"
+    _managed_json=$(printf '%s\n' "${_managed_exclusions[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')
+    _tmp=$(mktemp)
+    if jq --argjson managed "${_managed_json}" '
+        .skills = (reduce $managed[] as $entry (
+            (if (.skills | type) == "array" then .skills else [] end);
+            if index($entry) then . else . + [$entry] end
+        ))
+    ' "${_settings_file}" > "${_tmp}"; then
+        mv "${_tmp}" "${_settings_file}"
+        print_success "Pi skill ownership configured without removing shared harness copies."
+    else
+        rm -f "${_tmp}"
+        print_warning "Failed to configure Pi skill ownership at ${_settings_file}."
+        return 1
+    fi
+}
+
+# Configure pi-autoresearch without overriding Pi transcript search.
+configure_pi_autoresearch_shortcut() {
+    local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _config_dir="${_agent_dir}/extensions"
+    local _config_file="${_config_dir}/pi-autoresearch.json"
+    local _tmp=""
+
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot configure the pi-autoresearch shortcut."
+        return 1
+    fi
+
+    mkdir -p "${_config_dir}"
+    [[ -f "${_config_file}" ]] || printf '{}\n' > "${_config_file}"
+    _tmp=$(mktemp)
+    if jq '.shortcuts.fullscreenDashboard = "ctrl+shift+r"' "${_config_file}" > "${_tmp}"; then
+        mv "${_tmp}" "${_config_file}"
+        print_success "pi-autoresearch dashboard shortcut set to Ctrl+Shift+R."
+    else
+        rm -f "${_tmp}"
+        print_warning "Failed to configure pi-autoresearch at ${_config_file}."
+        return 1
+    fi
+}
+
 # Remove Pi goal/autoresearch package sources from settings when disabled
 remove_pi_goal_autoresearch_settings() {
     local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
@@ -3566,26 +5142,42 @@ setup_pi_goal_autoresearch() {
     elif [[ "${_had_failure}" -eq 0 ]]; then
         print_warning "Pi goal/autoresearch install completed, but package validation was inconclusive: ${_list_output}"
     fi
+
+    configure_pi_autoresearch_shortcut || return 1
 }
 
 
-# Matt Pocock skills to install for Pi.
-matt_pocock_pi_skills() {
+# Matt Pocock skills to install for Pi and Codex.
+matt_pocock_skills() {
     printf '%s\n' \
         setup-matt-pocock-skills \
-        diagnose \
+        diagnosing-bugs \
         tdd \
         improve-codebase-architecture \
-        zoom-out \
-        grill-with-docs
+        grill-with-docs \
+        grilling \
+        domain-modeling \
+        codebase-design
 }
 
-matt_pocock_pi_skills_disabled() {
-    [[ "${WORK_MACHINE:-}" == "1" || "${BAN_MATT_POCOCK_SKILLS:-}" == "1" || "${BAN_MATT_POCKOCK_SKILLS:-}" == "1" ]]
+# Setup-managed skill names retired or renamed upstream.
+matt_pocock_obsolete_skills() {
+    printf '%s\n' \
+        diagnose \
+        zoom-out
 }
 
-# Remove Matt Pocock skill copies from Pi when disabled.
-remove_matt_pocock_pi_skills() {
+matt_pocock_all_managed_skills() {
+    matt_pocock_skills
+    matt_pocock_obsolete_skills
+}
+
+matt_pocock_skills_disabled() {
+    [[ "${BAN_MATT_POCOCK_SKILLS:-}" == "1" || "${BAN_MATT_POCKOCK_SKILLS:-}" == "1" ]]
+}
+
+# Remove setup-managed Matt Pocock skills without following symlink targets.
+remove_matt_pocock_skills() {
     local _default_agent_dir="${HOME}/.pi/agent"
     local _active_agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
     local _skills_dir=""
@@ -3593,7 +5185,7 @@ remove_matt_pocock_pi_skills() {
     local _skill_path=""
     local _removed=0
     local _failed=()
-    local _skills_dirs=("${_default_agent_dir}/skills")
+    local _skills_dirs=("${_default_agent_dir}/skills" "${HOME}/.agents/skills")
 
     if [[ "${_active_agent_dir}" != "${_default_agent_dir}" ]]; then
         _skills_dirs+=("${_active_agent_dir}/skills")
@@ -3602,104 +5194,114 @@ remove_matt_pocock_pi_skills() {
     for _skills_dir in "${_skills_dirs[@]}"; do
         while IFS= read -r _skill; do
             _skill_path="${_skills_dir}/${_skill}"
-            if [[ -e "${_skill_path}" ]]; then
-                if rm -rf -- "${_skill_path:?}" && [[ ! -e "${_skill_path}" ]]; then
+            if [[ -e "${_skill_path}" || -L "${_skill_path}" ]]; then
+                if rm -rf -- "${_skill_path:?}" && [[ ! -e "${_skill_path}" && ! -L "${_skill_path}" ]]; then
                     _removed=1
                 else
                     _failed+=("${_skill}")
                 fi
             fi
-        done < <(matt_pocock_pi_skills || true)
+        done < <(matt_pocock_all_managed_skills || true)
     done
 
     if [[ "${#_failed[@]}" -gt 0 ]]; then
-        print_warning "Failed to remove Matt Pocock Pi skills: ${_failed[*]}"
+        print_warning "Failed to remove Matt Pocock skills: ${_failed[*]}"
         return 1
     elif [[ "${_removed}" -eq 1 ]]; then
-        print_success "Matt Pocock Pi skills disabled."
+        print_success "Matt Pocock skills disabled."
     else
-        print_debug "Matt Pocock Pi skills disabled; no installed copies found."
+        print_debug "Matt Pocock skills disabled; no installed copies found."
     fi
 }
 
-# Install/update Matt Pocock engineering skills for Pi.
-setup_matt_pocock_pi_skills() {
-    local _repo="mattpocock/skills"
+# Remove only retired setup-managed names after their replacements validate.
+remove_obsolete_matt_pocock_skills() {
     local _default_agent_dir="${HOME}/.pi/agent"
-    local _agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
-    local _default_skills_dir="${_default_agent_dir}/skills"
-    local _skills_dir="${_agent_dir}/skills"
+    local _active_agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
+    local _skills_dir=""
+    local _skill=""
+    local _skill_path=""
+    local _failed=()
+    local _skills_dirs=("${_default_agent_dir}/skills" "${HOME}/.agents/skills")
+
+    if [[ "${_active_agent_dir}" != "${_default_agent_dir}" ]]; then
+        _skills_dirs+=("${_active_agent_dir}/skills")
+    fi
+
+    for _skills_dir in "${_skills_dirs[@]}"; do
+        while IFS= read -r _skill; do
+            _skill_path="${_skills_dir}/${_skill}"
+            if [[ -e "${_skill_path}" || -L "${_skill_path}" ]]; then
+                if ! rm -rf -- "${_skill_path:?}" || [[ -e "${_skill_path}" || -L "${_skill_path}" ]]; then
+                    _failed+=("${_skill_path}")
+                fi
+            fi
+        done < <(matt_pocock_obsolete_skills || true)
+    done
+
+    if [[ "${#_failed[@]}" -gt 0 ]]; then
+        print_warning "Failed to remove obsolete Matt Pocock skills: ${_failed[*]}"
+        return 1
+    fi
+}
+
+# Install/update Matt Pocock engineering skills in the shared Codex/Pi path.
+setup_matt_pocock_skills() {
+    local _repo="mattpocock/skills"
+    local _codex_skills_dir="${HOME}/.agents/skills"
+    local _validation_dir=""
     local _skill=""
     local _output=""
     local _source_path=""
-    local _dest_path=""
-    local _args=(--yes skills@latest add "${_repo}" --global --agent pi --copy -y)
+    local _args=(--yes skills@latest add "${_repo}" --global --agent codex --copy --yes)
+    local _validation_dirs=("${_codex_skills_dir}")
     local _missing=()
-    local _sync_failed=()
 
-    if matt_pocock_pi_skills_disabled; then
-        if [[ "${WORK_MACHINE:-}" == "1" ]]; then
-            print_debug "WORK_MACHINE=1, skipping Matt Pocock Pi skills."
-        fi
-        remove_matt_pocock_pi_skills
-        return 0
+    if matt_pocock_skills_disabled; then
+        remove_matt_pocock_skills
+        return
     fi
 
-    if ! command -v pi &> /dev/null; then
-        print_warning "Pi coding agent not found. Cannot install Matt Pocock Pi skills."
-        return 0
-    fi
-
-    if ! ensure_pi_node_runtime; then
-        print_warning "Skipping Matt Pocock Pi skills because the Pi Node.js runtime is not ready."
-        return 0
+    if ! ensure_skills_cli_node_runtime; then
+        print_warning "Cannot install Matt Pocock skills because the skills CLI runtime is not ready."
+        return 1
     fi
 
     if ! command -v npx &> /dev/null; then
-        print_warning "npx not found. Cannot install Matt Pocock Pi skills."
-        print_debug "Install Node.js >=20.6, then run: npx --yes skills@latest add mattpocock/skills --global --agent pi --copy"
-        return 0
+        print_warning "npx is not available; cannot install Matt Pocock skills."
+        print_debug "Install Node.js >=22.20, then run: npx --yes skills@latest add mattpocock/skills --global --agent codex --copy --yes"
+        return 1
     fi
 
     while IFS= read -r _skill; do
         _args+=(--skill "${_skill}")
-    done < <(matt_pocock_pi_skills || true)
+    done < <(matt_pocock_skills || true)
 
-    print_message "Installing/updating Matt Pocock Pi skills..."
-    if _output=$(npx "${_args[@]}" 2>&1); then
-        if [[ "${_agent_dir}" != "${_default_agent_dir}" ]]; then
-            mkdir -p "${_skills_dir}"
-            while IFS= read -r _skill; do
-                _source_path="${_default_skills_dir}/${_skill}"
-                _dest_path="${_skills_dir}/${_skill}"
-                if [[ -d "${_source_path}" ]]; then
-                    if rm -rf -- "${_dest_path:?}" && cp -a "${_source_path}" "${_dest_path}"; then
-                        true
-                    else
-                        _sync_failed+=("${_skill}")
-                    fi
-                else
-                    _sync_failed+=("${_skill}")
-                fi
-            done < <(matt_pocock_pi_skills || true)
-        fi
-
-        while IFS= read -r _skill; do
-            if [[ ! -f "${_skills_dir}/${_skill}/SKILL.md" ]]; then
-                _missing+=("${_skill}")
-            fi
-        done < <(matt_pocock_pi_skills || true)
-
-        if [[ "${#_sync_failed[@]}" -gt 0 ]]; then
-            print_warning "Matt Pocock Pi skills installed, but failed to sync to active Pi dir ${_agent_dir}: ${_sync_failed[*]}"
-        elif [[ "${#_missing[@]}" -eq 0 ]]; then
-            print_success "Matt Pocock Pi skills installed/updated."
-        else
-            print_warning "Matt Pocock Pi skills install completed, but missing expected skills: ${_missing[*]}"
-        fi
-    else
-        print_warning "Failed to install Matt Pocock Pi skills: ${_output}"
+    print_message "Installing/updating Matt Pocock skills for Pi and Codex..."
+    if ! _output=$(npx "${_args[@]}" < /dev/null 2>&1); then
+        print_warning "Failed to install Matt Pocock skills."
+        print_debug "${_output}"
+        return 1
     fi
+
+    for _validation_dir in "${_validation_dirs[@]}"; do
+        while IFS= read -r _skill; do
+            _source_path="${_validation_dir}/${_skill}"
+            if [[ ! -d "${_source_path}" || -L "${_source_path}" || ! -f "${_source_path}/SKILL.md" || -L "${_source_path}/SKILL.md" ]]; then
+                _missing+=("${_source_path}")
+            fi
+        done < <(matt_pocock_skills || true)
+    done
+
+    if [[ "${#_missing[@]}" -gt 0 ]]; then
+        print_warning "Matt Pocock skills are missing required files: ${_missing[*]}"
+        return 1
+    elif ! remove_obsolete_matt_pocock_skills; then
+        return 1
+    fi
+
+    print_success "Matt Pocock skills installed/updated for Pi and Codex through the shared skill path."
+    print_debug "${_output}"
 }
 
 
@@ -3782,7 +5384,8 @@ compound_pi_skill_names() {
         ce-test-xcode \
         ce-work \
         ce-work-beta \
-        ce-worktree
+        ce-worktree \
+        lfg
 }
 
 compound_pi_agent_names() {
@@ -3995,6 +5598,22 @@ remove_compound_engineering_resources() {
                     fi
                 done
             done < <(compound_pi_agent_names || true)
+        fi
+
+        # The Pi plugin installer leaves its install manifest behind. The
+        # manifest is part of the legacy installation and must be removed too.
+        _resource_path="${_agent_dir}/compound-engineering"
+        if [[ -e "${_resource_path}" || -L "${_resource_path}" ]]; then
+            if [[ -d "${_resource_path}" || -L "${_resource_path}" ]]; then
+                rm -rf -- "${_resource_path}"
+            else
+                rm -f -- "${_resource_path}"
+            fi
+            if [[ ! -e "${_resource_path}" && ! -L "${_resource_path}" ]]; then
+                _removed=1
+            else
+                _failed+=("${_resource_path}")
+            fi
         fi
 
         _agents_path="${_agent_dir}/AGENTS.md"
@@ -4255,30 +5874,6 @@ install_uv() {
     fi
 }
 
-# Upgrade global npm packages
-upgrade_npm_global_packages() {
-    # Initialize mise for current session (provides npm if Node.js is installed)
-    if command -v mise &> /dev/null; then
-        local mise_activation
-        mise_activation=$(mise activate bash || true)
-        eval "${mise_activation}"
-    fi
-
-    # Make sure npm is available
-    if ! command -v npm &> /dev/null; then
-        print_warning "npm not found. Skipping global package upgrade."
-        return
-    fi
-
-    print_message "Upgrading global npm packages..."
-    if npm update -g &> /dev/null; then
-        print_success "Global npm packages upgraded."
-    else
-        print_warning "Failed to upgrade some global npm packages."
-    fi
-}
-
-
 # Setup ~/Code directory
 setup_code_directory() {
     local code_dir="${HOME}/Code"
@@ -4296,32 +5891,92 @@ setup_code_directory() {
 
 # Upload log to centralized collector (non-fatal)
 upload_log() {
-    if [[ -n "${log_file:-}" ]] && [[ -f "${log_file:-}" ]]; then
-        print_debug "Uploading log to logs.scowalt.com..."
-        curl -s -X POST \
-            -F "file=@${log_file}" \
-            "https://logs.scowalt.com/upload?hostname=$(hostname)" \
-            --max-time 10 \
-            > /dev/null 2>&1 || true
+    local setup_hostname=""
+
+    if [[ -z "${SETUP_LOG_FILE}" ]] || [[ ! -f "${SETUP_LOG_FILE}" ]]; then
+        return 0
+    fi
+
+    setup_hostname=$(hostname 2>/dev/null) || setup_hostname="unknown"
+    print_debug "Uploading log to logs.scowalt.com..."
+    if ! curl --fail --silent -X POST \
+        -F "file=@${SETUP_LOG_FILE}" \
+        "https://logs.scowalt.com/upload?hostname=${setup_hostname}" \
+        --max-time 10 \
+        > /dev/null 2>&1; then
+        print_warning "Failed to upload setup log. Local log remains at ${SETUP_LOG_FILE}."
     fi
 }
 
-main() {
-    # Log this run (before banner so version appears in logs)
+start_setup_log() {
     local log_dir="${HOME}/.local/log/machine-setup"
-    mkdir -p "${log_dir}"
-    local log_file
-    log_file="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
+    if ! mkdir -p "${log_dir}"; then
+        print_warning "Could not create setup log directory at ${log_dir}; continuing without log upload."
+        return 1
+    fi
+
+    SETUP_LOG_FILE="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
+    if ! touch "${SETUP_LOG_FILE}"; then
+        print_warning "Could not create setup log at ${SETUP_LOG_FILE}; continuing without log upload."
+        SETUP_LOG_FILE=""
+        return 1
+    fi
+
     exec 3>&1
-    exec > >({ tee -a "${log_file}" || true; }) 2>&1
-    print_debug "Logging to ${log_file}"
+    exec > >({ tee -a "${SETUP_LOG_FILE}" || true; }) 2>&1
+    SETUP_LOG_TEE_PID=$!
+    SETUP_LOGGING_ACTIVE=1
+    print_debug "Logging to ${SETUP_LOG_FILE}"
+}
+
+finish_setup_log() {
+    local setup_status="$1"
+
+    if [[ "${SETUP_LOGGING_ACTIVE}" == "1" ]]; then
+        echo -e "${GRAY}Run log saved to: ${SETUP_LOG_FILE}${NC}"
+        exec 1>&3 2>&3
+        exec 3>&-
+        if [[ -n "${SETUP_LOG_TEE_PID}" ]]; then
+            wait "${SETUP_LOG_TEE_PID}" 2>/dev/null || true
+        fi
+        SETUP_LOG_TEE_PID=""
+        SETUP_LOGGING_ACTIVE=0
+        upload_log
+    fi
+
+    return "${setup_status}"
+}
+
+# Warn if the machine has a reboot pending. Informational only; never affects
+# the run's exit status. Detection: the Debian /var/run/reboot-required
+# sentinel; the matching .pkgs file names the packages that triggered it.
+check_pending_reboot() {
+    if [[ ! -f /var/run/reboot-required ]]; then
+        print_debug "No reboot pending."
+        return 0
+    fi
+
+    print_warning "Machine reboot pending. Restart this machine for applied updates to take effect."
+
+    if [[ -f /var/run/reboot-required.pkgs ]]; then
+        local pkg pkgs
+        pkgs=$(head -n 5 /var/run/reboot-required.pkgs 2> /dev/null) || pkgs=""
+        if [[ -n "${pkgs}" ]]; then
+            print_debug "Packages that triggered it (up to 5):"
+            while IFS= read -r pkg; do
+                print_debug "  ${pkg}"
+            done <<< "${pkgs}"
+        fi
+    fi
+}
+
+run_setup_tasks() {
+    local _setup_had_errors=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 163 | Last changed: Fix gcloud detection and ncurses package idempotency${NC}"
+    echo -e "${GRAY}Version 192 | Last changed: Remove retired Attention-kind guidance"
 
     if ! acquire_setup_lock; then
-        echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
-        upload_log
         return 1
     fi
 
@@ -4339,17 +5994,20 @@ main() {
     paseo_headless_platform_gate || return 1
 
     print_section "User & System Setup"
-    ensure_not_root
+    ensure_not_root || return 1
     check_raspberry_pi
     setup_swap
     setup_dns64_for_ipv6_only
 
     print_section "System Updates"
-    update_dependencies
+    if ! update_dependencies; then
+        _setup_had_errors=1
+    fi
     update_and_install_core
 
     print_section "Development Tools"
     install_homebrew
+    install_gitea_client || return 1
     install_brew_packages
     install_1password_cli
     install_secrets_manager
@@ -4363,7 +6021,9 @@ main() {
 
     print_section "Network & SSH"
     enable_ssh_server
-    install_tailscale
+    if ! install_tailscale; then
+        _setup_had_errors=1
+    fi
     install_fail2ban
     setup_unattended_upgrades
     add_github_to_known_hosts || return 1
@@ -4383,7 +6043,6 @@ main() {
     install_codex_cli
     install_portless_cli
     install_ntn_cli
-    install_rtk_cli
 
     print_section "Terminal & Shell"
     install_starship
@@ -4396,37 +6055,48 @@ main() {
     if check_dotfiles_access || setup_dotfiles_deploy_key; then
         # We have access, proceed with chezmoi setup
         install_chezmoi
-        initialize_chezmoi
+        if ! initialize_chezmoi; then
+            _setup_had_errors=1
+        fi
         # chezmoi init --apply overwrites ~/.ssh/config, removing the
         # github-dotfiles host alias needed for deploy key access.
         # Re-bootstrap it before any further chezmoi network operations.
         bootstrap_ssh_config
         configure_chezmoi_git
-        fix_chezmoi_remote_for_deploy_key
+        if ! fix_chezmoi_remote_for_deploy_key; then
+            _setup_had_errors=1
+        fi
         update_chezmoi
-        apply_chezmoi_config
+        if ! apply_chezmoi_config; then
+            print_error "Failed to apply chezmoi dotfiles."
+            _setup_had_errors=1
+        fi
+        # Applying dotfiles may replace ~/.ssh/config; leave the alias durable.
+        bootstrap_ssh_config
     else
         print_warning "Skipping dotfiles management - no access to repository."
     fi
 
-    setup_rtk_integrations
+    remove_rtk_resources || return 1
+    remove_attention_span_resources || return 1
 
     print_section "Pi Extensions"
-    if matt_pocock_pi_skills_disabled; then
-        setup_matt_pocock_pi_skills
+    if ! setup_matt_pocock_skills; then
+        _setup_had_errors=1
     fi
     if install_pi_cli; then
-        setup_pi_subagents
+        configure_pi_defaults
+        seed_pi_synthetic_models
+        seed_pi_zai_models
+        remove_pi_subagents
+        remove_pi_rpiv_packages
         setup_pi_mcp_adapter
         setup_pi_claude_bridge
+        setup_pi_companion_packages
         setup_pi_goal_autoresearch
-        if ! matt_pocock_pi_skills_disabled; then
-            setup_matt_pocock_pi_skills
-        fi
     else
-        if [[ "${BAN_PI_SUBAGENTS:-}" == "1" ]]; then
-            setup_pi_subagents
-        fi
+        remove_pi_subagents
+        remove_pi_rpiv_packages
         if [[ "${BAN_PI_MCP_ADAPTER:-}" == "1" ]]; then
             setup_pi_mcp_adapter
         fi
@@ -4434,7 +6104,17 @@ main() {
             setup_pi_goal_autoresearch
         fi
         print_warning "Skipping Pi extension setup because Pi migration failed."
+        _setup_had_errors=1
     fi
+
+    if ! setup_simple_english_skill; then
+        _setup_had_errors=1
+    fi
+    if ! configure_pi_skill_ownership; then
+        _setup_had_errors=1
+    fi
+
+    remove_impeccable_resources
 
     remove_compound_engineering_resources
 
@@ -4447,11 +6127,24 @@ main() {
     install_iterm2_shell_integration
 
     print_section "Final Updates"
-    upgrade_npm_global_packages
 
-    echo -e "${GRAY}Run log saved to: ${log_file}${NC}"
-    printf '\n%s%s✨ Setup complete! Please log out and log back in for all changes to take effect.%s\n\n' "${GREEN}" "${BOLD}" "${NC}" | tee -a "${log_file}" >&3
-    upload_log
+    check_pending_reboot
+
+    if [[ "${_setup_had_errors}" -eq 0 ]]; then
+        printf '\n%b%b✨ Setup complete! Please log out and log back in for all changes to take effect.%b\n\n' "${GREEN}" "${BOLD}" "${NC}"
+    else
+        print_warning "Setup completed with errors; review the failures above."
+    fi
+
+    return "${_setup_had_errors}"
+}
+
+main() {
+    local setup_status=0
+
+    start_setup_log || true
+    run_setup_tasks "$@" || setup_status=$?
+    finish_setup_log "${setup_status}"
 }
 
 main "$@"

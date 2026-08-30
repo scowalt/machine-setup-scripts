@@ -1,0 +1,3 @@
+# CLAUDE.md contains vendored Backlog.md CLI guidance and is kept in upstream formatting.
+# Exclude it from markdownlint so we do not reformat vendored documentation in this repo.
+CLAUDE.md

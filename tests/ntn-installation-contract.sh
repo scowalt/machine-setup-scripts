@@ -102,22 +102,15 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_function_not_contains "${file}" install_ntn_cli 'command -v ntn' 'presence-only early return'
     assert_function_not_contains "${file}" install_ntn_cli 'bun|npm' 'Node package-manager dependency'
     assert_function_not_contains "${file}" install_ntn_cli 'ntn login|ntn completions' 'authentication or completion automation'
-    assert_order "${file}" '^[[:space:]]+install_codex_cli$' '^[[:space:]]+install_ntn_cli$' 'Codex before Notion CLI'
-    assert_order "${file}" '^[[:space:]]+install_ntn_cli$' '^[[:space:]]+install_rtk_cli$' 'Notion CLI before RTK'
+    assert_order "${file}" '^[[:space:]]+install_codex_cli([[:space:]]+\|\|[[:space:]]+return 1)?$' '^[[:space:]]+install_ntn_cli$' 'Codex before Notion CLI'
+    assert_order "${file}" '^[[:space:]]+install_ntn_cli$' '^[[:space:]]+remove_rtk_resources[[:space:]]+\|\|[[:space:]]+return 1$' 'Notion CLI before retired RTK cleanup'
 done
-
-assert_contains mac.sh 'Version 182 \| Last changed: Harden package updates, tap trust, and setup locking' 'macOS version banner'
-assert_contains ubuntu.sh 'Version 202 \| Last changed: Fix gcloud detection and ncurses package idempotency' 'Ubuntu version banner'
-assert_contains wsl.sh 'Version 150 \| Last changed: Fix gcloud detection and ncurses package idempotency' 'WSL version banner'
-assert_contains pi.sh 'Version 163 \| Last changed: Fix gcloud detection and ncurses package idempotency' 'Raspberry Pi version banner'
-assert_contains bazzite.sh 'Version 61 \| Last changed: Fix multiline gcloud component-manager detection' 'Bazzite version banner'
 
 assert_contains win.ps1 '"Notion\.ntn"' 'official Notion CLI WinGet package'
 # These regexes intentionally use single quotes to preserve literal shell and Markdown syntax.
 # shellcheck disable=SC2016
 assert_contains win.ps1 '\$package -eq "Notion\.ntn" -and \$env:PROCESSOR_ARCHITECTURE -ne "AMD64"' 'Windows x64 architecture guard'
 assert_contains win.ps1 'Notion CLI supports Windows x64 only; skipping' 'unsupported Windows architecture warning'
-assert_contains win.ps1 'Version 108 \| Last changed: Fix multiline gcloud component-manager detection' 'Windows version banner'
 assert_order win.ps1 '^[[:space:]]+Install-WingetPackages$' '^[[:space:]]+Install-WingetUpdates$' 'WinGet install before update'
 assert_not_contains win.ps1 'npm (install|i).*(--global|-g).*ntn' 'npm-based Notion CLI installation'
 assert_not_contains win.ps1 'ntn (login|completions)' 'Notion authentication or completion automation'

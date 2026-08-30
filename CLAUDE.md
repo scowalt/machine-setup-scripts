@@ -72,9 +72,17 @@ All scripts follow a consistent pattern:
 - Dotfiles: Chezmoi (with auto-sync)
 - Terminal: Starship prompt
 - CI/CD: act (local GitHub Actions)
-- AI agents and developer CLIs: Notion CLI (`ntn`), Claude Code CLI, Gemini CLI, Codex CLI, Pi coding agent, RTK token optimizer
-- Agent skills/plugins: Matt Pocock engineering skills are installed for Pi on personal machines. Notion CLI is installed with its native installer on macOS/Linux and WinGet on Windows; setup updates the CLI but leaves `ntn login` and shell completions to the user. Claude Code CLI is installed with Anthropic's native installer, not npm/Bun, so it does not depend on a global Node runtime. RTK is installed for all machines and initialized for supported agents when available. Work machines install Google Cloud CLI and update its components when the component manager is available. Skip Claude Code CLI with `BAN_CLAUDE_CODE=1`; skip Matt Pocock skills with `WORK_MACHINE=1` or `BAN_MATT_POCOCK_SKILLS=1`; skip RTK with `BAN_RTK=1` in `~/.env.local`
+- AI agents and developer CLIs: Notion CLI (`ntn`), Claude Code CLI, Gemini CLI, Codex CLI, Pi coding agent
+- Agent skills/plugins: Setup always installs the latest Simple English skill globally for Claude Code, Codex, Gemini CLI, and Pi.
+- Matt Pocock skills: Setup installs the managed engineering skills for Pi and Codex on personal and work machines.
+- Skill paths: Pi and Codex share canonical setup-managed skills in `~/.agents/skills`. Gemini CLI shares the Simple English copy in this directory. Setup excludes obsolete direct Pi copies and package-skill collisions without deleting intentional shared copies.
+- Skill maintenance: Setup validates installed files. It removes legacy Impeccable skill copies and Cursor subagent files. It does not change project data or hooks.
+- Notion CLI: Setup uses the native installer on macOS and Linux. Setup uses WinGet on Windows. Setup does not run `ntn login` or install shell completions.
+- Claude Code CLI: Setup uses the Anthropic native installer instead of npm or Bun. Thus, the CLI does not require a global Node runtime.
+- Work machines: Setup installs Google Cloud CLI. Setup updates its components when the component manager is available.
+- Opt-outs: Set `BAN_CLAUDE_CODE=1` to skip Claude Code CLI. Set `BAN_MATT_POCOCK_SKILLS=1` to remove the managed Matt Pocock skills and keep them inactive. The older `BAN_MATT_POCKOCK_SKILLS=1` spelling also works. `WORK_MACHINE=1` does not disable these skills.
 - If Claude Code setup warns that another `claude` command shadows the native binary, do not authenticate Fable with bare `claude` until PATH/package cleanup is done; use the native path printed by the script.
+- Pi defaults are forced to the Synthetic provider with Kimi K3 (`hf:moonshotai/Kimi-K3`) as the default model at `high` thinking level (Kimi K3 has no `xhigh` tier; its `thinkingLevelMap` leaves `xhigh` unmapped). Setup seeds the Synthetic provider block into `~/.pi/agent/models.json` using `SYNTHETIC_API_KEY` from `~/.env.local` — the key is never committed. Chezmoi (dotfiles repo) owns the same defaults long-term via `private_settings.json.tmpl`/`private_models.json.tmpl`. Machines with `ZAI_API_KEY` in `~/.env.local` additionally get the z.ai GLM Coding Plan provider seeded into `models.json` (`https://api.z.ai/api/coding/paas/v4` with `glm-5.3`, `glm-5-turbo`, and `glm-4.7`; GLM-5.3 only supports `low`/`high`/`max` reasoning effort, so its `thinkingLevelMap` leaves `minimal`/`medium`/`xhigh` unmapped), and `WORK_MACHINE=1` machines with that key default to `glm-5.3` (z.ai) instead of Kimi K3. The missing-key warning only fires on work machines; other machines skip z.ai seeding silently, and the chezmoi templates gate the z.ai block on the same key presence. Pi uses package-managed goal/autoresearch skills, and the autoresearch dashboard uses `Ctrl+Shift+R` so `Ctrl+Shift+F` remains Pi transcript search.
 
 ### Important Notes
 

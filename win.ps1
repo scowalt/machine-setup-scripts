@@ -40,10 +40,20 @@ $sparkles = [char]0x2728   # Sparkles for completion
 
 $script:SetupOriginalPath = $env:PATH
 $script:SetupOriginalClaudeCommand = $null
+$script:SetupOriginalTeaCommand = $null
+$script:SetupLogFile = $null
+$script:SetupTranscriptStarted = $false
 try {
     $setupOriginalClaude = Get-Command claude -ErrorAction SilentlyContinue
     if ($setupOriginalClaude) {
         $script:SetupOriginalClaudeCommand = $setupOriginalClaude.Source
+    }
+}
+catch {}
+try {
+    $setupOriginalTea = Get-Command tea -CommandType Application -ErrorAction SilentlyContinue
+    if ($setupOriginalTea) {
+        $script:SetupOriginalTeaCommand = if ($setupOriginalTea.Source) { $setupOriginalTea.Source } else { $setupOriginalTea.Path }
     }
 }
 catch {}
@@ -114,11 +124,10 @@ function New-TokenPlaceholders {
 # Machine/setup guards
 # HEADLESS=1
 # WORK_MACHINE=1
-# BAN_PI_SUBAGENTS=1
 # BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
-# BAN_RTK=1
+# ZAI_API_KEY=<your z.ai API key>
 # BAN_CLAUDE_CODE=1
 "@ | Set-Content -Path $envLocalPath
         Write-Debug "Created placeholder ~/.env.local"
@@ -162,6 +171,103 @@ function Assert-HeadlessPaseoUnsupported {
     Write-Error "HEADLESS=1 requested, but native Windows cannot guarantee a no-login Paseo daemon with the foreground CLI."
     Write-Error "Use a supported native Linux setup script for strict Paseo headless support, or unset HEADLESS for Windows setup."
     throw "Unsupported HEADLESS=1 Paseo daemon setup on Windows"
+}
+
+# Install the Tea workstation client on work machines.
+function Install-GiteaClient {
+    if (-not (Test-EnvLocalFlag "WORK_MACHINE")) {
+        Write-Debug "Skipping Gitea client (not a work machine)."
+        return
+    }
+
+    $installDir = Join-Path $env:USERPROFILE ".local\bin"
+    $managedPath = Join-Path $installDir "tea.exe"
+    if (-not [string]::IsNullOrWhiteSpace($script:SetupOriginalTeaCommand)) {
+        $originalTeaPath = [System.IO.Path]::GetFullPath($script:SetupOriginalTeaCommand)
+        $managedTeaPath = [System.IO.Path]::GetFullPath($managedPath)
+        if (-not $originalTeaPath.Equals($managedTeaPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Error "A conflicting tea executable is earlier on PATH: $($script:SetupOriginalTeaCommand)"
+            Write-Debug "Remove it from PATH or move $installDir ahead of it, then rerun setup."
+            throw "Conflicting tea executable on PATH"
+        }
+    }
+
+    $processorArchitecture = $env:PROCESSOR_ARCHITEW6432
+    if ([string]::IsNullOrWhiteSpace($processorArchitecture)) {
+        $processorArchitecture = $env:PROCESSOR_ARCHITECTURE
+    }
+    $releaseArch = switch -Regex ($processorArchitecture) {
+        '^(AMD64|x86_64)$' { "amd64"; break }
+        '^(ARM64|aarch64)$' { "arm64"; break }
+        default { throw "No official Gitea client binary is available for Windows architecture $processorArchitecture." }
+    }
+
+    $apiUrl = "https://gitea.com/api/v1/repos/gitea/tea/releases/latest"
+    Write-Message "Finding the latest stable Gitea client release..."
+    $release = Invoke-RestMethod -Uri $apiUrl -TimeoutSec 30 -ErrorAction Stop
+    $tag = [string]$release.tag_name
+    if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+        throw "The latest Gitea client release did not contain a stable semantic version."
+    }
+
+    $version = $tag.Substring(1)
+    $asset = "tea-$version-windows-$releaseArch.exe"
+    $downloadRoot = "https://dl.gitea.com/tea/$version"
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "tea-install-$([guid]::NewGuid())"
+    $downloadedBinary = Join-Path $tempDir $asset
+    $checksumsPath = Join-Path $tempDir "checksums.txt"
+
+    try {
+        New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+        Write-Message "Downloading Gitea client $version..."
+        Invoke-WebRequest -Uri "$downloadRoot/$asset" -OutFile $downloadedBinary -TimeoutSec 120 -ErrorAction Stop
+        Invoke-WebRequest -Uri "$downloadRoot/checksums.txt" -OutFile $checksumsPath -TimeoutSec 30 -ErrorAction Stop
+
+        $checksumText = Get-Content -LiteralPath $checksumsPath -Raw -ErrorAction Stop
+        $assetPattern = [regex]::Escape($asset)
+        $checksumMatch = [regex]::Match($checksumText, "(?m)^([A-Fa-f0-9]{64})\s+$assetPattern\s*$")
+        if (-not $checksumMatch.Success) {
+            throw "Published SHA-256 checksum not found for $asset."
+        }
+        $expectedHash = $checksumMatch.Groups[1].Value
+        $actualHash = (Get-FileHash -LiteralPath $downloadedBinary -Algorithm SHA256 -ErrorAction Stop).Hash
+        if (-not $actualHash.Equals($expectedHash, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Gitea client SHA-256 verification failed for $asset."
+        }
+
+        New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+        Copy-Item -LiteralPath $downloadedBinary -Destination $managedPath -Force -ErrorAction Stop
+    }
+    finally {
+        Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    $processEntries = @($env:PATH -split ';' | Where-Object { $_ })
+    if (-not ($processEntries | Where-Object { [System.IO.Path]::GetFullPath($_).Equals([System.IO.Path]::GetFullPath($installDir), [System.StringComparison]::OrdinalIgnoreCase) })) {
+        $env:PATH = "$installDir;$env:PATH"
+    }
+    $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+    $userEntries = @()
+    if ($userPath) {
+        $userEntries = @($userPath -split ';' | Where-Object { $_ })
+    }
+    if (-not ($userEntries | Where-Object { [System.IO.Path]::GetFullPath($_).Equals([System.IO.Path]::GetFullPath($installDir), [System.StringComparison]::OrdinalIgnoreCase) })) {
+        $newUserPath = if ($userPath) { "$($userPath.TrimEnd(';'));$installDir" } else { $installDir }
+        [Environment]::SetEnvironmentVariable("PATH", $newUserPath, "User")
+        Write-Success "Added the Gitea client directory to PATH."
+    }
+
+    $versionOutput = & $managedPath --version 2>&1
+    if ($LASTEXITCODE -ne 0 -or ($versionOutput -join "`n") -notmatch '[0-9]+\.[0-9]+') {
+        throw "Gitea client verification failed at $managedPath."
+    }
+    $resolvedTea = Get-Command tea -CommandType Application -ErrorAction SilentlyContinue
+    if ($null -eq $resolvedTea -or -not ([System.IO.Path]::GetFullPath($resolvedTea.Source)).Equals([System.IO.Path]::GetFullPath($managedPath), [System.StringComparison]::OrdinalIgnoreCase)) {
+        $resolvedPath = if ($null -eq $resolvedTea) { "<missing>" } else { $resolvedTea.Source }
+        throw "The tea command resolves to $resolvedPath instead of $managedPath."
+    }
+
+    Write-Success "Gitea client is ready ($($versionOutput -join ' '))."
 }
 
 # Install the appropriate secrets manager based on machine type
@@ -247,7 +353,7 @@ function Install-GcloudCli {
 function Install-Chezmoi {
     if (-not (Get-Command chezmoi -ErrorAction SilentlyContinue)) {
         Write-Host "$failIcon Failed to install chezmoi." -ForegroundColor Red
-        exit 1
+        throw "Failed to install chezmoi"
     }
     else {
         Write-Debug "chezmoi is already installed."
@@ -323,7 +429,7 @@ function Test-GithubSSHKeyAlreadyAdded {
     }
     catch {
         Write-Host "$failIcon Failed to fetch SSH keys from GitHub." -ForegroundColor Red
-        exit 1
+        throw "Failed to fetch SSH keys from GitHub"
     }
 
     $localKeyContent = Get-Content -Path $localKeyPath
@@ -969,33 +1075,85 @@ function Install-GeminiCli {
     }
 }
 
-# Function to install/update Codex CLI (OpenAI's AI coding agent)
+# Function to install/update Codex CLI from OpenAI's native GitHub release
+# binary, so codex does not depend on Node.js/Bun being present at runtime.
 function Install-CodexCli {
     Write-Host "$arrow Installing/updating Codex CLI..." -ForegroundColor Cyan
 
-    # Ensure bun is available
+    # Remove the legacy Bun package so the node_modules symlink can no
+    # longer shadow the native binary (or vanish in a broken state).
     $bunPath = "$env:USERPROFILE\.bun\bin"
     if (Test-Path $bunPath) {
         $env:PATH = "$bunPath;$env:PATH"
     }
-
-    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
-        Write-Host "$warnIcon Bun not found. Cannot install Codex CLI." -ForegroundColor Yellow
-        Write-Host "  Install Bun first, then run: bun install -g @openai/codex" -ForegroundColor DarkGray
-        return
+    if (Get-Command bun -ErrorAction SilentlyContinue) {
+        $bunPackages = ''
+        try { $bunPackages = (bun pm ls -g 2>$null) -join "`n" } catch { $bunPackages = '' }
+        if ($bunPackages -match [regex]::Escape('@openai/codex')) {
+            Write-Host "$arrow Removing Node-dependent Bun Codex package..." -ForegroundColor Cyan
+            try {
+                bun remove -g '@openai/codex' | Out-Null
+            }
+            catch {
+                Write-Host "$failIcon Failed to remove Bun's @openai/codex package: $($_.Exception.Message)" -ForegroundColor Red
+                return
+            }
+        }
     }
 
+    $installDir = "$env:USERPROFILE\.local\bin"
+    $codexExe = Join-Path $installDir 'codex.exe'
+    New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+
+    $tmp = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP ("codex-install-" + [guid]::NewGuid()))
     try {
-        bun install -g @openai/codex
-        if ($?) {
-            Write-Host "$success Codex CLI installed/updated." -ForegroundColor Green
+        $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
+        $asset = "codex-$arch-pc-windows-msvc.exe.zip"
+        $url = "https://github.com/openai/codex/releases/latest/download/$asset"
+        $archive = Join-Path $tmp.FullName $asset
+
+        Write-Debug "Downloading Codex CLI from $url"
+        Invoke-WebRequest -Uri $url -OutFile $archive -UseBasicParsing
+        Expand-Archive -Path $archive -DestinationPath $tmp.FullName -Force
+
+        $downloaded = Get-ChildItem "$tmp.FullName\codex-*.exe" | Select-Object -First 1
+        if (-not $downloaded) {
+            Write-Host "$failIcon Downloaded Codex release archive is missing its executable." -ForegroundColor Red
+            return
         }
-        else {
-            Write-Host "$failIcon Failed to install Codex CLI." -ForegroundColor Red
+        Copy-Item $downloaded.FullName $codexExe -Force
+
+        # Ensure the user-local bin directory is on the persistent user PATH
+        # without duplicating it.
+        $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+        $userEntries = @()
+        if ($userPath) {
+            $userEntries = @($userPath -split ';' | Where-Object { $_ })
         }
+        if (-not ($userEntries -contains $installDir)) {
+            if ($userPath) {
+                [Environment]::SetEnvironmentVariable('PATH', ($userPath.TrimEnd(';') + ';' + $installDir), 'User')
+            }
+            else {
+                [Environment]::SetEnvironmentVariable('PATH', $installDir, 'User')
+            }
+        }
+        $env:PATH = "$installDir;$env:PATH"
+
+        $env:NODE_OPTIONS = $null
+        $env:NODE_PATH = $null
+        $versionOutput = & $codexExe --version 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $versionOutput) {
+            Write-Host "$failIcon Codex CLI installed, but its smoke test failed." -ForegroundColor Red
+            return
+        }
+        Write-Host "$success Codex CLI installed/updated ($($versionOutput -join ' ') => $codexExe)." -ForegroundColor Green
     }
     catch {
         Write-Host "$failIcon Failed to install Codex CLI: $($_.Exception.Message)" -ForegroundColor Red
+    }
+    finally {
+        Remove-Item $tmp.FullName -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -1040,143 +1198,470 @@ function Install-PortlessCli {
     }
 }
 
-# Check whether the installed rtk is Rust Token Killer, not the unrelated Rust Type Kit.
-function Test-RtkCliReady {
-    $rtkCommand = Get-Command rtk -ErrorAction SilentlyContinue
-    if (-not $rtkCommand) {
+# Remove the managed footprint of the retired RTK tool.
+function Test-RtkTokenKiller {
+    param([Parameter(Mandatory=$true)][string]$Binary)
+
+    if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) {
         return $false
     }
 
     try {
-        & $rtkCommand.Source gain *> $null
-        return ($LASTEXITCODE -eq 0)
+        & $Binary gain *> $null
+        if ($LASTEXITCODE -eq 0) {
+            return $true
+        }
+
+        $output = (& $Binary --help 2>&1 | Out-String)
+        return ($output -match 'Rust Token Killer|token-optimized|Initialize rtk instructions')
     }
     catch {
-        return $false
+        try {
+            $content = [System.IO.File]::ReadAllText($Binary)
+            return ($content -match 'Rust Token Killer|rtk-ai/rtk')
+        }
+        catch {
+            return $false
+        }
     }
 }
 
-function Add-RtkToPath {
-    param([Parameter(Mandatory=$true)][string]$RtkDir)
+function Test-RtkPathExists {
+    param([Parameter(Mandatory=$true)][string]$Path)
 
-    if ($env:PATH -notlike "*$RtkDir*") {
-        $env:PATH = "$RtkDir;$env:PATH"
-    }
-
-    $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-    if ($currentPath -notlike "*$RtkDir*") {
-        if ([string]::IsNullOrWhiteSpace($currentPath)) {
-            [Environment]::SetEnvironmentVariable("PATH", $RtkDir, "User")
-        }
-        else {
-            [Environment]::SetEnvironmentVariable("PATH", "$currentPath;$RtkDir", "User")
-        }
-        Write-Success "Added RTK CLI to PATH."
-    }
+    return ($null -ne (Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue))
 }
 
-# Function to install RTK (Rust Token Killer) for token-optimized agent command output.
-function Install-RtkCli {
-    if (Test-EnvLocalFlag "BAN_RTK") {
-        Write-Debug "BAN_RTK=1, skipping RTK setup."
+function Remove-RtkPathStrict {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    if (-not (Test-RtkPathExists -Path $Path)) {
         return
     }
 
-    $rtkDir = Join-Path $env:LOCALAPPDATA "rtk\bin"
-    if (Test-Path $rtkDir) {
-        Add-RtkToPath -RtkDir $rtkDir
-    }
-
-    $hadRtk = Test-RtkCliReady
-    if ($hadRtk) {
-        Write-Message "Updating RTK CLI..."
-    }
-    elseif (Get-Command rtk -ErrorAction SilentlyContinue) {
-        Write-Warning "An rtk command exists, but it does not look like Rust Token Killer. Installing the rtk-ai binary to a user-local directory."
-    }
-    else {
-        Write-Message "Installing RTK CLI..."
-    }
-
-    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("rtk-" + [System.Guid]::NewGuid().ToString())
     try {
-        New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/rtk-ai/rtk/releases/latest"
-        $asset = $release.assets | Where-Object { $_.name -eq "rtk-x86_64-pc-windows-msvc.zip" } | Select-Object -First 1
-        if (-not $asset) {
-            throw "Could not find Windows RTK release asset."
-        }
-
-        $zipPath = Join-Path $tempDir "rtk.zip"
-        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath
-        Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
-
-        $rtkExe = Get-ChildItem -Path $tempDir -Filter "rtk.exe" -Recurse | Select-Object -First 1
-        if (-not $rtkExe) {
-            throw "Downloaded RTK archive did not contain rtk.exe."
-        }
-
-        New-Item -ItemType Directory -Force -Path $rtkDir | Out-Null
-        Copy-Item -Path $rtkExe.FullName -Destination (Join-Path $rtkDir "rtk.exe") -Force
-        Add-RtkToPath -RtkDir $rtkDir
-
-        if (Test-RtkCliReady) {
-            Write-Success "RTK CLI installed/updated."
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
         }
         else {
-            Write-Warning "RTK installed, but 'rtk gain' did not verify the expected binary."
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
         }
     }
     catch {
-        if ($hadRtk) {
-            Write-Warning "Failed to update RTK CLI; existing install remains available: $($_.Exception.Message)"
+        throw "Failed to remove retired RTK path: $Path. $($_.Exception.Message)"
+    }
+
+    if (Test-RtkPathExists -Path $Path) {
+        throw "Retired RTK path remains after cleanup: $Path"
+    }
+
+    $script:RtkCleanupHadResources = $true
+}
+
+function Set-RtkFileContent {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$Content
+    )
+
+    $current = [System.IO.File]::ReadAllText($Path)
+    if ($current -ceq $Content) {
+        return
+    }
+
+    try {
+        [System.IO.File]::WriteAllText(
+            $Path,
+            $Content,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+    }
+    catch {
+        throw "Failed to update shared agent file during RTK cleanup: $Path. $($_.Exception.Message)"
+    }
+
+    $script:RtkCleanupHadResources = $true
+}
+
+function Test-RtkGeneratedGeminiMd {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    $inCode = $false
+    $sawTitle = $false
+    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+        if ($line -match '^```') {
+            $inCode = -not $inCode
+            continue
+        }
+        if ($inCode) {
+            if ($line -match '^\s*$|^\s*(rtk|which\s+rtk)(\s|$)') {
+                continue
+            }
+            return $false
+        }
+        if ($line -match '^\s*$') {
+            continue
+        }
+        if ($line -match '^# RTK([\s-]|$)') {
+            $sawTitle = $true
+            continue
+        }
+        if ($line -match '^## (Meta Commands|Installation Verification|Hook-Based Usage)') {
+            continue
+        }
+        if ($line -match '^\*\*Usage\*\*:|^⚠️ \*\*Name collision\*\*:') {
+            continue
+        }
+        if ($line -match '^(All other commands|Example:|Refer to CLAUDE\.md)') {
+            continue
+        }
+        return $false
+    }
+
+    return ($sawTitle -and -not $inCode)
+}
+
+function Assert-RtkGeminiMdSafe {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+
+    $content = [System.IO.File]::ReadAllText($Path)
+    if ($content -notmatch '(?i)(^|[^A-Za-z0-9_])rtk([^A-Za-z0-9_]|$)|Rust Token Killer') {
+        return
+    }
+
+    $script:RtkCleanupHadResources = $true
+    if (Test-RtkGeneratedGeminiMd -Path $Path) {
+        $script:RtkCleanupRemoveGeminiMd = $true
+        return
+    }
+
+    throw "RTK cleanup found mixed user and RTK content in shared file: $Path. Move the user content out of this file, then run setup again."
+}
+
+function Remove-RtkInstructionText {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$ManagedReference
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+
+    $content = [System.IO.File]::ReadAllText($Path)
+    if ($content -notmatch '(?m)^\s*@RTK\.md\s*$|^\s*@.*[/\\]RTK\.md\s*$|<!--\s*rtk-instructions') {
+        return
+    }
+
+    $output = [System.Collections.Generic.List[string]]::new()
+    $inRtkBlock = $false
+    $normalizedReference = $ManagedReference -replace '\\', '/'
+    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+        $trimmed = $line.Trim()
+        $normalizedLine = $trimmed -replace '\\', '/'
+        if ($trimmed -match '^<!--\s*rtk-instructions') {
+            $inRtkBlock = $true
+            continue
+        }
+        if ($inRtkBlock) {
+            if ($trimmed -eq '<!-- /rtk-instructions -->') {
+                $inRtkBlock = $false
+            }
+            continue
+        }
+        if ($trimmed -eq '@RTK.md' -or $normalizedLine -eq $normalizedReference) {
+            continue
+        }
+        $output.Add($line)
+    }
+
+    if ($inRtkBlock) {
+        throw "RTK cleanup found an incomplete managed block in: $Path"
+    }
+
+    $newContent = $output -join [Environment]::NewLine
+    if ($content.EndsWith("`n")) {
+        $newContent += [Environment]::NewLine
+    }
+    Set-RtkFileContent -Path $Path -Content $newContent
+}
+
+function Remove-RtkPiInstructions {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+
+    $lines = [System.IO.File]::ReadAllLines($Path)
+    $heading = '## RTK token-optimized commands'
+    $start = [Array]::IndexOf($lines, $heading)
+    if ($start -lt 0) {
+        return
+    }
+
+    $end = $lines.Count
+    for ($index = $start + 1; $index -lt $lines.Count; $index++) {
+        if ($lines[$index] -match '^## ') {
+            $end = $index
+            break
+        }
+    }
+
+    $expected = @(
+        '## RTK token-optimized commands',
+        '',
+        '- RTK (`rtk-ai/rtk`) is installed by the machine setup scripts when available. Prefer `rtk <command>` for noisy shell commands with supported filters (`git`, `gh`, tests, build/lint tools, package managers, file/search commands) unless full raw output is required.',
+        '- Bypass RTK for one command with `RTK_DISABLED=1 <command>` or by running the raw command directly when exact output formatting matters.',
+        ''
+    )
+    $section = @($lines[$start..($end - 1)])
+    if (($section -join "`n") -cne ($expected -join "`n")) {
+        throw "RTK cleanup found mixed user and RTK content in shared file: $Path. Move the user content out of the RTK section, then run setup again."
+    }
+
+    $output = [System.Collections.Generic.List[string]]::new()
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($index -ge $start -and $index -lt $end) {
+            continue
+        }
+        $output.Add($lines[$index])
+    }
+
+    $content = [System.IO.File]::ReadAllText($Path)
+    $newContent = $output -join [Environment]::NewLine
+    if ($content.EndsWith("`n")) {
+        $newContent += [Environment]::NewLine
+    }
+    Set-RtkFileContent -Path $Path -Content $newContent
+}
+
+function Remove-RtkJsonHooks {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$HookKey,
+        [Parameter(Mandatory=$true)][string]$CommandPattern
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+
+    $content = [System.IO.File]::ReadAllText($Path)
+    if ($content -notmatch $CommandPattern) {
+        return
+    }
+
+    try {
+        $settings = $content | ConvertFrom-Json
+    }
+    catch {
+        throw "Failed to parse shared agent settings during RTK cleanup: $Path. $($_.Exception.Message)"
+    }
+
+    $hooksProperty = $settings.PSObject.Properties['hooks']
+    if ($null -eq $hooksProperty) {
+        return
+    }
+    $hookEntriesProperty = $settings.hooks.PSObject.Properties[$HookKey]
+    if ($null -eq $hookEntriesProperty) {
+        return
+    }
+
+    $kept = [System.Collections.Generic.List[object]]::new()
+    $removed = $false
+    foreach ($entry in @($hookEntriesProperty.Value)) {
+        $managed = $false
+        foreach ($hook in @($entry.hooks)) {
+            if ($null -ne $hook.command -and [string]$hook.command -match $CommandPattern) {
+                $managed = $true
+                break
+            }
+        }
+        if ($managed) {
+            $removed = $true
         }
         else {
-            Write-Warning "Failed to install RTK CLI: $($_.Exception.Message)"
+            $kept.Add($entry)
         }
+    }
+
+    if (-not $removed) {
+        return
+    }
+
+    if ($kept.Count -eq 0) {
+        $settings.hooks.PSObject.Properties.Remove($HookKey)
+    }
+    else {
+        $settings.hooks.$HookKey = @($kept)
+    }
+    if ($settings.hooks.PSObject.Properties.Count -eq 0) {
+        $settings.PSObject.Properties.Remove('hooks')
+    }
+
+    $newContent = $settings | ConvertTo-Json -Depth 100
+    $newContent += [Environment]::NewLine
+    Set-RtkFileContent -Path $Path -Content $newContent
+}
+
+function Invoke-RtkUpstreamUninstall {
+    param(
+        [Parameter(Mandatory=$true)][string]$Binary,
+        [Parameter(Mandatory=$true)][ValidateSet('codex', 'gemini')][string]$Mode,
+        [string]$ConfigDir
+    )
+
+    $originalCodexHome = $env:CODEX_HOME
+    try {
+        if ($Mode -eq 'codex') {
+            $env:CODEX_HOME = $ConfigDir
+            $output = & $Binary init -g --codex --uninstall 2>&1
+        }
+        else {
+            $output = & $Binary init -g --gemini --uninstall 2>&1
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Debug "RTK $Mode uninstall was not available; using deterministic cleanup. $($output | Out-String)"
+        }
+    }
+    catch {
+        Write-Debug "RTK $Mode uninstall was not available; using deterministic cleanup. $($_.Exception.Message)"
     }
     finally {
-        if (Test-Path $tempDir) {
-            Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        $env:CODEX_HOME = $originalCodexHome
     }
 }
 
-# Configure RTK integrations for installed AI agents. Non-fatal by design.
-function Setup-RtkIntegrations {
-    if (Test-EnvLocalFlag "BAN_RTK") {
-        Write-Debug "BAN_RTK=1, skipping RTK integrations."
+function Remove-RtkPathEntry {
+    param([Parameter(Mandatory=$true)][string]$RtkDir)
+
+    $normalizedRtkDir = $RtkDir.TrimEnd('\', '/')
+    $processEntries = @($env:PATH -split ';' | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and $_.TrimEnd('\', '/') -ine $normalizedRtkDir
+    })
+    $newProcessPath = $processEntries -join ';'
+    if ($newProcessPath -cne $env:PATH) {
+        $env:PATH = $newProcessPath
+        $script:RtkCleanupHadResources = $true
+    }
+
+    $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+    if ([string]::IsNullOrWhiteSpace($userPath)) {
         return
     }
+    $userEntries = @($userPath -split ';' | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and $_.TrimEnd('\', '/') -ine $normalizedRtkDir
+    })
+    $newUserPath = $userEntries -join ';'
+    if ($newUserPath -cne $userPath) {
+        [Environment]::SetEnvironmentVariable('PATH', $newUserPath, 'User')
+        $script:RtkCleanupHadResources = $true
+    }
+}
 
-    if (-not (Test-RtkCliReady)) {
-        Write-Warning "RTK CLI is not available; skipping RTK integrations."
-        return
+function Remove-RtkResources {
+    $profileRoot = [System.IO.Path]::GetFullPath($env:USERPROFILE)
+    $rtkDir = Join-Path $env:LOCALAPPDATA 'rtk\bin'
+    $managedBinary = Join-Path $rtkDir 'rtk.exe'
+    $binaryIsRtk = $false
+    $script:RtkCleanupHadResources = $false
+    $script:RtkCleanupRemoveGeminiMd = $false
+
+    $claudeDirs = @((Join-Path $profileRoot '.claude'))
+    if (-not [string]::IsNullOrWhiteSpace($env:CLAUDE_CONFIG_DIR)) {
+        $claudeDirs += $env:CLAUDE_CONFIG_DIR
+    }
+    $claudeDirs = @($claudeDirs | Select-Object -Unique)
+
+    $codexDirs = @((Join-Path $profileRoot '.codex'))
+    if (-not [string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
+        $codexDirs += $env:CODEX_HOME
+    }
+    $codexDirs = @($codexDirs | Select-Object -Unique)
+
+    $piDirs = @((Join-Path $profileRoot '.pi\agent'))
+    if (-not [string]::IsNullOrWhiteSpace($env:PI_CODING_AGENT_DIR)) {
+        $piDirs += $env:PI_CODING_AGENT_DIR
+    }
+    $piDirs = @($piDirs | Select-Object -Unique)
+
+    $geminiDir = Join-Path $profileRoot '.gemini'
+    $geminiMd = Join-Path $geminiDir 'GEMINI.md'
+    Assert-RtkGeminiMdSafe -Path $geminiMd
+    foreach ($piDir in $piDirs) {
+        Remove-RtkPiInstructions -Path (Join-Path $piDir 'AGENTS.md')
     }
 
-    # Automated setup should not prompt for telemetry consent. Users can opt in later with `rtk telemetry enable`.
-    & rtk telemetry disable *> $null
-
-    if (Get-Command gemini -ErrorAction SilentlyContinue) {
-        Write-Debug "Native Windows RTK Gemini hook setup is Unix-shell based; use WSL for transparent Gemini rewrites."
-    }
-    else {
-        Write-Debug "Gemini CLI not installed; skipping RTK Gemini integration."
-    }
-
-    if (Get-Command codex -ErrorAction SilentlyContinue) {
-        Write-Message "Configuring RTK for Codex CLI..."
-        $output = & rtk init -g --codex 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Success "RTK configured for Codex CLI."
+    if (Test-RtkPathExists -Path $managedBinary) {
+        if (Test-RtkTokenKiller -Binary $managedBinary) {
+            $binaryIsRtk = $true
+            $script:RtkCleanupHadResources = $true
         }
         else {
-            Write-Warning "Failed to configure RTK for Codex CLI."
-            if ($output) { Write-Debug ($output | Out-String) }
+            Write-Warning "Preserving unrelated or unverified rtk command at $managedBinary."
         }
     }
+
+    if ($binaryIsRtk) {
+        foreach ($codexDir in $codexDirs) {
+            Invoke-RtkUpstreamUninstall -Binary $managedBinary -Mode codex -ConfigDir $codexDir
+        }
+        if (-not (Test-Path -LiteralPath $geminiMd -PathType Leaf) -or $script:RtkCleanupRemoveGeminiMd) {
+            Invoke-RtkUpstreamUninstall -Binary $managedBinary -Mode gemini
+        }
+        else {
+            Write-Debug 'Preserving unrelated Gemini instructions and using deterministic RTK cleanup.'
+        }
+    }
+
+    foreach ($claudeDir in $claudeDirs) {
+        Remove-RtkInstructionText -Path (Join-Path $claudeDir 'CLAUDE.md') -ManagedReference '@RTK.md'
+        Remove-RtkJsonHooks -Path (Join-Path $claudeDir 'settings.json') -HookKey 'PreToolUse' -CommandPattern 'rtk hook claude|rtk-rewrite\.sh'
+        Remove-RtkPathStrict -Path (Join-Path $claudeDir 'RTK.md')
+        Remove-RtkPathStrict -Path (Join-Path $claudeDir 'hooks\rtk-rewrite.sh')
+        Remove-RtkPathStrict -Path (Join-Path $claudeDir 'hooks\.rtk-hook.sha256')
+    }
+
+    foreach ($codexDir in $codexDirs) {
+        Remove-RtkInstructionText -Path (Join-Path $codexDir 'AGENTS.md') -ManagedReference "@$codexDir\RTK.md"
+        Remove-RtkPathStrict -Path (Join-Path $codexDir 'RTK.md')
+    }
+
+    Remove-RtkJsonHooks -Path (Join-Path $geminiDir 'settings.json') -HookKey 'BeforeTool' -CommandPattern 'rtk hook gemini|rtk-hook-gemini\.sh'
+    Remove-RtkPathStrict -Path (Join-Path $geminiDir 'hooks\rtk-hook-gemini.sh')
+    Remove-RtkPathStrict -Path (Join-Path $geminiDir 'hooks\.rtk-hook.sha256')
+    if ($script:RtkCleanupRemoveGeminiMd) {
+        Remove-RtkPathStrict -Path $geminiMd
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
+        Remove-RtkPathStrict -Path (Join-Path $env:APPDATA 'rtk')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $localRtkRoot = Join-Path $env:LOCALAPPDATA 'rtk'
+        if ($binaryIsRtk) {
+            Remove-RtkPathStrict -Path $localRtkRoot
+        }
+        elseif (Test-RtkPathExists -Path $localRtkRoot) {
+            $children = @(Get-ChildItem -LiteralPath $localRtkRoot -Force -ErrorAction SilentlyContinue | Where-Object { $_.FullName -ne $rtkDir })
+            foreach ($child in $children) {
+                Remove-RtkPathStrict -Path $child.FullName
+            }
+        }
+    }
+    Remove-RtkPathEntry -RtkDir $rtkDir
+
+    if ($script:RtkCleanupHadResources) {
+        Write-Success 'Legacy RTK resources removed.'
+    }
     else {
-        Write-Debug "Codex CLI not installed; skipping RTK Codex integration."
+        Write-Debug 'No legacy RTK resources found.'
     }
 }
 
@@ -1237,6 +1722,404 @@ function Enable-PiNodeRuntime {
 
     Write-Warning "Node.js >=20.6 is still not active after installing $runtime."
     return $false
+}
+
+# Remove the managed footprint of the retired Attention-kind guidance.
+function Get-AttentionSpanCleanupDirectories {
+    param(
+        [Parameter(Mandatory=$true)][string]$DefaultDirectory,
+        [AllowEmptyString()][string]$ActiveDirectory
+    )
+
+    $directories = [System.Collections.Generic.List[string]]::new()
+    foreach ($candidate in @($DefaultDirectory, $ActiveDirectory)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+        try {
+            $resolved = [System.IO.Path]::GetFullPath($candidate)
+        }
+        catch {
+            throw "Could not safely resolve an Attention-kind cleanup directory: $candidate"
+        }
+        if (-not $directories.Contains($resolved)) {
+            $directories.Add($resolved)
+        }
+    }
+    return $directories.ToArray()
+}
+
+function Assert-AttentionSpanStyleIsSafe {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) {
+        return
+    }
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        return
+    }
+    if ($item.PSIsContainer) {
+        throw "Attention-kind style target is not a file or symlink: $Path"
+    }
+}
+
+function Assert-AttentionSpanSettingsAreSafe {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) {
+        return
+    }
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Cannot safely remove Attention-kind from symlinked Claude settings: $Path"
+    }
+    if ($item.PSIsContainer) {
+        throw "Claude settings target is not a regular file: $Path"
+    }
+
+    try {
+        $content = [System.IO.File]::ReadAllText($Path)
+        if ([string]::IsNullOrWhiteSpace($content)) {
+            throw "empty settings"
+        }
+        $settings = $content | ConvertFrom-Json -ErrorAction Stop
+        if ($settings -isnot [System.Management.Automation.PSCustomObject]) {
+            throw "settings are not an object"
+        }
+    }
+    catch {
+        throw "Claude settings are not a valid JSON object: $Path"
+    }
+}
+
+function Assert-AttentionSpanManagedFileIsSafe {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) {
+        return
+    }
+    if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Cannot safely remove Attention-kind from symlinked shared instructions: $Path"
+    }
+    if ($item.PSIsContainer) {
+        throw "Shared instruction target is not a regular file: $Path"
+    }
+
+    [string[]]$lines = @([System.IO.File]::ReadAllLines($Path))
+    $beginMarker = "<!-- attention-span:start -->"
+    $endMarker = "<!-- attention-span:end -->"
+    $beginIndexes = @($lines | ForEach-Object -Begin { $index = 0 } -Process {
+        $current = $index
+        $index++
+        if ($_ -ceq $beginMarker) { $current }
+    })
+    $endIndexes = @($lines | ForEach-Object -Begin { $index = 0 } -Process {
+        $current = $index
+        $index++
+        if ($_ -ceq $endMarker) { $current }
+    })
+
+    if ($beginIndexes.Count -eq 0 -and $endIndexes.Count -eq 0) {
+        return
+    }
+    if ($beginIndexes.Count -ne 1 -or $endIndexes.Count -ne 1 -or $beginIndexes[0] -ge $endIndexes[0]) {
+        throw "Attention-kind markers are malformed in $Path; leaving it unchanged."
+    }
+}
+
+function Set-AttentionSpanCleanupFile {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][AllowEmptyString()][string]$Content
+    )
+
+    $temporaryPath = Join-Path (Split-Path -Parent $Path) ".attention-cleanup-$([guid]::NewGuid()).tmp"
+    try {
+        $encoding = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($temporaryPath, $Content, $encoding)
+        Move-Item -LiteralPath $temporaryPath -Destination $Path -Force -ErrorAction Stop
+    }
+    catch {
+        Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        throw "Failed to atomically update Attention-kind cleanup target: $Path. $($_.Exception.Message)"
+    }
+}
+
+function Remove-AttentionSpanStyle {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    Assert-AttentionSpanStyleIsSafe -Path $Path
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) {
+        return
+    }
+    try {
+        Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+    }
+    catch {
+        throw "Failed to remove retired Attention-kind style: $Path. $($_.Exception.Message)"
+    }
+    if ($null -ne (Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
+        throw "Retired Attention-kind style remains after cleanup: $Path"
+    }
+    $script:AttentionSpanCleanupRemoved = $true
+}
+
+function Remove-AttentionSpanSetting {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    Assert-AttentionSpanSettingsAreSafe -Path $Path
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+    $settings = [System.IO.File]::ReadAllText($Path) | ConvertFrom-Json -ErrorAction Stop
+    $property = @($settings.PSObject.Properties | Where-Object { $_.Name -ceq "outputStyle" } | Select-Object -First 1)
+    if ($property.Count -eq 0 -or $property[0].Value -cne "Attention-kind") {
+        return
+    }
+
+    $settings.PSObject.Properties.Remove("outputStyle")
+    $json = ($settings | ConvertTo-Json -Depth 100) + [Environment]::NewLine
+    Set-AttentionSpanCleanupFile -Path $Path -Content $json
+    $script:AttentionSpanCleanupRemoved = $true
+}
+
+function Remove-AttentionSpanManagedBlock {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    Assert-AttentionSpanManagedFileIsSafe -Path $Path
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+    [string[]]$lines = @([System.IO.File]::ReadAllLines($Path))
+    $beginMarker = "<!-- attention-span:start -->"
+    $endMarker = "<!-- attention-span:end -->"
+    $beginIndex = [Array]::IndexOf($lines, $beginMarker)
+    if ($beginIndex -lt 0) {
+        return
+    }
+    $endIndex = [Array]::IndexOf($lines, $endMarker)
+    $updatedLines = [System.Collections.Generic.List[string]]::new()
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if ($index -lt $beginIndex -or $index -gt $endIndex) {
+            $updatedLines.Add($lines[$index])
+        }
+    }
+
+    $content = if ($updatedLines.Count -eq 0) {
+        ""
+    }
+    else {
+        [string]::Join([Environment]::NewLine, $updatedLines) + [Environment]::NewLine
+    }
+    Set-AttentionSpanCleanupFile -Path $Path -Content $content
+    $script:AttentionSpanCleanupRemoved = $true
+}
+
+function Remove-AttentionSpanResources {
+    $defaultClaudeDir = Join-Path $env:USERPROFILE ".claude"
+    $defaultCodexDir = Join-Path $env:USERPROFILE ".codex"
+    $defaultPiDir = Join-Path $env:USERPROFILE ".pi\agent"
+    $claudeDirs = @(Get-AttentionSpanCleanupDirectories -DefaultDirectory $defaultClaudeDir -ActiveDirectory $env:CLAUDE_CONFIG_DIR)
+    $codexDirs = @(Get-AttentionSpanCleanupDirectories -DefaultDirectory $defaultCodexDir -ActiveDirectory $env:CODEX_HOME)
+    $piDirs = @(Get-AttentionSpanCleanupDirectories -DefaultDirectory $defaultPiDir -ActiveDirectory $env:PI_CODING_AGENT_DIR)
+    $managedFiles = @()
+    foreach ($directory in $codexDirs) {
+        $managedFiles += Join-Path $directory "AGENTS.md"
+    }
+    $managedFiles += Join-Path (Join-Path $env:USERPROFILE ".gemini") "GEMINI.md"
+    foreach ($directory in $piDirs) {
+        $managedFiles += Join-Path $directory "APPEND_SYSTEM.md"
+    }
+    $script:AttentionSpanCleanupRemoved = $false
+
+    # Preflight every target before changing any file.
+    foreach ($directory in $claudeDirs) {
+        Assert-AttentionSpanStyleIsSafe -Path (Join-Path $directory "output-styles\attention-kind.md")
+        Assert-AttentionSpanSettingsAreSafe -Path (Join-Path $directory "settings.json")
+    }
+    foreach ($managedFile in $managedFiles) {
+        Assert-AttentionSpanManagedFileIsSafe -Path $managedFile
+    }
+
+    foreach ($directory in $claudeDirs) {
+        Remove-AttentionSpanStyle -Path (Join-Path $directory "output-styles\attention-kind.md")
+        Remove-AttentionSpanSetting -Path (Join-Path $directory "settings.json")
+    }
+    foreach ($managedFile in $managedFiles) {
+        Remove-AttentionSpanManagedBlock -Path $managedFile
+    }
+
+    if ($script:AttentionSpanCleanupRemoved) {
+        Write-Success "Retired Attention-kind guidance removed."
+    }
+    else {
+        Write-Debug "No retired Attention-kind guidance found."
+    }
+}
+
+# Check whether the active Node.js runtime can run the current skills CLI.
+function Test-SkillsCliNodeRuntimeReady {
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    & node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 20) ? 0 : 1)' *> $null
+    return ($LASTEXITCODE -eq 0)
+}
+
+# Ensure the skills CLI runs on its required Node.js version.
+function Enable-SkillsCliNodeRuntime {
+    $runtime = "node@24"
+
+    if (Test-SkillsCliNodeRuntimeReady) {
+        $nodeVersion = (& node --version 2>$null | Out-String).Trim()
+        Write-Debug "Node.js $nodeVersion is ready for the skills CLI."
+        return $true
+    }
+
+    $pathCandidates = @(
+        [Environment]::GetEnvironmentVariable("Path", "User"),
+        [Environment]::GetEnvironmentVariable("Path", "Machine"),
+        (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links"),
+        (Join-Path $env:USERPROFILE ".local\bin")
+    ) | Where-Object { $_ -and $_.Trim() -ne "" }
+    $env:PATH = (($pathCandidates + @($env:PATH)) -join ";")
+
+    if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
+        Write-Warning "Node.js >=22.20 is required for the skills CLI, but mise is not available to install it."
+        Write-Debug "Install mise, then run: mise use -g -y $runtime"
+        return $false
+    }
+
+    Write-Message "Ensuring Node.js 24 runtime for the skills CLI..."
+    & mise use -g -y $runtime *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to install/configure $runtime with mise."
+        return $false
+    }
+
+    $miseEnv = & mise env -C $env:USERPROFILE -s pwsh $runtime 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to activate $runtime with mise."
+        return $false
+    }
+
+    $miseEnv | Out-String | Invoke-Expression
+
+    if (Test-SkillsCliNodeRuntimeReady) {
+        $nodeVersion = (& node --version 2>$null | Out-String).Trim()
+        Write-Success "Node.js $nodeVersion is ready for the skills CLI."
+        return $true
+    }
+
+    Write-Warning "Node.js >=22.20 is still not active after installing $runtime."
+    return $false
+}
+
+# Install/update Simple English for every supported AI coding harness.
+function Install-SimpleEnglishSkill {
+    if (-not (Enable-SkillsCliNodeRuntime)) {
+        return $false
+    }
+
+    if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
+        Write-Warning "npx is not available; cannot install the Simple English skill."
+        return $false
+    }
+
+    $installArguments = @(
+        "--yes",
+        "skills@latest",
+        "add",
+        "AminBlg/SimpleEnglish",
+        "--global",
+        "--agent", "claude-code",
+        "--agent", "codex",
+        "--agent", "gemini-cli",
+        "--skill", "simple-english",
+        "--copy",
+        "--yes"
+    )
+
+    Write-Message "Installing/updating Simple English across AI harnesses..."
+    $global:LASTEXITCODE = 0
+    $installOutput = & npx @installArguments 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to install/update the Simple English skill."
+        if ($installOutput) { Write-Debug ($installOutput | Out-String) }
+        return $false
+    }
+
+    $claudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
+    # Codex and Gemini CLI both discover the skills CLI's shared user copy.
+    $skillFiles = @(
+        (Join-Path $claudeDir "skills\simple-english\SKILL.md"),
+        (Join-Path $env:USERPROFILE ".agents\skills\simple-english\SKILL.md")
+    )
+
+    foreach ($skillFile in $skillFiles) {
+        if (-not (Test-Path -LiteralPath $skillFile -PathType Leaf)) {
+            Write-Warning "Simple English validation failed: missing $skillFile."
+            return $false
+        }
+    }
+
+    Write-Success "Simple English installed/updated for Claude Code, Codex, Gemini CLI, and Pi through the shared skill path."
+    if ($installOutput) { Write-Debug ($installOutput | Out-String) }
+    return $true
+}
+
+# Remove setup-managed Impeccable resources without affecting sibling agent tooling.
+function Remove-ImpeccableResources {
+    $paths = @(
+        (Join-Path $env:USERPROFILE ".claude\skills\impeccable"),
+        (Join-Path $env:USERPROFILE ".agents\skills\impeccable"),
+        (Join-Path $env:USERPROFILE ".cursor\skills\impeccable"),
+        (Join-Path $env:USERPROFILE ".gemini\skills\impeccable"),
+        (Join-Path $env:USERPROFILE ".pi\agent\skills\impeccable"),
+        (Join-Path $env:USERPROFILE ".cursor\agents\impeccable-manual-edit-applier.md"),
+        (Join-Path $env:USERPROFILE ".cursor\agents\impeccable-asset-producer.md"),
+        (Join-Path $env:USERPROFILE ".cursor\agents\impeccable-documenter.md"),
+        (Join-Path $env:USERPROFILE ".cursor\agents\impeccable-finish-reviewer.md")
+    )
+    $removed = $false
+    $failed = @()
+
+    foreach ($path in $paths) {
+        $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        if ($null -eq $item) {
+            continue
+        }
+
+        try {
+            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+            }
+            elseif ($item.PSIsContainer) {
+                Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop
+            }
+            else {
+                Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+            }
+            $removed = $true
+        }
+        catch {
+            $failed += $path
+        }
+    }
+
+    if ($failed.Count -gt 0) {
+        Write-Warning "Failed to remove legacy Impeccable resources: $($failed -join ', ')"
+    }
+    elseif ($removed) {
+        Write-Success "Legacy Impeccable resources removed."
+    }
+    else {
+        Write-Debug "No legacy Impeccable resources found."
+    }
 }
 
 # Remove stale Pi installs from Bun-managed global locations.
@@ -1322,6 +2205,33 @@ function Remove-NonCanonicalPiInstalls {
     }
 }
 
+# Validate and repair npm's effective user configuration before setup mutates
+# any npm-owned package tree. npm performs registry-scoped auth migration while
+# all command output stays out of the setup transcript.
+function Repair-NpmConfiguration {
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Warning "npm not found. Cannot validate npm configuration."
+        return $false
+    }
+
+    & npm config fix *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "$failIcon npm configuration is invalid and automatic repair failed." -ForegroundColor Red
+        Write-Debug "Run 'npm config fix', review the user npmrc, and rerun setup."
+        return $false
+    }
+
+    & npm config list --location=user *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "$failIcon npm configuration remains invalid after automatic repair." -ForegroundColor Red
+        Write-Debug "Run 'npm config fix', review the user npmrc, and rerun setup."
+        return $false
+    }
+
+    Write-Debug "npm configuration validated."
+    return $true
+}
+
 # Function to install/update Pi coding agent
 function Install-PiCli {
     $newPackage = "@earendil-works/pi-coding-agent"
@@ -1358,6 +2268,10 @@ function Install-PiCli {
             return $false
         }
 
+        if (-not (Repair-NpmConfiguration)) {
+            return $false
+        }
+
         # Remove old npm-package ownership before installing so npm can claim the canonical shim.
         & npm uninstall -g --prefix $localPrefix $oldPackage *> $null
         foreach ($candidate in $canonicalCandidates) {
@@ -1370,8 +2284,12 @@ function Install-PiCli {
         }
 
         Write-Message "Installing Pi with npm into $localPrefix..."
-        & npm install -g --ignore-scripts --prefix $localPrefix "$newPackage@latest"
-        if ($LASTEXITCODE -ne 0) {
+        $npmInstallOutput = & npm install -g --ignore-scripts --prefix $localPrefix "$newPackage@latest" 2>&1
+        $npmInstallStatus = $LASTEXITCODE
+        foreach ($npmInstallLine in $npmInstallOutput) {
+            Write-Host $npmInstallLine
+        }
+        if ($npmInstallStatus -ne 0) {
             Write-Host "$failIcon Failed to install Pi coding agent." -ForegroundColor Red
             return $false
         }
@@ -1413,11 +2331,360 @@ function Install-PiCli {
         }
 
         $piVersion = (& pi --version 2>$null | Out-String).Trim()
+        $piVersionStatus = $LASTEXITCODE
+        if ($piVersionStatus -ne 0 -or [string]::IsNullOrWhiteSpace($piVersion)) {
+            Write-Host "$warnIcon Pi migration incomplete: canonical pi failed its version smoke test." -ForegroundColor Yellow
+            return $false
+        }
         Write-Host "$success Pi coding agent $piVersion installed/updated at $canonicalPi." -ForegroundColor Green
         return $true
     }
     catch {
         Write-Host "$failIcon Failed to install Pi coding agent: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+# Force Pi defaults: Kimi K3 (Synthetic), or GLM-5.3 (z.ai GLM Coding Plan)
+# on work machines that have a z.ai API key.
+# Chezmoi owns settings.json long-term; this seeds fresh machines and repairs drift.
+function Set-PiDefaults {
+    if ($env:PI_CODING_AGENT_DIR) {
+        $agentDir = $env:PI_CODING_AGENT_DIR
+    }
+    else {
+        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    }
+
+    $settingsPath = Join-Path $agentDir "settings.json"
+
+    if (-not (Test-Path $agentDir)) {
+        New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
+    }
+
+    $settingsJson = "{}"
+    if (Test-Path $settingsPath) {
+        $settingsJson = Get-Content -Path $settingsPath -Raw
+        if ([string]::IsNullOrWhiteSpace($settingsJson)) {
+            $settingsJson = "{}"
+        }
+    }
+
+    try {
+        $settings = $settingsJson | ConvertFrom-Json
+        if ($null -eq $settings) {
+            $settings = New-Object PSObject
+        }
+        $defaultDesc = "Kimi K3 (Synthetic)"
+        if ((Test-EnvLocalFlag "WORK_MACHINE") -and (Test-PiZaiKeyAvailable)) {
+            Set-JsonProperty -Object $settings -Name "defaultProvider" -Value "zai"
+            Set-JsonProperty -Object $settings -Name "defaultModel" -Value "glm-5.3"
+            $defaultDesc = "GLM-5.3 (z.ai)"
+        }
+        else {
+            Set-JsonProperty -Object $settings -Name "defaultProvider" -Value "synthetic"
+            Set-JsonProperty -Object $settings -Name "defaultModel" -Value "hf:moonshotai/Kimi-K3"
+        }
+        Set-JsonProperty -Object $settings -Name "defaultThinkingLevel" -Value "high"
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsPath -Encoding UTF8
+        Write-Host "$success Pi default model set to $defaultDesc with high thinking." -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "$failIcon Failed to write Pi defaults to $settingsPath : $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+# Read a KEY=VALUE pair from ~/.env.local (strips optional export/quotes).
+function Get-EnvLocalValue {
+    param([Parameter(Mandatory=$true)][string]$Name)
+
+    $envValue = [Environment]::GetEnvironmentVariable($Name)
+    if (-not [string]::IsNullOrWhiteSpace($envValue)) {
+        return $envValue
+    }
+
+    $envLocalFile = Join-Path $env:USERPROFILE ".env.local"
+    if (Test-Path $envLocalFile) {
+        $match = Get-Content $envLocalFile | Where-Object { $_ -match "^\s*(export\s+)?$Name=" } | Select-Object -Last 1
+        if ($match) {
+            $value = ($match -replace "^\s*(export\s+)?$Name=", "").Trim()
+            $value = $value.Trim('"').Trim("'")
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                return $value
+            }
+        }
+    }
+    return $null
+}
+
+# Seed the Synthetic provider block (Kimi K3) into Pi's models.json.
+# The API key comes from SYNTHETIC_API_KEY in ~/.env.local; it is never
+# stored in this repository. Existing synthetic keys are preserved.
+function Seed-PiSyntheticModels {
+    if ($env:PI_CODING_AGENT_DIR) {
+        $agentDir = $env:PI_CODING_AGENT_DIR
+    }
+    else {
+        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    }
+
+    $modelsPath = Join-Path $agentDir "models.json"
+
+    $modelsJson = '{"providers":{}}'
+    if (Test-Path $modelsPath) {
+        $modelsJson = Get-Content -Path $modelsPath -Raw
+        if ([string]::IsNullOrWhiteSpace($modelsJson)) {
+            $modelsJson = '{"providers":{}}'
+        }
+    }
+
+    try {
+        $models = $modelsJson | ConvertFrom-Json
+        if ($null -eq $models) {
+            $models = [PSCustomObject]@{ providers = [PSCustomObject]@{} }
+        }
+        if ($null -eq $models.providers) {
+            $models | Add-Member -NotePropertyName "providers" -NotePropertyValue ([PSCustomObject]@{}) -Force
+        }
+
+        $existingKey = $null
+        if ($models.providers.PSObject.Properties.Name -contains "synthetic") {
+            $existingKey = $models.providers.synthetic.apiKey
+        }
+        if (-not [string]::IsNullOrWhiteSpace($existingKey)) {
+            Write-Debug "Synthetic provider with an API key already configured in $modelsPath."
+            return $true
+        }
+
+        $apiKey = Get-EnvLocalValue "SYNTHETIC_API_KEY"
+        if ([string]::IsNullOrWhiteSpace($apiKey)) {
+            Write-Warning "SYNTHETIC_API_KEY not set in ~/.env.local. Kimi K3 (Synthetic) is the Pi default but has no API key yet; add the key and rerun setup."
+            return $false
+        }
+
+        $syntheticProvider = [PSCustomObject]@{
+            baseUrl = "https://api.synthetic.new/v1"
+            api     = "openai-completions"
+            apiKey  = $apiKey
+            compat  = [PSCustomObject]@{
+                supportsDeveloperRole = $false
+                supportsStore         = $false
+                maxTokensField        = "max_tokens"
+                supportsStrictMode    = $false
+                deferredToolsMode     = "kimi"
+            }
+            models  = @(
+                [PSCustomObject]@{
+                    id               = "hf:moonshotai/Kimi-K3"
+                    name             = "Kimi K3 (Synthetic)"
+                    reasoning        = $true
+                    thinkingLevelMap = [PSCustomObject]@{
+                        off     = $null
+                        minimal = $null
+                        low     = "low"
+                        medium  = $null
+                        high    = "high"
+                        xhigh   = $null
+                        max     = "max"
+                    }
+                    input            = @("text", "image")
+                    contextWindow    = 512000
+                    maxTokens        = 131072
+                    cost             = [PSCustomObject]@{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }
+                    compat           = [PSCustomObject]@{
+                        supportsReasoningEffort                     = $true
+                        thinkingFormat                              = "openai"
+                        requiresReasoningContentOnAssistantMessages = $true
+                    }
+                }
+            )
+        }
+
+        if ($models.providers.PSObject.Properties.Name -contains "synthetic") {
+            $models.providers.synthetic = $syntheticProvider
+        }
+        else {
+            $models.providers | Add-Member -NotePropertyName "synthetic" -NotePropertyValue $syntheticProvider
+        }
+
+        $models | ConvertTo-Json -Depth 20 | Set-Content -Path $modelsPath -Encoding UTF8
+        Write-Host "$success Synthetic provider (Kimi K3) seeded in $modelsPath." -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "$failIcon Failed to seed Synthetic provider in $modelsPath : $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+# Check whether a z.ai API key is available from ~/.env.local or from an
+# existing z.ai provider block in Pi's models.json.
+function Test-PiZaiKeyAvailable {
+    if (-not [string]::IsNullOrWhiteSpace((Get-EnvLocalValue "ZAI_API_KEY"))) {
+        return $true
+    }
+
+    if ($env:PI_CODING_AGENT_DIR) {
+        $agentDir = $env:PI_CODING_AGENT_DIR
+    }
+    else {
+        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    }
+    $modelsPath = Join-Path $agentDir "models.json"
+    if (Test-Path $modelsPath) {
+        try {
+            $existingModels = Get-Content -Path $modelsPath -Raw | ConvertFrom-Json
+            if ($existingModels.providers -and ($existingModels.providers.PSObject.Properties.Name -contains "zai")) {
+                $existingKey = $existingModels.providers.zai.apiKey
+                if (-not [string]::IsNullOrWhiteSpace($existingKey)) {
+                    return $true
+                }
+            }
+        }
+        catch {
+            Write-Debug "Could not parse Pi models at $modelsPath while checking for a z.ai key."
+        }
+    }
+    return $false
+}
+
+# Seed the z.ai provider block (GLM Coding Plan) into Pi's models.json.
+# The API key comes from ZAI_API_KEY in ~/.env.local; it is never stored in
+# this repository. Existing z.ai keys are preserved. Seeding follows key
+# presence: any machine with the key gets the provider, and only work
+# machines are warned when the key is missing.
+function Seed-PiZaiModels {
+    if ($env:PI_CODING_AGENT_DIR) {
+        $agentDir = $env:PI_CODING_AGENT_DIR
+    }
+    else {
+        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    }
+
+    $modelsPath = Join-Path $agentDir "models.json"
+
+    $modelsJson = '{"providers":{}}'
+    if (Test-Path $modelsPath) {
+        $modelsJson = Get-Content -Path $modelsPath -Raw
+        if ([string]::IsNullOrWhiteSpace($modelsJson)) {
+            $modelsJson = '{"providers":{}}'
+        }
+    }
+
+    try {
+        $models = $modelsJson | ConvertFrom-Json
+        if ($null -eq $models) {
+            $models = [PSCustomObject]@{ providers = [PSCustomObject]@{} }
+        }
+        if ($null -eq $models.providers) {
+            $models | Add-Member -NotePropertyName "providers" -NotePropertyValue ([PSCustomObject]@{}) -Force
+        }
+
+        $existingKey = $null
+        if ($models.providers.PSObject.Properties.Name -contains "zai") {
+            $existingKey = $models.providers.zai.apiKey
+        }
+        if (-not [string]::IsNullOrWhiteSpace($existingKey)) {
+            Write-Debug "z.ai provider with an API key already configured in $modelsPath."
+            return $true
+        }
+
+        $apiKey = Get-EnvLocalValue "ZAI_API_KEY"
+        if ([string]::IsNullOrWhiteSpace($apiKey)) {
+            if (Test-EnvLocalFlag "WORK_MACHINE") {
+                Write-Warning "ZAI_API_KEY not set in ~/.env.local. Work machines default Pi to GLM-5.3 (z.ai) but there is no API key yet; add the key and rerun setup."
+                return $false
+            }
+            Write-Debug "ZAI_API_KEY not set in ~/.env.local; skipping z.ai provider seeding."
+            return $true
+        }
+
+        $zaiProvider = [PSCustomObject]@{
+            baseUrl = "https://api.z.ai/api/coding/paas/v4"
+            api     = "openai-completions"
+            apiKey  = $apiKey
+            compat  = [PSCustomObject]@{
+                supportsDeveloperRole = $false
+                supportsStore         = $false
+                maxTokensField        = "max_tokens"
+                supportsStrictMode    = $false
+            }
+            models  = @(
+                [PSCustomObject]@{
+                    id               = "glm-5.3"
+                    name             = "GLM-5.3 (z.ai)"
+                    reasoning        = $true
+                    thinkingLevelMap = [PSCustomObject]@{
+                        off     = $null
+                        minimal = $null
+                        low     = "low"
+                        medium  = $null
+                        high    = "high"
+                        xhigh   = $null
+                        max     = "max"
+                    }
+                    input            = @("text")
+                    contextWindow    = 1000000
+                    maxTokens        = 131072
+                    cost             = [PSCustomObject]@{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }
+                    compat           = [PSCustomObject]@{
+                        supportsReasoningEffort = $true
+                        thinkingFormat          = "openai"
+                    }
+                },
+                [PSCustomObject]@{
+                    id               = "glm-5-turbo"
+                    name             = "GLM-5-Turbo (z.ai)"
+                    reasoning        = $true
+                    thinkingLevelMap = [PSCustomObject]@{
+                        off     = "none"
+                        minimal = "minimal"
+                        low     = "low"
+                        medium  = "medium"
+                        high    = "high"
+                        xhigh   = "xhigh"
+                        max     = "max"
+                    }
+                    input            = @("text")
+                    contextWindow    = 200000
+                    maxTokens        = 131072
+                    cost             = [PSCustomObject]@{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }
+                    compat           = [PSCustomObject]@{
+                        supportsReasoningEffort = $true
+                        thinkingFormat          = "openai"
+                    }
+                },
+                [PSCustomObject]@{
+                    id            = "glm-4.7"
+                    name          = "GLM-4.7 (z.ai)"
+                    reasoning     = $true
+                    input         = @("text")
+                    contextWindow = 200000
+                    maxTokens     = 131072
+                    cost          = [PSCustomObject]@{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }
+                    compat        = [PSCustomObject]@{
+                        supportsReasoningEffort = $false
+                        thinkingFormat          = "openai"
+                    }
+                }
+            )
+        }
+
+        if ($models.providers.PSObject.Properties.Name -contains "zai") {
+            $models.providers.zai = $zaiProvider
+        }
+        else {
+            $models.providers | Add-Member -NotePropertyName "zai" -NotePropertyValue $zaiProvider
+        }
+
+        $models | ConvertTo-Json -Depth 20 | Set-Content -Path $modelsPath -Encoding UTF8
+        Write-Host "$success z.ai provider (GLM Coding Plan) seeded in $modelsPath." -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "$failIcon Failed to seed z.ai provider in $modelsPath : $($_.Exception.Message)" -ForegroundColor Red
         return $false
     }
 }
@@ -1452,10 +2719,28 @@ function Remove-JsonProperty {
     }
 }
 
-# Function to update Pi settings for the tintinweb subagents extension
-function Update-PiSubagentsSettings {
-    param([ValidateSet("Install", "Remove")][string]$Mode = "Install")
+# Function to remove the tintinweb Pi subagents extension (idempotent, non-fatal)
+function Remove-PiSubagents {
+    if (Get-Command pi -ErrorAction SilentlyContinue) {
+        foreach ($package in @("npm:@tintinweb/pi-subagents", "npm:pi-subagents")) {
+            $output = & pi remove $package 2>&1
+            $removeExitCode = $LASTEXITCODE
+            $outputText = ($output | Out-String)
+            if ($removeExitCode -eq 0) {
+                Write-Success "Removed Pi subagents extension ($package)."
+            }
+            elseif ($outputText -match "no matching package found") {
+                Write-Debug "Pi subagents extension not installed ($package)."
+            }
+            else {
+                Write-Warning "Failed to remove Pi subagents extension ($package): $outputText"
+            }
+        }
+        return
+    }
 
+    # Fallback when the pi CLI is unavailable: strip both package sources
+    # directly from settings.json.
     if ($env:PI_CODING_AGENT_DIR) {
         $agentDir = $env:PI_CODING_AGENT_DIR
     }
@@ -1465,16 +2750,14 @@ function Update-PiSubagentsSettings {
 
     $settingsPath = Join-Path $agentDir "settings.json"
 
-    if (-not (Test-Path $agentDir)) {
-        New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
+    if (-not (Test-Path $settingsPath)) {
+        Write-Debug "Pi settings not found; Pi subagents extension not installed."
+        return
     }
 
-    $settingsJson = "{}"
-    if (Test-Path $settingsPath) {
-        $settingsJson = Get-Content -Path $settingsPath -Raw
-        if ([string]::IsNullOrWhiteSpace($settingsJson)) {
-            $settingsJson = "{}"
-        }
+    $settingsJson = Get-Content -Path $settingsPath -Raw
+    if ([string]::IsNullOrWhiteSpace($settingsJson)) {
+        $settingsJson = "{}"
     }
 
     try {
@@ -1485,7 +2768,7 @@ function Update-PiSubagentsSettings {
     }
     catch {
         Write-Warning "Failed to parse Pi settings at $settingsPath. Leaving settings unchanged."
-        return $false
+        return
     }
 
     $packages = @()
@@ -1503,25 +2786,13 @@ function Update-PiSubagentsSettings {
             $source = [string]$package.source
         }
 
-        if ($Mode -eq "Remove") {
-            if ($source -ne "npm:pi-subagents" -and $source -ne "npm:@tintinweb/pi-subagents") {
-                $filteredPackages += $package
-            }
-        }
-        else {
-            if ($source -ne "npm:pi-subagents") {
-                $filteredPackages += $package
-            }
+        if ($source -ne "npm:pi-subagents" -and $source -ne "npm:@tintinweb/pi-subagents") {
+            $filteredPackages += $package
         }
     }
 
-    if ($Mode -eq "Remove") {
-        if ($filteredPackages.Count -eq 0) {
-            Remove-JsonProperty -Object $settings -Name "packages"
-        }
-        else {
-            Set-JsonProperty -Object $settings -Name "packages" -Value ([object[]]$filteredPackages)
-        }
+    if ($filteredPackages.Count -eq 0) {
+        Remove-JsonProperty -Object $settings -Name "packages"
     }
     else {
         Set-JsonProperty -Object $settings -Name "packages" -Value ([object[]]$filteredPackages)
@@ -1529,58 +2800,98 @@ function Update-PiSubagentsSettings {
 
     try {
         $settings | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsPath -Encoding UTF8
+        Write-Success "Removed Pi subagents extension from Pi settings."
     }
     catch {
         Write-Warning "Failed to write Pi settings at $settingsPath."
-        return $false
     }
-
-    return $true
 }
 
-# Function to install/update tintinweb Pi subagents extension
-function Setup-PiSubagents {
-    $package = "npm:@tintinweb/pi-subagents"
-
-    if (Test-EnvLocalFlag "BAN_PI_SUBAGENTS") {
-        if (Update-PiSubagentsSettings -Mode "Remove") {
-            Write-Success "Pi subagents extension disabled in Pi settings."
+# Function to remove retired Pi RPIV packages (ask-user-question and todo)
+function Remove-PiRpivPackages {
+    if (Get-Command pi -ErrorAction SilentlyContinue) {
+        foreach ($package in @("npm:@juicesharp/rpiv-ask-user-question", "npm:@juicesharp/rpiv-todo")) {
+            $output = & pi remove $package 2>&1
+            $removeExitCode = $LASTEXITCODE
+            $outputText = ($output | Out-String)
+            if ($removeExitCode -eq 0) {
+                Write-Success "Removed Pi RPIV package ($package)."
+            }
+            elseif ($outputText -match "no matching package found") {
+                Write-Debug "Pi RPIV package not installed ($package)."
+            }
+            else {
+                Write-Warning "Failed to remove Pi RPIV package ($package): $outputText"
+            }
         }
         return
     }
 
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        Write-Warning "npm not found. Cannot install Pi subagents."
-        Write-Debug "Install Node.js/npm, then run: pi install npm:@tintinweb/pi-subagents"
-        return
-    }
-
-    if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
-        Write-Warning "Pi coding agent not found. Cannot install Pi subagents."
-        return
-    }
-
-    if (-not (Update-PiSubagentsSettings -Mode "Install")) {
-        return
-    }
-
-    Write-Message "Installing/updating tintinweb Pi subagents..."
-    $output = & pi install $package 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        $listOutput = & pi list 2>&1
-        $listText = ($listOutput | Out-String)
-        $hasPackage = $listText.Contains($package)
-        $hasLegacyPackage = $listText -match '(^|\s)npm:pi-subagents(\s|$)'
-
-        if ($LASTEXITCODE -eq 0 -and $hasPackage -and -not $hasLegacyPackage) {
-            Write-Success "tintinweb Pi subagents installed/updated."
-        }
-        else {
-            Write-Warning "Pi subagents install completed, but package validation was inconclusive: $listText"
-        }
+    # Fallback when the pi CLI is unavailable: strip both package sources
+    # directly from settings.json.
+    if ($env:PI_CODING_AGENT_DIR) {
+        $agentDir = $env:PI_CODING_AGENT_DIR
     }
     else {
-        Write-Warning "Failed to install tintinweb Pi subagents: $output"
+        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    }
+
+    $settingsPath = Join-Path $agentDir "settings.json"
+
+    if (-not (Test-Path $settingsPath)) {
+        Write-Debug "Pi settings not found; Pi RPIV packages not installed."
+        return
+    }
+
+    $settingsJson = Get-Content -Path $settingsPath -Raw
+    if ([string]::IsNullOrWhiteSpace($settingsJson)) {
+        $settingsJson = "{}"
+    }
+
+    try {
+        $settings = $settingsJson | ConvertFrom-Json
+        if ($null -eq $settings) {
+            $settings = New-Object PSObject
+        }
+    }
+    catch {
+        Write-Warning "Failed to parse Pi settings at $settingsPath. Leaving settings unchanged."
+        return
+    }
+
+    $packages = @()
+    if ($settings.PSObject.Properties["packages"]) {
+        $packages = @($settings.packages)
+    }
+
+    $filteredPackages = @()
+    foreach ($package in $packages) {
+        $source = ""
+        if ($package -is [string]) {
+            $source = $package
+        }
+        elseif ($null -ne $package -and $package.PSObject.Properties["source"]) {
+            $source = [string]$package.source
+        }
+
+        if ($source -ne "npm:@juicesharp/rpiv-ask-user-question" -and $source -ne "npm:@juicesharp/rpiv-todo") {
+            $filteredPackages += $package
+        }
+    }
+
+    if ($filteredPackages.Count -eq 0) {
+        Remove-JsonProperty -Object $settings -Name "packages"
+    }
+    else {
+        Set-JsonProperty -Object $settings -Name "packages" -Value ([object[]]$filteredPackages)
+    }
+
+    try {
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsPath -Encoding UTF8
+        Write-Success "Removed Pi RPIV packages from Pi settings."
+    }
+    catch {
+        Write-Warning "Failed to write Pi settings at $settingsPath."
     }
 }
 
@@ -1727,6 +3038,166 @@ function Setup-PiClaudeBridge {
     }
 }
 
+# Function to remove legacy Pi Ask User and install/update the Pi web access package
+function Setup-PiCompanionPackages {
+    $legacyPackage = "npm:pi-ask-user"
+    $packages = @(
+        "npm:pi-web-access"
+    )
+
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Warning "npm not found. Cannot install Pi companion packages."
+        Write-Debug "Install Node.js/npm, then install these Pi packages manually: $($packages -join ', ')"
+        return
+    }
+
+    if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
+        Write-Warning "Pi coding agent not found. Cannot install Pi companion packages."
+        return
+    }
+
+    $listOutput = & pi list 2>&1
+    $listExitCode = $LASTEXITCODE
+    $listText = ($listOutput | Out-String)
+    if ($listExitCode -eq 0) {
+        if ($listText.Contains($legacyPackage)) {
+            Write-Message "Removing legacy Pi Ask User package..."
+            $output = & pi remove $legacyPackage 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Success "Legacy Pi Ask User package removed."
+            }
+            else {
+                Write-Warning "Failed to remove legacy Pi Ask User package: $output"
+            }
+        }
+    }
+    else {
+        Write-Warning "Cannot inspect Pi packages before legacy cleanup: $listText"
+    }
+
+    foreach ($package in $packages) {
+        Write-Message "Installing/updating Pi package $package..."
+        $output = & pi install $package 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $listOutput = & pi list 2>&1
+            $listExitCode = $LASTEXITCODE
+            $listText = ($listOutput | Out-String)
+            if ($listExitCode -eq 0 -and $listText.Contains($package)) {
+                Write-Success "Pi package $package installed/updated."
+            }
+            else {
+                Write-Warning "Pi package $package install completed, but validation was inconclusive: $listText"
+            }
+        }
+        else {
+            Write-Warning "Failed to install Pi package ${package}: $output"
+        }
+    }
+}
+
+# Return true only when two ordinary directories have identical file trees.
+function Test-DirectoryTreeEqual {
+    param(
+        [Parameter(Mandatory = $true)][string]$Left,
+        [Parameter(Mandatory = $true)][string]$Right
+    )
+
+    $leftItem = Get-Item -LiteralPath $Left -Force -ErrorAction SilentlyContinue
+    $rightItem = Get-Item -LiteralPath $Right -Force -ErrorAction SilentlyContinue
+    if ($null -eq $leftItem -or $null -eq $rightItem -or -not $leftItem.PSIsContainer -or -not $rightItem.PSIsContainer) { return $false }
+    if ((($leftItem.Attributes -bor $rightItem.Attributes) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+
+    $leftFiles = @(Get-ChildItem -LiteralPath $Left -Recurse -Force -ErrorAction SilentlyContinue)
+    $rightFiles = @(Get-ChildItem -LiteralPath $Right -Recurse -Force -ErrorAction SilentlyContinue)
+    if (@($leftFiles | Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -gt 0) { return $false }
+    if (@($rightFiles | Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -gt 0) { return $false }
+
+    $leftLeafFiles = @($leftFiles | Where-Object { -not $_.PSIsContainer })
+    $rightLeafFiles = @($rightFiles | Where-Object { -not $_.PSIsContainer })
+    if ($leftLeafFiles.Count -ne $rightLeafFiles.Count) { return $false }
+
+    foreach ($leftFile in $leftLeafFiles) {
+        $relativePath = $leftFile.FullName.Substring($leftItem.FullName.Length).TrimStart('\', '/')
+        $rightFile = Join-Path $Right $relativePath
+        if (-not (Test-Path -LiteralPath $rightFile -PathType Leaf)) { return $false }
+        if ((Get-FileHash -LiteralPath $leftFile.FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $rightFile -Algorithm SHA256).Hash) { return $false }
+    }
+    return $true
+}
+
+# Keep shared skills canonical for Pi and suppress stale direct/package collisions.
+function Set-PiSkillOwnership {
+    $defaultAgentDir = Join-Path $env:USERPROFILE ".pi\agent"
+    $activeAgentDir = if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { $defaultAgentDir }
+    $canonicalDir = Join-Path $env:USERPROFILE ".agents\skills"
+    $agentDirs = @($defaultAgentDir)
+    if ($activeAgentDir -ne $defaultAgentDir) { $agentDirs += $activeAgentDir }
+    $sharedSkills = @(
+        "simple-english", "setup-matt-pocock-skills", "diagnosing-bugs", "tdd",
+        "improve-codebase-architecture", "grill-with-docs", "grilling", "domain-modeling", "codebase-design"
+    )
+    $managedExclusions = @(
+        "!$(Join-Path $canonicalDir 'pi-goal-writer')/**",
+        "!$(Join-Path $canonicalDir 'autoresearch-create')/**",
+        "!$(Join-Path $canonicalDir 'autoresearch-finalize')/**",
+        "!$(Join-Path $canonicalDir 'autoresearch-hooks')/**"
+    )
+
+    foreach ($agentDir in $agentDirs) {
+        foreach ($skill in $sharedSkills) {
+            $duplicate = Join-Path $agentDir "skills\$skill"
+            $canonical = Join-Path $canonicalDir $skill
+            $managedExclusions += "!$duplicate/**"
+            if ((Test-DirectoryTreeEqual -Left $canonical -Right $duplicate) -and (Remove-MattPocockSkillPath -Path $duplicate)) {
+                Write-Debug "Removed obsolete duplicate Pi skill: $duplicate"
+            }
+        }
+    }
+
+    New-Item -ItemType Directory -Force -Path $activeAgentDir | Out-Null
+    $settingsPath = Join-Path $activeAgentDir "settings.json"
+    $settingsJson = if (Test-Path $settingsPath) { Get-Content -LiteralPath $settingsPath -Raw } else { "{}" }
+    try { $settings = $settingsJson | ConvertFrom-Json } catch {
+        Write-Warning "Failed to parse Pi settings at $settingsPath. Leaving settings unchanged."
+        return $false
+    }
+    if ($null -eq $settings) { $settings = New-Object PSObject }
+    $skills = if ($settings.PSObject.Properties["skills"] -and $settings.skills -is [array]) { @($settings.skills) } else { @() }
+    foreach ($exclusion in $managedExclusions) {
+        if ($skills -notcontains $exclusion) { $skills += $exclusion }
+    }
+    Set-JsonProperty -Object $settings -Name "skills" -Value ([object[]]$skills)
+    try { $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $settingsPath -Encoding UTF8 } catch {
+        Write-Warning "Failed to configure Pi skill ownership at $settingsPath."
+        return $false
+    }
+    Write-Success "Pi skill ownership configured without removing shared harness copies."
+    return $true
+}
+
+# Configure pi-autoresearch without overriding Pi transcript search.
+function Set-PiAutoresearchShortcut {
+    $agentDir = if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { Join-Path $env:USERPROFILE ".pi\agent" }
+    $configDir = Join-Path $agentDir "extensions"
+    $configPath = Join-Path $configDir "pi-autoresearch.json"
+    New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+    $configJson = if (Test-Path $configPath) { Get-Content -LiteralPath $configPath -Raw } else { "{}" }
+    try { $config = $configJson | ConvertFrom-Json } catch {
+        Write-Warning "Failed to parse pi-autoresearch config at $configPath."
+        return $false
+    }
+    if ($null -eq $config) { $config = New-Object PSObject }
+    $shortcuts = if ($config.PSObject.Properties["shortcuts"] -and $null -ne $config.shortcuts) { $config.shortcuts } else { New-Object PSObject }
+    Set-JsonProperty -Object $shortcuts -Name "fullscreenDashboard" -Value "ctrl+shift+r"
+    Set-JsonProperty -Object $config -Name "shortcuts" -Value $shortcuts
+    try { $config | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $configPath -Encoding UTF8 } catch {
+        Write-Warning "Failed to write pi-autoresearch config at $configPath."
+        return $false
+    }
+    Write-Success "pi-autoresearch dashboard shortcut set to Ctrl+Shift+R."
+    return $true
+}
+
 # Function to remove Pi goal/autoresearch package sources from settings when disabled
 function Remove-PiGoalAutoresearchSettings {
     if ($env:PI_CODING_AGENT_DIR) {
@@ -1839,23 +3310,68 @@ function Setup-PiGoalAutoresearch {
     elseif (-not $hadFailure) {
         Write-Warning "Pi goal/autoresearch install completed, but package validation was inconclusive: $listText"
     }
+
+    if (-not (Set-PiAutoresearchShortcut)) {
+        throw "Required pi-autoresearch shortcut setup failed."
+    }
 }
 
 
-function Test-MattPocockPiSkillsDisabled {
-    return ((Test-EnvLocalFlag "WORK_MACHINE") -or (Test-EnvLocalFlag "BAN_MATT_POCOCK_SKILLS") -or (Test-EnvLocalFlag "BAN_MATT_POCKOCK_SKILLS"))
+function Test-MattPocockSkillsDisabled {
+    return ((Test-EnvLocalFlag "BAN_MATT_POCOCK_SKILLS") -or (Test-EnvLocalFlag "BAN_MATT_POCKOCK_SKILLS"))
 }
 
-# Function to remove Matt Pocock skill copies from Pi when disabled
-function Remove-MattPocockPiSkills {
+function Remove-MattPocockSkillPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    try {
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    }
+    catch [System.Management.Automation.ItemNotFoundException] {
+        return $true
+    }
+    catch {
+        return $false
+    }
+
+    try {
+        $isReparsePoint = ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+        if ($isReparsePoint -or -not $item.PSIsContainer) {
+            Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+        }
+        else {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        }
+        try {
+            Get-Item -LiteralPath $Path -Force -ErrorAction Stop | Out-Null
+            return $false
+        }
+        catch [System.Management.Automation.ItemNotFoundException] {
+            return $true
+        }
+        catch {
+            return $false
+        }
+    }
+    catch {
+        return $false
+    }
+}
+
+# Remove setup-managed Matt Pocock skills without following symlink targets.
+function Remove-MattPocockSkills {
     $skills = @(
         "setup-matt-pocock-skills",
-        "diagnose",
+        "diagnosing-bugs",
         "tdd",
         "improve-codebase-architecture",
-        "zoom-out",
-        "grill-with-docs"
+        "grill-with-docs",
+        "grilling",
+        "domain-modeling",
+        "codebase-design"
     )
+    $obsoleteSkills = @("diagnose", "zoom-out")
+    $skills += $obsoleteSkills
 
     $defaultAgentDir = Join-Path $env:USERPROFILE ".pi\agent"
     if ($env:PI_CODING_AGENT_DIR) {
@@ -1865,7 +3381,10 @@ function Remove-MattPocockPiSkills {
         $activeAgentDir = $defaultAgentDir
     }
 
-    $skillsDirs = @((Join-Path $defaultAgentDir "skills"))
+    $skillsDirs = @(
+        (Join-Path $defaultAgentDir "skills"),
+        (Join-Path $env:USERPROFILE ".agents\skills")
+    )
     if ($activeAgentDir -ne $defaultAgentDir) {
         $skillsDirs += (Join-Path $activeAgentDir "skills")
     }
@@ -1875,131 +3394,127 @@ function Remove-MattPocockPiSkills {
     foreach ($skillsDir in $skillsDirs) {
         foreach ($skill in $skills) {
             $skillPath = Join-Path $skillsDir $skill
-            if (Test-Path $skillPath) {
-                try {
-                    Remove-Item -Path $skillPath -Recurse -Force -ErrorAction Stop
-                    if (Test-Path $skillPath) {
-                        $failed += $skill
-                    }
-                    else {
-                        $removed = $true
-                    }
-                }
-                catch {
-                    $failed += $skill
-                }
+            try {
+                Get-Item -LiteralPath $skillPath -Force -ErrorAction Stop | Out-Null
+            }
+            catch [System.Management.Automation.ItemNotFoundException] {
+                continue
+            }
+            catch {
+                $failed += $skill
+                continue
+            }
+
+            if (Remove-MattPocockSkillPath -Path $skillPath) {
+                $removed = $true
+            }
+            else {
+                $failed += $skill
             }
         }
     }
 
     if ($failed.Count -gt 0) {
-        Write-Warning "Failed to remove Matt Pocock Pi skills: $($failed -join ', ')"
+        Write-Warning "Failed to remove Matt Pocock skills: $($failed -join ', ')"
+        return $false
     }
-    elseif ($removed) {
-        Write-Success "Matt Pocock Pi skills disabled."
+    if ($removed) {
+        Write-Success "Matt Pocock skills disabled."
     }
     else {
-        Write-Debug "Matt Pocock Pi skills disabled; no installed copies found."
+        Write-Debug "Matt Pocock skills disabled; no installed copies found."
     }
+    return $true
 }
 
-# Function to install/update Matt Pocock engineering skills for Pi
-function Setup-MattPocockPiSkills {
+# Install/update Matt Pocock engineering skills in the shared Codex/Pi path.
+function Setup-MattPocockSkills {
     $skills = @(
         "setup-matt-pocock-skills",
-        "diagnose",
+        "diagnosing-bugs",
         "tdd",
         "improve-codebase-architecture",
-        "zoom-out",
-        "grill-with-docs"
+        "grill-with-docs",
+        "grilling",
+        "domain-modeling",
+        "codebase-design"
     )
+    $obsoleteSkills = @("diagnose", "zoom-out")
 
-    if (Test-MattPocockPiSkillsDisabled) {
-        if (Test-EnvLocalFlag "WORK_MACHINE") {
-            Write-Debug "WORK_MACHINE=1, skipping Matt Pocock Pi skills."
-        }
-        Remove-MattPocockPiSkills
-        return
+    if (Test-MattPocockSkillsDisabled) {
+        return (Remove-MattPocockSkills)
     }
 
-    if (-not (Get-Command pi -ErrorAction SilentlyContinue)) {
-        Write-Warning "Pi coding agent not found. Cannot install Matt Pocock Pi skills."
-        return
-    }
-
-    if (-not (Enable-PiNodeRuntime)) {
-        Write-Warning "Skipping Matt Pocock Pi skills because the Pi Node.js runtime is not ready."
-        return
+    if (-not (Enable-SkillsCliNodeRuntime)) {
+        Write-Warning "Cannot install Matt Pocock skills because the skills CLI runtime is not ready."
+        return $false
     }
 
     if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
-        Write-Warning "npx not found. Cannot install Matt Pocock Pi skills."
-        Write-Debug "Install Node.js >=20.6, then run: npx --yes skills@latest add mattpocock/skills --global --agent pi --copy"
-        return
+        Write-Warning "npx is not available; cannot install Matt Pocock skills."
+        Write-Debug "Install Node.js >=22.20, then run: npx --yes skills@latest add mattpocock/skills --global --agent codex --copy --yes"
+        return $false
     }
 
-    $defaultAgentDir = Join-Path $env:USERPROFILE ".pi\agent"
-    if ($env:PI_CODING_AGENT_DIR) {
-        $agentDir = $env:PI_CODING_AGENT_DIR
-    }
-    else {
-        $agentDir = $defaultAgentDir
-    }
-
-    $defaultSkillsDir = Join-Path $defaultAgentDir "skills"
-    $skillsDir = Join-Path $agentDir "skills"
-    $npxArgs = @("--yes", "skills@latest", "add", "mattpocock/skills", "--global", "--agent", "pi", "--copy", "-y")
+    $codexSkillsDir = Join-Path $env:USERPROFILE ".agents\skills"
+    $npxArgs = @(
+        "--yes", "skills@latest", "add", "mattpocock/skills",
+        "--global",
+        "--agent", "codex",
+        "--copy",
+        "--yes"
+    )
     foreach ($skill in $skills) {
         $npxArgs += @("--skill", $skill)
     }
 
-    Write-Message "Installing/updating Matt Pocock Pi skills..."
+    Write-Message "Installing/updating Matt Pocock skills for Pi and Codex through the shared skill path..."
+    $global:LASTEXITCODE = 0
     $output = & npx @npxArgs 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Failed to install Matt Pocock Pi skills: $output"
-        return
-    }
-
-    $syncFailed = @()
-    if ($agentDir -ne $defaultAgentDir) {
-        New-Item -ItemType Directory -Force -Path $skillsDir | Out-Null
-        foreach ($skill in $skills) {
-            $sourcePath = Join-Path $defaultSkillsDir $skill
-            $destPath = Join-Path $skillsDir $skill
-            if (Test-Path $sourcePath) {
-                try {
-                    if (Test-Path $destPath) {
-                        Remove-Item -Path $destPath -Recurse -Force -ErrorAction Stop
-                    }
-                    Copy-Item -Path $sourcePath -Destination $destPath -Recurse -Force -ErrorAction Stop
-                }
-                catch {
-                    $syncFailed += $skill
-                }
-            }
-            else {
-                $syncFailed += $skill
-            }
-        }
+        Write-Warning "Failed to install Matt Pocock skills."
+        if ($output) { Write-Debug ($output | Out-String) }
+        return $false
     }
 
     $missing = @()
-    foreach ($skill in $skills) {
-        $skillFile = Join-Path (Join-Path $skillsDir $skill) "SKILL.md"
-        if (-not (Test-Path $skillFile)) {
-            $missing += $skill
+    $managedSkillsDirs = @($codexSkillsDir)
+    foreach ($managedSkillsDir in $managedSkillsDirs) {
+        foreach ($skill in $skills) {
+            $skillDir = Join-Path $managedSkillsDir $skill
+            $skillFile = Join-Path $skillDir "SKILL.md"
+            $skillDirItem = Get-Item -LiteralPath $skillDir -Force -ErrorAction SilentlyContinue
+            $skillFileItem = Get-Item -LiteralPath $skillFile -Force -ErrorAction SilentlyContinue
+            $skillDirIsLink = $null -ne $skillDirItem -and (($skillDirItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+            $skillFileIsLink = $null -ne $skillFileItem -and (($skillFileItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+            if ($null -eq $skillFileItem -or $skillFileItem.PSIsContainer -or $skillDirIsLink -or $skillFileIsLink) {
+                $missing += $skillDir
+            }
         }
     }
 
-    if ($syncFailed.Count -gt 0) {
-        Write-Warning "Matt Pocock Pi skills installed, but failed to sync to active Pi dir ${agentDir}: $($syncFailed -join ', ')"
+    if ($missing.Count -gt 0) {
+        Write-Warning "Matt Pocock skills are missing required files: $($missing -join ', ')"
+        return $false
     }
-    elseif ($missing.Count -eq 0) {
-        Write-Success "Matt Pocock Pi skills installed/updated."
+
+    $obsoleteCleanupFailed = @()
+    foreach ($managedSkillsDir in $managedSkillsDirs) {
+        foreach ($obsoleteSkill in $obsoleteSkills) {
+            $obsoletePath = Join-Path $managedSkillsDir $obsoleteSkill
+            if (-not (Remove-MattPocockSkillPath -Path $obsoletePath)) {
+                $obsoleteCleanupFailed += $obsoletePath
+            }
+        }
     }
-    else {
-        Write-Warning "Matt Pocock Pi skills install completed, but missing expected skills: $($missing -join ', ')"
+    if ($obsoleteCleanupFailed.Count -gt 0) {
+        Write-Warning "Failed to remove obsolete Matt Pocock skills: $($obsoleteCleanupFailed -join ', ')"
+        return $false
     }
+
+    Write-Success "Matt Pocock skills installed/updated for Pi and Codex through the shared skill path."
+    if ($output) { Write-Debug ($output | Out-String) }
+    return $true
 }
 
 
@@ -2148,7 +3663,7 @@ function Remove-CompoundEngineeringResources {
     $profileRoot = [System.IO.Path]::GetFullPath($env:USERPROFILE)
     $defaultAgentDir = Join-Path $profileRoot ".pi\agent"
     $agentDirs = @()
-    $compoundSkillPattern = '^(ce-agent-native-architecture|ce-agent-native-audit|ce-brainstorm|ce-clean-gone-branches|ce-code-review|ce-commit|ce-commit-push-pr|ce-compound|ce-compound-refresh|ce-debug|ce-demo-reel|ce-dhh-rails-style|ce-doc-review|ce-frontend-design|ce-gemini-imagegen|ce-ideate|ce-optimize|ce-plan|ce-polish-beta|ce-product-pulse|ce-proof|ce-release-notes|ce-report-bug|ce-resolve-pr-feedback|ce-riffrec-feedback-analysis|ce-sessions|ce-setup|ce-simplify-code|ce-slack-research|ce-strategy|ce-test-browser|ce-test-xcode|ce-work|ce-work-beta|ce-worktree)$'
+    $compoundSkillPattern = '^(ce-agent-native-architecture|ce-agent-native-audit|ce-brainstorm|ce-clean-gone-branches|ce-code-review|ce-commit|ce-commit-push-pr|ce-compound|ce-compound-refresh|ce-debug|ce-demo-reel|ce-dhh-rails-style|ce-doc-review|ce-frontend-design|ce-gemini-imagegen|ce-ideate|ce-optimize|ce-plan|ce-polish-beta|ce-product-pulse|ce-proof|ce-release-notes|ce-report-bug|ce-resolve-pr-feedback|ce-riffrec-feedback-analysis|ce-sessions|ce-setup|ce-simplify-code|ce-slack-research|ce-strategy|ce-test-browser|ce-test-xcode|ce-work|ce-work-beta|ce-worktree|lfg)$'
     $compoundAgentPattern = '^(ce-adversarial-document-reviewer|ce-adversarial-reviewer|ce-agent-native-reviewer|ce-ankane-readme-writer|ce-api-contract-reviewer|ce-architecture-strategist|ce-best-practices-researcher|ce-code-simplicity-reviewer|ce-coherence-reviewer|ce-correctness-reviewer|ce-data-integrity-guardian|ce-data-migration-expert|ce-data-migrations-reviewer|ce-deployment-verification-agent|ce-design-implementation-reviewer|ce-design-iterator|ce-design-lens-reviewer|ce-dhh-rails-reviewer|ce-feasibility-reviewer|ce-figma-design-sync|ce-framework-docs-researcher|ce-git-history-analyzer|ce-issue-intelligence-analyst|ce-julik-frontend-races-reviewer|ce-kieran-python-reviewer|ce-kieran-rails-reviewer|ce-kieran-typescript-reviewer|ce-learnings-researcher|ce-maintainability-reviewer|ce-pattern-recognition-specialist|ce-performance-oracle|ce-performance-reviewer|ce-pr-comment-resolver|ce-previous-comments-reviewer|ce-product-lens-reviewer|ce-project-standards-reviewer|ce-reliability-reviewer|ce-repo-research-analyst|ce-schema-drift-detector|ce-scope-guardian-reviewer|ce-security-lens-reviewer|ce-security-reviewer|ce-security-sentinel|ce-session-historian|ce-slack-researcher|ce-spec-flow-analyzer|ce-swift-ios-reviewer|ce-testing-reviewer|ce-web-researcher)$'
     $compoundRepo = Join-Path $profileRoot ".local\share\compound-engineering-plugin"
     $sharedSkillsDir = Join-Path $profileRoot ".agents\skills"
@@ -2235,6 +3750,33 @@ function Remove-CompoundEngineeringResources {
                 catch {
                     $failed += $resource.FullName
                 }
+            }
+        }
+
+        # The Pi plugin installer leaves its install manifest behind. The
+        # manifest is part of the legacy installation and must be removed too.
+        $manifestDir = Join-Path $agentDir "compound-engineering"
+        if (Test-Path -LiteralPath $manifestDir) {
+            try {
+                $manifestItem = Get-Item -LiteralPath $manifestDir -Force -ErrorAction Stop
+                if ($manifestItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                    Remove-Item -LiteralPath $manifestDir -Force -ErrorAction Stop
+                    $removed = $true
+                }
+                elseif ($manifestItem.PSIsContainer -and (Test-SafeProfileDirectory -Path $manifestDir -ProfileRoot $profileRoot)) {
+                    Remove-Item -LiteralPath $manifestDir -Recurse -Force -ErrorAction Stop
+                    $removed = $true
+                }
+                elseif (-not $manifestItem.PSIsContainer) {
+                    Remove-Item -LiteralPath $manifestDir -Force -ErrorAction Stop
+                    $removed = $true
+                }
+                else {
+                    Write-Warning "Skipping Compound Engineering manifest cleanup through a reparse point or outside the Windows user profile: $manifestDir"
+                }
+            }
+            catch {
+                $failed += $manifestDir
             }
         }
 
@@ -2384,35 +3926,30 @@ function Install-WindowsUpdates {
     }
 }
 
-# Function to upgrade global npm packages
-function Update-NpmGlobalPackages {
-    # Try to initialize mise if available (provides npm if Node.js is installed)
-    if (Get-Command mise -ErrorAction SilentlyContinue) {
-        mise activate pwsh | Out-String | Invoke-Expression
+# Function to setup ~/Code directory
+# Report whether the machine has a reboot pending. Informational only; never
+# affects the run's exit status. Checks the standard pending-reboot registry
+# locations and reports which of them triggered.
+function Test-PendingReboot {
+    $reasons = @()
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') {
+        $reasons += 'Component Based Servicing'
     }
-
-    # Make sure npm is available
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        Write-Host "$warnIcon npm not found. Skipping global package upgrade." -ForegroundColor Yellow
-        return
+    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') {
+        $reasons += 'Windows Update'
     }
-
-    Write-Host "$arrow Upgrading global npm packages..." -ForegroundColor Cyan
-    try {
-        npm update -g
-        if ($?) {
-            Write-Host "$success Global npm packages upgraded." -ForegroundColor Green
-        }
-        else {
-            Write-Host "$warnIcon Failed to upgrade some global npm packages." -ForegroundColor Yellow
-        }
+    $pendingRename = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name 'PendingFileRenameOperations' -ErrorAction SilentlyContinue
+    if ($null -ne $pendingRename -and $null -ne $pendingRename.PendingFileRenameOperations) {
+        $reasons += 'pending file rename operations'
     }
-    catch {
-        Write-Host "$warnIcon Failed to upgrade global npm packages: $($_.Exception.Message)" -ForegroundColor Yellow
+    if ($reasons.Count -gt 0) {
+        Write-Warning "Machine reboot pending ($($reasons -join ', ')). Restart this PC for applied updates to take effect."
+    }
+    else {
+        Write-Debug "No reboot pending."
     }
 }
 
-# Function to setup ~/Code directory
 function Setup-CodeDirectory {
     $codeDir = "$env:USERPROFILE\Code"
 
@@ -2453,30 +3990,47 @@ function Set-WindowsTerminalConfiguration {
 
 
 function Upload-Log {
-    if ($logFile -and (Test-Path $logFile)) {
+    if ($script:SetupLogFile -and (Test-Path $script:SetupLogFile)) {
         try {
             Write-Debug "Uploading log to logs.scowalt.com..."
             Invoke-RestMethod -Uri "https://logs.scowalt.com/upload?hostname=$env:COMPUTERNAME" `
-                -Method Post -Form @{ file = Get-Item $logFile } `
-                -TimeoutSec 10 -ErrorAction SilentlyContinue | Out-Null
-        } catch {}
+                -Method Post -Form @{ file = Get-Item $script:SetupLogFile } `
+                -TimeoutSec 10 -ErrorAction Stop | Out-Null
+        }
+        catch {
+            Write-Warning "Failed to upload setup log. Local log remains at $script:SetupLogFile."
+        }
     }
 }
 
-# Main setup function to call all necessary steps
-function Initialize-WindowsEnvironment {
+function Complete-SetupLog {
+    if (-not $script:SetupLogFile) {
+        return
+    }
+
+    Write-Host "Run log saved to: $script:SetupLogFile" -ForegroundColor DarkGray
+    if ($script:SetupTranscriptStarted) {
+        try {
+            Stop-Transcript -ErrorAction Stop | Out-Null
+        }
+        catch {
+            Write-Warning "Failed to stop the setup transcript cleanly: $($_.Exception.Message)"
+        }
+        finally {
+            $script:SetupTranscriptStarted = $false
+        }
+    }
+
+    Upload-Log
+}
+
+function Invoke-WindowsSetupTasks {
+    $piSetupFailed = $false
+    $mattPocockSetupFailed = $false
+    $simpleEnglishSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 108 | Last changed: Fix multiline gcloud component-manager detection" -ForegroundColor DarkGray
-
-    # Log this run
-    $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
-    if (-not (Test-Path $logDir)) {
-        New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-    }
-    $logFile = Join-Path $logDir "$(Get-Date -Format 'yyyy-MM-dd-HHmmss').log"
-    Start-Transcript -Path $logFile -Append
-    Write-Debug "Logging to $logFile"
+    Write-Host "Version 130 | Last changed: Remove retired Attention-kind guidance" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -2506,29 +4060,31 @@ function Initialize-WindowsEnvironment {
     Set-WindowsTerminalConfiguration
     
     Write-Section "Additional Development Tools"
+    Install-GiteaClient
     Install-SocketFirewall
     Install-ClaudeCode
     Install-GeminiCli
     Install-CodexCli
     Install-PortlessCli
-    Install-RtkCli
-    Setup-RtkIntegrations
-    if (Test-MattPocockPiSkillsDisabled) {
-        Setup-MattPocockPiSkills
+    Remove-RtkResources
+    Remove-AttentionSpanResources
+    if (-not (Setup-MattPocockSkills)) {
+        $mattPocockSetupFailed = $true
     }
     if (Install-PiCli) {
-        Setup-PiSubagents
+        Set-PiDefaults
+        Seed-PiSyntheticModels
+        Seed-PiZaiModels
+        Remove-PiSubagents
+        Remove-PiRpivPackages
         Setup-PiMcpAdapter
         Setup-PiClaudeBridge
+        Setup-PiCompanionPackages
         Setup-PiGoalAutoresearch
-        if (-not (Test-MattPocockPiSkillsDisabled)) {
-            Setup-MattPocockPiSkills
-        }
     }
     else {
-        if (Test-EnvLocalFlag "BAN_PI_SUBAGENTS") {
-            Setup-PiSubagents
-        }
+        Remove-PiSubagents
+        Remove-PiRpivPackages
         if (Test-EnvLocalFlag "BAN_PI_MCP_ADAPTER") {
             Setup-PiMcpAdapter
         }
@@ -2536,20 +4092,60 @@ function Initialize-WindowsEnvironment {
             Setup-PiGoalAutoresearch
         }
         Write-Warning "Skipping Pi extension setup because Pi migration failed."
+        $piSetupFailed = $true
     }
+    if (-not (Install-SimpleEnglishSkill)) {
+        $simpleEnglishSetupFailed = $true
+    }
+    if (-not (Set-PiSkillOwnership)) {
+        $piSetupFailed = $true
+    }
+    Remove-ImpeccableResources
     Remove-CompoundEngineeringResources
     Install-TursoCli
 
     Write-Section "System Updates"
     Install-WingetUpdates
-    Update-NpmGlobalPackages
     Install-WindowsUpdates # this should always be LAST since it may prompt a system reboot
 
-    $logFile = Get-ChildItem "$env:USERPROFILE\.local\log\machine-setup" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    Write-Host "Run log saved to: $($logFile.FullName)" -ForegroundColor DarkGray
+    Test-PendingReboot
+
+    if ($piSetupFailed) {
+        throw "Required Pi coding agent setup failed."
+    }
+    if ($mattPocockSetupFailed) {
+        throw "Required Matt Pocock skill setup failed."
+    }
+    if ($simpleEnglishSetupFailed) {
+        throw "Required Simple English skill setup failed."
+    }
+
     Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen
-    Stop-Transcript
-    Upload-Log
+}
+
+# Main setup function to call all necessary steps
+function Initialize-WindowsEnvironment {
+    $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
+    if (-not (Test-Path $logDir)) {
+        New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    }
+    $script:SetupLogFile = Join-Path $logDir "$(Get-Date -Format 'yyyy-MM-dd-HHmmss').log"
+    Start-Transcript -Path $script:SetupLogFile -Append -ErrorAction Stop | Out-Null
+    $script:SetupTranscriptStarted = $true
+    Write-Debug "Logging to $script:SetupLogFile"
+
+    $setupError = $null
+    try {
+        Invoke-WindowsSetupTasks
+    }
+    catch {
+        $setupError = $_
+    }
+
+    Complete-SetupLog
+    if ($null -ne $setupError) {
+        throw $setupError
+    }
 }
 
 # Run the main setup function
