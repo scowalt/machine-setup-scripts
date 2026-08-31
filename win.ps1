@@ -2019,14 +2019,20 @@ function Enable-SkillsCliNodeRuntime {
     return $false
 }
 
-# Install/update Simple English for every supported AI coding harness.
-function Install-SimpleEnglishSkill {
+# Install/update one copied global skill for every supported AI coding harness.
+function Install-ManagedAgentSkill {
+    param(
+        [Parameter(Mandatory = $true)][string]$Repository,
+        [Parameter(Mandatory = $true)][string]$SkillName,
+        [Parameter(Mandatory = $true)][string]$DisplayName
+    )
+
     if (-not (Enable-SkillsCliNodeRuntime)) {
         return $false
     }
 
     if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
-        Write-Warning "npx is not available; cannot install the Simple English skill."
+        Write-Warning "npx is not available; cannot install the $DisplayName skill."
         return $false
     }
 
@@ -2034,42 +2040,61 @@ function Install-SimpleEnglishSkill {
         "--yes",
         "skills@latest",
         "add",
-        "AminBlg/SimpleEnglish",
+        $Repository,
         "--global",
         "--agent", "claude-code",
         "--agent", "codex",
         "--agent", "gemini-cli",
-        "--skill", "simple-english",
+        "--skill", $SkillName,
         "--copy",
         "--yes"
     )
 
-    Write-Message "Installing/updating Simple English across AI harnesses..."
+    Write-Message "Installing/updating $DisplayName across AI harnesses..."
     $global:LASTEXITCODE = 0
     $installOutput = & npx @installArguments 2>&1
     if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Failed to install/update the Simple English skill."
+        Write-Warning "Failed to install/update the $DisplayName skill."
         if ($installOutput) { Write-Debug ($installOutput | Out-String) }
         return $false
     }
 
     $claudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
-    # Codex and Gemini CLI both discover the skills CLI's shared user copy.
+    # Codex, Gemini CLI, and Pi discover the skills CLI's shared user copy.
     $skillFiles = @(
-        (Join-Path $claudeDir "skills\simple-english\SKILL.md"),
-        (Join-Path $env:USERPROFILE ".agents\skills\simple-english\SKILL.md")
+        (Join-Path $claudeDir "skills\$SkillName\SKILL.md"),
+        (Join-Path $env:USERPROFILE ".agents\skills\$SkillName\SKILL.md")
     )
 
     foreach ($skillFile in $skillFiles) {
+        $skillDir = Split-Path -Parent $skillFile
+        $skillDirItem = Get-Item -LiteralPath $skillDir -Force -ErrorAction SilentlyContinue
+        $skillFileItem = Get-Item -LiteralPath $skillFile -Force -ErrorAction SilentlyContinue
+        $skillDirIsLink = $null -ne $skillDirItem -and (($skillDirItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+        $skillFileIsLink = $null -ne $skillFileItem -and (($skillFileItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+        if ($skillDirIsLink -or $skillFileIsLink) {
+            Write-Warning "$DisplayName validation failed: copied artifact is a symlink at $skillFile."
+            return $false
+        }
         if (-not (Test-Path -LiteralPath $skillFile -PathType Leaf)) {
-            Write-Warning "Simple English validation failed: missing $skillFile."
+            Write-Warning "$DisplayName validation failed: missing $skillFile."
             return $false
         }
     }
 
-    Write-Success "Simple English installed/updated for Claude Code, Codex, Gemini CLI, and Pi through the shared skill path."
+    Write-Success "$DisplayName installed/updated for Claude Code, Codex, Gemini CLI, and Pi through the shared skill path."
     if ($installOutput) { Write-Debug ($installOutput | Out-String) }
     return $true
+}
+
+# Preserve the named Simple English setup interface.
+function Install-SimpleEnglishSkill {
+    return (Install-ManagedAgentSkill -Repository "AminBlg/SimpleEnglish" -SkillName "simple-english" -DisplayName "Simple English")
+}
+
+# Install/update HumanLayer show-me for every supported AI coding harness.
+function Install-ShowMeSkill {
+    return (Install-ManagedAgentSkill -Repository "humanlayer/skills" -SkillName "show-me" -DisplayName "show-me")
 }
 
 # Remove setup-managed Impeccable resources without affecting sibling agent tooling.
@@ -3133,7 +3158,7 @@ function Set-PiSkillOwnership {
     $agentDirs = @($defaultAgentDir)
     if ($activeAgentDir -ne $defaultAgentDir) { $agentDirs += $activeAgentDir }
     $sharedSkills = @(
-        "simple-english", "setup-matt-pocock-skills", "diagnosing-bugs", "tdd",
+        "simple-english", "show-me", "setup-matt-pocock-skills", "diagnosing-bugs", "tdd",
         "improve-codebase-architecture", "grill-with-docs", "grilling", "domain-modeling", "codebase-design"
     )
     $managedExclusions = @(
@@ -4028,9 +4053,10 @@ function Invoke-WindowsSetupTasks {
     $piSetupFailed = $false
     $mattPocockSetupFailed = $false
     $simpleEnglishSetupFailed = $false
+    $showMeSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 130 | Last changed: Remove retired Attention-kind guidance" -ForegroundColor DarkGray
+    Write-Host "Version 131 | Last changed: Manage show-me agent skill" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -4097,6 +4123,9 @@ function Invoke-WindowsSetupTasks {
     if (-not (Install-SimpleEnglishSkill)) {
         $simpleEnglishSetupFailed = $true
     }
+    if (-not (Install-ShowMeSkill)) {
+        $showMeSetupFailed = $true
+    }
     if (-not (Set-PiSkillOwnership)) {
         $piSetupFailed = $true
     }
@@ -4118,6 +4147,9 @@ function Invoke-WindowsSetupTasks {
     }
     if ($simpleEnglishSetupFailed) {
         throw "Required Simple English skill setup failed."
+    }
+    if ($showMeSetupFailed) {
+        throw "Required show-me skill setup failed."
     }
 
     Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen

@@ -20,6 +20,10 @@ _Avoid_: Gitea CLI, Gitea server command
 A development tool whose installation, configuration, update, and removal are controlled by the setup scripts.
 _Avoid_: Provisioned tool, setup tool
 
+**Managed agent skill**:
+An agent skill whose upstream identity and managed footprint are part of the desired machine state. User-created and project-scoped skills are outside this category.
+_Avoid_: Setup-managed skill, bundled skill
+
 **Managed footprint**:
 The files, directories, configuration entries, and environment entries that the setup scripts own for a managed tool.
 _Avoid_: Installation, tool data

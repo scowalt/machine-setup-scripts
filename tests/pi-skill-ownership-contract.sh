@@ -21,11 +21,15 @@ for file in "${bash_setup_scripts[@]}"; do
     custom_pi="${active_pi}/skills"
 
     mkdir -p "${shared}/simple-english" "${default_pi}/simple-english" \
-        "${custom_pi}/simple-english" "${shared}/diagnosing-bugs" \
+        "${custom_pi}/simple-english" "${shared}/show-me" "${default_pi}/show-me" \
+        "${custom_pi}/show-me" "${shared}/diagnosing-bugs" \
         "${default_pi}/diagnosing-bugs" "${custom_pi}/diagnosing-bugs"
     printf 'canonical\n' > "${shared}/simple-english/SKILL.md"
     cp "${shared}/simple-english/SKILL.md" "${default_pi}/simple-english/SKILL.md"
     cp "${shared}/simple-english/SKILL.md" "${custom_pi}/simple-english/SKILL.md"
+    printf 'canonical-show-me\n' > "${shared}/show-me/SKILL.md"
+    cp "${shared}/show-me/SKILL.md" "${default_pi}/show-me/SKILL.md"
+    printf 'user-modified-show-me\n' > "${custom_pi}/show-me/SKILL.md"
     printf 'canonical\n' > "${shared}/diagnosing-bugs/SKILL.md"
     printf 'user-modified\n' > "${default_pi}/diagnosing-bugs/SKILL.md"
     cp "${shared}/diagnosing-bugs/SKILL.md" "${custom_pi}/diagnosing-bugs/SKILL.md"
@@ -44,6 +48,9 @@ for file in "${bash_setup_scripts[@]}"; do
 
     [[ ! -e "${default_pi}/simple-english" ]] || fail "${file}: identical default Pi duplicate remains"
     [[ ! -e "${custom_pi}/simple-english" ]] || fail "${file}: identical custom Pi duplicate remains"
+    [[ ! -e "${default_pi}/show-me" ]] || fail "${file}: identical default show-me duplicate remains"
+    [[ -f "${custom_pi}/show-me/SKILL.md" ]] || fail "${file}: modified show-me copy was removed"
+    [[ $(< "${custom_pi}/show-me/SKILL.md") == user-modified-show-me ]] || fail "${file}: modified show-me copy changed"
     [[ ! -e "${custom_pi}/diagnosing-bugs" ]] || fail "${file}: identical custom Matt Pocock duplicate remains"
     [[ -f "${default_pi}/diagnosing-bugs/SKILL.md" ]] || fail "${file}: modified user copy was removed"
     [[ $(< "${default_pi}/diagnosing-bugs/SKILL.md") == user-modified ]] || fail "${file}: modified user copy changed"
@@ -63,9 +70,10 @@ done
 grep -q '^function Set-PiSkillOwnership' win.ps1 || fail 'win.ps1: missing Pi skill ownership function'
 grep -q '^function Set-PiAutoresearchShortcut' win.ps1 || fail 'win.ps1: missing autoresearch shortcut function'
 grep -q 'fullscreenDashboard.*ctrl+shift+r' win.ps1 || fail 'win.ps1: missing Ctrl+Shift+R binding'
-if sed -n '/^function Install-SimpleEnglishSkill/,/^}/p' win.ps1 | grep -q '"--agent", "pi"'; then
-    fail 'win.ps1: Simple English still targets direct Pi installation'
+if sed -n '/^function Install-ManagedAgentSkill/,/^}/p' win.ps1 | grep -q '"--agent", "pi"'; then
+    fail 'win.ps1: managed agent skills still target direct Pi installation'
 fi
+grep -q '"simple-english", "show-me"' win.ps1 || fail 'win.ps1: show-me is not a canonical shared Pi skill'
 if sed -n '/^function Setup-MattPocockSkills/,/^}/p' win.ps1 | grep -q '"--agent", "pi"'; then
     fail 'win.ps1: Matt Pocock skills still target direct Pi installation'
 fi
