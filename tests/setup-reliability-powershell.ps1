@@ -325,31 +325,33 @@ finally {
     Remove-Item -Recurse -Force $cleanupTestRoot -ErrorAction SilentlyContinue
 }
 
-# Simple English provisioning updates on every run and validates the canonical
-# shared path without creating a direct Pi copy.
-$originalSimpleEnglishUserProfile = $env:USERPROFILE
+# Required managed agent skills update on every run, use the canonical shared
+# path, honor custom harness locations, and reject incomplete or linked copies.
+$originalManagedSkillUserProfile = $env:USERPROFILE
 $originalClaudeConfigDir = $env:CLAUDE_CONFIG_DIR
 $originalCodexHome = $env:CODEX_HOME
 $originalPiCodingAgentDir = $env:PI_CODING_AGENT_DIR
-$simpleEnglishTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "simple-english-$([guid]::NewGuid())"
-$env:USERPROFILE = Join-Path $simpleEnglishTestRoot "home"
-$env:CLAUDE_CONFIG_DIR = Join-Path $simpleEnglishTestRoot "claude-home"
-$env:CODEX_HOME = Join-Path $simpleEnglishTestRoot "codex-home"
-$env:PI_CODING_AGENT_DIR = Join-Path $simpleEnglishTestRoot "custom-pi"
-$script:SimpleEnglishCalls = [System.Collections.Generic.List[string]]::new()
+$managedSkillTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "managed-skills-$([guid]::NewGuid())"
+$env:USERPROFILE = Join-Path $managedSkillTestRoot "home"
+$env:CLAUDE_CONFIG_DIR = Join-Path $managedSkillTestRoot "claude-home"
+$env:CODEX_HOME = Join-Path $managedSkillTestRoot "codex-home"
+$env:PI_CODING_AGENT_DIR = Join-Path $managedSkillTestRoot "custom-pi"
+$script:ManagedSkillCalls = [System.Collections.Generic.List[string]]::new()
 
 function global:Enable-SkillsCliNodeRuntime { return $true }
 function global:npx {
     param([Parameter(ValueFromRemainingArguments = $true)][object[]]$Arguments)
 
-    $script:SimpleEnglishCalls.Add(($Arguments -join " "))
+    $script:ManagedSkillCalls.Add(($Arguments -join " "))
+    $skillIndex = [Array]::IndexOf($Arguments, "--skill")
+    $skillName = [string]$Arguments[$skillIndex + 1]
     $skillFiles = @(
-        (Join-Path $env:CLAUDE_CONFIG_DIR "skills\simple-english\SKILL.md"),
-        (Join-Path $env:USERPROFILE ".agents\skills\simple-english\SKILL.md")
+        (Join-Path $env:CLAUDE_CONFIG_DIR "skills\$skillName\SKILL.md"),
+        (Join-Path $env:USERPROFILE ".agents\skills\$skillName\SKILL.md")
     )
     foreach ($skillFile in $skillFiles) {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $skillFile) | Out-Null
-        Set-Content -LiteralPath $skillFile -Value "---`nname: simple-english`n---"
+        Set-Content -LiteralPath $skillFile -Value "---`nname: $skillName`n---"
     }
     $global:LASTEXITCODE = 0
     Write-Output "mock install complete"
@@ -360,42 +362,118 @@ try {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $siblingSkill) | Out-Null
     Set-Content -LiteralPath $siblingSkill -Value "keep"
 
-    if (-not (Install-SimpleEnglishSkill) -or -not (Install-SimpleEnglishSkill)) {
-        throw "Simple English mocked installation failed"
+    if (-not (Install-SimpleEnglishSkill) -or -not (Install-ShowMeSkill) -or
+        -not (Install-SimpleEnglishSkill) -or -not (Install-ShowMeSkill)) {
+        throw "Required managed skill mocked installation failed"
     }
 
-    $expectedArguments = "--yes skills@latest add AminBlg/SimpleEnglish --global --agent claude-code --agent codex --agent gemini-cli --skill simple-english --copy --yes"
-    if ($script:SimpleEnglishCalls.Count -ne 2 -or ($script:SimpleEnglishCalls | Where-Object { $_ -ne $expectedArguments })) {
-        throw "Simple English installer did not update twice with the exact targets: $($script:SimpleEnglishCalls -join '; ')"
+    $expectedSimpleEnglishArguments = "--yes skills@latest add AminBlg/SimpleEnglish --global --agent claude-code --agent codex --agent gemini-cli --skill simple-english --copy --yes"
+    $expectedShowMeArguments = "--yes skills@latest add humanlayer/skills --global --agent claude-code --agent codex --agent gemini-cli --skill show-me --copy --yes"
+    if (@($script:ManagedSkillCalls | Where-Object { $_ -eq $expectedSimpleEnglishArguments }).Count -ne 2) {
+        throw "Simple English installer did not update twice with the exact targets: $($script:ManagedSkillCalls -join '; ')"
+    }
+    if (@($script:ManagedSkillCalls | Where-Object { $_ -eq $expectedShowMeArguments }).Count -ne 2) {
+        throw "show-me installer did not update twice with the exact targets: $($script:ManagedSkillCalls -join '; ')"
+    }
+    if ($script:ManagedSkillCalls.Count -ne 4) {
+        throw "Managed skill installer made unexpected calls: $($script:ManagedSkillCalls -join '; ')"
     }
 
-    $installedSkillFiles = @(
-        (Join-Path $env:CLAUDE_CONFIG_DIR "skills\simple-english\SKILL.md"),
-        (Join-Path $env:USERPROFILE ".agents\skills\simple-english\SKILL.md")
-    )
-    foreach ($skillFile in $installedSkillFiles) {
-        if (-not (Test-Path -LiteralPath $skillFile -PathType Leaf)) {
-            throw "Simple English validation missed $skillFile"
+    foreach ($skillName in @("simple-english", "show-me")) {
+        $installedSkillFiles = @(
+            (Join-Path $env:CLAUDE_CONFIG_DIR "skills\$skillName\SKILL.md"),
+            (Join-Path $env:USERPROFILE ".agents\skills\$skillName\SKILL.md")
+        )
+        foreach ($skillFile in $installedSkillFiles) {
+            if (-not (Test-Path -LiteralPath $skillFile -PathType Leaf)) {
+                throw "Managed skill validation missed $skillFile"
+            }
+        }
+        if (Test-Path -LiteralPath (Join-Path $env:CODEX_HOME "skills\$skillName")) {
+            throw "Managed skill installer used CODEX_HOME instead of the canonical shared path"
+        }
+        if (Test-Path -LiteralPath (Join-Path $env:PI_CODING_AGENT_DIR "skills\$skillName")) {
+            throw "Managed skill installer created a redundant direct Pi copy"
         }
     }
     if (-not (Test-Path -LiteralPath $siblingSkill -PathType Leaf)) {
-        throw "Simple English custom Pi sync removed a sibling skill"
+        throw "Managed skill setup removed a custom Pi sibling"
+    }
+
+    $canonicalShowMe = Join-Path $env:USERPROFILE ".agents\skills\show-me"
+    $defaultPiShowMe = Join-Path $env:USERPROFILE ".pi\agent\skills\show-me"
+    $customPiShowMe = Join-Path $env:PI_CODING_AGENT_DIR "skills\show-me"
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $defaultPiShowMe) | Out-Null
+    Copy-Item -LiteralPath $canonicalShowMe -Destination $defaultPiShowMe -Recurse
+    New-Item -ItemType Directory -Force -Path $customPiShowMe | Out-Null
+    Set-Content -LiteralPath (Join-Path $customPiShowMe "SKILL.md") -Value "user-modified"
+    if (-not (Set-PiSkillOwnership) -or -not (Set-PiSkillOwnership)) {
+        throw "Pi managed skill ownership setup failed"
+    }
+    if (Test-Path -LiteralPath $defaultPiShowMe) {
+        throw "Pi ownership left an identical direct show-me duplicate"
+    }
+    if ((Get-Content -LiteralPath (Join-Path $customPiShowMe "SKILL.md") -Raw).Trim() -ne "user-modified") {
+        throw "Pi ownership removed or changed a user-modified show-me copy"
     }
 
     function global:npx {
         $global:LASTEXITCODE = 1
         Write-Output "simulated install failure"
     }
-    if (Install-SimpleEnglishSkill) {
-        throw "Simple English installer failure was not propagated"
+    if (Install-ShowMeSkill) {
+        throw "show-me installer failure was not propagated"
+    }
+
+    $showMePaths = @((Join-Path $env:CLAUDE_CONFIG_DIR "skills\show-me"), $canonicalShowMe)
+    Remove-Item -LiteralPath $showMePaths -Recurse -Force
+    function global:npx { $global:LASTEXITCODE = 0 }
+    if (Install-ShowMeSkill) {
+        throw "show-me missing-artifact failure was not propagated"
+    }
+
+    $linkTarget = Join-Path $managedSkillTestRoot "show-me-link-target"
+    $claudeSkillsDir = Join-Path $env:CLAUDE_CONFIG_DIR "skills"
+    New-Item -ItemType Directory -Force -Path $linkTarget, $claudeSkillsDir, $canonicalShowMe | Out-Null
+    Set-Content -LiteralPath (Join-Path $linkTarget "SKILL.md") -Value "show-me"
+    Set-Content -LiteralPath (Join-Path $canonicalShowMe "SKILL.md") -Value "show-me"
+    $claudeShowMe = Join-Path $claudeSkillsDir "show-me"
+    try {
+        New-Item -ItemType SymbolicLink -Path $claudeShowMe -Target $linkTarget -ErrorAction Stop | Out-Null
+    }
+    catch {
+        New-Item -ItemType Junction -Path $claudeShowMe -Target $linkTarget -ErrorAction Stop | Out-Null
+    }
+    if (Install-ShowMeSkill) {
+        throw "show-me symlink validation failure was not propagated"
+    }
+
+    $script:ManagedSkillRuntimeNpxCalled = $false
+    function global:Enable-SkillsCliNodeRuntime { return $false }
+    function global:npx { $script:ManagedSkillRuntimeNpxCalled = $true; $global:LASTEXITCODE = 0 }
+    if ((Install-ShowMeSkill) -or $script:ManagedSkillRuntimeNpxCalled) {
+        throw "show-me runtime failure was not propagated before installer execution"
+    }
+
+    function global:Enable-SkillsCliNodeRuntime { return $true }
+    Remove-Item Function:\npx -ErrorAction SilentlyContinue
+    $managedSkillPath = $env:PATH
+    $env:PATH = Join-Path $managedSkillTestRoot "empty-path"
+    try {
+        if (Install-ShowMeSkill) {
+            throw "show-me accepted an unavailable skills installer"
+        }
+    }
+    finally {
+        $env:PATH = $managedSkillPath
     }
 }
 finally {
-    $env:USERPROFILE = $originalSimpleEnglishUserProfile
+    $env:USERPROFILE = $originalManagedSkillUserProfile
     $env:CLAUDE_CONFIG_DIR = $originalClaudeConfigDir
     $env:CODEX_HOME = $originalCodexHome
     $env:PI_CODING_AGENT_DIR = $originalPiCodingAgentDir
-    Remove-Item -Recurse -Force $simpleEnglishTestRoot -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $managedSkillTestRoot -ErrorAction SilentlyContinue
 }
 
 # Matt Pocock provisioning uses the canonical shared Codex/Pi path on all

@@ -1923,14 +1923,18 @@ ensure_skills_cli_node_runtime() {
     return 1
 }
 
-# Install/update Simple English for every supported AI coding harness.
-setup_simple_english_skill() {
+# Install/update one copied global skill for every supported AI coding harness.
+install_managed_agent_skill() {
+    local _repository=$1
+    local _skill_name=$2
+    local _display_name=$3
     local _install_output=""
+    local _skill_dir=""
     local _skill_file=""
-    # Codex and Gemini CLI both discover the skills CLI's shared user copy.
+    # Codex, Gemini CLI, and Pi discover the skills CLI's shared user copy.
     local -a _skill_files=(
-        "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/skills/simple-english/SKILL.md"
-        "${HOME}/.agents/skills/simple-english/SKILL.md"
+        "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/skills/${_skill_name}/SKILL.md"
+        "${HOME}/.agents/skills/${_skill_name}/SKILL.md"
     )
 
     if ! ensure_skills_cli_node_runtime; then
@@ -1938,33 +1942,48 @@ setup_simple_english_skill() {
     fi
 
     if ! command -v npx &> /dev/null; then
-        print_warning "npx is not available; cannot install the Simple English skill."
+        print_warning "npx is not available; cannot install the ${_display_name} skill."
         return 1
     fi
 
-    print_message "Installing/updating Simple English across AI harnesses..."
-    if ! _install_output=$(npx --yes skills@latest add AminBlg/SimpleEnglish \
+    print_message "Installing/updating ${_display_name} across AI harnesses..."
+    if ! _install_output=$(npx --yes skills@latest add "${_repository}" \
         --global \
         --agent claude-code \
         --agent codex \
         --agent gemini-cli \
-        --skill simple-english \
+        --skill "${_skill_name}" \
         --copy \
         --yes < /dev/null 2>&1); then
-        print_warning "Failed to install/update the Simple English skill."
+        print_warning "Failed to install/update the ${_display_name} skill."
         print_debug "${_install_output}"
         return 1
     fi
 
     for _skill_file in "${_skill_files[@]}"; do
+        _skill_dir=${_skill_file%/SKILL.md}
+        if [[ -L "${_skill_dir}" || -L "${_skill_file}" ]]; then
+            print_warning "${_display_name} validation failed: copied artifact is a symlink at ${_skill_file}."
+            return 1
+        fi
         if [[ ! -f "${_skill_file}" ]]; then
-            print_warning "Simple English validation failed: missing ${_skill_file}."
+            print_warning "${_display_name} validation failed: missing ${_skill_file}."
             return 1
         fi
     done
 
-    print_success "Simple English installed/updated for Claude Code, Codex, Gemini CLI, and Pi through the shared skill path."
+    print_success "${_display_name} installed/updated for Claude Code, Codex, Gemini CLI, and Pi through the shared skill path."
     print_debug "${_install_output}"
+}
+
+# Preserve the named Simple English setup interface.
+setup_simple_english_skill() {
+    install_managed_agent_skill "AminBlg/SimpleEnglish" "simple-english" "Simple English"
+}
+
+# Install/update HumanLayer show-me for every supported AI coding harness.
+setup_show_me_skill() {
+    install_managed_agent_skill "humanlayer/skills" "show-me" "show-me"
 }
 
 # Remove setup-managed Impeccable resources without affecting sibling agent tooling.
@@ -2852,7 +2871,7 @@ configure_pi_skill_ownership() {
         "!${_canonical_dir}/autoresearch-hooks/**"
     )
     local -a _shared_skills=(
-        simple-english setup-matt-pocock-skills diagnosing-bugs tdd
+        simple-english show-me setup-matt-pocock-skills diagnosing-bugs tdd
         improve-codebase-architecture grill-with-docs grilling domain-modeling codebase-design
     )
     local -a _managed_exclusions=("${_shared_exclusions[@]}")
@@ -4237,7 +4256,7 @@ run_setup_tasks() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 177 | Last changed: Remove retired Attention-kind guidance${NC}"
+    echo -e "${GRAY}Version 178 | Last changed: Manage show-me agent skill${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -4363,6 +4382,9 @@ run_setup_tasks() {
     fi
 
     if ! setup_simple_english_skill; then
+        _setup_had_errors=1
+    fi
+    if ! setup_show_me_skill; then
         _setup_had_errors=1
     fi
     if ! configure_pi_skill_ownership; then
