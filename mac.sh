@@ -4520,11 +4520,12 @@ setup_pi_claude_bridge() {
     fi
 }
 
-# Remove legacy Pi Ask User and install/update the Pi web access package
+# Remove legacy Pi Ask User and install/update the Pi companion packages
 setup_pi_companion_packages() {
     local _legacy_package="npm:pi-ask-user"
     local -a _packages=(
         "npm:pi-web-access"
+        "npm:pi-prose"
     )
     local _package=""
     local _output=""
@@ -4566,6 +4567,39 @@ setup_pi_companion_packages() {
             print_warning "Failed to install Pi package ${_package}: ${_output}"
         fi
     done
+}
+
+# Seed pi-prose for new sessions without replacing an existing user choice.
+seed_pi_prose_default() {
+    local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _config_dir="${_agent_dir}/prose"
+    local _config_file="${_config_dir}/config.json"
+
+    if [[ -e "${_config_file}" || -L "${_config_file}" ]]; then
+        if [[ ! -f "${_config_file}" ]]; then
+            print_warning "Existing pi-prose config at ${_config_file} is not a regular file; leaving it unchanged."
+        elif ! command -v jq &> /dev/null; then
+            print_debug "Pi prose config already exists at ${_config_file}; leaving it unchanged."
+        elif jq -e 'type == "object" and ((has("default") | not) or (.default | type == "string"))' "${_config_file}" > /dev/null 2>&1; then
+            print_debug "Pi prose default is already configured at ${_config_file}; leaving it unchanged."
+        else
+            print_warning "Existing pi-prose config at ${_config_file} is malformed; leaving it unchanged."
+        fi
+        return 0
+    fi
+
+    if ! mkdir -p "${_config_dir}"; then
+        print_warning "Failed to create the pi-prose config directory at ${_config_dir}."
+        return 1
+    fi
+
+    if printf '{\n  "default": "matter-of-fact"\n}\n' > "${_config_file}"; then
+        print_success "Pi prose default seeded as matter-of-fact for new sessions."
+        return 0
+    fi
+
+    print_warning "Failed to seed the pi-prose default at ${_config_file}."
+    return 1
 }
 
 # Keep shared skills canonical for Pi and suppress stale direct/package collisions.
@@ -5672,7 +5706,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 211 | Last changed: Manage show-me agent skill${NC}"
+    echo -e "${GRAY}Version 212 | Last changed: Install pi-prose with matter-of-fact default${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5863,6 +5897,7 @@ HELPER_EOF
         setup_pi_mcp_adapter
         setup_pi_claude_bridge
         setup_pi_companion_packages
+        seed_pi_prose_default
         setup_pi_goal_autoresearch
     else
         remove_pi_subagents

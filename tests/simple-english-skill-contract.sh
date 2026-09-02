@@ -7,13 +7,13 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=211
-    [ubuntu.sh]=234
-    [wsl.sh]=178
-    [pi.sh]=193
-    [bazzite.sh]=93
+    [mac.sh]=212
+    [ubuntu.sh]=235
+    [wsl.sh]=179
+    [pi.sh]=194
+    [bazzite.sh]=94
 )
-expected_banner='Manage show-me agent skill'
+expected_banner='Install pi-prose with matter-of-fact default'
 
 fail() {
     printf '✗ %s\n' "$1" >&2
@@ -173,7 +173,7 @@ assert_powershell_function_contains win.ps1 Install-ShowMeSkill 'humanlayer/skil
 assert_powershell_function_contains win.ps1 Set-PiSkillOwnership '"simple-english", "show-me"' 'show-me canonical shared ownership'
 assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal Simple English failure propagation'
 assert_contains win.ps1 'Required show-me skill setup failed' 'PowerShell fatal show-me failure propagation'
-assert_contains win.ps1 'Version 131 \| Last changed: Manage show-me agent skill' 'PowerShell version banner'
+assert_contains win.ps1 'Version 132 \| Last changed: Install pi-prose with matter-of-fact default' 'PowerShell version banner'
 assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+if \(-not \(Install-ShowMeSkill\)\) \{$' 'PowerShell Simple English before show-me'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-ShowMeSkill\)\) \{$' '^[[:space:]]+if \(-not \(Set-PiSkillOwnership\)\) \{$' 'PowerShell show-me before Pi ownership'

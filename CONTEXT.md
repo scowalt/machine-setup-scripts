@@ -20,6 +20,10 @@ _Avoid_: Gitea CLI, Gitea server command
 A development tool whose installation, configuration, update, and removal are controlled by the setup scripts.
 _Avoid_: Provisioned tool, setup tool
 
+**Pi output style**:
+A named preference for how Pi writes responses. A user default starts new sessions unless a session, command-line, or project choice overrides it.
+_Avoid_: Prose mode, writing preset
+
 **Managed agent skill**:
 An agent skill whose upstream identity and managed footprint are part of the desired machine state. User-created and project-scoped skills are outside this category.
 _Avoid_: Setup-managed skill, bundled skill

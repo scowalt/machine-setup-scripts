@@ -3063,11 +3063,12 @@ function Setup-PiClaudeBridge {
     }
 }
 
-# Function to remove legacy Pi Ask User and install/update the Pi web access package
+# Function to remove legacy Pi Ask User and install/update the Pi companion packages
 function Setup-PiCompanionPackages {
     $legacyPackage = "npm:pi-ask-user"
     $packages = @(
-        "npm:pi-web-access"
+        "npm:pi-web-access",
+        "npm:pi-prose"
     )
 
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
@@ -3117,6 +3118,52 @@ function Setup-PiCompanionPackages {
         else {
             Write-Warning "Failed to install Pi package ${package}: $output"
         }
+    }
+}
+
+# Seed pi-prose for new sessions without replacing an existing user choice.
+function Initialize-PiProseDefault {
+    $agentDir = if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { Join-Path $env:USERPROFILE ".pi\agent" }
+    $configDir = Join-Path $agentDir "prose"
+    $configPath = Join-Path $configDir "config.json"
+    $item = Get-Item -LiteralPath $configPath -Force -ErrorAction SilentlyContinue
+
+    if ($null -ne $item) {
+        $validConfig = $false
+        if (-not $item.PSIsContainer) {
+            try {
+                $config = [System.IO.File]::ReadAllText($configPath) | ConvertFrom-Json -ErrorAction Stop
+                $validConfig = $null -ne $config -and $config -is [PSCustomObject]
+                $defaultProperty = if ($validConfig) { $config.PSObject.Properties["default"] } else { $null }
+                if ($null -ne $defaultProperty -and $defaultProperty.Value -isnot [string]) {
+                    $validConfig = $false
+                }
+            }
+            catch {
+                $validConfig = $false
+            }
+        }
+
+        if ($validConfig) {
+            Write-Debug "Pi prose default is already configured at $configPath; leaving it unchanged."
+        }
+        elseif ($item.PSIsContainer) {
+            Write-Warning "Existing pi-prose config at $configPath is not a regular file; leaving it unchanged."
+        }
+        else {
+            Write-Warning "Existing pi-prose config at $configPath is malformed; leaving it unchanged."
+        }
+        return
+    }
+
+    try {
+        New-Item -ItemType Directory -Force -Path $configDir -ErrorAction Stop | Out-Null
+        $json = "{`n  `"default`": `"matter-of-fact`"`n}`n"
+        [System.IO.File]::WriteAllText($configPath, $json, [System.Text.UTF8Encoding]::new($false))
+        Write-Success "Pi prose default seeded as matter-of-fact for new sessions."
+    }
+    catch {
+        Write-Warning "Failed to seed the pi-prose default at ${configPath}: $($_.Exception.Message)"
     }
 }
 
@@ -4056,7 +4103,7 @@ function Invoke-WindowsSetupTasks {
     $showMeSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 131 | Last changed: Manage show-me agent skill" -ForegroundColor DarkGray
+    Write-Host "Version 132 | Last changed: Install pi-prose with matter-of-fact default" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -4106,6 +4153,7 @@ function Invoke-WindowsSetupTasks {
         Setup-PiMcpAdapter
         Setup-PiClaudeBridge
         Setup-PiCompanionPackages
+        Initialize-PiProseDefault
         Setup-PiGoalAutoresearch
     }
     else {
