@@ -296,7 +296,7 @@ done
 # User-facing setup metadata and authentication handoff stay consistent across
 # platforms.
 for file in "${bash_setup_scripts[@]}" win.ps1; do
-    assert_contains "${file}" 'Last changed: Install pi-prose with matter-of-fact default' 'current version banner'
+    assert_contains "${file}" 'Version [0-9]+ \| Last changed: .+' 'current version banner'
 done
 assert_contains README.md 'WORK_MACHINE=1.*Tea' 'work-machine Tea management documentation'
 # shellcheck disable=SC2016 # Match the literal command in Markdown.

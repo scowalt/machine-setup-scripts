@@ -3244,6 +3244,7 @@ install_pi_cli() {
 # Managed marker used to distinguish setup-owned Paseo service artifacts from user-managed ones.
 PASEO_MANAGED_MARKER="Managed by scowalt machine setup: headless-paseo-daemon"
 PASEO_PACKAGE="@getpaseo/cli"
+PASEO_LISTEN_TARGET="127.0.0.1:6767"
 PASEO_LAUNCHD_LABEL="com.scowalt.paseo-daemon"
 PASEO_VALIDATED_CMD=""
 PASEO_VALIDATED_NODE=""
@@ -3729,6 +3730,7 @@ write_paseo_daemon_wrapper() {
     local _path_q=""
     local _cmd_q=""
     local _node_q=""
+    local _listen_q=""
     local _service_path=""
 
     if [[ -z "${PASEO_VALIDATED_CMD}" ]]; then
@@ -3745,6 +3747,7 @@ write_paseo_daemon_wrapper() {
     _path_q=$(paseo_shell_quote "${_service_path}")
     _cmd_q=$(paseo_shell_quote "${PASEO_VALIDATED_CMD}")
     _node_q=$(paseo_shell_quote "${PASEO_VALIDATED_NODE}")
+    _listen_q=$(paseo_shell_quote "${PASEO_LISTEN_TARGET}")
     _tmp=$(mktemp)
     if ! cat > "${_tmp}" << EOF
 #!/bin/bash
@@ -3754,7 +3757,7 @@ export HOME=${_home_q}
 export PATH=${_path_q}
 [[ -x ${_node_q} ]] || exit 127
 [[ -x ${_cmd_q} ]] || exit 127
-exec ${_cmd_q} daemon start --foreground
+exec ${_cmd_q} daemon start --foreground --listen ${_listen_q}
 EOF
     then
         rm -f "${_tmp}"
@@ -3982,6 +3985,8 @@ paseo_listener_audit() {
     local _pid="$1"
     local _pid_list=""
     local _listener_pid=""
+    local _listener_rows=""
+    local _listener_owner_pids=""
     local _bad_listener=""
     local _addr=""
     local _listeners=""
@@ -4002,8 +4007,7 @@ paseo_listener_audit() {
             print_error "Failed to inspect Paseo listeners with ss."
             return 1
         fi
-        if ! _listeners=$(printf '%s
-' "${_listener_source}" | awk -v pids="${_pid_list}" '
+        if ! _listener_rows=$(printf '%s\n' "${_listener_source}" | awk -v pids="${_pid_list}" '
             BEGIN {
                 split(pids, pid_values, /[[:space:]]+/)
                 for (i in pid_values) {
@@ -4015,8 +4019,7 @@ paseo_listener_audit() {
             {
                 for (pid in wanted) {
                     if ($0 ~ "pid=" pid ",") {
-                        print $4
-                        next
+                        print pid, $4
                     }
                 }
             }
@@ -4031,8 +4034,7 @@ paseo_listener_audit() {
                 lsof -nP -a -p "${_listener_pid}" -iTCP -sTCP:LISTEN 2>/dev/null || true
             done <<< "${_pid_list}"
         )
-        if ! _listeners=$(printf '%s
-' "${_listener_source}" | awk '$1 != "COMMAND" && $9 != "" {print $9}'); then
+        if ! _listener_rows=$(printf '%s\n' "${_listener_source}" | awk '$1 != "COMMAND" && $2 ~ /^[0-9]+$/ && $9 != "" {print $2, $9}'); then
             print_error "Failed to parse Paseo listeners from lsof output."
             return 1
         fi
@@ -4041,10 +4043,25 @@ paseo_listener_audit() {
         return 1
     fi
 
-    if [[ -z "${_listeners}" ]]; then
-        print_error "No TCP listeners could be associated with the managed Paseo service process tree; refusing to let another daemon satisfy health checks."
+    # Paseo-launched agents remain in the service process tree and may open their
+    # own listeners. Audit only the process that owns Paseo's managed endpoint.
+    _listener_owner_pids=$(printf '%s\n' "${_listener_rows}" | awk -v target="${PASEO_LISTEN_TARGET}" '$2 == target && !seen[$1]++ {print $1}' || true)
+    if [[ -z "${_listener_owner_pids}" ]]; then
+        print_error "The managed Paseo service does not own its expected loopback listener (${PASEO_LISTEN_TARGET}); refusing to let another daemon satisfy health checks."
         return 1
     fi
+
+    _listeners=$(printf '%s\n' "${_listener_rows}" | awk -v pids="${_listener_owner_pids}" '
+        BEGIN {
+            split(pids, pid_values, /[[:space:]]+/)
+            for (i in pid_values) {
+                if (pid_values[i] ~ /^[0-9]+$/) {
+                    wanted[pid_values[i]] = 1
+                }
+            }
+        }
+        $1 in wanted {print $2}
+    ' || true)
 
     while IFS= read -r _addr; do
         [[ -n "${_addr}" ]] || continue
@@ -5706,7 +5723,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 212 | Last changed: Install pi-prose with matter-of-fact default${NC}"
+    echo -e "${GRAY}Version 213 | Last changed: Ignore agent listeners in Paseo audit${NC}"
 
     if ! acquire_setup_lock; then
         return 1

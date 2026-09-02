@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Dynamic source-based harnesses intentionally override functions and globals.
-# shellcheck disable=SC1090,SC1091,SC2034,SC2154,SC2312,SC2317
+# shellcheck disable=SC1090,SC1091,SC2030,SC2031,SC2034,SC2154,SC2312,SC2317
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -90,6 +90,84 @@ EOF
         pid_tree=$(paseo_service_process_pids 100 | paste -sd, -)
         [[ "${pid_tree}" == "100,101,102" ]] || fail "ubuntu.sh: listener audit process tree was ${pid_tree}, expected 100,101,102"
         paseo_listener_audit 100 >/dev/null
+    )
+}
+
+assert_spawned_agent_listener_is_ignored() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+
+    cat > "${tmp_dir}/ps" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == "-eo pid=,ppid=" ]]; then
+    cat <<'ROWS'
+100 1
+101 100
+102 101
+103 102
+ROWS
+    exit 0
+fi
+exit 1
+EOF
+
+    cat > "${tmp_dir}/ss" <<'EOF'
+#!/usr/bin/env bash
+cat <<'ROWS'
+LISTEN 0 511 127.0.0.1:6767 0.0.0.0:* users:(("Paseo Daemon",pid=102,fd=23))
+LISTEN 0 511 0.0.0.0:4026 0.0.0.0:* users:(("agent server",pid=103,fd=24))
+ROWS
+EOF
+
+    chmod 700 "${tmp_dir}/ps" "${tmp_dir}/ss"
+
+    (
+        PATH="${tmp_dir}:${PATH}"
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        paseo_listener_audit 100 >/dev/null
+    )
+}
+
+assert_daemon_secondary_nonloopback_listener_is_rejected() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+
+    cat > "${tmp_dir}/ps" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == "-eo pid=,ppid=" ]]; then
+    cat <<'ROWS'
+100 1
+101 100
+102 101
+ROWS
+    exit 0
+fi
+exit 1
+EOF
+
+    cat > "${tmp_dir}/ss" <<'EOF'
+#!/usr/bin/env bash
+cat <<'ROWS'
+LISTEN 0 511 127.0.0.1:6767 0.0.0.0:* users:(("Paseo Daemon",pid=102,fd=23))
+LISTEN 0 511 0.0.0.0:4026 0.0.0.0:* users:(("Paseo Daemon",pid=102,fd=24))
+ROWS
+EOF
+
+    chmod 700 "${tmp_dir}/ps" "${tmp_dir}/ss"
+
+    (
+        PATH="${tmp_dir}:${PATH}"
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        print_error() { :; }
+        if paseo_listener_audit 100 >/dev/null; then
+            fail "ubuntu.sh: accepted a non-loopback listener owned by the Paseo daemon process"
+        fi
     )
 }
 
@@ -609,7 +687,8 @@ done
 for file in "${supported_bash[@]}"; do
     assert_contains "${file}" 'PASEO_MANAGED_MARKER="Managed by scowalt machine setup: headless-paseo-daemon"' 'managed artifact marker'
     assert_contains "${file}" 'PASEO_PACKAGE="@getpaseo/cli"' 'scoped Paseo package'
-    assert_contains "${file}" 'daemon start --foreground' 'foreground daemon supervision command'
+    assert_contains "${file}" 'PASEO_LISTEN_TARGET="127\.0\.0\.1:6767"' 'managed loopback daemon listener target'
+    assert_contains "${file}" 'daemon start --foreground --listen' 'foreground daemon supervision command with explicit listener'
     assert_contains "${file}" 'daemon status --json' 'JSON health check'
     assert_contains "${file}" 'setup_headless_paseo_daemon \|\| return 1' 'fail-fast main wiring'
     assert_contains "${file}" '\$\{HEADLESS:-\}" != "1"' 'exact HEADLESS=1 no-op guard'
@@ -723,6 +802,8 @@ assert_contains README.md 'WSL.*native Windows fail early' 'README unsupported W
 assert_contains README.md 'does not run or print pairing material' 'README no-pairing contract'
 
 assert_child_listener_audit
+assert_spawned_agent_listener_is_ignored
+assert_daemon_secondary_nonloopback_listener_is_rejected
 assert_lingering_sudo_gate
 assert_systemctl_user_environment
 assert_bun_global_paseo_identity_check

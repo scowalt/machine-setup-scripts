@@ -7,13 +7,19 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=212
-    [ubuntu.sh]=235
+    [mac.sh]=213
+    [ubuntu.sh]=236
     [wsl.sh]=179
-    [pi.sh]=194
-    [bazzite.sh]=94
+    [pi.sh]=195
+    [bazzite.sh]=95
 )
-expected_banner='Install pi-prose with matter-of-fact default'
+declare -A expected_banners=(
+    [mac.sh]='Ignore agent listeners in Paseo audit'
+    [ubuntu.sh]='Ignore agent listeners in Paseo audit'
+    [wsl.sh]='Install pi-prose with matter-of-fact default'
+    [pi.sh]='Ignore agent listeners in Paseo audit'
+    [bazzite.sh]='Ignore agent listeners in Paseo audit'
+)
 
 fail() {
     printf '✗ %s\n' "$1" >&2
@@ -145,7 +151,7 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_order "${file}" '^[[:space:]]+(if ! )?setup_show_me_skill' '^[[:space:]]+(if ! )?configure_pi_skill_ownership' 'show-me validation before Pi ownership'
     assert_order "${file}" '^[[:space:]]+(if ! )?setup_show_me_skill' '^[[:space:]]+remove_impeccable_resources$' 'show-me validation before cleanup'
     assert_function_contains "${file}" configure_pi_skill_ownership 'simple-english show-me setup-matt-pocock-skills' 'show-me canonical shared ownership'
-    assert_contains "${file}" "Version ${expected_versions[${file}]} \\| Last changed: ${expected_banner}" 'updated version banner'
+    assert_contains "${file}" "Version ${expected_versions[${file}]} \\| Last changed: ${expected_banners[${file}]}" 'updated version banner'
 done
 
 assert_contains win.ps1 '^function Test-SkillsCliNodeRuntimeReady' 'PowerShell Node.js runtime check'
