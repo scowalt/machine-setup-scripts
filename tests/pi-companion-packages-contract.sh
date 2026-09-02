@@ -75,8 +75,13 @@ MOCK_PI
         fail "${file}: legacy Pi Ask User package remains installed"
     fi
 
-    count=$(grep -Fxc -- 'npm:pi-web-access' "${package_state}" || true)
-    [[ "${count}" -eq 1 ]] || fail "${file}: expected one installed entry for npm:pi-web-access, found ${count}"
+    for package in 'npm:pi-web-access' 'npm:pi-prose'; do
+        count=$(grep -Fxc -- "${package}" "${package_state}" || true)
+        [[ "${count}" -eq 1 ]] || fail "${file}: expected one installed entry for ${package}, found ${count}"
+
+        install_count=$(grep -Fxc -- "install ${package}" "${command_log}" || true)
+        [[ "${install_count}" -eq 2 ]] || fail "${file}: expected ${package} to update on both setup runs, found ${install_count} installs"
+    done
 
     # Regression guard: the retired RPIV packages must never be installed.
     for package in \
