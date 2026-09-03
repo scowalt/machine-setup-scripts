@@ -3121,7 +3121,8 @@ install_pi_cli() {
 # Managed marker used to distinguish setup-owned Paseo service artifacts from user-managed ones.
 PASEO_MANAGED_MARKER="Managed by scowalt machine setup: headless-paseo-daemon"
 PASEO_PACKAGE="@getpaseo/cli"
-PASEO_LISTEN_TARGET="127.0.0.1:6767"
+PASEO_DEFAULT_LISTEN_TARGET="127.0.0.1:6767"
+PASEO_LISTEN_TARGET=""
 PASEO_SERVICE_NAME="paseo.service"
 PASEO_VALIDATED_CMD=""
 PASEO_VALIDATED_NODE=""
@@ -3613,6 +3614,7 @@ write_paseo_daemon_wrapper() {
         print_error "Cannot write Paseo daemon wrapper before validating the paseo command."
         return 1
     fi
+    paseo_resolve_listen_target || return 1
 
     PASEO_DAEMON_WRAPPER_CHANGED=0
     mkdir -p "${HOME}/.local/bin" "${_log_dir}"
@@ -3756,6 +3758,40 @@ paseo_json_string_field() {
     local _field="$2"
 
     printf '%s\n' "${_json}" | sed -n "s/.*\"${_field}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n 1 || true
+}
+
+paseo_resolve_listen_target() {
+    local _config_file="${HOME}/.paseo/config.json"
+    local _configured_target="${PASEO_DEFAULT_LISTEN_TARGET}"
+    local _target=""
+    local _host=""
+    local _port=""
+
+    if [[ -n "${PASEO_LISTEN_TARGET}" ]]; then
+        return 0
+    fi
+
+    if [[ -f "${_config_file}" ]]; then
+        if ! command -v jq &> /dev/null; then
+            print_error "jq is required to read Paseo daemon.listen for HEADLESS=1."
+            return 1
+        fi
+        if ! _configured_target=$(jq -er --arg default "${PASEO_DEFAULT_LISTEN_TARGET}" '(.daemon.listen // $default) | if type == "string" then . else error("daemon.listen must be a string") end' "${_config_file}" 2>/dev/null); then
+            print_error "Failed to read daemon.listen from ${_config_file}."
+            return 1
+        fi
+    fi
+
+    _target=$(paseo_sanitize_status_value "${_configured_target}")
+    _host=${_target%:*}
+    _port=${_target##*:}
+    if [[ "${_configured_target}" != "${_target}" || "${_host}" != "127.0.0.1" || ! "${_port}" =~ ^[0-9]+$ ]] || (( 10#${_port} < 1 || 10#${_port} > 65535 )); then
+        print_error "Paseo daemon.listen must use 127.0.0.1 and a port for HEADLESS=1; found ${_target:-unknown}."
+        return 1
+    fi
+
+    PASEO_LISTEN_TARGET="${_target}"
+    print_debug "Paseo managed listener resolved from configuration: ${PASEO_LISTEN_TARGET}"
 }
 
 paseo_status_relay_disabled() {
@@ -4001,6 +4037,41 @@ paseo_listener_audit() {
     fi
 
     print_debug "Paseo listener audit passed."
+}
+
+paseo_listener_target_available() {
+    local _managed_pid="${1:-}"
+    local _listener_source=""
+    local _occupied=""
+
+    if [[ -z "${PASEO_LISTEN_TARGET}" ]]; then
+        print_error "Paseo listener target is unavailable before service start."
+        return 1
+    fi
+
+    if command -v ss &> /dev/null; then
+        if ! _listener_source=$(ss -H -ltn 2>/dev/null); then
+            print_error "Failed to inspect the configured Paseo listener before service start."
+            return 1
+        fi
+        _occupied=$(printf '%s\n' "${_listener_source}" | awk -v target="${PASEO_LISTEN_TARGET}" '$4 == target {print; exit}' || true)
+    elif command -v lsof &> /dev/null; then
+        _listener_source=$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null || true)
+        _occupied=$(printf '%s\n' "${_listener_source}" | awk -v target="${PASEO_LISTEN_TARGET}" '$1 != "COMMAND" && $9 == target {print; exit}' || true)
+    else
+        print_error "No listener-audit tool found (ss/lsof); cannot check the configured Paseo listener before service start."
+        return 1
+    fi
+
+    if [[ -z "${_occupied}" ]]; then
+        return 0
+    fi
+    if [[ -n "${_managed_pid}" && "${_managed_pid}" != "0" ]] && paseo_listener_audit "${_managed_pid}" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    print_error "Paseo listener target ${PASEO_LISTEN_TARGET} is already in use by another process. Set daemon.listen to an unused IPv4 loopback port and rerun setup."
+    return 1
 }
 
 paseo_service_owner_check() {
@@ -4312,8 +4383,11 @@ setup_headless_paseo_daemon() {
     paseo_existing_managed_service_check || return 1
 
     install_paseo_cli || return 1
-    write_paseo_daemon_wrapper || return 1
+    paseo_resolve_listen_target || return 1
     stop_existing_paseo_daemon || return 1
+    _service_pid=$(paseo_linux_service_pid || true)
+    paseo_listener_target_available "${_service_pid}" || return 1
+    write_paseo_daemon_wrapper || return 1
 
     if ! install_paseo_systemd_user_service; then
         cleanup_paseo_managed_service "${_platform}"
@@ -5492,7 +5566,7 @@ for deployment in data.get("deployments", []):
 
 run_setup_tasks() {
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 95 | Last changed: Ignore agent listeners in Paseo audit"
+    echo -e "${GRAY}Version 96 | Last changed: Honor configured Paseo listener ports"
 
     if ! acquire_setup_lock; then
         return 1
