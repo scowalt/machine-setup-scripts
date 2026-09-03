@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Dynamic source-based harnesses intentionally override functions and globals.
-# shellcheck disable=SC1090,SC1091,SC2030,SC2031,SC2034,SC2154,SC2312,SC2317
+# shellcheck disable=SC1090,SC1091,SC2030,SC2031,SC2034,SC2154,SC2310,SC2312,SC2317
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -87,6 +87,7 @@ EOF
         PATH="${tmp_dir}:${PATH}"
         # shellcheck source=../ubuntu.sh
         source ./ubuntu.sh
+        PASEO_LISTEN_TARGET=127.0.0.1:6767
         pid_tree=$(paseo_service_process_pids 100 | paste -sd, -)
         [[ "${pid_tree}" == "100,101,102" ]] || fail "ubuntu.sh: listener audit process tree was ${pid_tree}, expected 100,101,102"
         paseo_listener_audit 100 >/dev/null
@@ -127,6 +128,7 @@ EOF
         PATH="${tmp_dir}:${PATH}"
         # shellcheck source=../ubuntu.sh
         source ./ubuntu.sh
+        PASEO_LISTEN_TARGET=127.0.0.1:6767
         paseo_listener_audit 100 >/dev/null
     )
 }
@@ -164,6 +166,7 @@ EOF
         PATH="${tmp_dir}:${PATH}"
         # shellcheck source=../ubuntu.sh
         source ./ubuntu.sh
+        PASEO_LISTEN_TARGET=127.0.0.1:6767
         print_error() { :; }
         if paseo_listener_audit 100 >/dev/null; then
             fail "ubuntu.sh: accepted a non-loopback listener owned by the Paseo daemon process"
@@ -327,6 +330,100 @@ assert_untrusted_optional_service_path_is_filtered() {
             "${tmp_dir}/trusted-bin:${tmp_dir}/other-user-brew-bin" 2>/dev/null)
         [[ "${filtered_path}" == "${tmp_dir}/trusted-bin" ]] || \
             fail "ubuntu.sh: did not filter an optional service PATH component owned by another user"
+    )
+}
+
+assert_configured_paseo_listener_is_preserved() {
+    local tmp_dir
+    local wrapper
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+    mkdir -p "${tmp_dir}/home/.paseo" "${tmp_dir}/bin"
+
+    printf '%s\n' '{"daemon":{"listen":"127.0.0.1:6768"}}' > "${tmp_dir}/home/.paseo/config.json"
+    cat > "${tmp_dir}/bin/paseo" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == "daemon status --json" ]]; then
+    printf '%s\n' '{"localDaemon":"running","connectedDaemon":"reachable","listen":"127.0.0.1:6767"}'
+    exit 0
+fi
+exit 1
+EOF
+    chmod 700 "${tmp_dir}/bin/paseo"
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        HOME="${tmp_dir}/home"
+        PASEO_VALIDATED_CMD="${tmp_dir}/bin/paseo"
+        PASEO_VALIDATED_NODE=/bin/bash
+        PASEO_SERVICE_PATH="${tmp_dir}/bin:/usr/bin:/bin"
+        PASEO_LISTEN_TARGET=""
+
+        write_paseo_daemon_wrapper >/dev/null
+        wrapper="${HOME}/.local/bin/paseo-daemon-start"
+        grep -qF "daemon start --foreground --listen '127.0.0.1:6768'" "${wrapper}" || \
+            fail 'ubuntu.sh: generated wrapper did not preserve daemon.listen from Paseo configuration'
+        if grep -qF -- "--listen '127.0.0.1:6767'" "${wrapper}"; then
+            fail 'ubuntu.sh: generated wrapper replaced the configured Paseo listener with the default port'
+        fi
+    )
+}
+
+assert_occupied_configured_listener_is_rejected_before_service_start() {
+    local tmp_dir
+
+    tmp_dir=$(mktemp -d)
+    trap 'rm -rf "${tmp_dir}"' RETURN
+    mkdir -p "${tmp_dir}/home/.paseo" "${tmp_dir}/bin"
+
+    printf '%s\n' '{"daemon":{"listen":"127.0.0.1:6768"}}' > "${tmp_dir}/home/.paseo/config.json"
+    cat > "${tmp_dir}/bin/paseo" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == "daemon status --json" ]]; then
+    printf '%s\n' '{"localDaemon":"stopped","connectedDaemon":"unreachable","listen":"127.0.0.1:6768"}'
+    exit 0
+fi
+exit 1
+EOF
+    cat > "${tmp_dir}/bin/ss" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'LISTEN 0 511 127.0.0.1:6768 0.0.0.0:*'
+EOF
+    chmod 700 "${tmp_dir}/bin/paseo" "${tmp_dir}/bin/ss"
+
+    (
+        # shellcheck source=../ubuntu.sh
+        source ./ubuntu.sh
+        HOME="${tmp_dir}/home"
+        PATH="${tmp_dir}/bin:${PATH}"
+        HEADLESS=1
+
+        uname() { printf 'Linux\n'; }
+        paseo_native_linux_preflight() { return 0; }
+        paseo_existing_managed_service_check() { return 0; }
+        install_paseo_cli() {
+            PASEO_VALIDATED_CMD="${tmp_dir}/bin/paseo"
+            PASEO_VALIDATED_NODE=/bin/bash
+            PASEO_SERVICE_PATH="${tmp_dir}/bin:/usr/bin:/bin"
+        }
+        stop_existing_paseo_daemon() { return 0; }
+        install_paseo_systemd_user_service() { touch "${tmp_dir}/service-started"; }
+        paseo_linux_service_pid() { return 0; }
+        paseo_service_owner_check() { return 0; }
+        wait_for_paseo_health() { return 0; }
+        paseo_listener_audit() { return 0; }
+        cleanup_paseo_managed_service() { return 0; }
+        print_error() { :; }
+
+        if setup_headless_paseo_daemon; then
+            fail 'ubuntu.sh: accepted an occupied configured Paseo listener target'
+        fi
+        [[ ! -e "${tmp_dir}/service-started" ]] || \
+            fail 'ubuntu.sh: started the managed service before rejecting its occupied listener target'
+        [[ ! -e "${HOME}/.local/bin/paseo-daemon-start" ]] || \
+            fail 'ubuntu.sh: replaced the managed wrapper before rejecting its occupied listener target'
     )
 }
 
@@ -687,8 +784,13 @@ done
 for file in "${supported_bash[@]}"; do
     assert_contains "${file}" 'PASEO_MANAGED_MARKER="Managed by scowalt machine setup: headless-paseo-daemon"' 'managed artifact marker'
     assert_contains "${file}" 'PASEO_PACKAGE="@getpaseo/cli"' 'scoped Paseo package'
-    assert_contains "${file}" 'PASEO_LISTEN_TARGET="127\.0\.0\.1:6767"' 'managed loopback daemon listener target'
+    assert_contains "${file}" 'PASEO_DEFAULT_LISTEN_TARGET="127\.0\.0\.1:6767"' 'default loopback daemon listener target'
+    assert_contains "${file}" 'PASEO_LISTEN_TARGET=""' 'runtime-resolved managed listener target'
+    assert_contains "${file}" 'paseo_resolve_listen_target' 'configured listener resolution'
+    assert_contains "${file}" 'paseo_listener_target_available' 'pre-start listener collision check'
     assert_contains "${file}" 'daemon start --foreground --listen' 'foreground daemon supervision command with explicit listener'
+    # shellcheck disable=SC2016 # Match the literal variable reference in each setup script.
+    assert_order "${file}" 'paseo_listener_target_available "${_service_pid}" || return 1' 'write_paseo_daemon_wrapper || return 1' 'listener collision check before wrapper replacement'
     assert_contains "${file}" 'daemon status --json' 'JSON health check'
     assert_contains "${file}" 'setup_headless_paseo_daemon \|\| return 1' 'fail-fast main wiring'
     assert_contains "${file}" '\$\{HEADLESS:-\}" != "1"' 'exact HEADLESS=1 no-op guard'
@@ -808,6 +910,8 @@ assert_lingering_sudo_gate
 assert_systemctl_user_environment
 assert_bun_global_paseo_identity_check
 assert_untrusted_optional_service_path_is_filtered
+assert_configured_paseo_listener_is_preserved
+assert_occupied_configured_listener_is_rejected_before_service_start
 assert_managed_daemon_is_preserved
 assert_unchanged_service_is_not_restarted
 assert_wedged_service_is_recovered

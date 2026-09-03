@@ -7,18 +7,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=213
-    [ubuntu.sh]=236
+    [mac.sh]=214
+    [ubuntu.sh]=237
     [wsl.sh]=179
-    [pi.sh]=195
-    [bazzite.sh]=95
+    [pi.sh]=196
+    [bazzite.sh]=96
 )
 declare -A expected_banners=(
-    [mac.sh]='Ignore agent listeners in Paseo audit'
-    [ubuntu.sh]='Ignore agent listeners in Paseo audit'
+    [mac.sh]='Honor configured Paseo listener ports'
+    [ubuntu.sh]='Honor configured Paseo listener ports'
     [wsl.sh]='Install pi-prose with matter-of-fact default'
-    [pi.sh]='Ignore agent listeners in Paseo audit'
-    [bazzite.sh]='Ignore agent listeners in Paseo audit'
+    [pi.sh]='Honor configured Paseo listener ports'
+    [bazzite.sh]='Honor configured Paseo listener ports'
 )
 
 fail() {
