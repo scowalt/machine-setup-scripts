@@ -121,6 +121,12 @@ function New-TokenPlaceholders {
 # Create a service account at: https://my.1password.com/integrations/infrastructure-secrets
 # OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
 
+# Scott's Telegram alerts (optional, direct Bot API requests)
+# See ~/.config/agent-docs/telegram-alerts.md after chezmoi apply
+# TELEGRAM_ALERTS_BOT_TOKEN=
+# TELEGRAM_ALERTS_CHAT_ID=
+# Work-machine alerts require Scott's explicit permission
+
 # Machine/setup guards
 # HEADLESS=1
 # WORK_MACHINE=1
@@ -4103,7 +4109,7 @@ function Invoke-WindowsSetupTasks {
     $showMeSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 132 | Last changed: Install pi-prose with matter-of-fact default" -ForegroundColor DarkGray
+    Write-Host "Version 133 | Last changed: Add Telegram alert credential placeholders" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 

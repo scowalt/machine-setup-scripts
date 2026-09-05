@@ -119,6 +119,12 @@ create_env_local() {
 # Create a service account at: https://my.1password.com/integrations/infrastructure-secrets
 # OP_SERVICE_ACCOUNT_TOKEN=ops_xxx
 
+# Scott's Telegram alerts (optional, direct Bot API requests)
+# See ~/.config/agent-docs/telegram-alerts.md after chezmoi apply
+# TELEGRAM_ALERTS_BOT_TOKEN=
+# TELEGRAM_ALERTS_CHAT_ID=
+# Work-machine alerts require Scott's explicit permission
+
 # Machine/setup guards
 # HEADLESS=1
 # WORK_MACHINE=1
@@ -5566,7 +5572,7 @@ for deployment in data.get("deployments", []):
 
 run_setup_tasks() {
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 96 | Last changed: Honor configured Paseo listener ports"
+    echo -e "${GRAY}Version 97 | Last changed: Add Telegram alert credential placeholders"
 
     if ! acquire_setup_lock; then
         return 1

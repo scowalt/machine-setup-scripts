@@ -30,6 +30,18 @@ Setup removes legacy global Impeccable skill copies and Cursor subagent files th
 
 Notion CLI is installed with Notion's native installer on macOS and Linux and with WinGet on Windows. The native installer supports x64 and ARM64, while the Windows package supports x64 only; unsupported architectures warn and continue setup. Setup does not authenticate Notion CLI or configure shell completions. Run `ntn login` manually when you are ready to connect a workspace.
 
+## Telegram alert credentials
+
+New `~/.env.local` files include commented `TELEGRAM_ALERTS_BOT_TOKEN` and `TELEGRAM_ALERTS_CHAT_ID` entries.
+Existing files remain unchanged. Add the two entries manually on existing machines.
+
+The [dotfiles Telegram guide](https://github.com/scowalt/dotfiles/blob/main/dot_config/agent-docs/telegram-alerts.md) covers bot creation, chat discovery, and direct requests.
+Chezmoi installs the guide at `~/.config/agent-docs/telegram-alerts.md` alongside global guidance for Claude Code, Codex, and Pi.
+Agents send alerts directly through Telegram. Setup does not send alerts, distribute tokens, or install a notification helper.
+Keep real values local and out of Git. Work-machine alerts require Scott's explicit permission.
+
+Run `bash tests/telegram-alerts-contract.sh` for offline tests of the environment templates.
+
 ## Work-machine Gitea client
 
 On work machines, `WORK_MACHINE=1` makes Tea (`tea`) a managed tool. Setup installs or updates the latest stable Tea release.
