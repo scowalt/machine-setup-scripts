@@ -22,7 +22,7 @@ pre-push:
       fail_text: "Shellcheck found issues in shell scripts"
 
     contract-tests:
-      run: for test in tests/*.sh; do bash "$test"; done
+      run: for test in tests/*.sh; do bash "$test" || exit 1; done
       fail_text: "Contract tests failed"
     
     markdownlint-all:

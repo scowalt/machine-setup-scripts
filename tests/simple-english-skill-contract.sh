@@ -7,18 +7,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=215
-    [ubuntu.sh]=237
-    [wsl.sh]=179
-    [pi.sh]=196
-    [bazzite.sh]=96
+    [mac.sh]=216
+    [ubuntu.sh]=238
+    [wsl.sh]=180
+    [pi.sh]=197
+    [bazzite.sh]=97
 )
 declare -A expected_banners=(
-    [mac.sh]='Report incomplete Homebrew upgrades'
-    [ubuntu.sh]='Honor configured Paseo listener ports'
-    [wsl.sh]='Install pi-prose with matter-of-fact default'
-    [pi.sh]='Honor configured Paseo listener ports'
-    [bazzite.sh]='Honor configured Paseo listener ports'
+    [mac.sh]='Add Telegram alert credential placeholders'
+    [ubuntu.sh]='Add Telegram alert credential placeholders'
+    [wsl.sh]='Add Telegram alert credential placeholders'
+    [pi.sh]='Add Telegram alert credential placeholders'
+    [bazzite.sh]='Add Telegram alert credential placeholders'
 )
 
 fail() {
@@ -179,7 +179,7 @@ assert_powershell_function_contains win.ps1 Install-ShowMeSkill 'humanlayer/skil
 assert_powershell_function_contains win.ps1 Set-PiSkillOwnership '"simple-english", "show-me"' 'show-me canonical shared ownership'
 assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal Simple English failure propagation'
 assert_contains win.ps1 'Required show-me skill setup failed' 'PowerShell fatal show-me failure propagation'
-assert_contains win.ps1 'Version 132 \| Last changed: Install pi-prose with matter-of-fact default' 'PowerShell version banner'
+assert_contains win.ps1 'Version 133 \| Last changed: Add Telegram alert credential placeholders' 'PowerShell version banner'
 assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+if \(-not \(Install-ShowMeSkill\)\) \{$' 'PowerShell Simple English before show-me'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-ShowMeSkill\)\) \{$' '^[[:space:]]+if \(-not \(Set-PiSkillOwnership\)\) \{$' 'PowerShell show-me before Pi ownership'

@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-05 22:20'
-updated_date: '2026-09-05 23:15'
+updated_date: '2026-09-05 23:20'
 labels: []
 dependencies: []
 ---
@@ -42,6 +42,8 @@ Verification: 14 offline tests execute the documented Bash blocks with a fake cu
 The native PowerShell test is included but could not run because pwsh is unavailable. Both alert credentials are absent on this machine, so no live Telegram request was made. Scott must configure the dedicated bot and verify desktop/iOS deletion. No real dotfiles apply, setup run, commit, or push was performed.
 
 Scott approved publishing both repositories to remote main. Release preparation includes rebasing dotfiles onto current remote main and running repository commit/push hooks.
+
+Publication follow-up: dotfiles 8b0296a and machine setup 67beef2 reached remote main. The pre-push loop masked a stale version-banner fixture failure because a later test succeeded. Updated all six expected banners for the Telegram version increments and changed the loop to stop on failure. The managed-skills contract now passes; an injected failing test proves the hook returns failure instead of running the next test.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
