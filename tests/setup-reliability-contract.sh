@@ -429,6 +429,30 @@ if grep -q 'Homebrew updated\.' <<< "${brew_output}"; then
 fi
 grep -q '^unpin tmux$' <<< "${brew_output}" || fail 'mac.sh: tmux was not unpinned after brew failure'
 
+# Homebrew can return success while skipping packages that remain outdated.
+# Ignore setup's temporary tmux pin and user-pinned packages, but report every
+# other residual item instead of printing a false success.
+residual_brew_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
+    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+    brew() {
+        case "$*" in
+            update|upgrade|"pin tmux"|"unpin tmux") return 0 ;;
+            untrust) printf "%s\n" "No untrusted taps, formulae, casks or commands." ;;
+            "outdated --quiet") printf "%s\n" "tmux" "example/pinned/tool" "docker-desktop" ;;
+            "list --pinned") printf "%s\n" "example/pinned/tool" ;;
+        esac
+        return 0
+    }
+    update_brew
+')
+grep -q 'Homebrew packages remain outdated after upgrade: docker-desktop' <<< "${residual_brew_output}" || fail 'mac.sh: residual Homebrew package lacked an actionable warning'
+if grep -q 'Homebrew updated\.' <<< "${residual_brew_output}"; then
+    fail 'mac.sh: residual outdated Homebrew package was reported as successful'
+fi
+if grep -q 'remain outdated.*\(tmux\|example/pinned/tool\)' <<< "${residual_brew_output}"; then
+    fail 'mac.sh: intentionally pinned Homebrew package was reported as incomplete'
+fi
+
 untrusted_brew_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
     source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
     brew() {

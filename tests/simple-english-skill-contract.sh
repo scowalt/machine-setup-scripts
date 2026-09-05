@@ -7,14 +7,14 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=214
+    [mac.sh]=215
     [ubuntu.sh]=237
     [wsl.sh]=179
     [pi.sh]=196
     [bazzite.sh]=96
 )
 declare -A expected_banners=(
-    [mac.sh]='Honor configured Paseo listener ports'
+    [mac.sh]='Report incomplete Homebrew upgrades'
     [ubuntu.sh]='Honor configured Paseo listener ports'
     [wsl.sh]='Install pi-prose with matter-of-fact default'
     [pi.sh]='Honor configured Paseo listener ports'

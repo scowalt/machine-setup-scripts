@@ -5512,11 +5512,44 @@ install_tmux_plugins() {
     print_success "tmux plugins installed and updated."
 }
 
+list_unresolved_brew_outdated_items() {
+    local _outdated_items
+    local _pinned_items
+    local _item
+    local _short_name
+
+    if ! _outdated_items=$(brew outdated --quiet 2>/dev/null); then
+        return 1
+    fi
+    if ! _pinned_items=$(brew list --pinned 2>/dev/null); then
+        return 1
+    fi
+
+    while IFS= read -r _item; do
+        [[ -n "${_item}" ]] || continue
+        _short_name=${_item##*/}
+
+        # Setup temporarily pins tmux so active sessions survive the upgrade.
+        # Respect any other package pins that the user already manages.
+        if [[ "${_short_name}" == "tmux" ]] ||
+            grep -Fxq "${_item}" <<< "${_pinned_items}" ||
+            grep -Fxq "${_short_name}" <<< "${_pinned_items}"; then
+            continue
+        fi
+
+        printf '%s\n' "${_item}"
+    done <<< "${_outdated_items}"
+}
+
 update_brew() {
     local update_status
     local upgrade_status
     local unpin_status=0
     local unmanaged_taps_status=0
+    local postcheck_status=0
+    local remaining_outdated=""
+    local remaining_outdated_inline=""
+    local completed_with_warnings=0
 
     print_message "Updating Homebrew..."
     if brew update > /dev/null; then
@@ -5547,13 +5580,31 @@ update_brew() {
         unmanaged_taps_status=1
     fi
 
-    if [[ "${update_status}" -eq 0 ]] && [[ "${upgrade_status}" -eq 0 ]] && [[ "${unpin_status}" -eq 0 ]] && [[ "${unmanaged_taps_status}" -eq 0 ]] && [[ "${SETUP_BREW_TRUST_FAILURES}" -eq 0 ]]; then
-        print_success "Homebrew updated."
-    elif [[ "${update_status}" -eq 0 ]] && [[ "${upgrade_status}" -eq 0 ]] && [[ "${unpin_status}" -eq 0 ]]; then
-        print_warning "Homebrew commands completed, but tap-trust warnings may have skipped packages; resolve the warnings above."
-    else
+    if [[ "${update_status}" -ne 0 ]] || [[ "${upgrade_status}" -ne 0 ]] || [[ "${unpin_status}" -ne 0 ]]; then
         print_warning "Homebrew update/upgrade incomplete (update=${update_status}, upgrade=${upgrade_status}, unpin=${unpin_status}); fix the errors above, then run: brew update && brew upgrade"
         print_warning "For a missing Bartender app, run: brew reinstall --cask --force bartender"
+        return
+    fi
+
+    if remaining_outdated=$(list_unresolved_brew_outdated_items); then
+        if [[ -n "${remaining_outdated}" ]]; then
+            remaining_outdated_inline=${remaining_outdated//$'\n'/ }
+            print_warning "Homebrew packages remain outdated after upgrade: ${remaining_outdated_inline}"
+            completed_with_warnings=1
+        fi
+    else
+        postcheck_status=$?
+        print_warning "Homebrew commands completed, but the remaining outdated packages could not be verified (status=${postcheck_status})."
+        completed_with_warnings=1
+    fi
+
+    if [[ "${unmanaged_taps_status}" -ne 0 ]] || [[ "${SETUP_BREW_TRUST_FAILURES}" -ne 0 ]]; then
+        print_warning "Homebrew commands completed, but tap-trust warnings may have skipped packages; resolve the warnings above."
+        completed_with_warnings=1
+    fi
+
+    if [[ "${completed_with_warnings}" -eq 0 ]]; then
+        print_success "Homebrew updated."
     fi
 }
 
@@ -5797,7 +5848,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 214 | Last changed: Honor configured Paseo listener ports${NC}"
+    echo -e "${GRAY}Version 215 | Last changed: Report incomplete Homebrew upgrades${NC}"
 
     if ! acquire_setup_lock; then
         return 1
