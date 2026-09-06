@@ -10,6 +10,8 @@ deepened: 2026-07-09
 
 # feat: Install and update Claude Code CLI from setup scripts
 
+> Update (2026-09-06): TASK-9 supersedes the opt-out requirements in this historical plan. Setup ignores `BAN_CLAUDE_CODE` and always manages Claude Code on supported platforms. Existing `.env.local` files remain unchanged.
+
 ## Summary
 
 Add Claude Code CLI installation/update support to every machine setup script so fresh machines and reruns provide the `claude` command needed for Fable access. Use Anthropic's native installer rather than npm/Bun, keep setup idempotent and non-fatal, add a default-on opt-out guard, and update docs/version banners so future changes preserve the install path.

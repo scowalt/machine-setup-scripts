@@ -261,7 +261,6 @@ create_env_local() {
 # BAN_MATT_POCOCK_SKILLS=1
 # SYNTHETIC_API_KEY=<your Synthetic API key>
 # ZAI_API_KEY=<your z.ai API key>
-# BAN_CLAUDE_CODE=1
 EOF
         chmod 600 "${HOME}/.env.local"
         print_debug "Created placeholder ~/.env.local"
@@ -1815,11 +1814,6 @@ claude_code_warn_if_shadowed() {
 }
 
 install_claude_code() {
-    if [[ "${BAN_CLAUDE_CODE:-}" == "1" ]]; then
-        print_debug "BAN_CLAUDE_CODE=1, skipping Claude Code CLI setup."
-        return
-    fi
-
     if ! claude_code_supported_platform; then
         return
     fi
@@ -5854,7 +5848,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 216 | Last changed: Add Telegram alert credential placeholders${NC}"
+    echo -e "${GRAY}Version 217 | Last changed: Retire the Claude Code installation opt-out${NC}"
 
     if ! acquire_setup_lock; then
         return 1

@@ -134,7 +134,6 @@ function New-TokenPlaceholders {
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
 # ZAI_API_KEY=<your z.ai API key>
-# BAN_CLAUDE_CODE=1
 "@ | Set-Content -Path $envLocalPath
         Write-Debug "Created placeholder ~/.env.local"
     }
@@ -976,11 +975,6 @@ function Warn-ClaudeCodeShadowing {
 }
 
 function Install-ClaudeCode {
-    if (Test-EnvLocalFlag "BAN_CLAUDE_CODE") {
-        Write-Debug "BAN_CLAUDE_CODE=1, skipping Claude Code CLI setup."
-        return
-    }
-
     if (-not (Test-ClaudeCodeSupportedPlatform)) {
         return
     }
@@ -4109,7 +4103,7 @@ function Invoke-WindowsSetupTasks {
     $showMeSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 133 | Last changed: Add Telegram alert credential placeholders" -ForegroundColor DarkGray
+    Write-Host "Version 134 | Last changed: Retire the Claude Code installation opt-out" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 

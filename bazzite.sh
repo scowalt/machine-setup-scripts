@@ -133,7 +133,6 @@ create_env_local() {
 # BAN_MATT_POCOCK_SKILLS=1
 # SYNTHETIC_API_KEY=<your Synthetic API key>
 # ZAI_API_KEY=<your z.ai API key>
-# BAN_CLAUDE_CODE=1
 EOF
         chmod 600 "${HOME}/.env.local"
         print_debug "Created placeholder ~/.env.local"
@@ -1693,11 +1692,6 @@ claude_code_warn_if_shadowed() {
 }
 
 install_claude_code() {
-    if [[ "${BAN_CLAUDE_CODE:-}" == "1" ]]; then
-        print_debug "BAN_CLAUDE_CODE=1, skipping Claude Code CLI setup."
-        return
-    fi
-
     if ! claude_code_supported_platform; then
         return
     fi
@@ -5572,7 +5566,7 @@ for deployment in data.get("deployments", []):
 
 run_setup_tasks() {
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 97 | Last changed: Add Telegram alert credential placeholders"
+    echo -e "${GRAY}Version 98 | Last changed: Retire the Claude Code installation opt-out"
 
     if ! acquire_setup_lock; then
         return 1
