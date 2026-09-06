@@ -2370,8 +2370,7 @@ function Install-PiCli {
     }
 }
 
-# Force Pi defaults: Kimi K3 (Synthetic), or GLM-5.3 (z.ai GLM Coding Plan)
-# on work machines that have a z.ai API key.
+# Force Pi defaults: GPT-6 Astra (OpenAI Codex) with xhigh thinking on all machines.
 # Chezmoi owns settings.json long-term; this seeds fresh machines and repairs drift.
 function Set-PiDefaults {
     if ($env:PI_CODING_AGENT_DIR) {
@@ -2400,19 +2399,15 @@ function Set-PiDefaults {
         if ($null -eq $settings) {
             $settings = New-Object PSObject
         }
-        $defaultDesc = "Kimi K3 (Synthetic)"
-        if ((Test-EnvLocalFlag "WORK_MACHINE") -and (Test-PiZaiKeyAvailable)) {
-            Set-JsonProperty -Object $settings -Name "defaultProvider" -Value "zai"
-            Set-JsonProperty -Object $settings -Name "defaultModel" -Value "glm-5.3"
-            $defaultDesc = "GLM-5.3 (z.ai)"
+        Set-JsonProperty -Object $settings -Name "defaultProvider" -Value "openai-codex"
+        Set-JsonProperty -Object $settings -Name "defaultModel" -Value "gpt-6-astra"
+        Set-JsonProperty -Object $settings -Name "defaultThinkingLevel" -Value "xhigh"
+        if ($null -eq $settings.modelThinkingLevels) {
+            Set-JsonProperty -Object $settings -Name "modelThinkingLevels" -Value ([PSCustomObject]@{})
         }
-        else {
-            Set-JsonProperty -Object $settings -Name "defaultProvider" -Value "synthetic"
-            Set-JsonProperty -Object $settings -Name "defaultModel" -Value "hf:moonshotai/Kimi-K3"
-        }
-        Set-JsonProperty -Object $settings -Name "defaultThinkingLevel" -Value "high"
+        Set-JsonProperty -Object $settings.modelThinkingLevels -Name "openai-codex/gpt-6-astra" -Value "xhigh"
         $settings | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsPath -Encoding UTF8
-        Write-Host "$success Pi default model set to $defaultDesc with high thinking." -ForegroundColor Green
+        Write-Host "$success Pi default model set to GPT-6 Astra (OpenAI Codex) with xhigh thinking." -ForegroundColor Green
         return $true
     }
     catch {
@@ -2444,135 +2439,40 @@ function Get-EnvLocalValue {
     return $null
 }
 
-# Seed the Synthetic provider block (Kimi K3) into Pi's models.json.
-# The API key comes from SYNTHETIC_API_KEY in ~/.env.local; it is never
-# stored in this repository. Existing synthetic keys are preserved.
-function Seed-PiSyntheticModels {
+# Remove the retired Synthetic provider without touching other providers or auth.json.
+function Remove-PiSyntheticModels {
     if ($env:PI_CODING_AGENT_DIR) {
         $agentDir = $env:PI_CODING_AGENT_DIR
     }
     else {
         $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
     }
-
     $modelsPath = Join-Path $agentDir "models.json"
-
-    $modelsJson = '{"providers":{}}'
-    if (Test-Path $modelsPath) {
-        $modelsJson = Get-Content -Path $modelsPath -Raw
-        if ([string]::IsNullOrWhiteSpace($modelsJson)) {
-            $modelsJson = '{"providers":{}}'
-        }
+    if (-not (Test-Path -LiteralPath $modelsPath)) {
+        return $true
     }
 
     try {
-        $models = $modelsJson | ConvertFrom-Json
-        if ($null -eq $models) {
-            $models = [PSCustomObject]@{ providers = [PSCustomObject]@{} }
-        }
-        if ($null -eq $models.providers) {
-            $models | Add-Member -NotePropertyName "providers" -NotePropertyValue ([PSCustomObject]@{}) -Force
-        }
-
-        $existingKey = $null
-        if ($models.providers.PSObject.Properties.Name -contains "synthetic") {
-            $existingKey = $models.providers.synthetic.apiKey
-        }
-        if (-not [string]::IsNullOrWhiteSpace($existingKey)) {
-            Write-Debug "Synthetic provider with an API key already configured in $modelsPath."
-            return $true
-        }
-
-        $apiKey = Get-EnvLocalValue "SYNTHETIC_API_KEY"
-        if ([string]::IsNullOrWhiteSpace($apiKey)) {
-            Write-Warning "SYNTHETIC_API_KEY not set in ~/.env.local. Kimi K3 (Synthetic) is the Pi default but has no API key yet; add the key and rerun setup."
+        $modelsJson = Get-Content -LiteralPath $modelsPath -Raw -ErrorAction Stop
+        $models = $modelsJson | ConvertFrom-Json -ErrorAction Stop
+        if ($models -isnot [PSCustomObject] -or -not $modelsJson.TrimStart().StartsWith('{') -or
+            ($null -ne $models.providers -and $models.providers -isnot [PSCustomObject])) {
+            Write-Warning "Invalid Pi models at $modelsPath; leaving the file unchanged."
             return $false
         }
-
-        $syntheticProvider = [PSCustomObject]@{
-            baseUrl = "https://api.synthetic.new/v1"
-            api     = "openai-completions"
-            apiKey  = $apiKey
-            compat  = [PSCustomObject]@{
-                supportsDeveloperRole = $false
-                supportsStore         = $false
-                maxTokensField        = "max_tokens"
-                supportsStrictMode    = $false
-                deferredToolsMode     = "kimi"
-            }
-            models  = @(
-                [PSCustomObject]@{
-                    id               = "hf:moonshotai/Kimi-K3"
-                    name             = "Kimi K3 (Synthetic)"
-                    reasoning        = $true
-                    thinkingLevelMap = [PSCustomObject]@{
-                        off     = $null
-                        minimal = $null
-                        low     = "low"
-                        medium  = $null
-                        high    = "high"
-                        xhigh   = $null
-                        max     = "max"
-                    }
-                    input            = @("text", "image")
-                    contextWindow    = 512000
-                    maxTokens        = 131072
-                    cost             = [PSCustomObject]@{ input = 0; output = 0; cacheRead = 0; cacheWrite = 0 }
-                    compat           = [PSCustomObject]@{
-                        supportsReasoningEffort                     = $true
-                        thinkingFormat                              = "openai"
-                        requiresReasoningContentOnAssistantMessages = $true
-                    }
-                }
-            )
+        if ($null -eq $models.providers -or -not $models.providers.PSObject.Properties['synthetic']) {
+            return $true
         }
-
-        if ($models.providers.PSObject.Properties.Name -contains "synthetic") {
-            $models.providers.synthetic = $syntheticProvider
-        }
-        else {
-            $models.providers | Add-Member -NotePropertyName "synthetic" -NotePropertyValue $syntheticProvider
-        }
-
-        $models | ConvertTo-Json -Depth 20 | Set-Content -Path $modelsPath -Encoding UTF8
-        Write-Host "$success Synthetic provider (Kimi K3) seeded in $modelsPath." -ForegroundColor Green
+        $models.providers.PSObject.Properties.Remove('synthetic')
+        $models | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $modelsPath -Encoding UTF8 -ErrorAction Stop
+        Write-Host "$success Removed the Synthetic provider from $modelsPath." -ForegroundColor Green
         return $true
     }
     catch {
-        Write-Host "$failIcon Failed to seed Synthetic provider in $modelsPath : $($_.Exception.Message)" -ForegroundColor Red
+        # Parser errors can contain credentials from the file. Do not print them.
+        Write-Warning "Failed to remove the Synthetic provider from $modelsPath."
         return $false
     }
-}
-
-# Check whether a z.ai API key is available from ~/.env.local or from an
-# existing z.ai provider block in Pi's models.json.
-function Test-PiZaiKeyAvailable {
-    if (-not [string]::IsNullOrWhiteSpace((Get-EnvLocalValue "ZAI_API_KEY"))) {
-        return $true
-    }
-
-    if ($env:PI_CODING_AGENT_DIR) {
-        $agentDir = $env:PI_CODING_AGENT_DIR
-    }
-    else {
-        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
-    }
-    $modelsPath = Join-Path $agentDir "models.json"
-    if (Test-Path $modelsPath) {
-        try {
-            $existingModels = Get-Content -Path $modelsPath -Raw | ConvertFrom-Json
-            if ($existingModels.providers -and ($existingModels.providers.PSObject.Properties.Name -contains "zai")) {
-                $existingKey = $existingModels.providers.zai.apiKey
-                if (-not [string]::IsNullOrWhiteSpace($existingKey)) {
-                    return $true
-                }
-            }
-        }
-        catch {
-            Write-Debug "Could not parse Pi models at $modelsPath while checking for a z.ai key."
-        }
-    }
-    return $false
 }
 
 # Seed the z.ai provider block (GLM Coding Plan) into Pi's models.json.
@@ -2619,7 +2519,7 @@ function Seed-PiZaiModels {
         $apiKey = Get-EnvLocalValue "ZAI_API_KEY"
         if ([string]::IsNullOrWhiteSpace($apiKey)) {
             if (Test-EnvLocalFlag "WORK_MACHINE") {
-                Write-Warning "ZAI_API_KEY not set in ~/.env.local. Work machines default Pi to GLM-5.3 (z.ai) but there is no API key yet; add the key and rerun setup."
+                Write-Warning "ZAI_API_KEY not set in ~/.env.local. Add the key and rerun setup to enable the optional z.ai provider."
                 return $false
             }
             Write-Debug "ZAI_API_KEY not set in ~/.env.local; skipping z.ai provider seeding."
@@ -4103,7 +4003,7 @@ function Invoke-WindowsSetupTasks {
     $showMeSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 134 | Last changed: Retire the Claude Code installation opt-out" -ForegroundColor DarkGray
+    Write-Host "Version 135 | Last changed: Replace Synthetic with GPT-6 Astra xhigh defaults" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -4146,7 +4046,7 @@ function Invoke-WindowsSetupTasks {
     }
     if (Install-PiCli) {
         Set-PiDefaults
-        Seed-PiSyntheticModels
+        Remove-PiSyntheticModels
         Seed-PiZaiModels
         Remove-PiSubagents
         Remove-PiRpivPackages

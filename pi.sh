@@ -121,7 +121,6 @@ create_env_local() {
 # BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
-# SYNTHETIC_API_KEY=<your Synthetic API key>
 # ZAI_API_KEY=<your z.ai API key>
 EOF
         chmod 600 "${HOME}/.env.local"
@@ -3083,16 +3082,20 @@ cleanup_noncanonical_pi_installs() {
     fi
 }
 
-# Force Pi defaults: Kimi K3 (Synthetic) as the default model, or GLM-5.3
-# (z.ai GLM Coding Plan) on work machines that have a z.ai API key.
+# Force Pi defaults: GPT-6 Astra (OpenAI Codex) with xhigh thinking on all machines.
 # Chezmoi owns ~/.pi/agent/settings.json long-term; this seeds the desired
 # state on fresh machines and repairs drift where dotfiles are not applied.
 configure_pi_defaults() {
     local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
     local _settings_file="${_agent_dir}/settings.json"
     local _tmp=""
-    local _jq_expr=""
-    local _default_desc="Kimi K3 (Synthetic)"
+    local _jq_expr='
+        .defaultProvider = "openai-codex"
+        | .defaultModel = "gpt-6-astra"
+        | .defaultThinkingLevel = "xhigh"
+        | .modelThinkingLevels = (.modelThinkingLevels // {})
+        | .modelThinkingLevels["openai-codex/gpt-6-astra"] = "xhigh"
+    '
 
     if ! command -v jq &> /dev/null; then
         print_warning "jq not found. Cannot set Pi default model in ${_settings_file}."
@@ -3111,25 +3114,10 @@ configure_pi_defaults() {
         return 1
     fi
 
-    if [[ "${WORK_MACHINE:-}" == "1" ]] && pi_zai_key_available; then
-        _default_desc="GLM-5.3 (z.ai)"
-        _jq_expr='
-            .defaultProvider = "zai"
-            | .defaultModel = "glm-5.3"
-            | .defaultThinkingLevel = "high"
-        '
-    else
-        _jq_expr='
-            .defaultProvider = "synthetic"
-            | .defaultModel = "hf:moonshotai/Kimi-K3"
-            | .defaultThinkingLevel = "high"
-        '
-    fi
-
     if jq "${_jq_expr}" "${_settings_file}" > "${_tmp}"; then
         if cat "${_tmp}" > "${_settings_file}"; then
             rm -f "${_tmp}"
-            print_success "Pi default model set to ${_default_desc} with high thinking."
+            print_success "Pi default model set to GPT-6 Astra (OpenAI Codex) with xhigh thinking."
             return 0
         fi
         rm -f "${_tmp}"
@@ -3160,108 +3148,40 @@ read_env_local_value() {
     printf '%s\n' "${_value}"
 }
 
-# Check whether a z.ai API key is available from ~/.env.local or from an
-# existing z.ai provider block in Pi's models.json.
-pi_zai_key_available() {
+# Remove the retired Synthetic provider without touching other providers or auth.json.
+remove_pi_synthetic_models() {
     local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
     local _models_file="${_agent_dir}/models.json"
-
-    if read_env_local_value "ZAI_API_KEY" > /dev/null 2>&1; then
-        return 0
-    fi
-    if [[ -f "${_models_file}" ]] \
-        && jq -e '.providers.zai.apiKey // empty | length > 0' "${_models_file}" > /dev/null 2>&1; then
-        return 0
-    fi
-    return 1
-}
-
-# Seed the Synthetic provider block (Kimi K3) into Pi's models.json.
-# The API key comes from SYNTHETIC_API_KEY in ~/.env.local; it is never
-# stored in this repository. Existing synthetic keys are preserved.
-seed_pi_synthetic_models() {
-    local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
-    local _models_file="${_agent_dir}/models.json"
-    local _api_key=""
     local _tmp=""
 
-    if ! command -v jq &> /dev/null; then
-        print_warning "jq not found. Cannot seed Synthetic provider in ${_models_file}."
-        return 1
-    fi
-
-    if [[ -f "${_models_file}" ]] && jq -e '.providers.synthetic.apiKey // empty | length > 0' "${_models_file}" > /dev/null 2>&1; then
-        print_debug "Synthetic provider with an API key already configured in ${_models_file}."
+    if [[ ! -e "${_models_file}" && ! -L "${_models_file}" ]]; then
         return 0
     fi
-
-    if ! _api_key=$(read_env_local_value "SYNTHETIC_API_KEY"); then
-        print_warning "SYNTHETIC_API_KEY not set in ~/.env.local. Kimi K3 (Synthetic) is the Pi default but has no API key yet; add the key and rerun setup."
+    if ! command -v jq &> /dev/null; then
+        print_warning "jq not found. Cannot remove the Synthetic provider from ${_models_file}."
         return 1
     fi
-
-    mkdir -p "${_agent_dir}"
-    if [[ ! -f "${_models_file}" ]]; then
-        printf '{"providers":{}}\n' > "${_models_file}"
+    if ! jq -e 'type == "object" and (.providers == null or (.providers | type == "object"))' "${_models_file}" > /dev/null 2>&1; then
+        print_warning "Invalid Pi models at ${_models_file}; leaving the file unchanged."
+        return 1
     fi
-
+    if ! jq -e '(.providers // {}) | has("synthetic")' "${_models_file}" > /dev/null; then
+        return 0
+    fi
     if ! _tmp=$(mktemp); then
         print_warning "Could not create a temporary file for Pi models at ${_models_file}."
         return 1
     fi
 
-    if jq --arg apiKey "${_api_key}" '
-        .providers = (.providers // {})
-        | .providers.synthetic = {
-            baseUrl: "https://api.synthetic.new/v1",
-            api: "openai-completions",
-            apiKey: ((.providers.synthetic.apiKey // "") | if length > 0 then . else $apiKey end),
-            compat: {
-                supportsDeveloperRole: false,
-                supportsStore: false,
-                maxTokensField: "max_tokens",
-                supportsStrictMode: false,
-                deferredToolsMode: "kimi"
-            },
-            models: [
-                {
-                    id: "hf:moonshotai/Kimi-K3",
-                    name: "Kimi K3 (Synthetic)",
-                    reasoning: true,
-                    thinkingLevelMap: {
-                        off: null,
-                        minimal: null,
-                        low: "low",
-                        medium: null,
-                        high: "high",
-                        xhigh: null,
-                        max: "max"
-                    },
-                    input: ["text", "image"],
-                    contextWindow: 512000,
-                    maxTokens: 131072,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    compat: {
-                        supportsReasoningEffort: true,
-                        thinkingFormat: "openai",
-                        requiresReasoningContentOnAssistantMessages: true
-                    }
-                }
-            ]
-        }
-    ' "${_models_file}" > "${_tmp}"; then
-        if cat "${_tmp}" > "${_models_file}" && chmod 600 "${_models_file}"; then
-            rm -f "${_tmp}"
-            print_success "Synthetic provider (Kimi K3) seeded in ${_models_file}."
-            return 0
-        fi
+    # Write through existing symlinks, including chezmoi-managed files.
+    if jq 'del(.providers.synthetic)' "${_models_file}" > "${_tmp}" \
+        && cat "${_tmp}" > "${_models_file}" && chmod 600 "${_models_file}"; then
         rm -f "${_tmp}"
-        print_warning "Failed to write Synthetic provider to ${_models_file}."
-        return 1
+        print_success "Removed the Synthetic provider from ${_models_file}."
+        return 0
     fi
-
     rm -f "${_tmp}"
-    print_warning "Failed to parse Pi models at ${_models_file}; leaving it unchanged."
+    print_warning "Failed to remove the Synthetic provider from ${_models_file}."
     return 1
 }
 # Seed the z.ai provider block (GLM Coding Plan) into Pi's models.json.
@@ -3287,7 +3207,7 @@ seed_pi_zai_models() {
 
     if ! _api_key=$(read_env_local_value "ZAI_API_KEY"); then
         if [[ "${WORK_MACHINE:-}" == "1" ]]; then
-            print_warning "ZAI_API_KEY not set in ~/.env.local. Work machines default Pi to GLM-5.3 (z.ai) but there is no API key yet; add the key and rerun setup."
+            print_warning "ZAI_API_KEY not set in ~/.env.local. Add the key and rerun setup to enable the optional z.ai provider."
             return 1
         fi
         print_debug "ZAI_API_KEY not set in ~/.env.local; skipping z.ai provider seeding."
@@ -6118,7 +6038,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 198 | Last changed: Retire the Claude Code installation opt-out"
+    echo -e "${GRAY}Version 199 | Last changed: Replace Synthetic with GPT-6 Astra xhigh defaults"
 
     if ! acquire_setup_lock; then
         return 1
@@ -6230,7 +6150,7 @@ run_setup_tasks() {
     fi
     if install_pi_cli; then
         configure_pi_defaults
-        seed_pi_synthetic_models
+        remove_pi_synthetic_models
         seed_pi_zai_models
         remove_pi_subagents
         remove_pi_rpiv_packages

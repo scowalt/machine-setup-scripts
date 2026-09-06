@@ -12,6 +12,8 @@ Every setup script installs or updates the main AI development tools. The suppor
 
 Setup removes the tintinweb Pi subagents extension when it is present. It also removes the legacy `pi-ask-user` package and the retired `@juicesharp/rpiv-ask-user-question` and `@juicesharp/rpiv-todo` packages when they are present. Setup installs the Pi MCP adapter, Pi Claude bridge, `pi-web-access`, `pi-prose`, and the Pi goal/autoresearch extensions.
 
+All machines default Pi to GPT-6 Astra (`openai-codex/gpt-6-astra`) with `xhigh` thinking, including work machines. Setup removes the retired Synthetic provider from Pi's `models.json` and preserves other providers and local credentials. z.ai remains optional when a key exists. On a new machine, use `/login` in Pi to connect your ChatGPT subscription.
+
 Each idempotent setup run requests unpinned `npm:pi-prose`, so Pi installs or updates the latest release. Setup creates `prose/config.json` with the `matter-of-fact` user default only when the file does not exist. Setup does not change an existing pi-prose user configuration. Pi still honors explicit session, command-line, and project style choices.
 
 Setup installs the managed Matt Pocock engineering skills on personal and work machines. Pi and Codex share the canonical copies in `~/.agents/skills`. Work machines also install Google Cloud CLI.

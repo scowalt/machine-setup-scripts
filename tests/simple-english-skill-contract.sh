@@ -7,18 +7,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=217
-    [ubuntu.sh]=239
-    [wsl.sh]=181
-    [pi.sh]=198
-    [bazzite.sh]=98
+    [mac.sh]=218
+    [ubuntu.sh]=240
+    [wsl.sh]=182
+    [pi.sh]=199
+    [bazzite.sh]=99
 )
 declare -A expected_banners=(
-    [mac.sh]='Retire the Claude Code installation opt-out'
-    [ubuntu.sh]='Retire the Claude Code installation opt-out'
-    [wsl.sh]='Retire the Claude Code installation opt-out'
-    [pi.sh]='Retire the Claude Code installation opt-out'
-    [bazzite.sh]='Retire the Claude Code installation opt-out'
+    [mac.sh]='Replace Synthetic with GPT-6 Astra xhigh defaults'
+    [ubuntu.sh]='Replace Synthetic with GPT-6 Astra xhigh defaults'
+    [wsl.sh]='Replace Synthetic with GPT-6 Astra xhigh defaults'
+    [pi.sh]='Replace Synthetic with GPT-6 Astra xhigh defaults'
+    [bazzite.sh]='Replace Synthetic with GPT-6 Astra xhigh defaults'
 )
 
 fail() {
@@ -179,7 +179,7 @@ assert_powershell_function_contains win.ps1 Install-ShowMeSkill 'humanlayer/skil
 assert_powershell_function_contains win.ps1 Set-PiSkillOwnership '"simple-english", "show-me"' 'show-me canonical shared ownership'
 assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal Simple English failure propagation'
 assert_contains win.ps1 'Required show-me skill setup failed' 'PowerShell fatal show-me failure propagation'
-assert_contains win.ps1 'Version 134 \| Last changed: Retire the Claude Code installation opt-out' 'PowerShell version banner'
+assert_contains win.ps1 'Version 135 \| Last changed: Replace Synthetic with GPT-6 Astra xhigh defaults' 'PowerShell version banner'
 assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+if \(-not \(Install-ShowMeSkill\)\) \{$' 'PowerShell Simple English before show-me'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-ShowMeSkill\)\) \{$' '^[[:space:]]+if \(-not \(Set-PiSkillOwnership\)\) \{$' 'PowerShell show-me before Pi ownership'
