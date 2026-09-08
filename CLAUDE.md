@@ -70,6 +70,7 @@ All scripts follow a consistent pattern:
 - Python: pyenv (Python version management)
 - Security: 1Password CLI, Tailscale
 - Dotfiles: Chezmoi (with auto-sync)
+- Paseo channels: Setup defaults to beta on personal and work machines. `PASEO_CHANNEL=stable` selects npm `latest` for managed headless daemons and Stable for Desktop. A nonempty process value overrides `~/.env.local`. Invalid channels fail before Paseo changes. Preserve the existing native Linux headless support, macOS canary gate, and Windows/WSL headless rejection. Desktop setup selects the channel in Electron's `desktop-settings.json`; it does not install or launch Desktop. Preserve unrelated settings, reject malformed or linked paths, and do not change a running app's cached settings. Set `migrations.legacyRendererSettingsImported=true` with the channel so a legacy preference cannot undo it. Use the native platform user-data path or `PASEO_ELECTRON_USER_DATA_DIR`, never the daemon's `PASEO_HOME`. WSL leaves the Windows host client to `win.ps1`. Skip absent headless and Linux ARM client profiles. Do not update remote machines or run live Paseo during tests. Run `tests/paseo-release-channel-contract.sh` and the PowerShell fixture suite after changes. See README.md for client update steps, platform limits, and downgrade cautions.
 - Terminal: Starship prompt
 - CI/CD: act (local GitHub Actions)
 - AI agents and developer CLIs: Notion CLI (`ntn`), Claude Code CLI, Gemini CLI, Codex CLI, Pi coding agent

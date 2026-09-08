@@ -129,6 +129,8 @@ function New-TokenPlaceholders {
 
 # Machine/setup guards
 # HEADLESS=1
+# Paseo release channel (beta by default; use stable to follow stable releases)
+# PASEO_CHANNEL=beta
 # WORK_MACHINE=1
 # BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
@@ -2454,6 +2456,101 @@ function Get-EnvLocalValue {
     return $null
 }
 
+# Paseo Desktop uses Electron userData, not the standalone daemon's PASEO_HOME.
+function Get-PaseoReleaseChannel {
+    $channel = Get-EnvLocalValue "PASEO_CHANNEL"
+    if ([string]::IsNullOrEmpty($channel)) { $channel = "beta" }
+    if ($channel -cnotin @("beta", "stable")) {
+        throw "Invalid PASEO_CHANNEL. Use beta or stable."
+    }
+    return $channel
+}
+
+function Test-PaseoDesktopRunning {
+    # Do not edit a running app's cached settings or stop its bundled daemon.
+    return @((Get-Process -ErrorAction Stop) | Where-Object { $_.ProcessName -ieq "Paseo" }).Count -gt 0
+}
+
+function Set-PaseoDesktopChannel {
+    $channel = Get-PaseoReleaseChannel
+    $tempPath = $null
+    try {
+        $directory = $env:PASEO_ELECTRON_USER_DATA_DIR
+        if (-not $directory) {
+            if (-not $env:APPDATA) { throw "APPDATA is unavailable." }
+            $directory = Join-Path $env:APPDATA "Paseo"
+        }
+        if (-not [System.IO.Path]::IsPathRooted($directory)) { throw "The user-data path must be absolute." }
+        if ((Test-EnvLocalFlag "HEADLESS") -and -not (Test-Path -LiteralPath $directory)) {
+            Write-Debug "No Paseo Desktop profile on this headless machine; skipping client channel setup."
+            return $true
+        }
+        $settingsPath = Join-Path $directory "desktop-settings.json"
+        $parent = $directory
+        while ($parent) {
+            $item = Get-Item -LiteralPath $parent -Force -ErrorAction SilentlyContinue
+            if ($item -and (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or -not $item.PSIsContainer)) {
+                Write-Warning "Unsafe Paseo Desktop directory. Linked or non-directory paths are not changed."
+                return $false
+            }
+            $parent = Split-Path -Parent $parent
+        }
+        $item = Get-Item -LiteralPath $settingsPath -Force -ErrorAction SilentlyContinue
+        if ($item -and (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or $item.PSIsContainer)) {
+            Write-Warning "Unsafe Paseo Desktop settings path. Leaving it unchanged."
+            return $false
+        }
+        $exists = $null -ne $item
+        if ($exists) {
+            $raw = Get-Content -LiteralPath $settingsPath -Raw -ErrorAction Stop
+            $document = $raw | ConvertFrom-Json -ErrorAction Stop
+            if ($document -isnot [PSCustomObject] -or -not $raw.TrimStart().StartsWith('{') -or
+                $document.version -ne 1 -or $document.version -is [string] -or
+                $document.settings -isnot [PSCustomObject] -or
+                ($document.PSObject.Properties['migrations'] -and $document.migrations -isnot [PSCustomObject])) {
+                Write-Warning "Invalid or unsupported Paseo Desktop settings. Leaving the file unchanged."
+                return $false
+            }
+            if ($document.settings.releaseChannel -ceq $channel -and
+                $document.migrations.legacyRendererSettingsImported -is [bool] -and $document.migrations.legacyRendererSettingsImported) {
+                Write-Debug "Paseo Desktop release channel is already $channel."
+                return $true
+            }
+        } else {
+            $document = [PSCustomObject]@{ version = 1; settings = [PSCustomObject]@{}; migrations = [PSCustomObject]@{} }
+        }
+        if (Test-PaseoDesktopRunning) {
+            Write-Warning "Close Paseo Desktop and rerun setup to change its release channel. Setup does not stop the app or its daemon."
+            return $false
+        }
+        $document.settings | Add-Member -NotePropertyName releaseChannel -NotePropertyValue $channel -Force
+        if (-not $document.PSObject.Properties['migrations']) {
+            $document | Add-Member -NotePropertyName migrations -NotePropertyValue ([PSCustomObject]@{})
+        }
+        # Match upstream's channel patch so a legacy renderer cannot restore stable.
+        $document.migrations | Add-Member -NotePropertyName legacyRendererSettingsImported -NotePropertyValue $true -Force
+        $json = $document | ConvertTo-Json -Depth 100 -WarningAction Stop -ErrorAction Stop
+        [System.IO.Directory]::CreateDirectory($directory) | Out-Null
+        $tempPath = Join-Path $directory ("desktop-settings.json.tmp." + [guid]::NewGuid())
+        [System.IO.File]::WriteAllText($tempPath, $json + "`n", [System.Text.UTF8Encoding]::new($false))
+        if ($exists) {
+            [System.IO.File]::Replace($tempPath, $settingsPath, [NullString]::Value)
+        } else {
+            [System.IO.File]::Move($tempPath, $settingsPath)
+        }
+        Write-Success "Paseo Desktop release channel set to $channel. Open Desktop and check for updates in Settings > About."
+        return $true
+    } catch {
+        # JSON errors can include private settings. Never log the raw exception.
+        Write-Warning "Could not select the Paseo Desktop release channel. Make sure that the app is closed and its settings are valid and writable."
+        return $false
+    } finally {
+        if ($tempPath -and (Test-Path -LiteralPath $tempPath)) {
+            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 # Remove the retired Synthetic provider without touching other providers or auth.json.
 function Remove-PiSyntheticModels {
     if ($env:PI_CODING_AGENT_DIR) {
@@ -4019,9 +4116,10 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 136 | Last changed: Install PR Lens across all supported agents" -ForegroundColor DarkGray
+    Write-Host "Version 137 | Last changed: Default Paseo daemons and clients to beta" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
+    $null = Get-PaseoReleaseChannel
 
     # Create placeholder token files early
     New-TokenPlaceholders
@@ -4049,6 +4147,7 @@ function Invoke-WindowsSetupTasks {
     Set-WindowsTerminalConfiguration
     
     Write-Section "Additional Development Tools"
+    if (-not (Set-PaseoDesktopChannel)) { throw "Paseo Desktop channel setup failed." }
     Install-GiteaClient
     Install-SocketFirewall
     Install-ClaudeCode

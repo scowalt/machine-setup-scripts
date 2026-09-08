@@ -255,6 +255,8 @@ create_env_local() {
 
 # Machine/setup guards
 # HEADLESS=1
+# Paseo release channel (beta by default; use stable to follow stable releases)
+# PASEO_CHANNEL=beta
 # WORK_MACHINE=1
 # BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
@@ -2861,6 +2863,133 @@ read_env_local_value() {
     printf '%s\n' "${_value}"
 }
 
+# Paseo release channels. Keep this block identical in the Bash setup scripts.
+paseo_release_channel() {
+    # The setup-scoped value survives later helpers that source .env.local again.
+    local _channel="${_paseo_setup_channel:-${PASEO_CHANNEL:-}}"
+    if [[ -z "${_channel}" ]]; then
+        _channel=$(read_env_local_value "PASEO_CHANNEL" || true)
+    fi
+    case "${_channel:-beta}" in
+        beta|stable) printf '%s\n' "${_channel:-beta}" ;;
+        *)
+            print_error "Invalid PASEO_CHANNEL. Use beta or stable." >&2
+            return 1
+            ;;
+    esac
+}
+
+paseo_package_spec() {
+    local _channel
+    _channel=$(paseo_release_channel) || return 1
+    if [[ "${_channel}" == "stable" ]]; then
+        printf '%s\n' '@getpaseo/cli@latest'
+    else
+        printf '%s\n' '@getpaseo/cli@beta'
+    fi
+}
+
+paseo_desktop_is_running() {
+    if ! command -v pgrep &> /dev/null; then
+        return 2
+    fi
+    local _uid
+    _uid=$(id -u) || return 2
+    pgrep -u "${_uid}" -x 'Paseo|paseo' > /dev/null
+}
+
+configure_paseo_desktop_channel() {
+    local _platform="$1"
+    local _channel _dir _file _parent _input _tmp _process_status
+    _channel=$(paseo_release_channel) || return 1
+    case "${_platform}" in
+        macos) _dir="${HOME}/Library/Application Support/Paseo" ;;
+        linux) _dir="${XDG_CONFIG_HOME:-${HOME}/.config}/Paseo" ;;
+        wsl)
+            print_message "Run win.ps1 on the Windows host to select the Paseo Desktop release channel. WSL does not change host client files."
+            return 0
+            ;;
+        *) print_error "Unsupported Paseo Desktop platform."; return 1 ;;
+    esac
+    _dir="${PASEO_ELECTRON_USER_DATA_DIR:-${_dir}}"
+    _file="${_dir}/desktop-settings.json"
+
+    # Do not create desktop state on a headless machine without a client profile.
+    if [[ "${HEADLESS:-}" == "1" && ! -e "${_dir}" && ! -L "${_dir}" ]]; then
+        print_debug "No Paseo Desktop profile on this headless machine; skipping client channel setup."
+        return 0
+    fi
+    if [[ "${_platform}" == "linux" && ! -e "${_dir}" && ! -L "${_dir}" ]]; then
+        case "$(uname -m)" in
+            x86_64|amd64) ;;
+            *)
+                print_warning "Paseo publishes Linux Desktop builds only for x64. Use the daemon with a supported client or browser."
+                return 0
+                ;;
+        esac
+    fi
+    if [[ "${_dir}" != /* ]]; then
+        print_error "Paseo Desktop user-data path must be absolute."
+        return 1
+    fi
+    _parent="${_dir}"
+    while [[ "${_parent}" != / ]]; do
+        if [[ -L "${_parent}" || ( -e "${_parent}" && ! -d "${_parent}" ) ]]; then
+            print_error "Unsafe Paseo Desktop directory. Linked or non-directory paths are not changed."
+            return 1
+        fi
+        _parent=$(dirname "${_parent}")
+    done
+    if [[ -L "${_file}" || ( -e "${_file}" && ! -f "${_file}" ) ]]; then
+        print_error "Unsafe Paseo Desktop settings path. Leaving it unchanged."
+        return 1
+    fi
+    if ! command -v jq &> /dev/null; then
+        print_error "jq is required to select the Paseo Desktop release channel."
+        return 1
+    fi
+    _input=/dev/null
+    if [[ -f "${_file}" ]]; then
+        _input="${_file}"
+        if ! jq -se 'length == 1 and (.[0] | type == "object" and .version == 1 and (.settings | type == "object") and ((has("migrations") | not) or (.migrations | type == "object")))' "${_file}" > /dev/null 2>&1; then
+            print_error "Invalid or unsupported Paseo Desktop settings. Leaving the file unchanged."
+            return 1
+        fi
+        if jq -e --arg channel "${_channel}" '.settings.releaseChannel == $channel and .migrations.legacyRendererSettingsImported == true' "${_file}" > /dev/null 2>&1; then
+            print_debug "Paseo Desktop release channel is already ${_channel}."
+            return 0
+        fi
+    fi
+    if paseo_desktop_is_running; then
+        print_error "Close Paseo Desktop and rerun setup to change its release channel. Setup does not stop the app or its daemon."
+        return 1
+    else
+        _process_status=$?
+        if [[ "${_process_status}" != "1" ]]; then
+            print_error "Cannot determine whether Paseo Desktop is running. Leaving client settings unchanged."
+            return 1
+        fi
+    fi
+    if ! (umask 077; mkdir -p "${_dir}"); then
+        print_error "Failed to create the Paseo Desktop settings directory."
+        return 1
+    fi
+    _tmp=$(mktemp "${_file}.tmp.XXXXXX") || return 1
+    # Match upstream's channel patch: prevent a legacy renderer preference from
+    # importing the old channel on launch. Preserve all other settings/migrations.
+    if ! jq -s --arg channel "${_channel}" '
+        (if length == 0 then {version: 1, settings: {}, migrations: {}} else .[0] end)
+        | .settings.releaseChannel = $channel
+        | .migrations.legacyRendererSettingsImported = true
+    ' "${_input}" > "${_tmp}" 2>/dev/null || ! chmod 600 "${_tmp}" || ! mv -f "${_tmp}" "${_file}"; then
+        rm -f "${_tmp}"
+        print_error "Failed to save the Paseo Desktop release channel."
+        return 1
+    fi
+    print_success "Paseo Desktop release channel set to ${_channel}. Open Desktop and check for updates in Settings > About."
+}
+# End Paseo release channels.
+
 # Remove the retired Synthetic provider without touching other providers or auth.json.
 remove_pi_synthetic_models() {
     local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
@@ -3562,13 +3691,15 @@ install_paseo_cli() {
     local _version_output=""
     local _service_path=""
     local _bun_global_bin=""
+    local _package_spec=""
 
     if [[ "${HEADLESS:-}" != "1" ]]; then
         return 0
     fi
 
+    _package_spec=$(paseo_package_spec) || return 1
     PASEO_PACKAGE_CHANGED=0
-    print_message "Installing/updating Paseo CLI for headless daemon setup..."
+    print_message "Installing/updating ${_package_spec} for headless daemon setup..."
 
     _service_path=$(paseo_service_path)
     export PATH="${HOME}/.bun/bin:${_service_path}:${PATH}"
@@ -3588,8 +3719,8 @@ install_paseo_cli() {
         return 1
     fi
 
-    if ! bun install -g "${PASEO_PACKAGE}"; then
-        print_error "Failed to install ${PASEO_PACKAGE}."
+    if ! bun install -g "${_package_spec}"; then
+        print_error "Failed to install ${_package_spec}."
         return 1
     fi
 
@@ -5786,7 +5917,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 219 | Last changed: Install PR Lens across all supported agents${NC}"
+    echo -e "${GRAY}Version 220 | Last changed: Default Paseo daemons and clients to beta${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -5795,6 +5926,8 @@ run_setup_tasks() {
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
 
+    local _paseo_channel_override="${PASEO_CHANNEL:-}"
+    local _paseo_setup_channel=""
     # Source env vars early so optional setup flags are available
     if [[ -f "${HOME}/.env.local" ]]; then
         set -a
@@ -5802,6 +5935,11 @@ run_setup_tasks() {
         source "${HOME}/.env.local"
         set +a
     fi
+
+    if [[ -n "${_paseo_channel_override}" ]]; then
+        PASEO_CHANNEL="${_paseo_channel_override}"
+    fi
+    _paseo_setup_channel=$(paseo_release_channel) || return 1
 
     print_section "Xcode Command Line Tools"
     install_xcode_cli_tools
@@ -5956,6 +6094,7 @@ HELPER_EOF
     print_section "Development Tools"
     install_gitea_client || return 1
     install_bun
+    configure_paseo_desktop_channel macos || return 1
     setup_headless_paseo_daemon || return 1
     install_sfw
     install_claude_code
