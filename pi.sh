@@ -2877,13 +2877,17 @@ install_managed_agent_skill() {
     local _repository=$1
     local _skill_name=$2
     local _display_name=$3
+    shift 3
+    local -a _required_files=("SKILL.md" "$@")
     local _install_output=""
     local _skill_dir=""
+    local _relative_file=""
     local _skill_file=""
+    local _artifact_path=""
     # Codex, Gemini CLI, and Pi discover the skills CLI's shared user copy.
-    local -a _skill_files=(
-        "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/skills/${_skill_name}/SKILL.md"
-        "${HOME}/.agents/skills/${_skill_name}/SKILL.md"
+    local -a _skill_dirs=(
+        "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/skills/${_skill_name}"
+        "${HOME}/.agents/skills/${_skill_name}"
     )
 
     if ! ensure_skills_cli_node_runtime; then
@@ -2909,16 +2913,24 @@ install_managed_agent_skill() {
         return 1
     fi
 
-    for _skill_file in "${_skill_files[@]}"; do
-        _skill_dir=${_skill_file%/SKILL.md}
-        if [[ -L "${_skill_dir}" || -L "${_skill_file}" ]]; then
-            print_warning "${_display_name} validation failed: copied artifact is a symlink at ${_skill_file}."
-            return 1
-        fi
-        if [[ ! -f "${_skill_file}" ]]; then
-            print_warning "${_display_name} validation failed: missing ${_skill_file}."
-            return 1
-        fi
+    for _skill_dir in "${_skill_dirs[@]}"; do
+        for _relative_file in "${_required_files[@]}"; do
+            _skill_file="${_skill_dir}/${_relative_file}"
+            _artifact_path=${_skill_file}
+            # Reject links in the file and every directory inside the skill copy.
+            while :; do
+                if [[ -L "${_artifact_path}" ]]; then
+                    print_warning "${_display_name} validation failed: copied artifact is a symlink at ${_artifact_path}."
+                    return 1
+                fi
+                [[ "${_artifact_path}" == "${_skill_dir}" ]] && break
+                _artifact_path=${_artifact_path%/*}
+            done
+            if [[ ! -f "${_skill_file}" || ! -s "${_skill_file}" ]]; then
+                print_warning "${_display_name} validation failed: missing, empty, or non-regular file at ${_skill_file}."
+                return 1
+            fi
+        done
     done
 
     print_success "${_display_name} installed/updated for Claude Code, Codex, Gemini CLI, and Pi through the shared skill path."
@@ -2933,6 +2945,12 @@ setup_simple_english_skill() {
 # Install/update HumanLayer show-me for every supported AI coding harness.
 setup_show_me_skill() {
     install_managed_agent_skill "humanlayer/skills" "show-me" "show-me"
+}
+
+# Install/update upstream PR Lens unchanged, including its default hosted uploads.
+setup_pr_lens_skill() {
+    install_managed_agent_skill "coldteadotai/pr-lens" "pr-lens" "PR Lens" \
+        "LICENSE" "references/graph-document.md" "references/config.md" "references/example.graph.json"
 }
 
 # Remove setup-managed Impeccable resources without affecting sibling agent tooling.
@@ -5062,7 +5080,7 @@ configure_pi_skill_ownership() {
         "!${_canonical_dir}/autoresearch-hooks/**"
     )
     local -a _shared_skills=(
-        simple-english show-me setup-matt-pocock-skills diagnosing-bugs tdd
+        simple-english show-me pr-lens setup-matt-pocock-skills diagnosing-bugs tdd
         improve-codebase-architecture grill-with-docs grilling domain-modeling codebase-design
     )
     local -a _managed_exclusions=("${_shared_exclusions[@]}")
@@ -6038,7 +6056,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 199 | Last changed: Replace Synthetic with GPT-6 Astra xhigh defaults"
+    echo -e "${GRAY}Version 200 | Last changed: Install PR Lens across all supported agents"
 
     if ! acquire_setup_lock; then
         return 1
@@ -6176,6 +6194,9 @@ run_setup_tasks() {
         _setup_had_errors=1
     fi
     if ! setup_show_me_skill; then
+        _setup_had_errors=1
+    fi
+    if ! setup_pr_lens_skill; then
         _setup_had_errors=1
     fi
     if ! configure_pi_skill_ownership; then

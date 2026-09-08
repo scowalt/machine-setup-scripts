@@ -22,7 +22,9 @@ Set `WORK_MACHINE=1` in `~/.env.local` for work machines. Set `BAN_PI_MCP_ADAPTE
 
 Set `BAN_MATT_POCOCK_SKILLS=1` to remove the managed Matt Pocock skills and keep them inactive. The older `BAN_MATT_POCKOCK_SKILLS=1` spelling also works.
 
-Every setup run installs the latest [Simple English](https://github.com/AminBlg/SimpleEnglish) and [HumanLayer `show-me`](https://github.com/humanlayer/skills) skills globally for Claude Code, Codex, Gemini CLI, and Pi. The installations are non-interactive and use copied files for cross-platform compatibility. Codex, Gemini CLI, and Pi discover the canonical shared copies in `~/.agents/skills`. Claude Code uses harness-specific copies. `CLAUDE_CONFIG_DIR` selects a custom Claude Code location when it is set. `PI_CODING_AGENT_DIR` selects the Pi settings location and obsolete-copy exclusions. Simple English and `show-me` are required on personal and work machines and have no setup opt-out.
+Every setup run installs the latest [Simple English](https://github.com/AminBlg/SimpleEnglish), [HumanLayer `show-me`](https://github.com/humanlayer/skills), and [PR Lens](https://github.com/coldteadotai/pr-lens) skills. The skills are available globally to Claude Code, Codex, Gemini CLI, and Pi. The installations are non-interactive and use copied files for cross-platform compatibility. Simple English, `show-me`, and PR Lens are required on personal and work machines and have no setup opt-out.
+
+Codex, Gemini CLI, and Pi discover the canonical shared copies in `~/.agents/skills`. Claude Code uses harness-specific copies. If `CLAUDE_CONFIG_DIR` is set, it selects a custom Claude Code location. `PI_CODING_AGENT_DIR` selects the Pi settings location and obsolete-copy exclusions.
 
 Claude Code is installed with Anthropic's native installer rather than npm/Bun. Setup installs or updates Claude Code on supported machines, with no opt-out. Setup ignores `BAN_CLAUDE_CODE`, including values in existing `.env.local` files. Those files remain unchanged. Run Claude Code's normal login/account flow before using Fable or the Pi Claude bridge. If setup warns that another `claude` command shadows the native binary, resolve PATH/package shadowing or use the native path shown in the warning before authenticating.
 
@@ -31,6 +33,22 @@ Codex CLI is installed per user with OpenAI's standalone installer on Ubuntu, WS
 Setup removes legacy global Impeccable skill copies and Cursor subagent files that earlier versions installed. It leaves project-scoped Impeccable data and hooks untouched.
 
 Notion CLI is installed with Notion's native installer on macOS and Linux and with WinGet on Windows. The native installer supports x64 and ARM64, while the Windows package supports x64 only; unsupported architectures warn and continue setup. Setup does not authenticate Notion CLI or configure shell completions. Run `ntn login` manually when you are ready to connect a workspace.
+
+## PR Lens skill
+
+PR Lens draws code changes or system structure as architecture and data-flow diagrams. Each machine receives the latest upstream `pr-lens` skill from `coldteadotai/pr-lens` on its next setup run. This rollout does not remotely install anything on existing machines.
+
+Setup keeps upstream skill contents unchanged. Default hosted uploads remain enabled, including on work machines, with no added approval gate or local-only policy. The upstream standalone workflow uses `canvas push` to upload the whole graph JSON. Anyone with the hosted view link can read the diagram without a login. CLI 0.4.0 also prints a secret edit link. Keep that edit link out of shared logs and commits.
+
+Setup installs the skill only, not the PR Lens GitHub App or a global PR Lens CLI. It does not require diagrams on every PR, add hooks or provider credentials, or change dotfiles policies or shell profiles. Setup and its offline tests do not render diagrams, upload graphs, or post PR content. Setup requires five nonempty regular files in both managed copies: `SKILL.md`, `LICENSE`, `references/graph-document.md`, `references/config.md`, and `references/example.graph.json`. Missing or empty files and linked files or directories fail validation, including linked `references` directories. Pi ownership removes identical obsolete direct copies and excludes user-modified copies without deleting them.
+
+Runtime limits are separate from skill installation:
+
+- The skill invokes `npx @coldtea/pr-lens-cli@latest` on demand. CLI 0.4.0 needs Node.js >=20.11. The setup skill installer already requires Node.js >=22.20 and can provision Node.js 24 through mise.
+- Agent-authored graphs need no extra provider key. The optional `analyze` command needs a provider key.
+- The `render` command produces local output but can update the project `.gitignore`. Setup does not run it.
+- PR attachment with `gh --attach` needs GitHub CLI >=2.99, write-level permissions, and a suitable token and host. Some setup platforms use older distro versions. This rollout does not upgrade `gh`.
+- Native Windows and Linux ARM64 viability comes from source inspection, not runtime smoke tests. ARM32 runtime readiness remains unverified. Skill installation does not guarantee every native runtime workflow works.
 
 ## Telegram alert credentials
 

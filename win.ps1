@@ -2024,7 +2024,8 @@ function Install-ManagedAgentSkill {
     param(
         [Parameter(Mandatory = $true)][string]$Repository,
         [Parameter(Mandatory = $true)][string]$SkillName,
-        [Parameter(Mandatory = $true)][string]$DisplayName
+        [Parameter(Mandatory = $true)][string]$DisplayName,
+        [string[]]$AdditionalFiles = @()
     )
 
     if (-not (Enable-SkillsCliNodeRuntime)) {
@@ -2061,24 +2062,31 @@ function Install-ManagedAgentSkill {
 
     $claudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
     # Codex, Gemini CLI, and Pi discover the skills CLI's shared user copy.
-    $skillFiles = @(
-        (Join-Path $claudeDir "skills\$SkillName\SKILL.md"),
-        (Join-Path $env:USERPROFILE ".agents\skills\$SkillName\SKILL.md")
+    $skillDirs = @(
+        (Join-Path $claudeDir "skills\$SkillName"),
+        (Join-Path $env:USERPROFILE ".agents\skills\$SkillName")
     )
+    $requiredFiles = @("SKILL.md") + $AdditionalFiles
 
-    foreach ($skillFile in $skillFiles) {
-        $skillDir = Split-Path -Parent $skillFile
-        $skillDirItem = Get-Item -LiteralPath $skillDir -Force -ErrorAction SilentlyContinue
-        $skillFileItem = Get-Item -LiteralPath $skillFile -Force -ErrorAction SilentlyContinue
-        $skillDirIsLink = $null -ne $skillDirItem -and (($skillDirItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
-        $skillFileIsLink = $null -ne $skillFileItem -and (($skillFileItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
-        if ($skillDirIsLink -or $skillFileIsLink) {
-            Write-Warning "$DisplayName validation failed: copied artifact is a symlink at $skillFile."
-            return $false
-        }
-        if (-not (Test-Path -LiteralPath $skillFile -PathType Leaf)) {
-            Write-Warning "$DisplayName validation failed: missing $skillFile."
-            return $false
+    foreach ($skillDir in $skillDirs) {
+        foreach ($relativeFile in $requiredFiles) {
+            $skillFile = Join-Path $skillDir $relativeFile
+            $artifactPath = $skillFile
+            # Reject links in the file and every directory inside the skill copy.
+            while ($true) {
+                $artifactItem = Get-Item -LiteralPath $artifactPath -Force -ErrorAction SilentlyContinue
+                if ($null -ne $artifactItem -and (($artifactItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
+                    Write-Warning "$DisplayName validation failed: copied artifact is a symlink at $artifactPath."
+                    return $false
+                }
+                if ($artifactPath -eq $skillDir) { break }
+                $artifactPath = Split-Path -Parent $artifactPath
+            }
+            $skillFileItem = Get-Item -LiteralPath $skillFile -Force -ErrorAction SilentlyContinue
+            if ($skillFileItem -isnot [System.IO.FileInfo] -or $skillFileItem.Length -le 0) {
+                Write-Warning "$DisplayName validation failed: missing, empty, or non-regular file at $skillFile."
+                return $false
+            }
         }
     }
 
@@ -2095,6 +2103,13 @@ function Install-SimpleEnglishSkill {
 # Install/update HumanLayer show-me for every supported AI coding harness.
 function Install-ShowMeSkill {
     return (Install-ManagedAgentSkill -Repository "humanlayer/skills" -SkillName "show-me" -DisplayName "show-me")
+}
+
+# Install/update upstream PR Lens unchanged, including its default hosted uploads.
+function Install-PrLensSkill {
+    return (Install-ManagedAgentSkill -Repository "coldteadotai/pr-lens" -SkillName "pr-lens" -DisplayName "PR Lens" -AdditionalFiles @(
+        "LICENSE", "references/graph-document.md", "references/config.md", "references/example.graph.json"
+    ))
 }
 
 # Remove setup-managed Impeccable resources without affecting sibling agent tooling.
@@ -3105,7 +3120,7 @@ function Set-PiSkillOwnership {
     $agentDirs = @($defaultAgentDir)
     if ($activeAgentDir -ne $defaultAgentDir) { $agentDirs += $activeAgentDir }
     $sharedSkills = @(
-        "simple-english", "show-me", "setup-matt-pocock-skills", "diagnosing-bugs", "tdd",
+        "simple-english", "show-me", "pr-lens", "setup-matt-pocock-skills", "diagnosing-bugs", "tdd",
         "improve-codebase-architecture", "grill-with-docs", "grilling", "domain-modeling", "codebase-design"
     )
     $managedExclusions = @(
@@ -4001,9 +4016,10 @@ function Invoke-WindowsSetupTasks {
     $mattPocockSetupFailed = $false
     $simpleEnglishSetupFailed = $false
     $showMeSetupFailed = $false
+    $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 135 | Last changed: Replace Synthetic with GPT-6 Astra xhigh defaults" -ForegroundColor DarkGray
+    Write-Host "Version 136 | Last changed: Install PR Lens across all supported agents" -ForegroundColor DarkGray
 
     Assert-HeadlessPaseoUnsupported
 
@@ -4074,6 +4090,9 @@ function Invoke-WindowsSetupTasks {
     if (-not (Install-ShowMeSkill)) {
         $showMeSetupFailed = $true
     }
+    if (-not (Install-PrLensSkill)) {
+        $prLensSetupFailed = $true
+    }
     if (-not (Set-PiSkillOwnership)) {
         $piSetupFailed = $true
     }
@@ -4098,6 +4117,9 @@ function Invoke-WindowsSetupTasks {
     }
     if ($showMeSetupFailed) {
         throw "Required show-me skill setup failed."
+    }
+    if ($prLensSetupFailed) {
+        throw "Required PR Lens skill setup failed."
     }
 
     Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen

@@ -327,6 +327,7 @@ finally {
 
 # Required managed agent skills update on every run, use the canonical shared
 # path, honor custom harness locations, and reject incomplete or linked copies.
+$originalManagedSkillWorkMachine = $env:WORK_MACHINE
 $originalManagedSkillUserProfile = $env:USERPROFILE
 $originalClaudeConfigDir = $env:CLAUDE_CONFIG_DIR
 $originalCodexHome = $env:CODEX_HOME
@@ -345,13 +346,20 @@ function global:npx {
     $script:ManagedSkillCalls.Add(($Arguments -join " "))
     $skillIndex = [Array]::IndexOf($Arguments, "--skill")
     $skillName = [string]$Arguments[$skillIndex + 1]
-    $skillFiles = @(
-        (Join-Path $env:CLAUDE_CONFIG_DIR "skills\$skillName\SKILL.md"),
-        (Join-Path $env:USERPROFILE ".agents\skills\$skillName\SKILL.md")
+    $skillDirs = @(
+        (Join-Path $env:CLAUDE_CONFIG_DIR "skills\$skillName"),
+        (Join-Path $env:USERPROFILE ".agents\skills\$skillName")
     )
-    foreach ($skillFile in $skillFiles) {
-        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $skillFile) | Out-Null
-        Set-Content -LiteralPath $skillFile -Value "---`nname: $skillName`n---"
+    $requiredFiles = @("SKILL.md")
+    if ($skillName -eq "pr-lens") {
+        $requiredFiles += @("LICENSE", "references/graph-document.md", "references/config.md", "references/example.graph.json")
+    }
+    foreach ($skillDir in $skillDirs) {
+        foreach ($relativeFile in $requiredFiles) {
+            $skillFile = Join-Path $skillDir $relativeFile
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $skillFile) | Out-Null
+            Set-Content -LiteralPath $skillFile -Value "mock $skillName $relativeFile"
+        }
     }
     $global:LASTEXITCODE = 0
     Write-Output "mock install complete"
@@ -362,9 +370,12 @@ try {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $siblingSkill) | Out-Null
     Set-Content -LiteralPath $siblingSkill -Value "keep"
 
-    if (-not (Install-SimpleEnglishSkill) -or -not (Install-ShowMeSkill) -or
-        -not (Install-SimpleEnglishSkill) -or -not (Install-ShowMeSkill)) {
-        throw "Required managed skill mocked installation failed"
+    foreach ($workMachine in @("0", "1")) {
+        $env:WORK_MACHINE = $workMachine
+        if (-not (Install-SimpleEnglishSkill) -or -not (Install-ShowMeSkill) -or
+            -not (Install-PrLensSkill) -or -not (Install-PrLensSkill)) {
+            throw "Required managed skill mocked installation failed"
+        }
     }
 
     $expectedSimpleEnglishArguments = "--yes skills@latest add AminBlg/SimpleEnglish --global --agent claude-code --agent codex --agent gemini-cli --skill simple-english --copy --yes"
@@ -375,11 +386,15 @@ try {
     if (@($script:ManagedSkillCalls | Where-Object { $_ -eq $expectedShowMeArguments }).Count -ne 2) {
         throw "show-me installer did not update twice with the exact targets: $($script:ManagedSkillCalls -join '; ')"
     }
-    if ($script:ManagedSkillCalls.Count -ne 4) {
+    $expectedPrLensArguments = "--yes skills@latest add coldteadotai/pr-lens --global --agent claude-code --agent codex --agent gemini-cli --skill pr-lens --copy --yes"
+    if (@($script:ManagedSkillCalls | Where-Object { $_ -eq $expectedPrLensArguments }).Count -ne 4) {
+        throw "PR Lens did not update twice on personal and work machines with the exact targets"
+    }
+    if ($script:ManagedSkillCalls.Count -ne 8) {
         throw "Managed skill installer made unexpected calls: $($script:ManagedSkillCalls -join '; ')"
     }
 
-    foreach ($skillName in @("simple-english", "show-me")) {
+    foreach ($skillName in @("simple-english", "show-me", "pr-lens")) {
         $installedSkillFiles = @(
             (Join-Path $env:CLAUDE_CONFIG_DIR "skills\$skillName\SKILL.md"),
             (Join-Path $env:USERPROFILE ".agents\skills\$skillName\SKILL.md")
@@ -417,9 +432,37 @@ try {
         throw "Pi ownership removed or changed a user-modified show-me copy"
     }
 
+    $canonicalPrLens = Join-Path $env:USERPROFILE ".agents\skills\pr-lens"
+    $defaultPiPrLens = Join-Path $env:USERPROFILE ".pi\agent\skills\pr-lens"
+    $customPiPrLens = Join-Path $env:PI_CODING_AGENT_DIR "skills\pr-lens"
+    Copy-Item -LiteralPath $canonicalPrLens -Destination $defaultPiPrLens -Recurse
+    Copy-Item -LiteralPath $canonicalPrLens -Destination $customPiPrLens -Recurse
+    Set-Content -LiteralPath (Join-Path $customPiPrLens "references/config.md") -Value "user-modified reference"
+    if (-not (Set-PiSkillOwnership) -or -not (Set-PiSkillOwnership)) {
+        throw "PR Lens ownership setup failed"
+    }
+    if (Test-Path -LiteralPath $defaultPiPrLens) {
+        throw "Pi ownership left an identical direct PR Lens duplicate"
+    }
+    if ((Get-Content -LiteralPath (Join-Path $customPiPrLens "references/config.md") -Raw).Trim() -ne "user-modified reference") {
+        throw "Pi ownership removed or changed a user-modified PR Lens reference"
+    }
+    $piSettings = Get-Content -LiteralPath (Join-Path $env:PI_CODING_AGENT_DIR "settings.json") -Raw | ConvertFrom-Json
+    foreach ($directPi in @($defaultPiPrLens, $customPiPrLens)) {
+        if (@($piSettings.skills | Where-Object { $_ -eq "!$directPi/**" }).Count -ne 1) {
+            throw "PR Lens direct-copy exclusion missing or repeated: $directPi"
+        }
+    }
+    if ($piSettings.skills -contains "!$canonicalPrLens/**" -or -not (Test-Path -LiteralPath $canonicalPrLens)) {
+        throw "Pi ownership removed or excluded canonical PR Lens"
+    }
+
     function global:npx {
         $global:LASTEXITCODE = 1
         Write-Output "simulated install failure"
+    }
+    if (Install-PrLensSkill) {
+        throw "PR Lens installer failure was not propagated"
     }
     if (Install-ShowMeSkill) {
         throw "show-me installer failure was not propagated"
@@ -448,11 +491,78 @@ try {
         throw "show-me symlink validation failure was not propagated"
     }
 
+    # Every required file, in both copies, must be regular, nonempty, and unlinked.
+    # Fixtures are inert text. Neither the real skills CLI nor PR Lens runs here.
+    $prLensFiles = @("SKILL.md", "LICENSE", "references/graph-document.md", "references/config.md", "references/example.graph.json")
+    $prLensFixture = Join-Path $managedSkillTestRoot "pr-lens-fixture"
+    foreach ($relativeFile in $prLensFiles) {
+        $fixtureFile = Join-Path $prLensFixture $relativeFile
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $fixtureFile) | Out-Null
+        Set-Content -LiteralPath $fixtureFile -Value "fixture $relativeFile"
+    }
+    function Reset-PrLensCopies {
+        foreach ($dir in $prLensDirs) {
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dir) | Out-Null
+            Copy-Item -LiteralPath $prLensFixture -Destination $dir -Recurse
+        }
+    }
+    function Assert-PrLensValidationFailure([string]$Artifact) {
+        $script:Messages.Clear()
+        if (Install-PrLensSkill) { throw "Accepted invalid PR Lens artifact: $Artifact" }
+        if (-not ($script:Messages | Where-Object { $_ -like "WARNING: PR Lens validation failed:*" })) {
+            throw "Missing PR Lens validation warning: $Artifact"
+        }
+    }
+    foreach ($claudeMode in @("custom", "default")) {
+        if ($claudeMode -eq "default") { $env:CLAUDE_CONFIG_DIR = $null }
+        $claudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
+        $prLensDirs = @((Join-Path $claudeDir "skills\pr-lens"), $canonicalPrLens)
+        Reset-PrLensCopies
+        if (-not (Install-PrLensSkill)) { throw "PR Lens complete fixture failed: $claudeMode" }
+        foreach ($dir in $prLensDirs) {
+            foreach ($relativeFile in $prLensFiles) {
+                $artifact = Join-Path $dir $relativeFile
+                if ((Get-FileHash -LiteralPath $artifact).Hash -ne (Get-FileHash -LiteralPath (Join-Path $prLensFixture $relativeFile)).Hash) {
+                    throw "PR Lens changed upstream fixture content: $artifact"
+                }
+                foreach ($defect in @("missing", "empty", "directory", "symlink", "dangling")) {
+                    Reset-PrLensCopies
+                    Remove-Item -LiteralPath $artifact -Force
+                    switch ($defect) {
+                        "empty" { [System.IO.File]::WriteAllText($artifact, "") }
+                        "directory" { New-Item -ItemType Directory -Path $artifact | Out-Null }
+                        "symlink" {
+                            New-Item -ItemType SymbolicLink -Path $artifact -Target (Join-Path $prLensFixture $relativeFile) -ErrorAction Stop | Out-Null
+                        }
+                        "dangling" {
+                            New-Item -ItemType SymbolicLink -Path $artifact -Target (Join-Path $prLensFixture "not-present") -ErrorAction Stop | Out-Null
+                        }
+                    }
+                    Assert-PrLensValidationFailure "$artifact ($defect)"
+                }
+                Reset-PrLensCopies
+            }
+            foreach ($relativeDir in @(".", "references")) {
+                foreach ($linkType in @("SymbolicLink", "Junction")) {
+                    if ($linkType -eq "Junction" -and [Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { continue }
+                    Reset-PrLensCopies
+                    $artifact = if ($relativeDir -eq ".") { $dir } else { Join-Path $dir $relativeDir }
+                    $target = if ($relativeDir -eq ".") { $prLensFixture } else { Join-Path $prLensFixture $relativeDir }
+                    Remove-Item -LiteralPath $artifact -Recurse -Force
+                    New-Item -ItemType $linkType -Path $artifact -Target $target -ErrorAction Stop | Out-Null
+                    Assert-PrLensValidationFailure "$artifact ($linkType directory)"
+                }
+            }
+            Reset-PrLensCopies
+        }
+    }
+
     $script:ManagedSkillRuntimeNpxCalled = $false
     function global:Enable-SkillsCliNodeRuntime { return $false }
     function global:npx { $script:ManagedSkillRuntimeNpxCalled = $true; $global:LASTEXITCODE = 0 }
-    if ((Install-ShowMeSkill) -or $script:ManagedSkillRuntimeNpxCalled) {
-        throw "show-me runtime failure was not propagated before installer execution"
+    if ((Install-ShowMeSkill) -or (Install-PrLensSkill) -or $script:ManagedSkillRuntimeNpxCalled) {
+        throw "Managed skill runtime failure was not propagated before installer execution"
     }
 
     function global:Enable-SkillsCliNodeRuntime { return $true }
@@ -460,8 +570,8 @@ try {
     $managedSkillPath = $env:PATH
     $env:PATH = Join-Path $managedSkillTestRoot "empty-path"
     try {
-        if (Install-ShowMeSkill) {
-            throw "show-me accepted an unavailable skills installer"
+        if ((Install-ShowMeSkill) -or (Install-PrLensSkill)) {
+            throw "Managed skill accepted an unavailable skills installer"
         }
     }
     finally {
@@ -469,6 +579,7 @@ try {
     }
 }
 finally {
+    $env:WORK_MACHINE = $originalManagedSkillWorkMachine
     $env:USERPROFILE = $originalManagedSkillUserProfile
     $env:CLAUDE_CONFIG_DIR = $originalClaudeConfigDir
     $env:CODEX_HOME = $originalCodexHome

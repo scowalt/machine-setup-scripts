@@ -33,6 +33,13 @@ for file in "${bash_setup_scripts[@]}"; do
     printf 'canonical\n' > "${shared}/diagnosing-bugs/SKILL.md"
     printf 'user-modified\n' > "${default_pi}/diagnosing-bugs/SKILL.md"
     cp "${shared}/diagnosing-bugs/SKILL.md" "${custom_pi}/diagnosing-bugs/SKILL.md"
+    mkdir -p "${shared}/pr-lens/references"
+    for artifact in SKILL.md LICENSE references/graph-document.md references/config.md references/example.graph.json; do
+        printf 'canonical %s\n' "${artifact}" > "${shared}/pr-lens/${artifact}"
+    done
+    cp -R "${shared}/pr-lens" "${default_pi}/pr-lens"
+    cp -R "${shared}/pr-lens" "${custom_pi}/pr-lens"
+    printf 'user-modified reference\n' > "${custom_pi}/pr-lens/references/config.md"
     mkdir -p "${active_pi}/extensions"
     printf '%s\n' '{"theme":"keep","skills":["user-skill"]}' > "${active_pi}/settings.json"
     printf '%s\n' '{"display":{"keep":true},"shortcuts":{"another":"ctrl+x"}}' > "${active_pi}/extensions/pi-autoresearch.json"
@@ -55,6 +62,16 @@ for file in "${bash_setup_scripts[@]}"; do
     [[ -f "${default_pi}/diagnosing-bugs/SKILL.md" ]] || fail "${file}: modified user copy was removed"
     [[ $(< "${default_pi}/diagnosing-bugs/SKILL.md") == user-modified ]] || fail "${file}: modified user copy changed"
 
+    [[ ! -e "${default_pi}/pr-lens" ]] || fail "${file}: identical default PR Lens duplicate remains"
+    [[ $(< "${custom_pi}/pr-lens/references/config.md") == 'user-modified reference' ]] || fail "${file}: modified PR Lens reference changed"
+    [[ -s "${shared}/pr-lens/references/config.md" ]] || fail "${file}: canonical PR Lens copy was removed"
+    for direct_pi in "${default_pi}" "${custom_pi}"; do
+        exclusion="!${direct_pi}/pr-lens/**"
+        count=$(jq --arg entry "${exclusion}" '[.skills[] | select(. == $entry)] | length' "${active_pi}/settings.json")
+        [[ "${count}" -eq 1 ]] || fail "${file}: PR Lens exclusion missing or repeated at ${direct_pi}"
+    done
+    jq -e --arg entry "!${shared}/pr-lens/**" '.skills | index($entry) == null' "${active_pi}/settings.json" > /dev/null || fail "${file}: canonical PR Lens copy was excluded"
+
     jq -e '.theme == "keep" and (.skills | index("user-skill"))' "${active_pi}/settings.json" > /dev/null || fail "${file}: existing Pi settings changed"
     for skill in pi-goal-writer autoresearch-create autoresearch-finalize autoresearch-hooks; do
         exclusion="!${shared}/${skill}/**"
@@ -73,7 +90,7 @@ grep -q 'fullscreenDashboard.*ctrl+shift+r' win.ps1 || fail 'win.ps1: missing Ct
 if sed -n '/^function Install-ManagedAgentSkill/,/^}/p' win.ps1 | grep -q '"--agent", "pi"'; then
     fail 'win.ps1: managed agent skills still target direct Pi installation'
 fi
-grep -q '"simple-english", "show-me"' win.ps1 || fail 'win.ps1: show-me is not a canonical shared Pi skill'
+grep -q '"simple-english", "show-me", "pr-lens"' win.ps1 || fail 'win.ps1: PR Lens is not a canonical shared Pi skill'
 if sed -n '/^function Setup-MattPocockSkills/,/^}/p' win.ps1 | grep -q '"--agent", "pi"'; then
     fail 'win.ps1: Matt Pocock skills still target direct Pi installation'
 fi
