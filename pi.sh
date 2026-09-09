@@ -1820,6 +1820,129 @@ install_ntn_cli() {
 
 
 # Install Portless CLI (Tailscale HTTPS tunnel helper)
+# Standalone installer shared verbatim with the other setup entry points.
+install_paseo_plain() {
+    if ! command -v node &> /dev/null; then
+        print_warning "Paseo Plain deferred: install Node.js >=22.19 and rerun setup."
+        return 0
+    fi
+    local result
+    local status=0
+    result=$(node --input-type=commonjs - <<'PASEO_PLAIN_SETUP_JS'
+// BEGIN PASEO PLAIN INSTALLER
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const { spawnSync } = require('node:child_process');
+const remote = 'https://github.com/scowalt/paseo-plain.git';
+const id = 'paseo-plain';
+const deferred = message => { console.log(`Paseo Plain deferred: ${message}`); };
+function executable(name, packageName) {
+    for (const directory of (process.env.PATH || '').split(path.delimiter)) {
+        if (!path.isAbsolute(directory)) continue;
+        const file = path.join(directory, name + (process.platform === 'win32' ? '.exe' : ''));
+        try { fs.accessSync(file, fs.constants.X_OK); return [file]; } catch {}
+        if (process.platform !== 'win32' || !packageName || !fs.existsSync(path.join(directory, `${name}.cmd`))) continue;
+        for (const base of [path.join(directory, 'node_modules'), path.resolve(directory, '../install/global/node_modules')]) {
+            try {
+                const root = path.join(base, packageName);
+                const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+                const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.[name];
+                if (pkg.name !== packageName || typeof bin !== 'string') continue;
+                const script = path.resolve(root, bin);
+                if (!script.startsWith(root + path.sep) || !fs.statSync(script).isFile()) continue;
+                return [process.execPath, script];
+            } catch {}
+        }
+    }
+    return null;
+}
+function main() {
+    const [major, minor] = process.versions.node.split('.').map(Number);
+    if (major < 22 || (major === 22 && minor < 19)) return deferred('Node.js >=22.19 is required.');
+    const paseo = executable('paseo', '@getpaseo/cli');
+    if (!paseo || !executable('pi', '@earendil-works/pi-coding-agent')) return deferred('install Paseo and Pi, then rerun setup.');
+    const home = path.resolve(process.env.PASEO_HOME || path.join(os.homedir(), '.paseo'));
+    const configFile = path.join(home, 'config.json');
+    if (!fs.existsSync(configFile)) return deferred('start and configure the local Paseo daemon, then rerun setup.');
+    const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    if (config.pluginsEnabled !== true) return deferred('enable trusted plugins in Paseo Settings > Plugins, then rerun setup.');
+    const localTarget = value => typeof value === 'string' && /^(127\.0\.0\.1|localhost|\[::1\]):[1-9][0-9]{0,4}$/.test(value) && Number(value.split(':').pop()) <= 65535;
+    if (config.daemon?.listen !== undefined && !localTarget(config.daemon.listen)) return deferred('a loopback TCP daemon endpoint is required; no remote host was changed.');
+    // Paseo status prefers the saved PID endpoint over daemon.listen and probes it.
+    const pidFile = path.join(home, 'paseo.pid');
+    if (fs.existsSync(pidFile)) {
+        const pidInfo = JSON.parse(fs.readFileSync(pidFile, 'utf8'));
+        const target = pidInfo?.listen ?? pidInfo?.sockPath;
+        if (target !== undefined && !localTarget(target)) return deferred('the saved daemon endpoint is not loopback TCP; inspect local Paseo configuration.');
+    }
+    const run = (args, timeout = 20000) => {
+        const result = spawnSync(paseo[0], [...paseo.slice(1), '--home', home, ...args], {
+            cwd: os.homedir(), encoding: 'utf8', timeout, maxBuffer: 2 * 1024 * 1024,
+            stdio: ['ignore', 'pipe', 'pipe'], shell: false,
+        });
+        if (result.error || result.status !== 0) throw new Error('paseo-command-failed');
+        return JSON.parse(result.stdout);
+    };
+    const status = run(['daemon', 'status', '--json']);
+    if (status.localDaemon !== 'running' || status.connectedDaemon !== 'reachable' ||
+        typeof status.home !== 'string' || fs.realpathSync(status.home) !== fs.realpathSync(home) || !localTarget(status.listen)) {
+        return deferred('the configured local daemon is not reachable; start it and rerun setup.');
+    }
+    if (![status.cliVersion, status.daemonVersion].every(v => typeof v === 'string' && /^0\.8\.\d+(?:[-+][\w.-]+)?$/.test(v))) {
+        return deferred('Paseo CLI and daemon 0.8.x are required; setup does not change release channels.');
+    }
+    const args = ['--host', status.listen, 'plugin'];
+    const catalog = run([...args, 'ls', '--json']);
+    if (!Array.isArray(catalog)) throw new Error('invalid-catalog');
+    const matches = catalog.filter(item => item.id === id);
+    if (matches.length > 1) throw new Error('duplicate-id');
+    const existing = matches[0];
+    if (existing?.enabled === false || config.plugins?.[id]?.enabled === false) return deferred('the saved disabled state was preserved.');
+    if (existing && (existing.source !== 'git' || existing.remote !== remote || existing.ref !== 'release')) {
+        return deferred('the existing paseo-plain source is not managed by setup; it was left unchanged.');
+    }
+    if (!existing && config.plugins?.[id]) return deferred('the configured plugin is absent from the catalog; inspect Paseo before retrying.');
+    const directory = path.join(home, 'plugin-data', id);
+    for (const folder of [path.join(home, 'plugin-data'), directory]) {
+        if (fs.existsSync(folder) && (fs.lstatSync(folder).isSymbolicLink() || !fs.statSync(folder).isDirectory())) {
+            return deferred('plugin storage must use regular directories.');
+        }
+    }
+    const settings = path.join(directory, 'configuration.json');
+    if (fs.existsSync(settings)) {
+        if (!fs.lstatSync(settings).isFile() || fs.lstatSync(settings).isSymbolicLink()) return deferred('settings must be a regular file.');
+        const saved = JSON.parse(fs.readFileSync(settings, 'utf8'));
+        if (!saved.values || typeof saved.values !== 'object' || !Number.isInteger(saved.revision)) throw new Error('invalid-settings');
+    } else if (!existing) {
+        fs.mkdirSync(directory, {recursive: true, mode: 0o700});
+        // Defaults are filled by the plugin schema. Never overwrite an existing preference file.
+        fs.writeFileSync(settings, JSON.stringify({values: {enabled: true}, revision: 0, error: null}), {flag: 'wx', mode: 0o600});
+    }
+    run(existing ? [...args, 'update', id, '--json'] : [...args, 'add', remote, '--ref', 'release', '--id', id, '--json'], 180000);
+    const after = run([...args, 'ls', '--json']);
+    if (!Array.isArray(after) || !after.some(item => item.id === id && item.status === 'running' && item.enabled === true && item.source === 'git' && item.remote === remote && item.ref === 'release')) {
+        throw new Error('plugin-not-running');
+    }
+    console.log(`Paseo Plain ${existing ? 'checked for updates' : 'installed'}; saved preferences preserved. Rewrites require an explicit request and an existing Pi login.`);
+}
+try { main(); } catch {
+    console.log('Paseo Plain setup could not finish. Check local prerequisites and plugin status, then rerun setup. Existing settings were not reset.');
+    process.exitCode = 1;
+}
+// END PASEO PLAIN INSTALLER
+PASEO_PLAIN_SETUP_JS
+    ) || status=$?
+    if [[ "${status}" -ne 0 ]]; then
+        print_warning "${result}"
+        return 1
+    elif [[ "${result}" == "Paseo Plain deferred:"* ]]; then
+        print_warning "${result}"
+    else
+        print_success "${result}"
+    fi
+}
+
 install_portless_cli() {
     if command -v portless &> /dev/null; then
         print_debug "Portless CLI is already installed."
@@ -5115,7 +5238,6 @@ setup_pi_companion_packages() {
     local _legacy_package="npm:pi-ask-user"
     local -a _packages=(
         "npm:pi-web-access"
-        "npm:pi-prose"
     )
     local _package=""
     local _output=""
@@ -5157,39 +5279,6 @@ setup_pi_companion_packages() {
             print_warning "Failed to install Pi package ${_package}: ${_output}"
         fi
     done
-}
-
-# Seed pi-prose for new sessions without replacing an existing user choice.
-seed_pi_prose_default() {
-    local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
-    local _config_dir="${_agent_dir}/prose"
-    local _config_file="${_config_dir}/config.json"
-
-    if [[ -e "${_config_file}" || -L "${_config_file}" ]]; then
-        if [[ ! -f "${_config_file}" ]]; then
-            print_warning "Existing pi-prose config at ${_config_file} is not a regular file; leaving it unchanged."
-        elif ! command -v jq &> /dev/null; then
-            print_debug "Pi prose config already exists at ${_config_file}; leaving it unchanged."
-        elif jq -e 'type == "object" and ((has("default") | not) or (.default | type == "string"))' "${_config_file}" > /dev/null 2>&1; then
-            print_debug "Pi prose default is already configured at ${_config_file}; leaving it unchanged."
-        else
-            print_warning "Existing pi-prose config at ${_config_file} is malformed; leaving it unchanged."
-        fi
-        return 0
-    fi
-
-    if ! mkdir -p "${_config_dir}"; then
-        print_warning "Failed to create the pi-prose config directory at ${_config_dir}."
-        return 1
-    fi
-
-    if printf '{\n  "default": "matter-of-fact"\n}\n' > "${_config_file}"; then
-        print_success "Pi prose default seeded as matter-of-fact for new sessions."
-        return 0
-    fi
-
-    print_warning "Failed to seed the pi-prose default at ${_config_file}."
-    return 1
 }
 
 # Keep shared skills canonical for Pi and suppress stale direct/package collisions.
@@ -6187,7 +6276,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 201 | Last changed: Default Paseo daemons and clients to beta"
+    echo -e "${GRAY}Version 202 | Last changed: Install Paseo Plain on future setup runs"
 
     if ! acquire_setup_lock; then
         return 1
@@ -6312,7 +6401,6 @@ run_setup_tasks() {
         setup_pi_mcp_adapter
         setup_pi_claude_bridge
         setup_pi_companion_packages
-        seed_pi_prose_default
         setup_pi_goal_autoresearch
     else
         remove_pi_subagents
@@ -6352,6 +6440,10 @@ run_setup_tasks() {
     configure_paseo_desktop_channel linux || return 1
     setup_headless_paseo_daemon || return 1
     install_iterm2_shell_integration
+
+    if ! install_paseo_plain; then
+        _setup_had_errors=1
+    fi
 
     print_section "Final Updates"
 

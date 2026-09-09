@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Version 2 | Last changed: Stop restoring Pi prose
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -75,23 +76,23 @@ MOCK_PI
         fail "${file}: legacy Pi Ask User package remains installed"
     fi
 
-    for package in 'npm:pi-web-access' 'npm:pi-prose'; do
-        count=$(grep -Fxc -- "${package}" "${package_state}" || true)
-        [[ "${count}" -eq 1 ]] || fail "${file}: expected one installed entry for ${package}, found ${count}"
+    package='npm:pi-web-access'
+    count=$(grep -Fxc -- "${package}" "${package_state}" || true)
+    [[ "${count}" -eq 1 ]] || fail "${file}: expected one installed entry for ${package}, found ${count}"
 
-        install_count=$(grep -Fxc -- "install ${package}" "${command_log}" || true)
-        [[ "${install_count}" -eq 2 ]] || fail "${file}: expected ${package} to update on both setup runs, found ${install_count} installs"
-    done
+    install_count=$(grep -Fxc -- "install ${package}" "${command_log}" || true)
+    [[ "${install_count}" -eq 2 ]] || fail "${file}: expected ${package} to update on both setup runs, found ${install_count} installs"
 
-    # Regression guard: the retired RPIV packages must never be installed.
+    # Regression guard: removed packages must not return on the next setup run.
     for package in \
+        'npm:pi-prose' \
         'npm:@juicesharp/rpiv-ask-user-question' \
         'npm:@juicesharp/rpiv-todo'; do
         if grep -Fxq -- "${package}" "${package_state}"; then
-            fail "${file}: retired RPIV package ${package} is installed"
+            fail "${file}: removed package ${package} is installed"
         fi
         if grep -Fxq "install ${package}" "${command_log}"; then
-            fail "${file}: attempted to install retired RPIV package ${package}"
+            fail "${file}: attempted to install removed package ${package}"
         fi
     done
 

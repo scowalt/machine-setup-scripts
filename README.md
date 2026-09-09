@@ -10,11 +10,11 @@ Every setup run writes a local log under `~/.local/log/machine-setup` and makes 
 
 Every setup script installs or updates the main AI development tools. The supported systems are macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows. The tools include Claude Code CLI and Codex CLI, Notion CLI (`ntn`), Gemini CLI, and Pi.
 
-Setup removes the tintinweb Pi subagents extension when it is present. It also removes the legacy `pi-ask-user` package and the retired `@juicesharp/rpiv-ask-user-question` and `@juicesharp/rpiv-todo` packages when they are present. Setup installs the Pi MCP adapter, Pi Claude bridge, `pi-web-access`, `pi-prose`, and the Pi goal/autoresearch extensions.
+Setup removes the tintinweb Pi subagents extension when it is present. It also removes the legacy `pi-ask-user` package and the retired `@juicesharp/rpiv-ask-user-question` and `@juicesharp/rpiv-todo` packages when they are present. Setup installs the Pi MCP adapter, Pi Claude bridge, `pi-web-access`, and the Pi goal/autoresearch extensions.
 
 All machines default Pi to GPT-6 Astra (`openai-codex/gpt-6-astra`) with `xhigh` thinking, including work machines. Setup removes the retired Synthetic provider from Pi's `models.json` and preserves other providers and local credentials. z.ai remains optional when a key exists. On a new machine, use `/login` in Pi to connect your ChatGPT subscription.
 
-Each idempotent setup run requests unpinned `npm:pi-prose`, so Pi installs or updates the latest release. Setup creates `prose/config.json` with the `matter-of-fact` user default only when the file does not exist. Setup does not change an existing pi-prose user configuration. Pi still honors explicit session, command-line, and project style choices.
+Setup does not reinstall `pi-prose` or create `prose/config.json`. Existing custom prose files remain unchanged. The dotfiles repository no longer manages this package or its initial default. Setup does not uninstall a user-selected copy.
 
 Setup installs the managed Matt Pocock engineering skills on personal and work machines. Pi and Codex share the canonical copies in `~/.agents/skills`. Work machines also install Google Cloud CLI.
 
@@ -105,6 +105,20 @@ For Android betas, install the APK manually from [GitHub releases](https://githu
 To return to stable, set `PASEO_CHANNEL=stable` and rerun setup with Desktop closed. Managed daemons install the current npm `latest` version, which can be older than the beta. Desktop waits for a newer stable release and does not automatically downgrade. Back up Paseo data before downgrading a daemon. Changing the channel does not undo data migrations.
 
 See [Paseo update instructions](https://paseo.sh/docs/updates.md). The client document format matches [the v0.8 beta Desktop settings store](https://github.com/getpaseo/paseo/blob/4eab53e24e1b57c74b00945aa48a89d68ed755e3/packages/desktop/src/settings/desktop-settings.ts). Tests use temporary fixtures and do not install, update, or start Paseo. Run `bash tests/paseo-release-channel-contract.sh` and `pwsh -NoProfile -File tests/paseo-release-channel-powershell.ps1` for channel coverage.
+
+## Paseo Plain plugin
+
+Future setup runs install [Paseo Plain](https://github.com/scowalt/paseo-plain) for the local daemon when Paseo CLI/daemon 0.8.x, Node.js >=22.19, Pi, and enabled Paseo plugins are available. The six standalone setup scripts share the same installer logic. Setup does not inventory or contact other machines.
+
+Setup installs the reviewed `release` branch through Paseo's Git installer. Later runs update only a matching Git-managed `paseo-plain` installation. Directory installations, other sources, pinned tags, and disabled installations remain unchanged. Failed updates do not trigger a remove/reinstall cycle.
+
+New installations initialize manual rewrite controls once. Existing voice, model, display, timeout, disabled choices, configuration files, and cached rewrites remain unchanged. Setup does not copy credentials or make a model request. The plugin uses the daemon user's existing Pi login when the user explicitly requests a rewrite.
+
+If prerequisites are missing, setup reports that installation is deferred. Start a compatible local daemon and enable trusted plugins in **Paseo Settings > Plugins**, then rerun setup. Plugins run without isolation and can access the daemon's files, processes, credentials, and network. The plugin installer does not enable the global switch or start another daemon. It follows the separate `PASEO_CHANNEL` policy above. If you select stable and that release lacks the required plugin API, plugin installation remains deferred.
+
+The installer currently requires a loopback TCP daemon endpoint. Existing headless support restrictions still apply. Plugin CI uses fake workers; actual model access, client appearance, and ARM/WSL runtime behavior need separate verification. The plugin restricts Windows storage through NTFS permissions and keeps rewriting off if private storage cannot be prepared.
+
+Run `python3 tests/test_paseo_plain_setup.py` for isolated installer regressions. Tests extract only installer functions and use temporary homes and fake CLIs. They do not source full provisioning entry points.
 
 ## Headless Paseo daemon
 
