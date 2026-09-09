@@ -41,15 +41,59 @@ if (command[0] === 'daemon' && command[1] === 'status') {
   console.log(JSON.stringify({localDaemon:'running', connectedDaemon:'reachable', home,
     listen:'127.0.0.1:19991', cliVersion:'0.8.0-beta.1', daemonVersion:'0.8.0-beta.1', ...state.status}));
 } else if (command[0] === 'plugin' && command[1] === 'ls') {
+  if (state.failAt === 'disable-during-check') {
+    const file = path.join(home, 'config.json');
+    const config = JSON.parse(fs.readFileSync(file));
+    config.pluginsEnabled = false;
+    fs.writeFileSync(file, JSON.stringify(config));
+  }
   console.log(JSON.stringify(state.plugins || []));
 } else if (command[0] === 'plugin' && command[1] === 'add') {
-  if (state.fail) { console.error('provider-secret-must-not-be-logged'); process.exit(1); }
-  state.plugins = [{id:'paseo-plain', source:'git', remote:'https://github.com/scowalt/paseo-plain.git',
-    ref:'release', commit:'a'.repeat(40), enabled:true, status:'running'}];
+  if (state.failAt === 'add-timeout') { setInterval(() => {}, 1000); return; }
+  if (state.fail || state.failAt === 'add-before') { console.error('provider-secret-must-not-be-logged'); process.exit(1); }
+  if (state.plugins.some(p => p.id === 'paseo-plain')) { console.error('ID already configured'); process.exit(1); }
+  if (state.expectedNative && fs.readFileSync(path.join(home, 'plugin-settings/paseo-plain/voice.json'), 'utf8') !== state.expectedNative) {
+    console.error('native settings not restored before activation'); process.exit(1);
+  }
+  const ref = command[command.indexOf('--ref') + 1];
+  const commit = (state.addCommit || 'a').repeat(40);
+  const checkout = path.join(home, 'plugins/paseo-plain', commit.slice(0, 12) + '-new', 'checkout');
+  fs.mkdirSync(checkout, {recursive:true});
+  fs.writeFileSync(path.join(checkout, 'index.server.ts'), 'new fixture plugin');
+  const installed = {id:'paseo-plain', source:'git', remote:'https://github.com/scowalt/paseo-plain.git',
+    ref, commit, path:checkout, enabled:true, status:state.failAt === 'add-after' ? 'failed' : 'running'};
+  state.plugins.push(installed);
+  const config = JSON.parse(fs.readFileSync(path.join(home, 'config.json')));
+  config.plugins = {...config.plugins, 'paseo-plain':{source:'directory', path:checkout, enabled:true}};
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify(config));
+  const sourcesFile = path.join(home, 'plugins/sources.json');
+  const sources = fs.existsSync(sourcesFile) ? JSON.parse(fs.readFileSync(sourcesFile)) : {};
+  sources['paseo-plain'] = {remote:installed.remote, requestedRef:ref, trackingBranch:ref, commit, pluginPath:'.', checkoutRoot:checkout};
+  fs.writeFileSync(sourcesFile, JSON.stringify(sources));
   fs.writeFileSync(statePath, JSON.stringify(state));
-  console.log(JSON.stringify(state.plugins[0]));
+  if (['add-after', 'add-lost-response'].includes(state.failAt)) { console.error('provider-secret-must-not-be-logged'); process.exit(1); }
+  console.log(JSON.stringify(installed));
+} else if (command[0] === 'plugin' && command[1] === 'remove') {
+  if (state.failAt === 'remove-before') { console.error('provider-secret-must-not-be-logged'); process.exit(1); }
+  state.plugins = state.plugins.filter(p => p.id !== 'paseo-plain');
+  const config = JSON.parse(fs.readFileSync(path.join(home, 'config.json')));
+  delete config.plugins['paseo-plain'];
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify(config));
+  const sourcesFile = path.join(home, 'plugins/sources.json');
+  const sources = JSON.parse(fs.readFileSync(sourcesFile));
+  delete sources['paseo-plain'];
+  fs.writeFileSync(sourcesFile, JSON.stringify(sources));
+  fs.rmSync(path.join(home, 'plugins/paseo-plain'), {recursive:true, force:true});
+  fs.rmSync(path.join(home, 'plugin-settings/paseo-plain'), {recursive:true, force:true});
+  if (state.failAt === 'native-reappeared') {
+    fs.mkdirSync(path.join(home, 'plugin-settings/paseo-plain'), {recursive:true});
+    fs.writeFileSync(path.join(home, 'plugin-settings/paseo-plain/new.json'), 'new concurrent settings');
+  }
+  fs.writeFileSync(statePath, JSON.stringify(state));
+  if (state.failAt === 'remove-after') { console.error('provider-secret-must-not-be-logged'); process.exit(1); }
+  console.log(JSON.stringify({id:'paseo-plain', enabled:false, status:'disabled'}));
 } else if (command[0] === 'plugin' && command[1] === 'update') {
-  if (state.fail) { console.error('provider-secret-must-not-be-logged'); process.exit(1); }
+  if (state.fail || command.includes('--ref')) { console.error('provider-secret-must-not-be-logged'); process.exit(1); }
   console.log(JSON.stringify([{id:'paseo-plain', updated:false}]));
 } else { console.error('forbidden command'); process.exit(99); }
 '''
@@ -78,9 +122,12 @@ class SetupTest(unittest.TestCase):
         (self.paseo / 'config.json').write_text(json.dumps(
             config if config is not None else {'pluginsEnabled': True, 'daemon': {'listen': '127.0.0.1:19991'}}))
 
-    def run_installer(self, script='ubuntu.sh', cwd=None):
+    def run_installer(self, script='ubuntu.sh', cwd=None, cli_timeout=None):
         (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
-        result = subprocess.run([NODE, '-'], input=installer(script), env=self.env, cwd=cwd,
+        code = installer(script)
+        if cli_timeout is not None:
+            code = code.replace('180000', str(cli_timeout))
+        result = subprocess.run([NODE, '-'], input=code, env=self.env, cwd=cwd,
                                 text=True, capture_output=True, timeout=15)
         self.state = json.loads((self.paseo / 'fake-state.json').read_text())
         self.assertNotIn('provider-secret-must-not-be-logged', result.stdout + result.stderr)
@@ -97,13 +144,200 @@ class SetupTest(unittest.TestCase):
         plugin_calls = [args for args in self.calls() if 'plugin' in args]
         install = next(args for args in plugin_calls if 'add' in args)
         self.assertIn('https://github.com/scowalt/paseo-plain.git', install)
-        self.assertEqual(install[install.index('--ref') + 1], 'release')
+        self.assertEqual(install[install.index('--ref') + 1], 'main')
         for args in plugin_calls:
             self.assertEqual(args[args.index('--host') + 1], '127.0.0.1:19991')
         saved = json.loads((self.paseo / 'plugin-data/paseo-plain/configuration.json').read_text())
         self.assertTrue(saved['values']['enabled'])
         self.assertTrue(json.loads((self.paseo / 'config.json').read_text())['pluginsEnabled'])
         self.assertFalse(any('rewrite' in arg or 'preview' in arg for args in self.calls() for arg in args))
+
+    def seed_release(self):
+        checkout = self.paseo / 'plugins/paseo-plain/aaaaaaaaaaaa-old/checkout'
+        checkout.mkdir(parents=True)
+        (checkout / 'index.server.ts').write_text('old fixture plugin')
+        (checkout / 'paseo-plugin.json').write_text('{"id":"paseo-plain"}')
+        record = {'remote': 'https://github.com/scowalt/paseo-plain.git', 'requestedRef': 'release',
+                  'trackingBranch': 'release', 'commit': 'a' * 40, 'pluginPath': '.', 'checkoutRoot': str(checkout)}
+        (self.paseo / 'plugins/sources.json').write_text(json.dumps({'paseo-plain': record, 'unrelated': {'keep': True}}))
+        self.configure({'pluginsEnabled': True, 'daemon': {'listen': '127.0.0.1:19991'}, 'unrelated': 'keep',
+                        'plugins': {'paseo-plain': {'source': 'directory', 'path': str(checkout), 'enabled': True},
+                                    'unrelated': {'source': 'directory', 'path': '/fixture/other', 'enabled': False}}})
+        self.state['plugins'] = [{'id': 'paseo-plain', 'source': 'git', 'remote': record['remote'],
+                                 'ref': 'release', 'commit': record['commit'], 'path': str(checkout),
+                                 'enabled': True, 'status': 'running'}, {'id': 'unrelated', 'enabled': False}]
+        self.state['addCommit'] = 'b'
+        data = self.paseo / 'plugin-data/paseo-plain'
+        data.mkdir(parents=True, exist_ok=True)
+        (data / 'configuration.json').write_text('{"values":{"enabled":false,"style":"Keep my voice"},"revision":7,"error":null}')
+        (data / 'cache.json').write_text('[{"text":"private cached text"}]')
+        native = self.paseo / 'plugin-settings/paseo-plain'
+        native.mkdir(parents=True, exist_ok=True)
+        (native / 'voice.json').write_text('{"custom":"native setting"}\n')
+        self.state['expectedNative'] = (native / 'voice.json').read_text()
+        return checkout
+
+    def test_release_migration_preserves_state_and_runs_only_once(self):
+        checkout = self.seed_release()
+        data = self.paseo / 'plugin-data/paseo-plain'
+        before = {p.name: p.read_bytes() for p in data.iterdir()}
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('migrated', result.stdout)
+        installed = next(p for p in self.state['plugins'] if p['id'] == 'paseo-plain')
+        self.assertEqual(installed['ref'], 'main')
+        self.assertEqual(installed['status'], 'running')
+        self.assertFalse(checkout.exists())
+        self.assertEqual({p.name: p.read_bytes() for p in data.iterdir()}, before)
+        native = self.paseo / 'plugin-settings/paseo-plain/voice.json'
+        self.assertEqual(native.read_text(), self.state['expectedNative'])
+        recovery = self.paseo / 'setup-recovery/paseo-plain-release-to-main'
+        self.assertEqual(json.loads((recovery / 'state.json').read_text())['phase'], 'complete')
+        self.assertEqual((recovery / 'checkout/index.server.ts').read_text(), 'old fixture plugin')
+        self.assertEqual((recovery / 'checkout').stat().st_mode & 0o777, 0o700)
+        self.assertTrue((recovery / 'RECOVERY.md').is_file())
+        config = json.loads((self.paseo / 'config.json').read_text())
+        self.assertEqual(config['unrelated'], 'keep')
+        self.assertFalse(config['plugins']['unrelated']['enabled'])
+        self.assertEqual(json.loads((self.paseo / 'plugins/sources.json').read_text())['unrelated'], {'keep': True})
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('checked for updates', result.stdout)
+        self.assertEqual(sum('remove' in args for args in self.calls()), 1)
+        self.assertEqual(sum('add' in args for args in self.calls()), 1)
+        self.assertEqual(sum('update' in args for args in self.calls()), 1)
+
+    def assert_stopped_migration_is_not_retried(self, failure, phase):
+        checkout = self.seed_release()
+        data = self.paseo / 'plugin-data/paseo-plain'
+        before = {p.name: p.read_bytes() for p in data.iterdir()}
+        self.state['failAt'] = failure
+        result = self.run_installer(cli_timeout=300)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('migration stopped', result.stdout)
+        recovery = self.paseo / 'setup-recovery/paseo-plain-release-to-main'
+        self.assertEqual(json.loads((recovery / 'state.json').read_text())['phase'], phase)
+        self.assertEqual((recovery / 'checkout/index.server.ts').read_text(), 'old fixture plugin')
+        self.assertEqual({p.name: p.read_bytes() for p in data.iterdir()}, before)
+        self.assertEqual(checkout.exists(), failure == 'remove-before')
+        mutations = [args for args in self.calls() if any(op in args for op in ('remove', 'add', 'update'))]
+        self.state.pop('failAt')
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('migration stopped', result.stdout)
+        self.assertEqual([args for args in self.calls() if any(op in args for op in ('remove', 'add', 'update'))], mutations)
+        self.assertEqual(sum('remove' in args for args in mutations), 1)
+
+    def test_failed_removal_keeps_recovery_and_blocks_retries(self):
+        self.assert_stopped_migration_is_not_retried('remove-before', 'removing')
+
+    def test_lost_removal_response_does_not_trigger_install_or_restore(self):
+        self.assert_stopped_migration_is_not_retried('remove-after', 'removing')
+        self.assertFalse(any('add' in args for args in self.calls()))
+        self.assertFalse((self.paseo / 'plugin-settings/paseo-plain').exists())
+
+    def test_failed_new_install_keeps_recovery_and_restored_native_settings(self):
+        self.assert_stopped_migration_is_not_retried('add-before', 'adding')
+        self.assertEqual((self.paseo / 'plugin-settings/paseo-plain/voice.json').read_text(), self.state['expectedNative'])
+
+    def test_failed_activation_is_not_removed_by_a_retry(self):
+        self.assert_stopped_migration_is_not_retried('add-after', 'adding')
+        self.assertEqual(next(p for p in self.state['plugins'] if p['id'] == 'paseo-plain')['status'], 'failed')
+
+    def test_lost_success_response_keeps_running_main_and_blocks_retries(self):
+        self.assert_stopped_migration_is_not_retried('add-lost-response', 'adding')
+        self.assertEqual(next(p for p in self.state['plugins'] if p['id'] == 'paseo-plain')['status'], 'running')
+
+    def test_timed_out_install_keeps_recovery_and_blocks_retries(self):
+        self.assert_stopped_migration_is_not_retried('add-timeout', 'adding')
+
+    def test_restore_does_not_overwrite_reappearing_native_settings(self):
+        self.assert_stopped_migration_is_not_retried('native-reappeared', 'restoring')
+        self.assertEqual((self.paseo / 'plugin-settings/paseo-plain/new.json').read_text(), 'new concurrent settings')
+        self.assertFalse(any('add' in args for args in self.calls()))
+
+    def test_disabled_release_and_unverified_tracking_metadata_are_not_migrated(self):
+        self.seed_release()
+        self.state['plugins'][0]['enabled'] = False
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('disabled', result.stdout)
+        self.state['plugins'][0]['enabled'] = True
+        sources = self.paseo / 'plugins/sources.json'
+        original = json.loads(sources.read_text())
+        for change in ({'trackingBranch': None}, {'commit': 'b' * 40}, {'pluginPath': 'other'},
+                       {'checkoutRoot': str(self.home)}, {'remote': 'https://example.com/other.git'}):
+            with self.subTest(change=change):
+                invalid = {**original, 'paseo-plain': {**original['paseo-plain'], **change}}
+                sources.write_text(json.dumps(invalid))
+                result = self.run_installer()
+                self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertFalse((self.paseo / 'setup-recovery').exists())
+        self.assertFalse(any('remove' in args or 'add' in args for args in self.calls()))
+
+    def test_unsafe_backup_link_is_rejected_before_removal(self):
+        checkout = self.seed_release()
+        target = self.home / 'outside'
+        target.write_text('do not copy this outside data')
+        (checkout / 'external-link').symlink_to(target)
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertTrue(checkout.exists())
+        self.assertFalse(any('remove' in args for args in self.calls()))
+        self.assertEqual(target.read_text(), 'do not copy this outside data')
+
+    def test_concurrent_trust_change_aborts_before_removal(self):
+        checkout = self.seed_release()
+        self.state['failAt'] = 'disable-during-check'
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertTrue(checkout.exists())
+        self.assertFalse(json.loads((self.paseo / 'config.json').read_text())['pluginsEnabled'])
+        self.assertFalse(any('remove' in args or 'add' in args for args in self.calls()))
+
+    def test_windows_backup_permission_failure_copies_no_state_and_removes_nothing(self):
+        self.seed_release()
+        for name in ('paseo', 'pi'):
+            shutil.copyfile(self.bin / name, self.bin / (name + '.exe'))
+            (self.bin / (name + '.exe')).chmod(0o700)
+        windows = self.home / 'Windows'
+        powershell = windows / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+        powershell.parent.mkdir(parents=True)
+        powershell.write_text('#!/bin/sh\nexit 1\n')
+        powershell.chmod(0o700)
+        (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
+        code = "Object.defineProperty(process, 'platform', {value:'win32'});\n" + installer('ubuntu.sh')
+        result = subprocess.run([NODE, '-'], input=code, env={**self.env, 'SystemRoot': str(windows)},
+                                text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        recovery = self.paseo / 'setup-recovery/paseo-plain-release-to-main'
+        self.assertTrue(recovery.is_dir())
+        self.assertEqual(list(recovery.iterdir()), [])
+        self.assertFalse(any('remove' in args or 'add' in args for args in self.calls()))
+
+    def test_internal_relative_checkout_links_survive_recovery_copy(self):
+        checkout = self.seed_release()
+        (checkout / 'internal-link').symlink_to('index.server.ts')
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        copied = self.paseo / 'setup-recovery/paseo-plain-release-to-main/checkout/internal-link'
+        self.assertTrue(copied.is_symlink())
+        self.assertEqual(copied.read_text(), 'old fixture plugin')
+
+    def test_symlinked_or_incomplete_recovery_records_never_allow_a_fresh_install(self):
+        recovery = self.paseo / 'setup-recovery/paseo-plain-release-to-main'
+        recovery.mkdir(parents=True)
+        for contents in ('not json', '{"version":1,"from":"release","to":"main","phase":"adding"}'):
+            (recovery / 'state.json').write_text(contents)
+            result = self.run_installer()
+            self.assertEqual(result.returncode, 1)
+            self.assertFalse((self.paseo / 'plugin-data').exists())
+        (recovery / 'state.json').unlink()
+        (recovery / 'state.json').symlink_to(self.home / 'nonexistent')
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(any('add' in args for args in self.calls()))
+        self.assertFalse((self.home / 'nonexistent').exists())
 
     def test_default_home_is_forwarded_when_environment_override_is_unset_or_empty(self):
         for override in (None, ''):
@@ -233,8 +467,15 @@ paseo_command_target() { command -v paseo; }
                                     text=True, capture_output=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('installed' if enabled else 'deferred', result.stdout)
+        self.seed_release()
+        (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
+        result = subprocess.run([ps, '-NoProfile', '-NonInteractive', '-File', str(fixture)],
+                                env={**self.env, 'POWERSHELL_TELEMETRY_OPTOUT':'1', 'POWERSHELL_UPDATECHECK':'Off'},
+                                text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('migrated from release to main', result.stdout)
 
-    def test_rerun_updates_only_owned_release_and_preserves_all_settings(self):
+    def test_rerun_updates_only_owned_main_and_preserves_all_settings(self):
         self.run_installer()
         settings = self.paseo / 'plugin-data/paseo-plain/configuration.json'
         custom = '{"values":{"enabled":false,"style":"My own voice","model":"custom"},"revision":7,"error":null}'
@@ -276,7 +517,7 @@ paseo_command_target() { command -v paseo; }
 
     def test_source_conflicts_and_disabled_installations_remain_untouched(self):
         for plugin in ({'source':'directory'}, {'source':'git','remote':'https://example.com/other.git','ref':'release'},
-                       {'source':'git','remote':'https://github.com/scowalt/paseo-plain.git','ref':'main'}, {'enabled':False}):
+                       {'source':'git','remote':'https://github.com/scowalt/paseo-plain.git','ref':'custom'}, {'enabled':False}):
             self.state['plugins'] = [{'id':'paseo-plain', **plugin}]
             result = self.run_installer()
             self.assertEqual(result.returncode, 0)

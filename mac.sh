@@ -1531,6 +1531,10 @@ const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 const remote = 'https://github.com/scowalt/paseo-plain.git';
 const id = 'paseo-plain';
+const { createHash } = require('node:crypto');
+const { isDeepStrictEqual } = require('node:util');
+let recovery = null;
+let migrationPhase = 'preparing';
 const deferred = message => { console.log(`Paseo Plain deferred: ${message}`); };
 function executable(name, packageName) {
     for (const directory of (process.env.PATH || '').split(path.delimiter)) {
@@ -1551,6 +1555,163 @@ function executable(name, packageName) {
         }
     }
     return null;
+}
+const info = file => { try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
+function regularPath(home, file) {
+    const relative = path.relative(home, file);
+    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error('outside-home');
+    let current = home;
+    for (const part of ['', ...relative.split(path.sep).filter(Boolean)]) {
+        current = path.join(current, part);
+        const stat = info(current);
+        if (stat && (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory()))) throw new Error('unsafe-path');
+    }
+}
+function tree(root, links = false) {
+    const entries = [];
+    let bytes = 0;
+    function visit(relative) {
+        const file = path.join(root, relative);
+        const stat = fs.lstatSync(file);
+        if (entries.length >= 20000 || (bytes += stat.size) > 256 * 1024 * 1024) throw new Error('backup-limit');
+        if (stat.isSymbolicLink()) {
+            const target = fs.readlinkSync(file);
+            if (!links || path.isAbsolute(target) || !fs.realpathSync(file).startsWith(fs.realpathSync(root) + path.sep)) throw new Error('unsafe-link');
+            entries.push([relative, 'link', target]);
+        } else if (stat.isDirectory()) {
+            entries.push([relative, 'directory']);
+            for (const name of fs.readdirSync(file).sort()) visit(path.join(relative, name));
+        } else if (stat.isFile()) {
+            entries.push([relative, 'file', createHash('sha256').update(fs.readFileSync(file)).digest('hex'), Boolean(stat.mode & 0o111)]);
+        } else throw new Error('unsafe-file');
+    }
+    if (info(root)) visit('');
+    return entries;
+}
+function copyTree(source, destination, links = false) {
+    const before = tree(source, links);
+    for (const [relative, kind, value, executable] of before) {
+        const target = path.join(destination, relative);
+        if (kind === 'directory') {
+            if (relative === '') privateRecoveryDirectory(target);
+            else fs.mkdirSync(target, {mode: 0o700});
+        }
+        else if (kind === 'link') fs.symlinkSync(value, target);
+        else {
+            fs.copyFileSync(path.join(source, relative), target, fs.constants.COPYFILE_EXCL);
+            fs.chmodSync(target, executable ? 0o700 : 0o600);
+            const fd = fs.openSync(target, 'r+');
+            try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        }
+    }
+    if (process.platform !== 'win32') {
+        for (const [relative, kind] of [...before].reverse()) {
+            if (kind !== 'directory') continue;
+            const fd = fs.openSync(path.join(destination, relative), 'r');
+            try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        }
+    }
+    if (!isDeepStrictEqual(before, tree(source, links)) || !isDeepStrictEqual(before, tree(destination, links))) throw new Error('backup-changed');
+    return before;
+}
+function privateRecoveryDirectory(directory) {
+    fs.mkdirSync(directory, {mode: 0o700});
+    if (process.platform !== 'win32') return;
+    const script = `$ErrorActionPreference = 'Stop'
+$env:PSModulePath = "$PSHOME\\Modules"
+$owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = [System.Security.AccessControl.DirectorySecurity]::new()
+$acl.SetOwner($owner)
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($sid in @($owner, [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'), [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))) {
+    $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+}
+Set-Acl -LiteralPath $env:PASEO_PLAIN_RECOVERY_DIRECTORY -AclObject $acl`;
+    const result = spawnSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+        ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+            env: {...process.env, PASEO_PLAIN_RECOVERY_DIRECTORY: directory}, shell: false, windowsHide: true,
+            timeout: 15000, maxBuffer: 16384, stdio: ['ignore', 'pipe', 'pipe'],
+        });
+    if (result.error || result.status !== 0) throw new Error('private-backup-unavailable');
+}
+function migrationJournal(phase) {
+    migrationPhase = phase;
+    const pending = path.join(recovery, 'state.next');
+    const fd = fs.openSync(pending, 'wx', 0o600);
+    try { fs.writeFileSync(fd, JSON.stringify({version: 1, from: 'release', to: 'main', phase}) + '\n'); fs.fsyncSync(fd); }
+    finally { fs.closeSync(fd); }
+    fs.renameSync(pending, path.join(recovery, 'state.json'));
+    if (process.platform !== 'win32') {
+        const directory = fs.openSync(recovery, 'r');
+        try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+    }
+}
+function migrateRelease({home, existing, config, args, run, directory}) {
+    const sourcesFile = path.join(home, 'plugins/sources.json');
+    const native = path.join(home, 'plugin-settings', id);
+    for (const file of [home, sourcesFile, native, directory]) regularPath(home, file);
+    const record = JSON.parse(fs.readFileSync(sourcesFile, 'utf8'))[id];
+    const source = config.plugins?.[id];
+    const root = path.join(home, 'plugins', id);
+    if (existing.enabled !== true || existing.status !== 'running' || source?.enabled === false ||
+        record?.remote !== remote || record.requestedRef !== 'release' || record.trackingBranch !== 'release' ||
+        record.pluginPath !== '.' || !/^[0-9a-f]{40,64}$/.test(record.commit) || record.commit !== existing.commit ||
+        typeof record.checkoutRoot !== 'string' || path.dirname(path.dirname(record.checkoutRoot)) !== root ||
+        path.basename(record.checkoutRoot) !== 'checkout' || source?.source !== 'directory' ||
+        source.path !== existing.path || source.path !== record.checkoutRoot) throw new Error('unverified-release-source');
+    regularPath(home, record.checkoutRoot);
+    if (!info(record.checkoutRoot)?.isDirectory() || (info(native) && !info(native).isDirectory())) throw new Error('invalid-migration-directory');
+    const parent = path.join(home, 'setup-recovery');
+    regularPath(home, parent);
+    if (!info(parent)) fs.mkdirSync(parent, {mode: 0o700});
+    recovery = path.join(parent, 'paseo-plain-release-to-main');
+    privateRecoveryDirectory(recovery);
+    migrationJournal('preparing');
+    fs.writeFileSync(path.join(recovery, 'RECOVERY.md'),
+        '# Paseo Plain migration recovery\n\nDo not rerun setup or remove another installation until any timed-out Paseo operation has finished.\n' +
+        'Inspect the local plugin catalog using the same explicit --host target. Keep these recovery files private.\n' +
+        'If the plugin is absent, the checkout directory is a local recovery source for paseo plugin install with --id paseo-plain.\n' +
+        'A recovered directory installation will not receive automatic Git updates. Never replace an occupied ID blindly.\n' +
+        'plugin-settings contains the removed Paseo-owned settings. Restore it only to an absent destination before activation.\n' +
+        'plugin-data is a safety copy, not an instruction to overwrite newer live preferences or cached rewrites.\n' +
+        'registration.json and source.json describe only the former plugin. Do not overwrite daemon config.json or sources.json.\n' +
+        'Never move this recovery directory while it is the installed directory source.\n' +
+        'If the installed path is outside this directory, no operation is pending, and source/state/settings are verified, move this recovery directory aside before retrying setup.\n' +
+        'See https://github.com/scowalt/machine-setup-scripts#paseo-plain-migration-recovery for the recovery procedure.\n', {flag: 'wx', mode: 0o600});
+    fs.writeFileSync(path.join(recovery, 'source.json'), JSON.stringify(record), {flag: 'wx', mode: 0o600});
+    fs.writeFileSync(path.join(recovery, 'registration.json'), JSON.stringify(source), {flag: 'wx', mode: 0o600});
+    const checkoutSnapshot = copyTree(record.checkoutRoot, path.join(recovery, 'checkout'), true);
+    const dataSnapshot = copyTree(directory, path.join(recovery, 'plugin-data'));
+    const nativeSnapshot = copyTree(native, path.join(recovery, 'plugin-settings'));
+    const currentConfig = () => JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8'));
+    const otherConfig = value => { const copy = {...value, plugins: {...value.plugins}}; delete copy.plugins[id]; return copy; };
+    if (!isDeepStrictEqual(config, currentConfig()) ||
+        !isDeepStrictEqual(record, JSON.parse(fs.readFileSync(sourcesFile, 'utf8'))[id]) ||
+        !isDeepStrictEqual(checkoutSnapshot, tree(record.checkoutRoot, true)) ||
+        !isDeepStrictEqual(dataSnapshot, tree(directory)) || !isDeepStrictEqual(nativeSnapshot, tree(native))) throw new Error('migration-state-changed');
+    migrationJournal('removing');
+    run([...args, 'remove', id, '--json'], 180000);
+    const remaining = run([...args, 'ls', '--json']);
+    if (!Array.isArray(remaining) || remaining.some(item => item.id === id) || currentConfig().plugins?.[id] ||
+        !isDeepStrictEqual(otherConfig(config), otherConfig(currentConfig())) ||
+        !isDeepStrictEqual(dataSnapshot, tree(directory))) throw new Error('removal-not-confirmed');
+    migrationJournal('restoring');
+    regularPath(home, native);
+    if (info(native)) throw new Error('native-settings-reappeared');
+    if (nativeSnapshot.length) {
+        if (!info(path.dirname(native))) fs.mkdirSync(path.dirname(native), {mode: 0o700});
+        copyTree(path.join(recovery, 'plugin-settings'), native);
+    }
+    migrationJournal('adding');
+    run([...args, 'add', remote, '--ref', 'main', '--id', id, '--json'], 180000);
+    migrationJournal('verifying');
+    const after = run([...args, 'ls', '--json']);
+    if (!Array.isArray(after) || !after.some(item => item.id === id && item.source === 'git' && item.remote === remote &&
+        item.ref === 'main' && item.enabled === true && item.status === 'running') ||
+        !isDeepStrictEqual(otherConfig(config), otherConfig(currentConfig())) ||
+        !isDeepStrictEqual(dataSnapshot, tree(directory)) || !isDeepStrictEqual(nativeSnapshot, tree(native))) throw new Error('migration-not-verified');
+    migrationJournal('complete');
+    console.log('Paseo Plain migrated from release to main; preferences and cache preserved. Private recovery files were retained.');
 }
 function main() {
     const [major, minor] = process.versions.node.split('.').map(Number);
@@ -1596,10 +1757,22 @@ function main() {
     if (matches.length > 1) throw new Error('duplicate-id');
     const existing = matches[0];
     if (existing?.enabled === false || config.plugins?.[id]?.enabled === false) return deferred('the saved disabled state was preserved.');
-    if (existing && (existing.source !== 'git' || existing.remote !== remote || existing.ref !== 'release')) {
+    if (existing && (existing.source !== 'git' || existing.remote !== remote || !['main', 'release'].includes(existing.ref))) {
         return deferred('the existing paseo-plain source is not managed by setup; it was left unchanged.');
     }
     if (!existing && config.plugins?.[id]) return deferred('the configured plugin is absent from the catalog; inspect Paseo before retrying.');
+    const recoveryPath = path.join(home, 'setup-recovery/paseo-plain-release-to-main');
+    regularPath(home, recoveryPath);
+    if (info(recoveryPath)) {
+        recovery = recoveryPath;
+        migrationPhase = 'previous attempt';
+        regularPath(home, path.join(recovery, 'state.json'));
+        const saved = JSON.parse(fs.readFileSync(path.join(recovery, 'state.json'), 'utf8'));
+        if (saved.version !== 1 || saved.from !== 'release' || saved.to !== 'main' || saved.phase !== 'complete' || existing?.ref === 'release') {
+            throw new Error('migration-needs-review');
+        }
+        recovery = null;
+    }
     const directory = path.join(home, 'plugin-data', id);
     for (const folder of [path.join(home, 'plugin-data'), directory]) {
         if (fs.existsSync(folder) && (fs.lstatSync(folder).isSymbolicLink() || !fs.statSync(folder).isDirectory())) {
@@ -1616,15 +1789,17 @@ function main() {
         // Defaults are filled by the plugin schema. Never overwrite an existing preference file.
         fs.writeFileSync(settings, JSON.stringify({values: {enabled: true}, revision: 0, error: null}), {flag: 'wx', mode: 0o600});
     }
-    run(existing ? [...args, 'update', id, '--json'] : [...args, 'add', remote, '--ref', 'release', '--id', id, '--json'], 180000);
+    if (existing?.ref === 'release') return migrateRelease({home, existing, config, args, run, directory});
+    run(existing ? [...args, 'update', id, '--json'] : [...args, 'add', remote, '--ref', 'main', '--id', id, '--json'], 180000);
     const after = run([...args, 'ls', '--json']);
-    if (!Array.isArray(after) || !after.some(item => item.id === id && item.status === 'running' && item.enabled === true && item.source === 'git' && item.remote === remote && item.ref === 'release')) {
+    if (!Array.isArray(after) || !after.some(item => item.id === id && item.status === 'running' && item.enabled === true && item.source === 'git' && item.remote === remote && item.ref === 'main')) {
         throw new Error('plugin-not-running');
     }
     console.log(`Paseo Plain ${existing ? 'checked for updates' : 'installed'}; saved preferences preserved. Rewrites require an explicit request and an existing Pi login.`);
 }
 try { main(); } catch {
-    console.log('Paseo Plain setup could not finish. Check local prerequisites and plugin status, then rerun setup. Existing settings were not reset.');
+    if (recovery) console.log(`Paseo Plain migration stopped (${migrationPhase}). Do not retry until reviewed. Private recovery location: ${JSON.stringify(recovery)}. See RECOVERY.md and the setup README.`);
+    console.log('Paseo Plain setup could not finish. Inspect local plugin status before retrying. Setup did not reset rewrite preferences.');
     process.exitCode = 1;
 }
 // END PASEO PLAIN INSTALLER
@@ -6008,7 +6183,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 222 | Last changed: Fix Paseo Plain CLI home selection${NC}"
+    echo -e "${GRAY}Version 223 | Last changed: Track Paseo Plain main and migrate release installs${NC}"
 
     if ! acquire_setup_lock; then
         return 1

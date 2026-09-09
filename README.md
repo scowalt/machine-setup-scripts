@@ -110,7 +110,9 @@ See [Paseo update instructions](https://paseo.sh/docs/updates.md). The client do
 
 Future setup runs install [Paseo Plain](https://github.com/scowalt/paseo-plain) for the local daemon when Paseo CLI/daemon 0.8.x, Node.js >=22.19, Pi, and enabled Paseo plugins are available. The six standalone setup scripts share the same installer logic. Setup does not inventory or contact other machines.
 
-Setup installs the reviewed `release` branch through Paseo's Git installer. Later runs update only a matching Git-managed `paseo-plain` installation. Directory installations, other sources, pinned tags, and disabled installations remain unchanged. Failed updates do not trigger a remove/reinstall cycle.
+Setup installs `main` through Paseo's Git installer. Later runs update matching Git-managed `paseo-plain` installations to the latest `main` commit. No GitHub release or version tag is required. Directory installations, other repositories or branches, pinned revisions, and disabled installations remain unchanged. Ordinary failed updates do not trigger a remove/reinstall cycle.
+
+Existing setup-managed `release` installations move to `main` on their next setup run. Paseo 0.8 requires a one-time remove/add operation under the same plugin ID. Setup verifies the source record and makes private recovery copies before removal. It preserves live rewrite preferences and cache, and restores Paseo-owned settings before adding `main`. Only the plugin is briefly interrupted. The migration does not restart the daemon. Do not change the plugin or its settings during migration. Paseo 0.8 does not make the entire migration atomic.
 
 New installations initialize manual rewrite controls once. Existing voice, model, display, timeout, disabled choices, configuration files, and cached rewrites remain unchanged. Setup does not copy credentials or make a model request. The plugin uses the daemon user's existing Pi login when the user explicitly requests a rewrite.
 
@@ -118,7 +120,30 @@ If prerequisites are missing, setup reports that installation is deferred. Start
 
 The installer uses `PASEO_HOME`, or `~/.paseo` when the variable is unset or empty, and requires a loopback TCP daemon endpoint. Existing headless support restrictions still apply. Plugin CI uses fake workers; actual model access, client appearance, and ARM/WSL runtime behavior need separate verification. The plugin restricts Windows storage through NTFS permissions and keeps rewriting off if private storage cannot be prepared.
 
-Run `python3 tests/test_paseo_plain_setup.py` for isolated installer regressions. Tests extract only installer functions and use temporary homes and fake CLIs. They do not source full provisioning entry points.
+Run `python3 tests/test_paseo_plain_setup.py` for isolated installer regressions. Tests extract only installer functions and use temporary homes and fake CLIs. They do not source full provisioning entry points. The POSIX fixture also tests the PowerShell wrapper when `PWSH_BIN` points to PowerShell. Pre-push hooks run these tests through `tests/paseo-plain-setup-contract.sh`.
+
+The native source-manager test requires an installed Paseo 0.8 server module:
+
+```bash
+PASEO_TEST_PLUGIN_SERVICE_MODULE=/absolute/path/to/server/plugins/index.js \
+  node tests/paseo-plain-native-migration.mjs
+```
+
+This test uses the actual source and configuration managers with temporary homes and local Git repositories. Plugin execution and CLI transport are simulated. No listener, authenticated session, or model is used. It verifies migration, reruns, native deletion behavior, and failed builds. Git configuration and inherited hook variables are isolated. The pre-push wrapper also tests that poisoned Git variables cannot change a caller repository, its index, or its configuration. Native Windows provisioning and successful Windows backup permissions still need separate verification.
+
+### Paseo Plain migration recovery
+
+Recovery files remain private under `<PASEO_HOME>/setup-recovery/paseo-plain-release-to-main`, including after success. `state.json` records progress. `RECOVERY.md` explains recovery. The directory contains the old checkout, plugin-specific registration and source records, rewrite preferences/cache, and any Paseo-owned settings. Backup copies of cached rewrites do not expire automatically. After a verified `main` migration, you can delete the backup if no installed source uses it.
+
+A failure, timeout, or incomplete journal stops further automatic changes. Setup does not assume that a failed CLI request stopped work in the daemon. It does not remove a potentially completed new installation or overwrite newer settings to retry. Do not repeatedly rerun setup while a migration needs review.
+
+1. Make sure that any pending Paseo operation finishes before recovery. Inspect the same local daemon with an explicit `--host` and `paseo plugin ls --json`.
+2. If `main` is already running, compare the preserved settings and cache before changing anything. Do not remove that installation merely because the CLI timed out.
+3. If the plugin is absent and the backup contains `plugin-settings`, restore it only to an absent `<PASEO_HOME>/plugin-settings/paseo-plain` directory. Do this before activation and preserve private permissions. Do not overwrite a destination that reappeared or newer live rewrite preferences/cache.
+4. If the plugin is absent, the backup `checkout` directory can restore the old code with `paseo plugin install`. Use `--id paseo-plain` and the same explicit `--host`. This creates a directory installation, not an automatically updated Git installation.
+5. Never restore the plugin records over the complete daemon `config.json` or `plugins/sources.json`. Those files also contain unrelated state.
+6. If a recovered directory is the installed source, keep it at that path. Moving the recovery directory would break that installation.
+7. If the installed path is outside the recovery directory, verify its source and settings and confirm that no operation remains pending. Then archive the recovery directory before retrying setup. Keep the old `release` branch and tags until they are no longer needed for recovery.
 
 ## Headless Paseo daemon
 
