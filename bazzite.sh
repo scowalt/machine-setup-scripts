@@ -1450,7 +1450,9 @@ function main() {
         if (target !== undefined && !localTarget(target)) return deferred('the saved daemon endpoint is not loopback TCP; inspect local Paseo configuration.');
     }
     const run = (args, timeout = 20000) => {
-        const result = spawnSync(paseo[0], [...paseo.slice(1), '--home', home, ...args], {
+        // --home is not a global Paseo option. Scope every command via its environment.
+        const result = spawnSync(paseo[0], [...paseo.slice(1), ...args], {
+            env: {...process.env, PASEO_HOME: home},
             cwd: os.homedir(), encoding: 'utf8', timeout, maxBuffer: 2 * 1024 * 1024,
             stdio: ['ignore', 'pipe', 'pipe'], shell: false,
         });
@@ -5724,7 +5726,7 @@ for deployment in data.get("deployments", []):
 
 run_setup_tasks() {
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 102 | Last changed: Install Paseo Plain on future setup runs"
+    echo -e "${GRAY}Version 103 | Last changed: Fix Paseo Plain CLI home selection"
 
     if ! acquire_setup_lock; then
         return 1

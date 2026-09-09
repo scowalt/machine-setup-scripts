@@ -29,6 +29,13 @@ const state = JSON.parse(fs.readFileSync(statePath));
 const args = process.argv.slice(2);
 fs.appendFileSync(path.join(home, 'calls.jsonl'), JSON.stringify(args) + '\n');
 const at = args.findIndex(a => ['daemon', 'plugin'].includes(a));
+// Match the global arguments used by setup against Paseo 0.8's CLI contract.
+// In particular, --home is NOT a global option, even before daemon status.
+const globals = args.slice(0, at);
+if (at < 0 || (globals.length && !(globals.length === 2 && globals[0] === '--host'))) {
+  console.error(`error: unknown option '${globals[0]}'`);
+  process.exit(1);
+}
 const command = args.slice(at);
 if (command[0] === 'daemon' && command[1] === 'status') {
   console.log(JSON.stringify({localDaemon:'running', connectedDaemon:'reachable', home,
@@ -48,6 +55,7 @@ if (command[0] === 'daemon' && command[1] === 'status') {
 '''
 
 
+@unittest.skipIf(os.name == 'nt', 'Fake CLI executables require POSIX; the PowerShell wrapper runs on POSIX')
 class SetupTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='plain-setup-test-')
@@ -70,9 +78,9 @@ class SetupTest(unittest.TestCase):
         (self.paseo / 'config.json').write_text(json.dumps(
             config if config is not None else {'pluginsEnabled': True, 'daemon': {'listen': '127.0.0.1:19991'}}))
 
-    def run_installer(self, script='ubuntu.sh'):
+    def run_installer(self, script='ubuntu.sh', cwd=None):
         (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
-        result = subprocess.run([NODE, '-'], input=installer(script), env=self.env,
+        result = subprocess.run([NODE, '-'], input=installer(script), env=self.env, cwd=cwd,
                                 text=True, capture_output=True, timeout=15)
         self.state = json.loads((self.paseo / 'fake-state.json').read_text())
         self.assertNotIn('provider-secret-must-not-be-logged', result.stdout + result.stderr)
@@ -96,6 +104,46 @@ class SetupTest(unittest.TestCase):
         self.assertTrue(saved['values']['enabled'])
         self.assertTrue(json.loads((self.paseo / 'config.json').read_text())['pluginsEnabled'])
         self.assertFalse(any('rewrite' in arg or 'preview' in arg for args in self.calls() for arg in args))
+
+    def test_default_home_is_forwarded_when_environment_override_is_unset_or_empty(self):
+        for override in (None, ''):
+            with self.subTest(override=override):
+                if override is None:
+                    self.env.pop('PASEO_HOME', None)
+                else:
+                    self.env['PASEO_HOME'] = override
+                result = self.run_installer()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(self.state['plugins'][0]['id'], 'paseo-plain')
+                self.assertEqual(self.state['plugins'][0]['status'], 'running')
+                self.assertEqual(self.env.get('PASEO_HOME'), override)
+
+    def test_relative_custom_home_is_resolved_before_child_working_directory_changes(self):
+        default_home = self.paseo
+        self.paseo = self.home / 'custom daemon home'
+        default_home.rename(self.paseo)
+        default_home.mkdir()
+        untouched = default_home / 'config.json'
+        untouched.write_text('{"pluginsEnabled":false,"unrelated":"keep me"}')
+        before = untouched.read_bytes()
+        invocation = self.home / 'invocation'
+        invocation.mkdir()
+        self.env['PASEO_HOME'] = '../custom daemon home'
+        self.env['PASEO_HOST'] = '192.0.2.10:29992'
+        self.configure({'pluginsEnabled': True, 'daemon': {'listen': '127.0.0.1:29992'}})
+        self.state['status'] = {'listen': '127.0.0.1:29992'}
+
+        for outcome in ('installed', 'checked for updates'):
+            result = self.run_installer(cwd=invocation)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(outcome, result.stdout)
+        self.assertTrue((self.paseo / 'plugin-data/paseo-plain/configuration.json').is_file())
+        for args in self.calls():
+            if 'plugin' in args:
+                self.assertEqual(args[args.index('--host') + 1], '127.0.0.1:29992')
+        self.assertEqual(untouched.read_bytes(), before)
+        self.assertEqual(list(default_home.iterdir()), [untouched])
+        self.assertEqual(self.env['PASEO_HOME'], '../custom daemon home')
 
     def test_every_standalone_entry_uses_the_same_tested_installer_after_prerequisites(self):
         baseline = installer('ubuntu.sh')

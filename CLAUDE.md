@@ -90,6 +90,7 @@ All scripts follow a consistent pattern:
 ### Paseo Plain installation
 
 - All six setup scripts contain the same embedded Node installer for the `paseo-plain` plugin. Keep these copies identical and run `python3 tests/test_paseo_plain_setup.py` after changes.
+- Set the resolved `PASEO_HOME` in each CLI child process. `--home` is not a global Paseo option. Keep `--host` explicit for plugin commands. Tests must reject unsupported global arguments.
 - Install/update only through the correct local daemon's native Git plugin commands. Use `https://github.com/scowalt/paseo-plain.git` on the reviewed `release` branch. Do not replace other sources, directory installs, pinned refs, or explicit disabled choices.
 - Require compatible Paseo 0.8.x, Node >=22.19, Pi, and an already enabled global plugin switch. Missing prerequisites defer installation. The plugin installer must not enable the global switch, create a second daemon, or override the separate `PASEO_CHANNEL` policy. Preserve the beta default and explicit stable choice from the channel installer. If the selected release lacks plugin support, defer plugin installation.
 - Initialize manual controls only for a new installation with no existing settings file. Preserve preferences, cache, credentials, and environment files. Never make a model request during setup or testing.

@@ -116,7 +116,7 @@ New installations initialize manual rewrite controls once. Existing voice, model
 
 If prerequisites are missing, setup reports that installation is deferred. Start a compatible local daemon and enable trusted plugins in **Paseo Settings > Plugins**, then rerun setup. Plugins run without isolation and can access the daemon's files, processes, credentials, and network. The plugin installer does not enable the global switch or start another daemon. It follows the separate `PASEO_CHANNEL` policy above. If you select stable and that release lacks the required plugin API, plugin installation remains deferred.
 
-The installer currently requires a loopback TCP daemon endpoint. Existing headless support restrictions still apply. Plugin CI uses fake workers; actual model access, client appearance, and ARM/WSL runtime behavior need separate verification. The plugin restricts Windows storage through NTFS permissions and keeps rewriting off if private storage cannot be prepared.
+The installer uses `PASEO_HOME`, or `~/.paseo` when the variable is unset or empty, and requires a loopback TCP daemon endpoint. Existing headless support restrictions still apply. Plugin CI uses fake workers; actual model access, client appearance, and ARM/WSL runtime behavior need separate verification. The plugin restricts Windows storage through NTFS permissions and keeps rewriting off if private storage cannot be prepared.
 
 Run `python3 tests/test_paseo_plain_setup.py` for isolated installer regressions. Tests extract only installer functions and use temporary homes and fake CLIs. They do not source full provisioning entry points.
 

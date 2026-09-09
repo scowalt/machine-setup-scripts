@@ -1217,7 +1217,9 @@ function main() {
         if (target !== undefined && !localTarget(target)) return deferred('the saved daemon endpoint is not loopback TCP; inspect local Paseo configuration.');
     }
     const run = (args, timeout = 20000) => {
-        const result = spawnSync(paseo[0], [...paseo.slice(1), '--home', home, ...args], {
+        // --home is not a global Paseo option. Scope every command via its environment.
+        const result = spawnSync(paseo[0], [...paseo.slice(1), ...args], {
+            env: {...process.env, PASEO_HOME: home},
             cwd: os.homedir(), encoding: 'utf8', timeout, maxBuffer: 2 * 1024 * 1024,
             stdio: ['ignore', 'pipe', 'pipe'], shell: false,
         });
@@ -4191,7 +4193,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 138 | Last changed: Install Paseo Plain on future setup runs"
+    Write-Host "Version 139 | Last changed: Fix Paseo Plain CLI home selection"
 
     Assert-HeadlessPaseoUnsupported
     $null = Get-PaseoReleaseChannel
