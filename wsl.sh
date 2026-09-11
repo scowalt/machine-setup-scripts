@@ -2586,6 +2586,27 @@ paseo_desktop_is_running() {
     pgrep -u "${_uid}" -x 'Paseo|paseo' > /dev/null
 }
 
+# Fedora Atomic/Bazzite use a system /home alias. Never resolve user-owned links.
+# GNU stat is used only by the Linux caller below.
+paseo_desktop_is_system_home_alias() {
+    local _target _path _owner _mode
+    [[ -L "/home" ]] || return 1
+    _target=$(readlink "/home") || return 1
+    case "${_target}" in
+        var/home|"/var/home") ;;
+        *) return 1 ;;
+    esac
+    _owner=$(stat -c %u "/home" 2>/dev/null) || return 1
+    [[ "${_owner}" == 0 ]] || return 1
+    for _path in "/" "/var" "/var/home"; do
+        [[ -d "${_path}" && ! -L "${_path}" ]] || return 1
+        _owner=$(stat -c %u "${_path}" 2>/dev/null) || return 1
+        _mode=$(stat -c %a "${_path}" 2>/dev/null) || return 1
+        [[ "${_owner}" == 0 && "${_mode}" =~ ^[0-7]{3,4}$ ]] || return 1
+        (( (8#${_mode} & 0022) == 0 )) || return 1
+    done
+}
+
 configure_paseo_desktop_channel() {
     local _platform="$1"
     local _channel _dir _file _parent _input _tmp _process_status
@@ -2622,6 +2643,11 @@ configure_paseo_desktop_channel() {
     fi
     _parent="${_dir}"
     while [[ "${_parent}" != / ]]; do
+        if [[ "${_platform}" == linux && "${_parent}" == "/home" ]] && paseo_desktop_is_system_home_alias; then
+            # Inspect the real system ancestors too, without resolving the client path.
+            _parent="/var/home"
+            continue
+        fi
         if [[ -L "${_parent}" || ( -e "${_parent}" && ! -d "${_parent}" ) ]]; then
             print_error "Unsafe Paseo Desktop directory. Linked or non-directory paths are not changed."
             return 1
@@ -4659,7 +4685,7 @@ run_setup_tasks() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 188 | Last changed: Keep Pi on a supported shared Node runtime${NC}"
+    echo -e "${GRAY}Version 189 | Last changed: Allow trusted Linux system home alias for Paseo Desktop${NC}"
 
     if ! acquire_setup_lock; then
         return 1

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract version 1: offline fixtures only; never run setup or a real daemon.
+# Contract version 2: cover the trusted Linux system home alias in offline fixtures.
 # shellcheck disable=SC1090,SC2030,SC2031,SC2034,SC2310,SC2312,SC2317
 set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -182,6 +182,7 @@ assert 'if (-not (Set-PaseoDesktopChannel)) { throw' in windows
 assert '$null = Get-PaseoReleaseChannel' in windows
 print('PASS: setup wiring and identical Bash channel blocks')
 PY
+python3 tests/test_paseo_system_home_alias.py
 if command -v pwsh > /dev/null; then
     pwsh -NoProfile -File tests/paseo-release-channel-powershell.ps1
 else

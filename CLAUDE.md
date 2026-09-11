@@ -41,6 +41,35 @@ Use `git` and `gh` CLI tools to manage this repository:
 - `gh pr create` - Create pull requests via GitHub CLI
 - `gh pr merge` - Merge pull requests
 
+## Investigating Setup Logs
+
+Use `https://logs.scowalt.com` as the canonical source for setup logs, even when the requested file is absent locally.
+Read access requires an `Authorization: Bearer <token>` header. An unauthenticated `401` does not prove that the collector is broken.
+
+1. Retrieve `SETUP_LOG_AUTH_TOKEN` from Doppler project `mission-control`, configuration `dev`, using the existing Doppler login.
+2. List uploads with authenticated `GET /logs`, or list one machine with `GET /logs/:hostname`.
+3. Retrieve candidates with authenticated `GET /logs/:hostname/:filename`.
+4. Match the requested local filename against the `Logging to` or `Run log saved to` line inside each candidate.
+
+Collector filenames use UTC upload timestamps, not local run filenames. Allow for timezone differences when selecting candidates.
+
+Use this pattern to list logs without putting the token in process arguments or shell traces:
+
+```bash
+(
+    set +x
+    set -o pipefail
+    token=$(doppler secrets get SETUP_LOG_AUTH_TOKEN --project mission-control --config dev --plain) || exit 1
+    [[ -n "${token}" ]] || exit 1
+    printf 'Authorization: Bearer %s\n' "${token}" |
+        curl --fail --silent --show-error --max-time 20 --header @- 'https://logs.scowalt.com/logs'
+)
+```
+
+Keep the token out of output, files, commits, and chat. Redact secrets before displaying downloaded log content.
+If access still fails, report whether Doppler retrieval or the authenticated HTTP request failed, including the status without credentials.
+Try this authenticated path before asking the user to attach a log. Do not remove authentication, rotate secrets, or redeploy the collector to fix an omitted request token.
+
 ## Architecture and Patterns
 
 ### Script Structure
@@ -70,7 +99,7 @@ All scripts follow a consistent pattern:
 - Python: pyenv (Python version management)
 - Security: 1Password CLI, Tailscale
 - Dotfiles: Chezmoi (with auto-sync)
-- Paseo channels: Setup defaults to beta on personal and work machines. `PASEO_CHANNEL=stable` selects npm `latest` for managed headless daemons and Stable for Desktop. A nonempty process value overrides `~/.env.local`. Invalid channels fail before Paseo changes. Preserve the existing native Linux headless support, macOS canary gate, and Windows/WSL headless rejection. Desktop setup selects the channel in Electron's `desktop-settings.json`; it does not install or launch Desktop. Preserve unrelated settings, reject malformed or linked paths, and do not change a running app's cached settings. Set `migrations.legacyRendererSettingsImported=true` with the channel so a legacy preference cannot undo it. Use the native platform user-data path or `PASEO_ELECTRON_USER_DATA_DIR`, never the daemon's `PASEO_HOME`. WSL leaves the Windows host client to `win.ps1`. Skip absent headless and Linux ARM client profiles. Do not update remote machines or run live Paseo during tests. Run `tests/paseo-release-channel-contract.sh` and the PowerShell fixture suite after changes. See README.md for client update steps, platform limits, and downgrade cautions.
+- Paseo channels: Setup defaults to beta on personal and work machines. `PASEO_CHANNEL=stable` selects npm `latest` for managed headless daemons and Stable for Desktop. A nonempty process value overrides `~/.env.local`. Invalid channels fail before Paseo changes. Preserve the existing native Linux headless support, macOS canary gate, and Windows/WSL headless rejection. Desktop setup selects the channel in Electron's `desktop-settings.json`; it does not install or launch Desktop. Preserve unrelated settings, reject malformed or linked paths except for the trusted Linux system home alias described below, and do not change a running app's cached settings. Set `migrations.legacyRendererSettingsImported=true` with the channel so a legacy preference cannot undo it. Use the native platform user-data path or `PASEO_ELECTRON_USER_DATA_DIR`, never the daemon's `PASEO_HOME`. WSL leaves the Windows host client to `win.ps1`. Skip absent headless and Linux ARM client profiles. Do not update remote machines or run live Paseo during tests. Run `tests/paseo-release-channel-contract.sh` and the PowerShell fixture suite after changes. See README.md for client update steps, platform limits, and downgrade cautions.
 - Terminal: Starship prompt
 - CI/CD: act (local GitHub Actions)
 - AI agents and developer CLIs: Notion CLI (`ntn`), Claude Code CLI, Gemini CLI, Codex CLI, Pi coding agent
@@ -86,6 +115,15 @@ All scripts follow a consistent pattern:
 - If Claude Code setup warns that another `claude` command shadows the native binary, do not authenticate Fable with bare `claude` until PATH/package cleanup is done; use the native path printed by the script.
 - Pi defaults to GPT-6 Astra (`gpt-6-astra`) through the built-in `openai-codex` provider with `xhigh` thinking on all machines, including work machines. Setup also sets its per-model thinking default to `xhigh` so an older override cannot lower it. Chezmoi owns the same defaults through `private_settings.json.tmpl`. Pi uses its existing OpenAI Codex login, not a new key in `models.json`. Setup removes the retired Synthetic provider from `models.json` but preserves other providers, `auth.json`, and existing `~/.env.local` files. Machines with `ZAI_API_KEY` still get the optional z.ai GLM Coding Plan provider at `https://api.z.ai/api/coding/paas/v4`. Its models are `glm-5.3`, `glm-5-turbo`, and `glm-4.7`. GLM-5.3 supports `low`/`high`/`max` reasoning, so its `thinkingLevelMap` leaves `minimal`/`medium`/`xhigh` unmapped. Missing z.ai keys produce warnings only on work machines and never change the default model. Pi uses package-managed goal/autoresearch skills. The autoresearch dashboard uses `Ctrl+Shift+R` so `Ctrl+Shift+F` remains Pi transcript search.
 - Pi output style: Setup no longer installs `pi-prose` or seeds a prose default. Dotfiles no longer list this package or manage its initial configuration. Preserve existing custom prose files, including empty or malformed configurations. Do not uninstall a user-selected copy or reintroduce default seeding. Paseo Plain is a separate display plugin, not a Pi package.
+
+### Paseo Desktop system home alias
+
+- Bazzite uses the system link `/home` → `/var/home`. Do not reject this alias or resolve all client paths indiscriminately.
+- On Linux only, permit `/home` when it points exactly to `var/home` or `/var/home` and belongs to root.
+- Require `/`, `/var`, and `/var/home` to be real root-owned directories without group or world write permission.
+- Keep rejecting other links, including linked user directories, Desktop profiles, and settings files. Preserve malformed-file and running-app protections.
+- Keep the shared Bash channel blocks identical. Run `python3 tests/test_paseo_system_home_alias.py` and both release-channel fixture suites after changes.
+- Use temporary filesystem fixtures, never the real `/home` tree. The alias fixtures simulate root ownership without sudo.
 
 ### Paseo Plain installation
 

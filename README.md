@@ -104,6 +104,8 @@ Close Desktop before setup changes its channel. Setup refuses to edit settings c
 
 Setup changes `settings.releaseChannel` and marks the legacy renderer import complete in `desktop-settings.json`. This prevents an older channel preference from replacing the selected channel. Setup preserves other settings and migration flags. It rejects malformed files, unknown document versions, linked paths, and paths that are not regular files or directories.
 
+Linux permits one system link: `/home` pointing exactly to `var/home` or `/var/home`, as on Bazzite. The link and `/`, `/var`, and `/var/home` must belong to root. Those directories must be real directories without group or world write permission. Links within user homes, Desktop profiles, and settings files remain unsupported. Run setup normally on Bazzite. No terminal change or path override is required.
+
 Desktop uses these user-data paths, separate from the standalone daemon's `PASEO_HOME`:
 
 - macOS: `~/Library/Application Support/Paseo/desktop-settings.json`.
