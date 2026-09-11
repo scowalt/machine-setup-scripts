@@ -4885,6 +4885,186 @@ remove_pi_subagents() {
     return 0
 }
 
+# Pi prose retirement. Keep this block identical in the Bash setup scripts.
+remove_pi_prose() {
+    local _default_dir="${HOME}/.pi/agent"
+    local _active_dir="${PI_CODING_AGENT_DIR:-${_default_dir}}"
+    local _result=""
+    if [[ ! -e "${_default_dir}" && ! -L "${_default_dir}" && ! -e "${_active_dir}" && ! -L "${_active_dir}" ]]; then
+        print_debug "No global Pi profiles; pi-prose is absent."
+        return 0
+    fi
+    if ! command -v node &> /dev/null; then
+        print_error "Node.js is required to retire pi-prose from existing Pi profiles."
+        return 1
+    fi
+    if ! _result=$(node --input-type=commonjs - "${HOME}" "${_active_dir}" <<'PI_PROSE_RETIREMENT_JS'
+// BEGIN PI_PROSE_RETIREMENT
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+class RetirementError extends Error {}
+const fail = message => { throw new RetirementError(message); };
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const prose = source => typeof source === 'string' && (source === 'npm:pi-prose' || source.startsWith('npm:pi-prose@'));
+const packageKey = key => key === 'pi-prose' || key.startsWith('pi-prose@');
+function info(file) {
+    try { return fs.lstatSync(file); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+function absolute(value) {
+    if (!value || !path.isAbsolute(value) || value.split(/[\\/]/).some(part => part === '..' || part === '.')) {
+        fail('Pi prose retirement requires absolute profile paths without dot segments.');
+    }
+    return path.resolve(value);
+}
+function readJson(file) {
+    const stat = info(file);
+    if (!stat) return null;
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) fail('Pi prose metadata must be regular, unlinked JSON files.');
+    const text = fs.readFileSync(file, 'utf8');
+    let value;
+    try { value = JSON.parse(text.replace(/^\uFEFF/, '')); }
+    catch { fail('Invalid JSON in Pi prose retirement metadata; leaving it unchanged.'); }
+    if (!object(value)) fail('Pi prose retirement metadata must contain a JSON object.');
+    return { file, stat, text, value };
+}
+function stripDependencies(value) {
+    let changed = false;
+    for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'peerDependenciesMeta', 'overrides']) {
+        if (!own(value, field)) continue;
+        if (!object(value[field])) fail('Invalid dependency map in Pi prose retirement metadata.');
+        for (const key of Object.keys(value[field])) {
+            if (key === 'pi-prose' || (field === 'overrides' && packageKey(key))) {
+                delete value[field][key];
+                changed = true;
+            }
+        }
+    }
+    return changed;
+}
+try {
+    // HOME is the trusted account boundary. Resolve only HOME, not Pi-owned paths,
+    // so OS home aliases work without following linked profiles or package stores.
+    const logicalHome = absolute(process.argv[2]);
+    const home = fs.realpathSync(logicalHome);
+    if (!fs.statSync(home).isDirectory()) fail('Pi prose retirement requires a home directory.');
+    const key = value => process.platform === 'win32' ? value.toLowerCase() : value;
+    const within = (file, base) => key(file) === key(base) || key(file).startsWith(key(base + path.sep));
+    const normalize = value => {
+        const file = absolute(value);
+        return within(file, logicalHome) ? path.join(home, path.relative(logicalHome, file)) : file;
+    };
+    const directories = [...new Map([path.join(home, '.pi', 'agent'), process.argv[3] || path.join(home, '.pi', 'agent')]
+        .map(normalize).map(dir => [key(dir), dir])).values()];
+    function safeDirectory(dir) {
+        const stop = within(dir, home) ? home : path.parse(dir).root;
+        for (let current = dir; current !== stop; current = path.dirname(current)) {
+            const stat = info(current);
+            if (stat && (!stat.isDirectory() || stat.isSymbolicLink())) fail('Linked or non-directory Pi profile paths are not changed.');
+        }
+    }
+    const writes = [];
+    const removals = [];
+    for (const dir of directories) {
+        if (dir === path.parse(dir).root) fail('The filesystem root cannot be a Pi profile.');
+        safeDirectory(dir);
+        const npm = path.join(dir, 'npm');
+        const modules = path.join(npm, 'node_modules');
+        safeDirectory(modules);
+        const settings = readJson(path.join(dir, 'settings.json'));
+        if (settings && own(settings.value, 'packages')) {
+            if (!Array.isArray(settings.value.packages)) fail('Pi settings packages must be an array.');
+            if (settings.value.packages.some(entry => typeof entry !== 'string' && (!object(entry) || typeof entry.source !== 'string'))) {
+                fail('Invalid package declaration in Pi settings; leaving it unchanged.');
+            }
+            const filtered = settings.value.packages.filter(entry => !prose(typeof entry === 'string' ? entry : entry.source));
+            if (filtered.length !== settings.value.packages.length) {
+                settings.value.packages = filtered;
+                writes.push(settings);
+            }
+        }
+        const manifest = readJson(path.join(npm, 'package.json'));
+        if (manifest && stripDependencies(manifest.value)) writes.push(manifest);
+        for (const file of [path.join(npm, 'package-lock.json'), path.join(npm, 'npm-shrinkwrap.json'), path.join(modules, '.package-lock.json')]) {
+            const lock = readJson(file);
+            if (!lock) continue;
+            const value = lock.value;
+            if (![1, 2, 3].includes(value.lockfileVersion)) fail('Unsupported Pi npm lockfile version; leaving it unchanged.');
+            let changed = stripDependencies(value);
+            if (own(value, 'packages')) {
+                if (!object(value.packages)) fail('Invalid packages map in Pi npm lockfile.');
+                if (own(value.packages, '')) {
+                    if (!object(value.packages[''])) fail('Invalid root record in Pi npm lockfile.');
+                    changed = stripDependencies(value.packages['']) || changed;
+                }
+                for (const name of Object.keys(value.packages)) {
+                    if (name === 'node_modules/pi-prose' || name.startsWith('node_modules/pi-prose/')) {
+                        delete value.packages[name];
+                        changed = true;
+                    }
+                }
+            }
+            if (changed) writes.push(lock);
+        }
+        const target = path.join(modules, 'pi-prose');
+        const stat = info(target);
+        if (stat) {
+            if (directories.some(profile => within(profile, target))) fail('A Pi profile overlaps the retired package directory; manual review is required.');
+            // A linked package is unlinked, never followed into a user's source tree.
+            if (!stat.isSymbolicLink()) {
+                if (!stat.isDirectory()) fail('The installed pi-prose path is not a package directory.');
+                const installed = readJson(path.join(target, 'package.json'));
+                if (!installed || installed.value.name !== 'pi-prose') fail('Cannot verify the installed pi-prose package; leaving it unchanged.');
+            }
+            removals.push({ file: target, stat });
+        }
+    }
+    // Preflight every profile before changing any of them. Remove declarations
+    // before package files, without running npm, Pi, or lifecycle scripts.
+    for (const record of writes) {
+        safeDirectory(path.dirname(record.file));
+        const current = info(record.file);
+        if (!current || current.isSymbolicLink() || current.ino !== record.stat.ino || current.dev !== record.stat.dev ||
+            fs.readFileSync(record.file, 'utf8') !== record.text) fail('Pi metadata changed during retirement; rerun setup after reviewing it.');
+        const temporary = record.file + '.retire-' + crypto.randomBytes(12).toString('hex');
+        try {
+            const bom = record.text.startsWith('\uFEFF') ? '\uFEFF' : '';
+            fs.writeFileSync(temporary, bom + JSON.stringify(record.value, null, 2) + '\n', { flag: 'wx', mode: record.stat.mode & 0o777 });
+            fs.renameSync(temporary, record.file);
+        } finally {
+            if (info(temporary)) fs.unlinkSync(temporary);
+        }
+    }
+    for (const record of removals) {
+        safeDirectory(path.dirname(record.file));
+        const current = info(record.file);
+        if (!current || current.ino !== record.stat.ino || current.dev !== record.stat.dev ||
+            current.isSymbolicLink() !== record.stat.isSymbolicLink()) fail('The pi-prose package changed during retirement; review it before retrying.');
+        if (current.isSymbolicLink()) fs.unlinkSync(record.file);
+        else fs.rmSync(record.file, { recursive: true });
+        if (info(record.file)) fail('The pi-prose package still exists after retirement.');
+    }
+    console.log(writes.length || removals.length ? 'removed' : 'absent');
+} catch (error) {
+    console.error(error instanceof RetirementError ? error.message : 'Pi prose retirement failed during a filesystem operation; check permissions and retry.');
+    process.exitCode = 1;
+}
+// END PI_PROSE_RETIREMENT
+PI_PROSE_RETIREMENT_JS
+    ); then
+        print_error "Required pi-prose retirement failed. No npm security settings were changed."
+        return 1
+    fi
+    case "${_result}" in
+        removed) print_success "Retired pi-prose from global Pi profiles; custom prose files preserved." ;;
+        absent) print_debug "pi-prose is absent from global Pi profiles." ;;
+        *) print_error "Pi prose retirement did not return a valid result."; return 1 ;;
+    esac
+}
+# End Pi prose retirement.
+
 # Remove retired Pi RPIV packages (ask-user-question and todo)
 remove_pi_rpiv_packages() {
     local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
@@ -6245,7 +6425,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 225 | Last changed: Allow trusted Linux system home alias for Paseo Desktop${NC}"
+    echo -e "${GRAY}Version 226 | Last changed: Retire pi-prose from global Pi profiles${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -6435,6 +6615,7 @@ HELPER_EOF
     if ! setup_matt_pocock_skills; then
         _setup_had_errors=1
     fi
+    remove_pi_prose || return 1
     if install_pi_cli; then
         configure_pi_defaults
         remove_pi_synthetic_models

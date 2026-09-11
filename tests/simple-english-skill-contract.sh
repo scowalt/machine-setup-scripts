@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract version 7: preserve shared Node coverage with the system home alias banners.
+# Contract version 8: preserve shared Node coverage with the Pi prose retirement banners.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -8,18 +8,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=225
-    [ubuntu.sh]=247
-    [wsl.sh]=189
-    [pi.sh]=206
-    [bazzite.sh]=106
+    [mac.sh]=226
+    [ubuntu.sh]=248
+    [wsl.sh]=190
+    [pi.sh]=207
+    [bazzite.sh]=107
 )
 declare -A expected_banners=(
-    [mac.sh]='Allow trusted Linux system home alias for Paseo Desktop'
-    [ubuntu.sh]='Allow trusted Linux system home alias for Paseo Desktop'
-    [wsl.sh]='Allow trusted Linux system home alias for Paseo Desktop'
-    [pi.sh]='Allow trusted Linux system home alias for Paseo Desktop'
-    [bazzite.sh]='Allow trusted Linux system home alias for Paseo Desktop'
+    [mac.sh]='Retire pi-prose from global Pi profiles'
+    [ubuntu.sh]='Retire pi-prose from global Pi profiles'
+    [wsl.sh]='Retire pi-prose from global Pi profiles'
+    [pi.sh]='Retire pi-prose from global Pi profiles'
+    [bazzite.sh]='Retire pi-prose from global Pi profiles'
 )
 
 fail() {
@@ -200,7 +200,7 @@ assert_powershell_function_contains win.ps1 Install-ShowMeSkill 'humanlayer/skil
 assert_powershell_function_contains win.ps1 Set-PiSkillOwnership '"simple-english", "show-me"' 'show-me canonical shared ownership'
 assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal Simple English failure propagation'
 assert_contains win.ps1 'Required show-me skill setup failed' 'PowerShell fatal show-me failure propagation'
-assert_contains win.ps1 'Version 141 \| Last changed: Keep Pi on a supported shared Node runtime' 'PowerShell version banner'
+assert_contains win.ps1 'Version 142 \| Last changed: Retire pi-prose from global Pi profiles' 'PowerShell version banner'
 assert_powershell_function_contains win.ps1 Install-PrLensSkill 'coldteadotai/pr-lens.*pr-lens.*PR Lens' 'PR Lens source and specific skill'
 assert_powershell_function_not_contains win.ps1 Install-PrLensSkill 'BAN_|WORK_MACHINE|cursor|plugin|output-style|canvas|npx' 'PR Lens opt-out, policy, or runtime workflow'
 for artifact in LICENSE references/graph-document.md references/config.md references/example.graph.json; do
