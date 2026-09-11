@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract version 5: banners include Paseo Plain main tracking and release migration.
+# Contract version 6: shared Node runtime selection and updated setup banners.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -8,18 +8,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=223
-    [ubuntu.sh]=245
-    [wsl.sh]=187
-    [pi.sh]=204
-    [bazzite.sh]=104
+    [mac.sh]=224
+    [ubuntu.sh]=246
+    [wsl.sh]=188
+    [pi.sh]=205
+    [bazzite.sh]=105
 )
 declare -A expected_banners=(
-    [mac.sh]='Track Paseo Plain main and migrate release installs'
-    [ubuntu.sh]='Track Paseo Plain main and migrate release installs'
-    [wsl.sh]='Track Paseo Plain main and migrate release installs'
-    [pi.sh]='Track Paseo Plain main and migrate release installs'
-    [bazzite.sh]='Track Paseo Plain main and migrate release installs'
+    [mac.sh]='Keep Pi on a supported shared Node runtime'
+    [ubuntu.sh]='Keep Pi on a supported shared Node runtime'
+    [wsl.sh]='Keep Pi on a supported shared Node runtime'
+    [pi.sh]='Keep Pi on a supported shared Node runtime'
+    [bazzite.sh]='Keep Pi on a supported shared Node runtime'
 )
 
 fail() {
@@ -125,9 +125,12 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '^install_managed_agent_skill\(\)' 'reusable managed skill installer'
     assert_contains "${file}" '^setup_simple_english_skill\(\)' 'Simple English installer wrapper'
     assert_contains "${file}" '^setup_show_me_skill\(\)' 'show-me installer wrapper'
-    assert_function_contains "${file}" skills_cli_node_runtime_ready 'major > 22.*major === 22 && minor >= 20' 'Node.js 22.20 minimum'
-    assert_function_contains "${file}" ensure_skills_cli_node_runtime 'local _runtime="node@24"' 'mise Node.js 24 runtime'
-    assert_function_contains "${file}" ensure_skills_cli_node_runtime 'mise use -g -y "\$\{_runtime\}"' 'global mise activation'
+    assert_function_contains "${file}" skills_cli_node_runtime_ready 'shared_node_runtime_ready' 'shared readiness check'
+    assert_function_contains "${file}" shared_node_runtime_ready 'major > 22.*major === 22 && minor >= 20' 'Node.js 22.20 minimum'
+    assert_function_contains "${file}" ensure_skills_cli_node_runtime 'ensure_shared_node_runtime' 'durable shared runtime selection'
+    assert_function_contains "${file}" ensure_shared_node_runtime 'mise use -g -y -C "\$\{HOME\}" "\$\{_runtime\}"' 'global mise selection'
+    assert_function_contains "${file}" shared_node_fallback 'node@22' 'official ARMv7 fallback'
+    assert_function_contains "${file}" shared_node_fallback 'node@24' 'supported Node.js 24 fallback'
     assert_function_contains "${file}" install_managed_agent_skill 'npx --yes skills@latest add "\$\{_repository\}"' 'latest upstream skills CLI install'
     assert_function_contains "${file}" install_managed_agent_skill '^        --global [\\]$' 'global installation flag'
     assert_function_contains "${file}" install_managed_agent_skill '^        --agent claude-code [\\]$' 'Claude Code target'
@@ -197,7 +200,7 @@ assert_powershell_function_contains win.ps1 Install-ShowMeSkill 'humanlayer/skil
 assert_powershell_function_contains win.ps1 Set-PiSkillOwnership '"simple-english", "show-me"' 'show-me canonical shared ownership'
 assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal Simple English failure propagation'
 assert_contains win.ps1 'Required show-me skill setup failed' 'PowerShell fatal show-me failure propagation'
-assert_contains win.ps1 'Version 140 \| Last changed: Track Paseo Plain main and migrate release installs' 'PowerShell version banner'
+assert_contains win.ps1 'Version 141 \| Last changed: Keep Pi on a supported shared Node runtime' 'PowerShell version banner'
 assert_powershell_function_contains win.ps1 Install-PrLensSkill 'coldteadotai/pr-lens.*pr-lens.*PR Lens' 'PR Lens source and specific skill'
 assert_powershell_function_not_contains win.ps1 Install-PrLensSkill 'BAN_|WORK_MACHINE|cursor|plugin|output-style|canvas|npx' 'PR Lens opt-out, policy, or runtime workflow'
 for artifact in LICENSE references/graph-document.md references/config.md references/example.graph.json; do

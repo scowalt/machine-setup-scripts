@@ -2496,59 +2496,138 @@ remove_rtk_resources() {
     fi
 }
 
-# Check whether the active Node.js runtime can run current Pi packages.
+# Pi needs Node >=22.19 and fs.globSync; the shared skills CLI needs >=22.20.
 pi_node_runtime_ready() {
     command -v node &> /dev/null || return 1
-    node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 20 || (major === 20 && minor >= 6) ? 0 : 1)' >/dev/null 2>&1
+    node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major > 22 || (major === 22 && minor >= 19)) && typeof require("node:fs").globSync === "function" ? 0 : 1)' >/dev/null 2>&1
 }
 
-# Ensure Pi runs with a Node.js version new enough for current @earendil-works packages.
+shared_node_runtime_ready() {
+    local _node="${1:-node}"
+    "${_node}" -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major > 22 || (major === 22 && minor >= 20)) && typeof require("node:fs").globSync === "function" ? 0 : 1)' >/dev/null 2>&1
+}
+
+# Only select releases with official binaries. Never fall back to a source build.
+shared_node_fallback() {
+    local _os _arch _bits
+    _os=$(uname -s) || return 1
+    _arch=$(uname -m) || return 1
+    case "${_os}:${_arch}" in
+        Linux:armv7l|Linux:armv8l) printf '%s\n' 'node@22' ;;
+        Linux:aarch64|Linux:arm64)
+            _bits=$(getconf LONG_BIT) || return 1
+            if [[ "${_bits}" == "32" ]]; then
+                printf '%s\n' 'node@22'
+            else
+                printf '%s\n' 'node@24'
+            fi
+            ;;
+        Linux:x86_64|Darwin:x86_64|Darwin:arm64) printf '%s\n' 'node@24' ;;
+        *) return 1 ;;
+    esac
+}
+
+# Test the normal chezmoi-owned fish activation, not setup's inherited runtime PATH.
+# An optional argument also verifies the canonical Pi command after installation.
+verify_shared_node_shell() {
+    local _fish="" _variable
+    _fish=$(command -v fish) || return 1
+    (
+        cd "${HOME}" || exit 1
+        for _variable in "${!__MISE_@}" "${!FNM_@}" "${!MISE_@}"; do
+            case "${_variable}" in
+                __MISE_*|FNM_*|MISE_SHELL|MISE_*_VERSION|MISE_TOOL_OPTS__NODE) unset "${_variable}" ;;
+                *) ;;
+            esac
+        done
+        unset NODE_PATH NODE_OPTIONS BASH_ENV
+        # Fish, not Bash, expands $argv in this probe.
+        # shellcheck disable=SC2016
+        env PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" MISE_AUTO_INSTALL=false "${_fish}" -l -c '
+            type -q mise; or exit 1
+            set -l expected_node (mise which -C "$HOME" node); or exit 1
+            node -e '\''const fs = require("node:fs"); const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major > 22 || (major === 22 && minor >= 20)) && typeof fs.globSync === "function" && fs.realpathSync(process.execPath) === fs.realpathSync(process.argv[1]) ? 0 : 1)'\'' "$expected_node"; or exit 1
+            npm --version >/dev/null; or exit 1
+            if test (count $argv) -gt 0
+                test (command -s pi) = "$argv[1]"; or exit 1
+                pi --version >/dev/null; or exit 1
+            end
+        ' "$@" < /dev/null
+    ) >/dev/null 2>&1
+}
+
+# A compatible inherited Node is not evidence of a durable shared mise selection.
+ensure_shared_node_runtime() {
+    local _inventory="" _count="" _install_path="" _version="" _runtime="" _mise_env="" _attempt
+    export PATH="${HOME}/.local/bin:${HOME}/.mise/bin:${PATH}"
+    if ! command -v mise &> /dev/null || ! command -v jq &> /dev/null; then
+        print_warning "mise and jq are required to verify the shared Node runtime."
+        return 1
+    fi
+
+    # Query outside HOME: --global filters active sources, so a HOME override can
+    # otherwise hide a valid global default. Activation below still honors HOME.
+    for _attempt in 1 2; do
+        if ! _inventory=$(MISE_AUTO_INSTALL=false mise ls -C / --global --json node < /dev/null) ||
+            ! _inventory=$(jq -ce 'if type == "array" then . elif type == "object" then (.node // []) else error("Invalid mise inventory") end' <<< "${_inventory}"); then
+            print_warning "Cannot read the global mise Node selection; leaving Pi unchanged."
+            return 1
+        fi
+        _count=$(jq -r 'length' <<< "${_inventory}") || return 1
+        if [[ "${_count}" -gt 1 ]]; then
+            print_warning "Multiple global Node versions are configured; select one compatible default before rerunning setup."
+            return 1
+        fi
+        _install_path=$(jq -r '.[0].install_path // empty' <<< "${_inventory}") || return 1
+        if [[ -n "${_install_path}" ]] && shared_node_runtime_ready "${_install_path}/bin/node"; then
+            break
+        fi
+        if [[ "${_attempt}" -eq 2 ]]; then
+            print_warning "The global mise Node runtime is still unavailable or incompatible; leaving Pi unchanged."
+            return 1
+        fi
+        if ! _runtime=$(shared_node_fallback); then
+            print_warning "No supported prebuilt Node runtime for this platform; leaving Pi unchanged."
+            return 1
+        fi
+        # Preserve an absent compatible selection when this platform has binaries.
+        # ARMv7 has official Node 22 binaries, not Node 24+ binaries.
+        _version=$(jq -r '.[0].version // empty' <<< "${_inventory}") || return 1
+        if [[ -z "${_install_path}" || ! -f "${_install_path}/bin/node" ]] &&
+            jq -e '.[0].version // "" | select(test("^[0-9]+(\\.[0-9]+){0,2}$")) | split(".") | map(tonumber) | .[0] > 22 or (.[0] == 22 and (length == 1 or .[1] >= 20))' <<< "${_inventory}" > /dev/null &&
+            { [[ "${_runtime}" != "node@22" ]] || [[ "${_version}" == "22" || "${_version}" == 22.* ]]; }; then
+            print_message "Installing the configured shared Node runtime (${_version})..."
+            if ! MISE_NODE_COMPILE=false MISE_AUTO_INSTALL=false mise install -C "${HOME}" "node@${_version}" < /dev/null; then
+                print_warning "Failed to install the configured Node runtime; leaving Pi unchanged."
+                return 1
+            fi
+        else
+            print_message "Selecting shared ${_runtime} for Pi and the skills CLI..."
+            if ! MISE_NODE_COMPILE=false MISE_AUTO_INSTALL=false mise use -g -y -C "${HOME}" "${_runtime}" < /dev/null; then
+                print_warning "Failed to install/select ${_runtime}; leaving Pi unchanged."
+                return 1
+            fi
+        fi
+    done
+
+    # No explicit node@ argument: HOME overrides must not be hidden by setup.
+    if ! _mise_env=$(MISE_AUTO_INSTALL=false mise env -C "${HOME}" -s bash < /dev/null) || ! eval "${_mise_env}"; then
+        print_warning "Failed to activate the shared mise environment; leaving Pi unchanged."
+        return 1
+    fi
+    if ! shared_node_runtime_ready || ! npm --version >/dev/null 2>&1; then
+        print_warning "HOME does not select Node >=22.20 with fs.globSync and npm. Review mise overrides; leaving Pi unchanged."
+        return 1
+    fi
+    if ! verify_shared_node_shell; then
+        print_warning "A fresh fish shell cannot use the shared Node/npm runtime. Apply the chezmoi mise activation and review HOME overrides before rerunning setup."
+        return 1
+    fi
+    print_debug "Shared Node.js $(node --version || true) is ready in setup and a fresh fish shell."
+}
+
 ensure_pi_node_runtime() {
-    local _runtime="node@24"
-
-    if pi_node_runtime_ready; then
-        print_debug "Node.js $(node --version || true) is ready for Pi."
-        return 0
-    fi
-
-    if [[ -d "${HOME}/.local/bin" ]]; then
-        export PATH="${HOME}/.local/bin:${PATH}"
-    fi
-
-    if [[ -d "${HOME}/.mise/bin" ]]; then
-        export PATH="${HOME}/.mise/bin:${PATH}"
-    fi
-
-    if ! command -v mise &> /dev/null; then
-        print_warning "Node.js >=20.6 is required for Pi, but mise is not available to install it."
-        print_debug "Install mise, then run: mise use -g -y ${_runtime}"
-        return 1
-    fi
-
-    print_message "Ensuring Node.js 24 runtime for Pi..."
-    if ! mise use -g -y "${_runtime}" > /dev/null; then
-        print_warning "Failed to install/configure ${_runtime} with mise."
-        return 1
-    fi
-
-    local _mise_env=""
-    if ! _mise_env=$(mise env -C "${HOME}" -s bash "${_runtime}"); then
-        print_warning "Failed to generate mise environment for ${_runtime}."
-        return 1
-    fi
-
-    if ! eval "${_mise_env}"; then
-        print_warning "Failed to activate ${_runtime} with mise."
-        return 1
-    fi
-
-    if pi_node_runtime_ready; then
-        print_success "Node.js $(node --version || true) is ready for Pi."
-        return 0
-    fi
-
-    print_warning "Node.js >=20.6 is still not active after installing ${_runtime}."
-    return 1
+    ensure_shared_node_runtime && pi_node_runtime_ready
 }
 
 # Remove the managed footprint of the retired Attention-kind guidance.
@@ -2757,59 +2836,13 @@ remove_attention_span_resources() {
     fi
 }
 
-# Check whether the active Node.js runtime can run the current skills CLI.
+# Pi and the skills CLI share one durable Node selection.
 skills_cli_node_runtime_ready() {
-    command -v node &> /dev/null || return 1
-    node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 20) ? 0 : 1)' >/dev/null 2>&1
+    shared_node_runtime_ready
 }
 
-# Ensure the skills CLI runs on its required Node.js version.
 ensure_skills_cli_node_runtime() {
-    local _runtime="node@24"
-
-    if skills_cli_node_runtime_ready; then
-        print_debug "Node.js $(node --version || true) is ready for the skills CLI."
-        return 0
-    fi
-
-    if [[ -d "${HOME}/.local/bin" ]]; then
-        export PATH="${HOME}/.local/bin:${PATH}"
-    fi
-
-    if [[ -d "${HOME}/.mise/bin" ]]; then
-        export PATH="${HOME}/.mise/bin:${PATH}"
-    fi
-
-    if ! command -v mise &> /dev/null; then
-        print_warning "Node.js >=22.20 is required for the skills CLI, but mise is not available to install it."
-        print_debug "Install mise, then run: mise use -g -y ${_runtime}"
-        return 1
-    fi
-
-    print_message "Ensuring Node.js 24 runtime for the skills CLI..."
-    if ! mise use -g -y "${_runtime}" > /dev/null; then
-        print_warning "Failed to install/configure ${_runtime} with mise."
-        return 1
-    fi
-
-    local _mise_env=""
-    if ! _mise_env=$(mise env -C "${HOME}" -s bash "${_runtime}"); then
-        print_warning "Failed to generate mise environment for ${_runtime}."
-        return 1
-    fi
-
-    if ! eval "${_mise_env}"; then
-        print_warning "Failed to activate ${_runtime} with mise."
-        return 1
-    fi
-
-    if skills_cli_node_runtime_ready; then
-        print_success "Node.js $(node --version || true) is ready for the skills CLI."
-        return 0
-    fi
-
-    print_warning "Node.js >=22.20 is still not active after installing ${_runtime}."
-    return 1
+    ensure_shared_node_runtime
 }
 
 # Install/update one copied global skill for every supported AI coding harness.
@@ -3440,18 +3473,17 @@ install_pi_cli() {
     local _pi_version=""
     local _path_entry=""
 
+    PI_RUNTIME_PREFLIGHT_PASSED=0
     print_message "Installing/updating Pi coding agent..."
 
     mkdir -p "${_canonical_bin}"
     export PATH="${_canonical_bin}:${PATH}"
-    if command -v fish &> /dev/null; then
-        fish -lc "fish_add_path -m \"${HOME}/.local/bin\"" > /dev/null 2>&1 || print_debug "Could not persist ~/.local/bin path preference with fish_add_path."
-    fi
-
+    # Chezmoi owns persistent shell PATH configuration.
     if ! ensure_pi_node_runtime; then
         print_warning "Skipping Pi installation and extension setup because the Pi Node.js runtime is not ready."
         return 1
     fi
+    PI_RUNTIME_PREFLIGHT_PASSED=1
 
     if ! command -v npm &> /dev/null; then
         print_warning "npm not found. Cannot install Pi coding agent."
@@ -3546,6 +3578,10 @@ install_pi_cli() {
         return 1
     fi
 
+    if ! verify_shared_node_shell "${_canonical_pi}"; then
+        print_warning "Pi was installed, but a fresh fish shell cannot launch the canonical command. Review PATH and chezmoi activation."
+        return 1
+    fi
     print_success "Pi coding agent ${_pi_version} installed/updated at ${_canonical_pi}."
 }
 
@@ -3957,7 +3993,7 @@ install_paseo_cli() {
     fi
 
     if ! ensure_pi_node_runtime; then
-        print_error "Node.js >=20.6 is required before installing ${PASEO_PACKAGE}."
+        print_error "A supported shared Node/npm runtime is required before installing ${PASEO_PACKAGE}."
         return 1
     fi
 
@@ -6553,7 +6589,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 245 | Last changed: Track Paseo Plain main and migrate release installs"
+    echo -e "${GRAY}Version 246 | Last changed: Keep Pi on a supported shared Node runtime"
 
     if ! acquire_setup_lock; then
         return 1
@@ -6731,13 +6767,16 @@ HELPER_EOF
         setup_pi_companion_packages
         setup_pi_goal_autoresearch
     else
-        remove_pi_subagents
-        remove_pi_rpiv_packages
-        if [[ "${BAN_PI_MCP_ADAPTER:-}" == "1" ]]; then
-            setup_pi_mcp_adapter
-        fi
-        if [[ "${BAN_PI_GOAL_AUTORESEARCH:-}" == "1" ]]; then
-            setup_pi_goal_autoresearch
+        # Do not run Pi package cleanup after a failed runtime preflight.
+        if [[ "${PI_RUNTIME_PREFLIGHT_PASSED:-0}" -eq 1 ]]; then
+            remove_pi_subagents
+            remove_pi_rpiv_packages
+            if [[ "${BAN_PI_MCP_ADAPTER:-}" == "1" ]]; then
+                setup_pi_mcp_adapter
+            fi
+            if [[ "${BAN_PI_GOAL_AUTORESEARCH:-}" == "1" ]]; then
+                setup_pi_goal_autoresearch
+            fi
         fi
         print_warning "Skipping Pi extension setup because Pi migration failed."
         _setup_had_errors=1

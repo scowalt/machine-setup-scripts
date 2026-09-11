@@ -66,7 +66,7 @@ All scripts follow a consistent pattern:
 
 - Version Control: git, gh (GitHub CLI)
 - Shell: fish (with completions), tmux
-- Node.js: fnm (Fast Node Manager)
+- Node.js: shared mise runtime. Pi requires >=22.19 and `fs.globSync`; the skills CLI requires >=22.20. Preserve a compatible global selection even when setup inherits another Node. If needed, provision Node 24 or official Node 22 binaries on Linux ARMv7 without compilation. Validate ordinary HOME selection and fresh-shell activation before Pi package mutations. Preserve project pins and conflicting HOME overrides. Chezmoi owns fish and PowerShell activation. Do not add private Pi runtimes, launchers, or npm adapters. Run `bash tests/shared-node-runtime-contract.sh`; set `PWSH_BIN` for PowerShell fixtures.
 - Python: pyenv (Python version management)
 - Security: 1Password CLI, Tailscale
 - Dotfiles: Chezmoi (with auto-sync)

@@ -1965,63 +1965,209 @@ function Remove-RtkResources {
     }
 }
 
-# Check whether the active Node.js runtime can run current Pi packages.
+# Pi's package minimum is lower than the shared skills CLI minimum.
 function Test-PiNodeRuntimeReady {
-    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-        return $false
+    try {
+        & node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major > 22 || (major === 22 && minor >= 19)) && typeof require("node:fs").globSync === "function" ? 0 : 1)' *> $null
+        return ($LASTEXITCODE -eq 0)
     }
-
-    & node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 20 || (major === 20 && minor >= 6) ? 0 : 1)' *> $null
-    return ($LASTEXITCODE -eq 0)
+    catch { return $false }
 }
 
-# Ensure Pi runs with a Node.js version new enough for current @earendil-works packages.
+function Test-SharedNodeRuntimeReady {
+    param([string]$Node = 'node')
+    try {
+        & $Node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major > 22 || (major === 22 && minor >= 20)) && typeof require("node:fs").globSync === "function" ? 0 : 1)' *> $null
+        return ($LASTEXITCODE -eq 0)
+    }
+    catch { return $false }
+}
+
+# New selections must have an official Windows binary. Never compile a fallback.
+function Get-SharedNodeFallback {
+    $architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and $architecture -in @('AMD64', 'ARM64')) {
+        return 'node@24'
+    }
+    return $null
+}
+
+function Get-SharedNodePowerShellHost {
+    return (Get-Process -Id $PID -ErrorAction Stop).Path
+}
+
+# Kept separate so offline fixtures can inspect the child without loading live profiles.
+function Invoke-SharedNodeShellProcess {
+    param([System.Diagnostics.ProcessStartInfo]$StartInfo)
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $StartInfo
+    try {
+        if (-not $process.Start()) { return $false }
+        $process.StandardInput.Close()
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(60000)) {
+            $process.Kill()
+            $process.WaitForExit()
+            return $false
+        }
+        $null = $stdout.GetAwaiter().GetResult()
+        $null = $stderr.GetAwaiter().GetResult()
+        return ($process.ExitCode -eq 0)
+    }
+    catch { return $false }
+    finally { $process.Dispose() }
+}
+
+# Test chezmoi-owned activation with the persisted Windows PATH, not setup's PATH.
+function Test-SharedNodeShell {
+    param([string]$CanonicalPi = '')
+    try {
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = Get-SharedNodePowerShellHost
+        $startInfo.WorkingDirectory = $env:USERPROFILE
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $persistedPath = @(
+            [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+            [Environment]::GetEnvironmentVariable('Path', 'User')
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        # Expand registry PATH entries only after removing the inherited runtime PATH.
+        $savedPath = $env:PATH
+        try {
+            $env:PATH = ''
+            $startInfo.EnvironmentVariables['PATH'] = [Environment]::ExpandEnvironmentVariables(($persistedPath -join ';'))
+        }
+        finally { $env:PATH = $savedPath }
+        foreach ($name in @($startInfo.EnvironmentVariables.Keys)) {
+            if ($name -match '^(__MISE_|FNM_)|^MISE_(SHELL|.*_VERSION|TOOL_OPTS__NODE)$|^NODE_(PATH|OPTIONS)$') {
+                $startInfo.EnvironmentVariables.Remove($name)
+            }
+        }
+        $startInfo.EnvironmentVariables['MISE_AUTO_INSTALL'] = 'false'
+        $startInfo.EnvironmentVariables['MISE_NODE_COMPILE'] = 'false'
+        # Encode the optional path separately so it cannot become PowerShell source.
+        $encodedPi = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($CanonicalPi))
+        $probe = @'
+$ErrorActionPreference = 'Stop'
+try {
+    if (-not (Get-Command mise -ErrorAction SilentlyContinue)) { exit 1 }
+    $expectedNode = (& mise which -C $env:USERPROFILE node 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $expectedNode) { exit 1 }
+    & node -e 'const fs = require("node:fs"); const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major > 22 || (major === 22 && minor >= 20)) && typeof fs.globSync === "function" && fs.realpathSync(process.execPath) === fs.realpathSync(process.argv[1]) ? 0 : 1)' $expectedNode *> $null
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+    & npm --version *> $null
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+    $canonicalPi = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__CANONICAL_PI__'))
+    if ($canonicalPi) {
+        $piCommand = Get-Command pi -ErrorAction Stop
+        if ($piCommand.Source -ne $canonicalPi) { exit 1 }
+        $piVersion = (& pi --version 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $piVersion) { exit 1 }
+    }
+    exit 0
+}
+catch { exit 1 }
+'@
+        $probe = $probe.Replace('__CANONICAL_PI__', $encodedPi)
+        $startInfo.Arguments = '-NoLogo -NonInteractive -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe))
+        return (Invoke-SharedNodeShellProcess -StartInfo $startInfo)
+    }
+    catch { return $false }
+}
+
+# Inherited Node is not evidence of a durable global mise selection.
+function Enable-SharedNodeRuntime {
+    $savedCompile = [Environment]::GetEnvironmentVariable('MISE_NODE_COMPILE', 'Process')
+    $savedAutoInstall = [Environment]::GetEnvironmentVariable('MISE_AUTO_INSTALL', 'Process')
+    try {
+        $env:MISE_NODE_COMPILE = 'false'
+        $env:MISE_AUTO_INSTALL = 'false'
+        $pathCandidates = @(
+            [Environment]::GetEnvironmentVariable('Path', 'User'),
+            [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+            (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'),
+            (Join-Path $env:USERPROFILE '.local\bin')
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        $env:PATH = (($pathCandidates + @($env:PATH)) -join ';')
+        if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
+            Write-Warning 'mise is required to verify the shared Node runtime.'
+            return $false
+        }
+        # mise ls --global filters active sources. HOME overrides hide global rows,
+        # so inventory at the drive root, but activate and verify at HOME below.
+        $inventoryRoot = [System.IO.Path]::GetPathRoot($env:USERPROFILE)
+        if (-not $inventoryRoot) { throw 'USERPROFILE must be an absolute path.' }
+        for ($attempt = 1; $attempt -le 2; $attempt++) {
+            $inventoryText = (& mise ls -C $inventoryRoot --global --json node 2>$null | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or -not $inventoryText) { throw 'Cannot read global mise Node inventory.' }
+            # Wrap the JSON so PowerShell does not flatten empty or one-row arrays.
+            $parsed = ConvertFrom-Json -InputObject ('{"inventory":' + $inventoryText + '}') -ErrorAction Stop
+            $inventoryObject = $parsed.inventory
+            if ($inventoryObject -is [array]) {
+                $inventory = @($inventoryObject)
+            }
+            elseif ($inventoryObject -is [System.Management.Automation.PSCustomObject]) {
+                if ($null -eq $inventoryObject.node) { $inventory = @() }
+                elseif ($inventoryObject.node -is [array]) { $inventory = @($inventoryObject.node) }
+                else { throw 'Invalid global mise Node inventory.' }
+            }
+            else { throw 'Invalid global mise Node inventory.' }
+            if ($inventory.Count -gt 1) { throw 'Multiple global Node versions are configured; select one compatible default.' }
+            $selection = if ($inventory.Count) { $inventory[0] } else { $null }
+            if ($inventory.Count -and ($selection -isnot [System.Management.Automation.PSCustomObject] -or [string]::IsNullOrWhiteSpace($selection.version))) {
+                throw 'Invalid global mise Node inventory row.'
+            }
+            $nodePath = if ($selection.install_path) { Join-Path $selection.install_path 'node.exe' } else { $null }
+            $installed = $nodePath -and (Test-Path -LiteralPath $nodePath -PathType Leaf)
+            if ($installed -and (Test-SharedNodeRuntimeReady -Node $nodePath)) { break }
+            if ($attempt -eq 2) { throw 'Global mise Node is still unavailable or incompatible after installation.' }
+            $runtime = Get-SharedNodeFallback
+            if (-not $runtime) { throw 'No supported prebuilt Node runtime for this platform.' }
+            $version = [string]$selection.version
+            $compatibleVersion = $false
+            if ($version -match '^\d+(\.\d+){0,2}$') {
+                $parts = $version.Split('.')
+                $compatibleVersion = [int]$parts[0] -gt 22 -or ([int]$parts[0] -eq 22 -and ($parts.Count -eq 1 -or [int]$parts[1] -ge 20))
+            }
+            if (-not $installed -and $compatibleVersion) {
+                Write-Message "Installing the configured shared Node runtime ($version)..."
+                & mise install -C $env:USERPROFILE "node@$version" *> $null
+            }
+            else {
+                Write-Message "Selecting shared $runtime for Pi and the skills CLI..."
+                & mise use -g -y -C $env:USERPROFILE $runtime *> $null
+            }
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to install/select the shared Node runtime.' }
+        }
+        # No explicit node@ override: preserve and detect conflicting HOME pins.
+        $miseEnv = (& mise env -C $env:USERPROFILE -s pwsh 2>$null | Out-String)
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($miseEnv)) { throw 'Failed to activate the shared mise environment.' }
+        Invoke-Expression -Command $miseEnv -ErrorAction Stop | Out-Null
+        if (-not (Test-SharedNodeRuntimeReady)) { throw 'HOME does not select Node >=22.20 with fs.globSync; review mise overrides.' }
+        & npm --version *> $null
+        if ($LASTEXITCODE -ne 0) { throw 'npm is unavailable under the shared Node runtime.' }
+        if (-not (Test-SharedNodeShell)) {
+            throw 'A fresh PowerShell cannot use the shared mise Node/npm runtime. Apply the chezmoi mise activation and review HOME overrides.'
+        }
+        Write-Debug 'Shared Node is ready in setup and a fresh PowerShell.'
+        return $true
+    }
+    catch {
+        Write-Warning "$($_.Exception.Message) Leaving Pi unchanged."
+        return $false
+    }
+    finally {
+        $env:MISE_NODE_COMPILE = $savedCompile
+        $env:MISE_AUTO_INSTALL = $savedAutoInstall
+    }
+}
+
 function Enable-PiNodeRuntime {
-    $runtime = "node@24"
-
-    if (Test-PiNodeRuntimeReady) {
-        $nodeVersion = (& node --version 2>$null | Out-String).Trim()
-        Write-Debug "Node.js $nodeVersion is ready for Pi."
-        return $true
-    }
-
-    $pathCandidates = @(
-        [Environment]::GetEnvironmentVariable("Path", "User"),
-        [Environment]::GetEnvironmentVariable("Path", "Machine"),
-        (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links"),
-        (Join-Path $env:USERPROFILE ".local\bin")
-    ) | Where-Object { $_ -and $_.Trim() -ne "" }
-    $env:PATH = (($pathCandidates + @($env:PATH)) -join ";")
-
-    if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
-        Write-Warning "Node.js >=20.6 is required for Pi, but mise is not available to install it."
-        Write-Debug "Install mise, then run: mise use -g -y $runtime"
-        return $false
-    }
-
-    Write-Message "Ensuring Node.js 24 runtime for Pi..."
-    & mise use -g -y $runtime *> $null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Failed to install/configure $runtime with mise."
-        return $false
-    }
-
-    $miseEnv = & mise env -C $env:USERPROFILE -s pwsh $runtime 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Failed to activate $runtime with mise."
-        return $false
-    }
-
-    $miseEnv | Out-String | Invoke-Expression
-
-    if (Test-PiNodeRuntimeReady) {
-        $nodeVersion = (& node --version 2>$null | Out-String).Trim()
-        Write-Success "Node.js $nodeVersion is ready for Pi."
-        return $true
-    }
-
-    Write-Warning "Node.js >=20.6 is still not active after installing $runtime."
-    return $false
+    return ((Enable-SharedNodeRuntime) -and (Test-PiNodeRuntimeReady))
 }
 
 # Remove the managed footprint of the retired Attention-kind guidance.
@@ -2260,63 +2406,13 @@ function Remove-AttentionSpanResources {
     }
 }
 
-# Check whether the active Node.js runtime can run the current skills CLI.
+# Skills and Pi must agree on the same durable shared Node selection.
 function Test-SkillsCliNodeRuntimeReady {
-    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-        return $false
-    }
-
-    & node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 20) ? 0 : 1)' *> $null
-    return ($LASTEXITCODE -eq 0)
+    return (Test-SharedNodeRuntimeReady)
 }
 
-# Ensure the skills CLI runs on its required Node.js version.
 function Enable-SkillsCliNodeRuntime {
-    $runtime = "node@24"
-
-    if (Test-SkillsCliNodeRuntimeReady) {
-        $nodeVersion = (& node --version 2>$null | Out-String).Trim()
-        Write-Debug "Node.js $nodeVersion is ready for the skills CLI."
-        return $true
-    }
-
-    $pathCandidates = @(
-        [Environment]::GetEnvironmentVariable("Path", "User"),
-        [Environment]::GetEnvironmentVariable("Path", "Machine"),
-        (Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links"),
-        (Join-Path $env:USERPROFILE ".local\bin")
-    ) | Where-Object { $_ -and $_.Trim() -ne "" }
-    $env:PATH = (($pathCandidates + @($env:PATH)) -join ";")
-
-    if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
-        Write-Warning "Node.js >=22.20 is required for the skills CLI, but mise is not available to install it."
-        Write-Debug "Install mise, then run: mise use -g -y $runtime"
-        return $false
-    }
-
-    Write-Message "Ensuring Node.js 24 runtime for the skills CLI..."
-    & mise use -g -y $runtime *> $null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Failed to install/configure $runtime with mise."
-        return $false
-    }
-
-    $miseEnv = & mise env -C $env:USERPROFILE -s pwsh $runtime 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Failed to activate $runtime with mise."
-        return $false
-    }
-
-    $miseEnv | Out-String | Invoke-Expression
-
-    if (Test-SkillsCliNodeRuntimeReady) {
-        $nodeVersion = (& node --version 2>$null | Out-String).Trim()
-        Write-Success "Node.js $nodeVersion is ready for the skills CLI."
-        return $true
-    }
-
-    Write-Warning "Node.js >=22.20 is still not active after installing $runtime."
-    return $false
+    return (Enable-SharedNodeRuntime)
 }
 
 # Install/update one copied global skill for every supported AI coding harness.
@@ -2574,6 +2670,7 @@ function Repair-NpmConfiguration {
 
 # Function to install/update Pi coding agent
 function Install-PiCli {
+    $script:PiRuntimePreflightPassed = $false
     $newPackage = "@earendil-works/pi-coding-agent"
     $oldPackage = "@mariozechner/pi-coding-agent"
     $localPrefix = Join-Path $env:USERPROFILE ".local"
@@ -2586,20 +2683,20 @@ function Install-PiCli {
 
     Write-Host "$arrow Installing/updating Pi coding agent..." -ForegroundColor Cyan
 
-    if (-not (Test-Path $localPrefix)) {
-        New-Item -ItemType Directory -Force -Path $localPrefix | Out-Null
-    }
-    $env:PATH = "$localPrefix;$env:PATH"
-
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    if (-not ($userPath -split ';' | Where-Object { $_ -eq $localPrefix })) {
-        [Environment]::SetEnvironmentVariable("Path", "$localPrefix;$userPath", "User")
-    }
-
     try {
         if (-not (Enable-PiNodeRuntime)) {
             Write-Warning "Skipping Pi installation and extension setup because the Pi Node.js runtime is not ready."
             return $false
+        }
+        $script:PiRuntimePreflightPassed = $true
+
+        if (-not (Test-Path $localPrefix)) {
+            New-Item -ItemType Directory -Force -Path $localPrefix | Out-Null
+        }
+        $env:PATH = "$localPrefix;$env:PATH"
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        if (-not ($userPath -split ';' | Where-Object { $_ -eq $localPrefix })) {
+            [Environment]::SetEnvironmentVariable("Path", "$localPrefix;$userPath", "User")
         }
 
         if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
@@ -2674,6 +2771,10 @@ function Install-PiCli {
         $piVersionStatus = $LASTEXITCODE
         if ($piVersionStatus -ne 0 -or [string]::IsNullOrWhiteSpace($piVersion)) {
             Write-Host "$warnIcon Pi migration incomplete: canonical pi failed its version smoke test." -ForegroundColor Yellow
+            return $false
+        }
+        if (-not (Test-SharedNodeShell -CanonicalPi $canonicalPi)) {
+            Write-Warning 'Pi failed in a fresh PowerShell at HOME; review chezmoi activation and PATH before rerunning setup.'
             return $false
         }
         Write-Host "$success Pi coding agent $piVersion installed/updated at $canonicalPi." -ForegroundColor Green
@@ -4368,7 +4469,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 140 | Last changed: Track Paseo Plain main and migrate release installs"
+    Write-Host "Version 141 | Last changed: Keep Pi on a supported shared Node runtime"
 
     Assert-HeadlessPaseoUnsupported
     $null = Get-PaseoReleaseChannel
@@ -4423,13 +4524,15 @@ function Invoke-WindowsSetupTasks {
         Setup-PiGoalAutoresearch
     }
     else {
-        Remove-PiSubagents
-        Remove-PiRpivPackages
-        if (Test-EnvLocalFlag "BAN_PI_MCP_ADAPTER") {
-            Setup-PiMcpAdapter
-        }
-        if (Test-EnvLocalFlag "BAN_PI_GOAL_AUTORESEARCH") {
-            Setup-PiGoalAutoresearch
+        if ($script:PiRuntimePreflightPassed) {
+            Remove-PiSubagents
+            Remove-PiRpivPackages
+            if (Test-EnvLocalFlag "BAN_PI_MCP_ADAPTER") {
+                Setup-PiMcpAdapter
+            }
+            if (Test-EnvLocalFlag "BAN_PI_GOAL_AUTORESEARCH") {
+                Setup-PiGoalAutoresearch
+            }
         }
         Write-Warning "Skipping Pi extension setup because Pi migration failed."
         $piSetupFailed = $true

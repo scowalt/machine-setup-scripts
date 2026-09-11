@@ -34,6 +34,20 @@ Setup removes legacy global Impeccable skill copies and Cursor subagent files th
 
 Notion CLI is installed with Notion's native installer on macOS and Linux and with WinGet on Windows. The native installer supports x64 and ARM64, while the Windows package supports x64 only; unsupported architectures warn and continue setup. Setup does not authenticate Notion CLI or configure shell completions. Run `ntn login` manually when you are ready to connect a workspace.
 
+## Shared Node runtime for Pi
+
+Pi uses the same mise-managed Node as your shell and project tools. Current Pi needs Node >=22.19 and `fs.globSync`. The managed skills CLI needs >=22.20, so setup selects a shared runtime that satisfies both.
+
+Setup preserves a compatible global mise selection. If that selection is missing or too old, setup selects Node 24 on supported platforms or prebuilt Node 22 on Linux ARMv7. Setup does not compile Node or use unofficial builds as a fallback. System Node and project runtime pins remain unchanged.
+
+Setup tests a fresh shell at HOME without its temporary Node PATH. Chezmoi owns mise activation in fish and Windows PowerShell. Deploy the matching dotfiles change for Windows. If activation is missing or a HOME override selects unsupported Node, setup reports the problem rather than rewriting the override. Multiple global Node selections require manual review.
+
+If runtime installation or validation fails, setup leaves the existing Pi package and command untouched. This protection does not roll back a later failed npm package update. Pi retains its normal npm installation and update commands, without a custom launcher or separate runtime.
+
+After setup, open a new terminal and run `node --version` and `pi --version`. An already-open shell can retain its previous environment. If a project explicitly selects an unsupported Node version, switch to a supported version before running Pi there.
+
+Run `bash tests/shared-node-runtime-contract.sh` for isolated fixtures. Set `PWSH_BIN` to a PowerShell executable to include its fixtures. On Windows, run `pwsh -NoProfile -File tests/shared-node-runtime-powershell.ps1` directly. Tests do not run full setup, change live dotfiles, contact arcane, or make model requests. Linux fixtures do not prove native Windows, macOS, or ARM behavior.
+
 ## PR Lens skill
 
 PR Lens draws code changes or system structure as architecture and data-flow diagrams. Each machine receives the latest upstream `pr-lens` skill from `coldteadotai/pr-lens` on its next setup run. This rollout does not remotely install anything on existing machines.
@@ -44,7 +58,7 @@ Setup installs the skill only, not the PR Lens GitHub App or a global PR Lens CL
 
 Runtime limits are separate from skill installation:
 
-- The skill invokes `npx @coldtea/pr-lens-cli@latest` on demand. CLI 0.4.0 needs Node.js >=20.11. The setup skill installer already requires Node.js >=22.20 and can provision Node.js 24 through mise.
+- The skill invokes `npx @coldtea/pr-lens-cli@latest` on demand. CLI 0.4.0 needs Node.js >=20.11. The setup skill installer requires Node.js >=22.20 and shares the mise runtime described above.
 - Agent-authored graphs need no extra provider key. The optional `analyze` command needs a provider key.
 - The `render` command produces local output but can update the project `.gitignore`. Setup does not run it.
 - PR attachment with `gh --attach` needs GitHub CLI >=2.99, write-level permissions, and a suitable token and host. Some setup platforms use older distro versions. This rollout does not upgrade `gh`.
