@@ -14,7 +14,11 @@ Setup removes the tintinweb Pi subagents extension when it is present. It also r
 
 All machines default Pi to GPT-6 Astra (`openai-codex/gpt-6-astra`) with `xhigh` thinking, including work machines. Setup removes the retired Synthetic provider from Pi's `models.json` and preserves other providers and local credentials. z.ai remains optional when a key exists. On a new machine, use `/login` in Pi to connect your ChatGPT subscription.
 
-Setup does not reinstall `pi-prose` or create `prose/config.json`. Existing custom prose files remain unchanged. The dotfiles repository no longer manages this package or its initial default. Setup does not uninstall a user-selected copy.
+Setup removes the retired `pi-prose` package on each machine's next run, including previously user-selected copies. It cleans the default global Pi profile and the profile selected by `PI_CODING_AGENT_DIR`. Cleanup removes the Pi package declarations, direct npm dependency declarations, matching lockfile records, and installed package directory. It does not change project-local packages, unrelated packages, credentials, or existing custom prose files, including empty or malformed `prose/config.json` files.
+
+Cleanup runs after dotfiles application and before Pi package operations. It does not run npm or Pi, resolve dependencies, or change npm security policy. A linked package is unlinked without deleting its source. Linked profile directories, package stores, JSON metadata, and unverified package contents require manual review. Cleanup validates both profiles before writing, but individual file replacements are not one transaction. Any failed write or removal stops setup rather than reporting success.
+
+Dotfiles no longer declare this package or seed its initial configuration. The [matching dotfiles change](https://github.com/scowalt/dotfiles/pull/19) prevents later chezmoi applies from restoring the declaration. Already-running Pi sessions need a restart to unload the extension. This retirement does not fix the separate npm 12 restriction on MCP adapter URL dependencies, and setup does not contact other machines.
 
 Setup installs the managed Matt Pocock engineering skills on personal and work machines. Pi and Codex share the canonical copies in `~/.agents/skills`. Work machines also install Google Cloud CLI.
 

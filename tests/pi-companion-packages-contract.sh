@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Version 2 | Last changed: Stop restoring Pi prose
+# Version 3 | Last changed: Isolate companion fixtures during Pi prose retirement
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
-source_without_main='s/^main "\$@"$/:/'
 
 fail() {
     printf '✗ %s\n' "$1" >&2
@@ -61,13 +60,15 @@ MOCK_PI
     chmod +x "${mock_bin}/npm" "${mock_bin}/pi"
 
     SETUP_SCRIPT="${repo_root}/${file}" \
-        SOURCE_WITHOUT_MAIN="${source_without_main}" \
         HOME="${test_root}/home" \
         PATH="${mock_bin}:${PATH}" \
         PI_MOCK_PACKAGE_STATE="${package_state}" \
         PI_MOCK_COMMAND_LOG="${command_log}" \
         bash -c '
-            source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+            source <(awk '\''$0 == "setup_pi_companion_packages() {" {copy=1} copy {print} copy && /^}$/ {exit}'\'' "${SETUP_SCRIPT}")
+            print_message() { :; }
+            print_success() { :; }
+            print_warning() { :; }
             setup_pi_companion_packages > /dev/null
             setup_pi_companion_packages > /dev/null
         '
