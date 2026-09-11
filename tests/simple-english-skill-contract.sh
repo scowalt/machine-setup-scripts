@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract version 6: shared Node runtime selection and updated setup banners.
+# Contract version 7: preserve shared Node coverage with the system home alias banners.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -8,18 +8,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=224
-    [ubuntu.sh]=246
-    [wsl.sh]=188
-    [pi.sh]=205
-    [bazzite.sh]=105
+    [mac.sh]=225
+    [ubuntu.sh]=247
+    [wsl.sh]=189
+    [pi.sh]=206
+    [bazzite.sh]=106
 )
 declare -A expected_banners=(
-    [mac.sh]='Keep Pi on a supported shared Node runtime'
-    [ubuntu.sh]='Keep Pi on a supported shared Node runtime'
-    [wsl.sh]='Keep Pi on a supported shared Node runtime'
-    [pi.sh]='Keep Pi on a supported shared Node runtime'
-    [bazzite.sh]='Keep Pi on a supported shared Node runtime'
+    [mac.sh]='Allow trusted Linux system home alias for Paseo Desktop'
+    [ubuntu.sh]='Allow trusted Linux system home alias for Paseo Desktop'
+    [wsl.sh]='Allow trusted Linux system home alias for Paseo Desktop'
+    [pi.sh]='Allow trusted Linux system home alias for Paseo Desktop'
+    [bazzite.sh]='Allow trusted Linux system home alias for Paseo Desktop'
 )
 
 fail() {
