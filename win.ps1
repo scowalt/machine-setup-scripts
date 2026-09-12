@@ -43,6 +43,7 @@ $script:SetupOriginalClaudeCommand = $null
 $script:SetupOriginalTeaCommand = $null
 $script:SetupLogFile = $null
 $script:SetupTranscriptStarted = $false
+$script:SetupLogClosed = $false
 try {
     $setupOriginalClaude = Get-Command claude -ErrorAction SilentlyContinue
     if ($setupOriginalClaude) {
@@ -4620,39 +4621,250 @@ function Set-WindowsTerminalConfiguration {
 
 
 
-function Upload-Log {
-    if ($script:SetupLogFile -and (Test-Path $script:SetupLogFile)) {
+# Logging uses .NET multipart support available in Windows PowerShell 5.1 as
+# well as PowerShell 7. It must not depend on tools installed by setup.
+function Get-SetupLogDirectory {
+    return [IO.Path]::GetFullPath((Join-Path $env:USERPROFILE '.local\log\machine-setup'))
+}
+
+function Assert-SetupLogPath {
+    param([string]$Path, [switch]$AllowMissing)
+    $directory = Get-SetupLogDirectory
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    if ($fullPath -ne $directory -and
+        ([IO.Path]::GetDirectoryName($fullPath) -ne $directory -or
+         [IO.Path]::GetFileName($fullPath) -cnotmatch '^\d{4}-\d{2}-\d{2}-\d{6}-[0-9a-f]{32}\.log(?:\.upload\.json)?$')) {
+        throw 'Unmanaged setup log path'
+    }
+    # Inspect ancestors without resolving links into another tree. Missing
+    # components are allowed only when preparing our own log directory/files.
+    $cursor = $fullPath
+    while ($cursor) {
         try {
-            Write-Debug "Uploading log to logs.scowalt.com..."
-            Invoke-RestMethod -Uri "https://logs.scowalt.com/upload?hostname=$env:COMPUTERNAME" `
-                -Method Post -Form @{ file = Get-Item $script:SetupLogFile } `
-                -TimeoutSec 10 -ErrorAction Stop | Out-Null
+            $attributes = [IO.File]::GetAttributes($cursor)
+            if ($attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked setup log path' }
+            $isDirectory = [bool]($attributes -band [IO.FileAttributes]::Directory)
+            if (($cursor -ne $fullPath -or $fullPath -eq $directory) -ne $isDirectory) {
+                throw 'Unexpected setup log path type'
+            }
         }
         catch {
-            Write-Warning "Failed to upload setup log. Local log remains at $script:SetupLogFile."
+            $cause = $_.Exception.GetBaseException()
+            if (-not $AllowMissing -or
+                ($cause -isnot [IO.FileNotFoundException] -and $cause -isnot [IO.DirectoryNotFoundException])) { throw }
         }
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
     }
 }
 
-function Complete-SetupLog {
-    if (-not $script:SetupLogFile) {
-        return
-    }
+function New-SetupLogHttpClient {
+    Add-Type -AssemblyName System.Net.Http
+    $handler = [Net.Http.HttpClientHandler]::new()
+    # Do not forward a transcript to a redirect destination. Keep normal proxy
+    # and certificate validation behavior; never install a validation callback.
+    $handler.AllowAutoRedirect = $false
+    return [Net.Http.HttpClient]::new($handler)
+}
 
+function Send-SetupLogRequest {
+    param([string]$LogPath, [string]$Hostname, [ValidateRange(1, 30)][int]$TimeoutSeconds)
+    $file = $client = $request = $response = $null
+    $originalProtocol = [Net.ServicePointManager]::SecurityProtocol
+    try {
+        Assert-SetupLogPath $LogPath
+        # Refuse a file still open for writing, including a running transcript.
+        $file = [IO.File]::Open($LogPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        $client = New-SetupLogHttpClient
+        $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+        # Old .NET installations can select TLS 1.0 explicitly. Add TLS 1.2
+        # only in that case, preserve SystemDefault, and restore caller state.
+        if ($PSVersionTable.PSVersion.Major -le 5 -and [int]$originalProtocol -ne 0) {
+            [Net.ServicePointManager]::SecurityProtocol = $originalProtocol -bor [Net.SecurityProtocolType]::Tls12
+        }
+        $uri = 'https://logs.scowalt.com/upload?hostname=' + [Uri]::EscapeDataString($Hostname)
+        $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::Post, $uri)
+        $request.Content = [Net.Http.MultipartFormDataContent]::new()
+        $request.Content.Add([Net.Http.StreamContent]::new($file), 'file', [IO.Path]::GetFileName($LogPath))
+        $response = $client.SendAsync($request, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        # Only status is needed. Never print or parse an untrusted response body.
+        return [int]$response.StatusCode
+    }
+    finally {
+        if ($response) { $response.Dispose() }
+        if ($request) { $request.Dispose() }
+        if ($client) { $client.Dispose() }
+        if ($file) { $file.Dispose() }
+        [Net.ServicePointManager]::SecurityProtocol = $originalProtocol
+    }
+}
+
+function Get-SetupLogFailureCategory {
+    param([Exception]$Exception)
+    $category = 'local-file-or-client-error'
+    for ($cause = $Exception; $null -ne $cause; $cause = $cause.InnerException) {
+        if ($cause -is [Security.Authentication.AuthenticationException]) { return 'tls-validation' }
+        if ($cause -is [OperationCanceledException] -or $cause -is [TimeoutException]) { $category = 'timeout' }
+        # The HttpClient assembly may not have loaded if opening the file failed.
+        elseif ($cause.GetType().FullName -eq 'System.Net.Http.HttpRequestException' -and $category -ne 'timeout') { $category = 'network' }
+        if ($cause -is [Net.WebException]) {
+            if ($cause.Status -in @([Net.WebExceptionStatus]::TrustFailure, [Net.WebExceptionStatus]::SecureChannelFailure)) {
+                return 'tls-validation'
+            }
+            if ($cause.Status -eq [Net.WebExceptionStatus]::Timeout) { $category = 'timeout' }
+            elseif ($cause.Status -in @([Net.WebExceptionStatus]::ConnectFailure, [Net.WebExceptionStatus]::NameResolutionFailure,
+                [Net.WebExceptionStatus]::ProxyNameResolutionFailure, [Net.WebExceptionStatus]::ConnectionClosed,
+                [Net.WebExceptionStatus]::ReceiveFailure, [Net.WebExceptionStatus]::SendFailure, [Net.WebExceptionStatus]::KeepAliveFailure)) {
+                if ($category -ne 'timeout') { $category = 'network' }
+            }
+        }
+    }
+    return $category
+}
+
+function Read-SetupLogUploadState {
+    param([IO.FileStream]$Stream)
+    if ($Stream.Length -eq 0 -or $Stream.Length -gt 4096) { throw 'Invalid upload state size' }
+    $Stream.Position = 0
+    $reader = [IO.StreamReader]::new($Stream, [Text.Encoding]::UTF8, $true, 1024, $true)
+    try { $state = $reader.ReadToEnd() | ConvertFrom-Json -ErrorAction Stop }
+    finally { $reader.Dispose() }
+    if ($state -isnot [pscustomobject] -or
+        ($state.schema -isnot [int] -and $state.schema -isnot [long]) -or $state.schema -ne 1 -or
+        $state.state -isnot [string] -or $state.state -notin @('pending', 'uploaded') -or
+        $state.hostname -isnot [string] -or $state.hostname -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$') {
+        throw 'Invalid upload state'
+    }
+    foreach ($property in $state.PSObject.Properties.Name) {
+        if ($property -notin @('schema', 'state', 'hostname', 'attempts', 'reason', 'statusCode', 'updatedUtc')) {
+            throw 'Unrecognized upload state'
+        }
+    }
+    return $state
+}
+
+function Write-SetupLogUploadState {
+    param([IO.FileStream]$Stream, [string]$Hostname, [string]$State, [int]$Attempts, [string]$Reason, [int]$StatusCode)
+    $record = [ordered]@{
+        schema = 1; state = $State; hostname = $Hostname; attempts = $Attempts
+        reason = $Reason; statusCode = $StatusCode; updatedUtc = [DateTime]::UtcNow.ToString('o')
+    }
+    $bytes = [Text.Encoding]::UTF8.GetBytes(($record | ConvertTo-Json -Compress))
+    $Stream.Position = 0
+    $Stream.SetLength(0)
+    $Stream.Write($bytes, 0, $bytes.Length)
+    $Stream.Flush($true)
+}
+
+function Upload-Log {
+    param([string]$LogPath = $script:SetupLogFile, [switch]$Recovery, [ValidateRange(1, 96)][int]$MaxDurationSeconds = 96)
+    if (-not $LogPath) { return }
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $stateStream = $null
+    try {
+        if ($script:SetupTranscriptStarted -and $LogPath -eq $script:SetupLogFile) { throw 'Transcript still active' }
+        Assert-SetupLogPath $LogPath
+        $statePath = "$LogPath.upload.json"
+        Assert-SetupLogPath $statePath -AllowMissing:(-not $Recovery)
+        $existing = [IO.File]::Exists($statePath)
+        $mode = if ($existing -or $Recovery) { [IO.FileMode]::Open } else { [IO.FileMode]::CreateNew }
+        # Keep the state file as an exclusive lease throughout all attempts.
+        # An uploaded record stays on disk, avoiding a close/delete/reopen race.
+        $stateStream = [IO.File]::Open($statePath, $mode, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+        if ($existing -or $Recovery) {
+            $state = Read-SetupLogUploadState $stateStream
+            if ($state.state -eq 'uploaded') { return }
+            $hostname = $state.hostname
+        }
+        else {
+            $hostname = $env:COMPUTERNAME
+            if (-not $hostname) { $hostname = [Environment]::MachineName }
+            if ($hostname -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$') { throw 'Invalid hostname' }
+            Write-SetupLogUploadState $stateStream $hostname 'pending' 0 'not-attempted' 0
+        }
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            $remaining = [int][Math]::Floor($MaxDurationSeconds - $watch.Elapsed.TotalSeconds)
+            if ($remaining -lt 1) { break }
+            $status = 0
+            $reason = 'local-file-or-client-error'
+            $retryable = $false
+            try {
+                Write-Debug "Uploading setup log (attempt $attempt/3; PowerShell $($PSVersionTable.PSVersion))..."
+                $status = Send-SetupLogRequest $LogPath $hostname ([Math]::Min(30, $remaining))
+                if ($status -ge 200 -and $status -lt 300) {
+                    Write-SetupLogUploadState $stateStream $hostname 'uploaded' $attempt 'uploaded' $status
+                    Write-Debug "Setup log uploaded. Local log remains at $LogPath."
+                    return
+                }
+                $reason = "http-$status"
+                $retryable = $status -in @(408, 429) -or ($status -ge 500 -and $status -le 599)
+            }
+            catch {
+                $reason = Get-SetupLogFailureCategory $_.Exception
+                $retryable = $reason -in @('network', 'timeout')
+            }
+            Write-SetupLogUploadState $stateStream $hostname 'pending' $attempt $reason $status
+            Write-Warning "Setup log upload failed ($reason; attempt $attempt/3)."
+            if (-not $retryable -or $attempt -eq 3) { break }
+            $delay = 2 * $attempt
+            if ($watch.Elapsed.TotalSeconds + $delay + 1 -ge $MaxDurationSeconds) { break }
+            Start-Sleep -Seconds $delay
+        }
+        Write-Warning "Failed to upload setup log. Local log remains at $LogPath."
+        Write-Warning "Upload status: $statePath. A later setup run will retry this pending log."
+    }
+    catch {
+        # Raw exceptions can contain server bodies, proxy URLs or secrets.
+        # Invalid/linked/locked metadata is preserved for manual review.
+        Write-Warning "Setup log upload deferred (local-file-or-metadata). Local log remains at $LogPath."
+        Write-Warning 'Check log permissions, linked paths, and upload state files. No unsafe file was replaced.'
+    }
+    finally {
+        if ($stateStream) { $stateStream.Dispose() }
+    }
+}
+
+function Invoke-PendingSetupLogUploads {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $count = 0
+    try {
+        $directory = Get-SetupLogDirectory
+        Assert-SetupLogPath $directory
+        # Enumerate lazily, with a 60-second budget shared by at most three logs.
+        foreach ($path in [IO.Directory]::EnumerateFiles($directory, '*.log.upload.json')) {
+            $remaining = [int][Math]::Floor(60 - $watch.Elapsed.TotalSeconds)
+            if ($count -ge 3 -or $remaining -lt 1) { break }
+            $stream = $null
+            try {
+                Assert-SetupLogPath $path
+                $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+                $state = Read-SetupLogUploadState $stream
+            }
+            catch { continue } # Leave malformed, linked or busy state untouched.
+            finally { if ($stream) { $stream.Dispose() } }
+            if ($state.state -ne 'pending') { continue }
+            $count++
+            $logPath = $path.Substring(0, $path.Length - '.upload.json'.Length)
+            Upload-Log -LogPath $logPath -Recovery -MaxDurationSeconds $remaining
+        }
+    }
+    catch { Write-Warning 'Pending setup logs could not be inspected. Local files were preserved.' }
+}
+
+function Complete-SetupLog {
+    if (-not $script:SetupLogFile) { return }
     Write-Host "Run log saved to: $script:SetupLogFile" -ForegroundColor DarkGray
     if ($script:SetupTranscriptStarted) {
         try {
             Stop-Transcript -ErrorAction Stop | Out-Null
+            $script:SetupTranscriptStarted = $false
+            $script:SetupLogClosed = $true
         }
         catch {
-            Write-Warning "Failed to stop the setup transcript cleanly: $($_.Exception.Message)"
-        }
-        finally {
-            $script:SetupTranscriptStarted = $false
+            Write-Warning 'Setup transcript could not close. Upload skipped to avoid sending an incomplete or active log.'
+            return
         }
     }
-
-    Upload-Log
+    if ($script:SetupLogClosed) { Upload-Log }
 }
 
 function Invoke-WindowsSetupTasks {
@@ -4664,7 +4876,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 142 | Last changed: Retire pi-prose from global Pi profiles"
+    Write-Host "Version 143 | Last changed: Make Windows setup log uploads recoverable"
 
     Assert-HeadlessPaseoUnsupported
     $null = Get-PaseoReleaseChannel
@@ -4783,27 +4995,30 @@ function Invoke-WindowsSetupTasks {
 
 # Main setup function to call all necessary steps
 function Initialize-WindowsEnvironment {
-    $logDir = Join-Path $env:USERPROFILE ".local\log\machine-setup"
-    if (-not (Test-Path $logDir)) {
-        New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-    }
-    $script:SetupLogFile = Join-Path $logDir "$(Get-Date -Format 'yyyy-MM-dd-HHmmss').log"
-    Start-Transcript -Path $script:SetupLogFile -Append -ErrorAction Stop | Out-Null
-    $script:SetupTranscriptStarted = $true
-    Write-Debug "Logging to $script:SetupLogFile"
-
+    $script:SetupLogFile = $null
+    $script:SetupTranscriptStarted = $false
+    $script:SetupLogClosed = $false
     $setupError = $null
     try {
+        $logDir = Get-SetupLogDirectory
+        Assert-SetupLogPath $logDir -AllowMissing
+        New-Item -ItemType Directory -Force -Path $logDir -ErrorAction Stop | Out-Null
+        Invoke-PendingSetupLogUploads
+        $script:SetupLogFile = Join-Path $logDir "$(Get-Date -Format 'yyyy-MM-dd-HHmmss')-$([guid]::NewGuid().ToString('N')).log"
+        Assert-SetupLogPath $script:SetupLogFile -AllowMissing
+        Start-Transcript -Path $script:SetupLogFile -NoClobber -ErrorAction Stop | Out-Null
+        $script:SetupTranscriptStarted = $true
+        Write-Debug "Logging to $script:SetupLogFile"
         Invoke-WindowsSetupTasks
     }
     catch {
         $setupError = $_
     }
-
-    Complete-SetupLog
-    if ($null -ne $setupError) {
-        throw $setupError
+    finally {
+        try { Complete-SetupLog }
+        catch { Write-Warning 'Setup log finalization failed. The original setup result and local files were preserved.' }
     }
+    if ($null -ne $setupError) { throw $setupError }
 }
 
 # Run the main setup function

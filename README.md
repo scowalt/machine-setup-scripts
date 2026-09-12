@@ -4,7 +4,17 @@ Idempotent scripts I use to set up my machines.
 
 ## Setup logs
 
-Every setup run writes a local log under `~/.local/log/machine-setup` and makes one best-effort upload to `logs.scowalt.com` after either success or a detected fatal error. If the upload fails, the setup result is preserved and the script prints the local log path for manual recovery.
+Setup writes a local log under `~/.local/log/machine-setup` and uploads it to `logs.scowalt.com` after success or a detected fatal error. Bash scripts make one best-effort upload attempt. If an upload fails, setup preserves its result and prints the local log path.
+
+The Windows uploader supports Windows PowerShell 5.1 and PowerShell 7 without an extra installed tool. It closes the transcript, the file that records console output, before uploading. Each run uses a unique log filename. Temporary network failures and HTTP 408, 429, or 5xx responses receive up to three attempts, with 2-second and 4-second delays. Requests use a timeout of at most 30 seconds within a 96-second upload budget. Other HTTP errors, certificate failures, and local file errors do not trigger immediate retries.
+
+Windows stores upload status in a neighboring `<log filename>.upload.json` file. This file records the failure category or HTTP status, attempt count, and original hostname, but not raw server responses or credentials. The console also shows the failure category and PowerShell version. If an upload fails, read this status file and keep the local log for diagnosis.
+
+At the start of a later Windows setup run, setup retries up to three pending logs within a shared 60-second budget. Only logs marked by this uploader qualify. Setup leaves unmarked historical logs, malformed status files, linked paths, and files in use untouched. Successful uploads change the status to `uploaded`, so later runs skip them. Setup keeps both the log and its status file. If the server accepts an upload but its response is lost, a retry can create a duplicate collector entry.
+
+A forced process exit, power loss, or reboot can prevent transcript closure and upload. Setup does not automatically upload an active transcript or a partial file from a failed transcript start. If transcript closure fails, use the printed local log path for manual recovery. These protections do not guarantee delivery when the network or collector remains unavailable.
+
+Run `bash tests/windows-log-upload-contract.sh` for the uploader contracts. Set `PWSH_BIN` to include the isolated PowerShell fixtures. On Windows, run `powershell.exe -NoProfile -File tests/windows-log-upload-powershell.ps1` and `pwsh -NoProfile -File tests/windows-log-upload-powershell.ps1` to test both hosts. Tests use temporary homes and an in-memory HTTP handler. They do not run setup or send logs to the collector. Linux PowerShell tests do not prove native Windows PowerShell 5.1 behavior.
 
 ## AI Coding Agents
 
