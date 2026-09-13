@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract v1: managed package results through extracted functions and fake CLIs."""
+"""Contract v2: managed packages and enabled resources in isolated profiles."""
 import json
 import os
 from pathlib import Path
@@ -50,7 +50,14 @@ elif action=='install':
         value.setdefault('dependencies',{})['pi-mcp-adapter']=version if os.environ.get('npm_config_save_exact')=='true' else '^'+version
         manifest.write_text(json.dumps(value))
         installed=store/'node_modules/pi-mcp-adapter';installed.mkdir(parents=True,exist_ok=True)
-        (installed/'package.json').write_text(json.dumps({'name':'pi-mcp-adapter','version':version}))
+        metadata={'name':'pi-mcp-adapter','version':version,'pi':{'extensions':['./index.ts']}}
+        if state.get('bad_manifest'): metadata['pi']['extensions']=[]
+        (installed/'package.json').write_text(json.dumps(metadata))
+        entry=installed/'index.ts'
+        if entry.exists() or entry.is_symlink(): entry.unlink()
+        if state.get('bad_resource')=='empty': entry.write_text('')
+        elif state.get('bad_resource')=='linked': entry.symlink_to(installed/'package.json')
+        elif state.get('bad_resource')!='missing': entry.write_text('export default function(pi) {}\n')
         settings=agent/'settings.json';value=json.loads(settings.read_text()) if settings.exists() else {}
         entries=value.get('packages',[])
         if not any((p if isinstance(p,str) else p['source'])==package for p in entries): entries.append(package)
@@ -212,6 +219,68 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                 self.assertEqual(json.loads((self.agent / 'npm/package.json').read_text()), manifest)
                 self.assertFalse(self.statefile.with_suffix('.calls').exists(), 'Opt-out must not install adapter')
 
+    def test_disabled_or_unverified_extension_filters_do_not_report_success(self):
+        for entry in ({'extensions': []}, {'extensions': ['-index.ts']},
+                      {'extensions': ['!index.ts']}, {'autoload': False},
+                      {'extensions': ['./index.ts']}, {'extensions': ['other.ts']},
+                      {'extensions': ['*.ts']}, {'extensions': 'index.ts'},
+                      {'extensions': [42]}, {'extensions': ['+index.ts', '-index.ts']}):
+            for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+                with self.subTest(script=script, entry=entry):
+                    settings, _ = self.seed_affected_store()
+                    settings['packages'][0] = dict(source=PIN, skills=[], **entry)
+                    target = self.agent / 'settings.json'
+                    target.write_text(json.dumps(settings))
+                    result = self.run_helper(script, 'adapter')
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertNotIn('SUCCESS:', result.stdout)
+                    self.assertIn('pi config', result.stdout + result.stderr)
+                    self.assertEqual(json.loads(target.read_text()), settings)
+
+    def test_explicit_enabled_filters_are_preserved(self):
+        for entry in ({}, {'skills': []}, {'extensions': ['index.ts']},
+                      {'extensions': ['+./index.ts']},
+                      {'extensions': ['*.ts', '+index.ts']},
+                      {'extensions': ['!*', '+./index.ts']},
+                      {'autoload': False, 'extensions': ['!index.ts', '+index.ts']}):
+            for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+                with self.subTest(script=script, entry=entry):
+                    settings, _ = self.seed_affected_store()
+                    settings['packages'][0] = dict(source=PIN, **entry)
+                    target = self.agent / 'settings.json'
+                    target.write_text(json.dumps(settings))
+                    result = self.run_helper(script, 'adapter')
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn('enabled in the active global profile', result.stdout)
+                    self.assertEqual(json.loads(target.read_text()), settings)
+
+    def test_missing_empty_or_linked_entry_point_fails_validation(self):
+        for resource in ('missing', 'empty', 'linked'):
+            self.state['bad_resource'] = resource
+            for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+                with self.subTest(script=script, resource=resource):
+                    result = self.run_helper(script, 'adapter')
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertNotIn('SUCCESS:', result.stdout)
+
+    def test_missing_manifest_extension_fails_validation(self):
+        self.state['bad_manifest'] = True
+        for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+            with self.subTest(script=script):
+                result = self.run_helper(script, 'adapter')
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertNotIn('SUCCESS:', result.stdout)
+
+    def test_duplicate_adapter_entries_are_not_assumed_enabled(self):
+        for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+            with self.subTest(script=script):
+                settings, _ = self.seed_affected_store()
+                settings['packages'].insert(0, {'source': PIN, 'extensions': []})
+                (self.agent / 'settings.json').write_text(json.dumps(settings))
+                result = self.run_helper(script, 'adapter')
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertNotIn('SUCCESS:', result.stdout)
+
     def test_wrong_installed_version_fails_validation(self):
         self.state['wrong_version'] = True
         for script in (*BASH, *(['win.ps1'] if PWSH else [])):
@@ -287,6 +356,37 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertNotIn('WARNING:', result.stdout)
 
+    @unittest.skipUnless(os.environ.get('PI_ADAPTER_DOTFILES_SOURCE'),
+                         'Set PI_ADAPTER_DOTFILES_SOURCE for the cross-repository render/setup fixture')
+    def test_dotfiles_and_setup_keep_adapter_enabled_across_repeated_runs(self):
+        template = Path(os.environ['PI_ADAPTER_DOTFILES_SOURCE']) / 'private_dot_pi/agent/private_settings.json.tmpl'
+        config = self.root / 'chezmoi.json'; config.write_text('{}')
+        source = self.root / 'empty-source'; source.mkdir()
+        for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+            for work in ('0', '1'):
+                for disabled in ('0', '1'):
+                    with self.subTest(script=script, work=work, disabled=disabled):
+                        self.env.update(WORK_MACHINE=work, BAN_PI_MCP_ADAPTER=disabled)
+                        envfile = self.home / '.env.local'
+                        envfile.write_text(f'WORK_MACHINE={work}\nBAN_PI_MCP_ADAPTER={disabled}\n')
+                        before = envfile.read_bytes()
+                        for _ in range(2):
+                            rendered = subprocess.run([
+                                shutil.which('chezmoi'), '--config', str(config), '--source', str(source),
+                                '--destination', str(self.home), '--cache', str(self.root / 'chezmoi-cache'),
+                                '--persistent-state', str(self.root / 'chezmoi-state'),
+                                '--override-data', json.dumps({'chezmoi': {'homeDir': str(self.home),
+                                    'os': 'windows' if script.endswith('.ps1') else 'darwin' if script == 'mac.sh' else 'linux'}}),
+                                'execute-template', '--file', str(template),
+                            ], env=self.env, cwd=self.root, capture_output=True, text=True, check=True)
+                            settings = json.loads(rendered.stdout)
+                            self.assertEqual(PIN in settings['packages'], disabled != '1')
+                            (self.agent / 'settings.json').write_text(rendered.stdout)
+                            result = self.run_helper(script, 'adapter')
+                            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                            self.assertEqual(json.loads((self.agent / 'settings.json').read_text()), settings)
+                        self.assertEqual(envfile.read_bytes(), before)
+
     def test_embedded_recovery_policy_is_identical(self):
         policies = []
         for script in (*BASH, 'win.ps1'):
@@ -328,6 +428,9 @@ print_warning() { printf '%s\\n' "$*" >&2; }
 ''' + extract('ubuntu.sh', 'prepare_pi_mcp_adapter') + '\n' + extract('ubuntu.sh', 'setup_pi_mcp_adapter') + '\nsetup_pi_mcp_adapter\n'
         fixture = self.root / 'real-adapter.sh'; fixture.write_text(code)
         cli('bash', str(fixture))
+        sdk = Path(os.environ['PI_PACKAGE_CLI']).resolve().with_name('index.js')
+        loaded = cli(NODE, str(ROOT / 'tests/pi-mcp-adapter-load.mjs'), str(sdk), str(self.agent), str(self.root))
+        self.assertIn('PASS: pinned adapter loads MCP tools', loaded.stdout)
         cli('pi', 'install', 'npm:is-number@7.0.0')
         store = self.agent / 'npm'
         metadata = json.loads(cli('npm', 'view', 'pi-mcp-adapter@2.33.0', '--json').stdout)

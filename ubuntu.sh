@@ -5257,6 +5257,12 @@ prepare_pi_mcp_adapter() {
         if (settings.data && 'packages' in settings.data && !Array.isArray(settings.data.packages)) throw new Error('invalid packages');
         const packages = settings.data?.packages ?? [];
         if (packages.some(entry => typeof entry !== 'string' && (!isObject(entry) || typeof entry.source !== 'string'))) throw new Error('invalid package');
+        const adapters = packages.filter(entry => isAdapter(typeof entry === 'string' ? entry : entry.source));
+        for (const entry of adapters) {
+            if (typeof entry === 'string') continue;
+            if (('extensions' in entry && (!Array.isArray(entry.extensions) || entry.extensions.some(item => typeof item !== 'string'))) ||
+                ('autoload' in entry && typeof entry.autoload !== 'boolean')) throw new Error('adapter activation');
+        }
         for (const field of ['dependencies', 'devDependencies', 'optionalDependencies']) {
             if (manifest.data && field in manifest.data && !isObject(manifest.data[field])) throw new Error('invalid dependencies');
         }
@@ -5264,6 +5270,39 @@ prepare_pi_mcp_adapter() {
             if (disabled !== '1' && (installed.data?.name !== 'pi-mcp-adapter' || installed.data?.version !== version ||
                 manifest.data?.dependencies?.['pi-mcp-adapter'] !== version ||
                 !packages.some(entry => (typeof entry === 'string' ? entry : entry.source) === source))) throw new Error('unverified adapter');
+            if (disabled !== '1') {
+                // 2.32.1 declares one extension. Do not execute it during live setup:
+                // extension startup can connect MCP servers or run configured commands.
+                const resources = installed.data.pi?.extensions;
+                const entryPoint = stat(path.join(store, 'node_modules/pi-mcp-adapter/index.ts'));
+                if (!Array.isArray(resources) || resources.length !== 1 || resources[0] !== './index.ts' ||
+                    !entryPoint?.isFile() || entryPoint.isSymbolicLink() || entryPoint.nlink !== 1 || entryPoint.size === 0) {
+                    throw new Error('unverified adapter resource');
+                }
+                if (adapters.length !== 1) throw new Error('adapter activation');
+                const entry = adapters[0];
+                if (typeof entry !== 'string') {
+                    // Accept Pi's defaults or explicit entry-point selections.
+                    // A force-include overrides globs, but never a force-exclude.
+                    // Preserve other complex filters without guessing their meaning.
+                    const filters = entry.extensions;
+                    const exact = value => {
+                        const normalized = value.replaceAll('\\', '/').replace(/^\.\//, '');
+                        return normalized === 'index.ts' || normalized ===
+                            path.resolve(store, 'node_modules/pi-mcp-adapter/index.ts').replaceAll('\\', '/');
+                    };
+                    let enabled = filters === undefined && entry.autoload !== false;
+                    if (filters?.length) {
+                        const last = filters[filters.length - 1];
+                        enabled = entry.autoload === false
+                            ? last === 'index.ts' || (last.startsWith('+') && exact(last.slice(1)))
+                            : (filters.length === 1 && filters[0] === 'index.ts' ||
+                                filters.some(item => item.startsWith('+') && exact(item.slice(1)))) &&
+                                !filters.some(item => item.startsWith('-') && exact(item.slice(1)));
+                    }
+                    if (!enabled) throw new Error('adapter activation');
+                }
+            }
         } else {
             const changes = [];
             if (settings.data && 'packages' in settings.data) {
@@ -5304,8 +5343,12 @@ prepare_pi_mcp_adapter() {
                 }
             }
         }
-    } catch {
-        console.error('Pi MCP adapter metadata recovery/validation failed; inspect the active profile. npm security settings were not changed.');
+    } catch (error) {
+        if (error.message === 'adapter activation') {
+            console.error('Pi MCP adapter enablement could not be verified. Existing filters were preserved. Use pi config in the active global profile to enable index.ts, or set BAN_PI_MCP_ADAPTER=1 for an intentional opt-out.');
+        } else {
+            console.error('Pi MCP adapter metadata/resource validation failed; inspect the active profile and reinstall the pinned package if needed. npm security settings were not changed.');
+        }
         process.exitCode = 1;
     }
 PI_ADAPTER_POLICY_JS
@@ -5339,7 +5382,7 @@ setup_pi_mcp_adapter() {
     if _output=$(npm_config_save_exact=true pi install "${_package}" 2>&1); then
         if _list_output=$(pi list 2>&1) && grep -Fq "${_package}" <<< "${_list_output}"; then
             prepare_pi_mcp_adapter verify || return 1
-            print_success "Pi MCP adapter installed/updated."
+            print_success "Pi MCP adapter installed/updated and enabled in the active global profile (restart Pi or /reload to load it)."
         else
             print_warning "Pi MCP adapter install completed, but package validation was inconclusive: ${_list_output}"
             return 1
@@ -6894,7 +6937,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 249 | Last changed: Fix weekly audit package and installer failures"
+    echo -e "${GRAY}Version 250 | Last changed: Keep the Pi MCP adapter installed and enabled"
 
     if ! acquire_setup_lock; then
         return 1

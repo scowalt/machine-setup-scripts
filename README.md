@@ -56,6 +56,12 @@ Setup pins `pi-mcp-adapter` to `2.32.1`. Version `2.33.0` depends on preview pac
 
 Before other Pi package operations, setup repairs the adapter declarations in the active global profile. `PI_CODING_AGENT_DIR` selects that profile, or setup uses `~/.pi/agent`. Setup changes only matching adapter sources and direct dependency entries in `npm/package.json`. It preserves source filters, unrelated packages, credentials, other profiles, and project data. npm updates its own lockfiles during installation.
 
+Dotfiles also declare `npm:pi-mcp-adapter@2.32.1`, enabled by default on personal and work machines. Later chezmoi applies retain the registration. The dotfiles template omits the adapter if the environment or `~/.env.local` sets `BAN_PI_MCP_ADAPTER=1`.
+
+Setup checks the installed version, exact dependency, package registration, declared extension, and nonempty regular `index.ts` file. It accepts default resource loading and explicit entry-point selections. Disabled, duplicate, or unverified filtered declarations return failure without a success message. Setup preserves filters rather than silently enabling a user-disabled extension. It does not guess complex glob behavior. If a filter needs review, use `pi config` in the active global profile to explicitly enable `index.ts`. An exact `+index.ts` selection can retain other filters. Project overrides remain unchanged.
+
+After setup, restart Pi or run `/reload` to load the adapter into an existing session. `/mcp` shows the available servers. Setup does not start MCP servers, authenticate them, or prove their connectivity. The isolated test described below loads the real package without network or model calls.
+
 With `BAN_PI_MCP_ADAPTER=1`, setup removes matching adapter declarations instead of installing the package. Malformed files, linked metadata, and linked managed directories stop Pi package operations for manual review. Setup records required package failures, continues unrelated work, and finishes logs with a failed result. Old registrations do not turn failed updates into success.
 
 Run `bash tests/pi-package-maintenance-contract.sh` for temporary-home fixtures. Set `PWSH_BIN` for PowerShell coverage. The optional registry probe needs JavaScript entry points for npm 12+ and Pi:
@@ -66,7 +72,9 @@ PI_PACKAGE_CLI=/absolute/path/to/pi/dist/cli.js \
   bash tests/pi-package-maintenance-contract.sh
 ```
 
-This probe downloads public packages only into a temporary home. It disables lifecycle scripts and prohibits remote dependency URLs. It tests clean installation, affected-store recovery, repeated runs, and adapter removal. Linux PowerShell fixtures do not prove native Windows provisioning.
+This probe downloads public packages only into a temporary home. It disables lifecycle scripts and prohibits remote dependency URLs. It tests clean installation, affected-store recovery, repeated runs, and adapter removal. It also uses Pi's SDK to load `2.32.1` and assert registration of `mcp`, `mcpScript`, and `/mcp`. Disabled resources must stay unloaded. The load fixture blocks network calls and uses no model credentials. Linux PowerShell fixtures do not prove native Windows provisioning.
+
+Set `PI_ADAPTER_DOTFILES_SOURCE=/absolute/path/to/dotfiles` when running the contract suite to test repeated template rendering followed by setup. This fixture uses temporary homes, never a live chezmoi apply.
 
 ## Shared Node runtime for Pi
 
