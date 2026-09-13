@@ -50,6 +50,46 @@ Setup removes legacy global Impeccable skill copies and Cursor subagent files th
 
 Notion CLI is installed with Notion's native installer on macOS and Linux and with WinGet on Windows. The native installer supports x64 and ARM64, while the Windows package supports x64 only; unsupported architectures warn and continue setup. Setup does not authenticate Notion CLI or configure shell completions. Run `ntn login` manually when you are ready to connect a workspace.
 
+## OpenCode Go and the Muse Contributor profile
+
+All six scripts add OpenCode Go access for Pi on personal and work machines. Setup uses Pi's built-in Go provider, not the retired OpenCode CLI. GPT-6 Astra remains the default.
+
+Add your existing Go subscription key to `~/.env.local` on each machine:
+
+```dotenv
+OPENCODE_GO_API_KEY=your-go-api-key
+```
+
+Use a plain, single-line API-key value, not a shell command or variable reference. New environment files contain a commented example. Existing files remain unchanged, so add the entry yourself before rerunning setup. Keep the file private to your account. On Unix, use `chmod 600 ~/.env.local` before setup. Do not put real keys in Git, commands, or shared logs.
+
+Setup reads this dedicated entry and copies a nonempty key into the `opencode-go` entry in Pi's private `auth.json`. This local copy lets headless Paseo authenticate without loading the whole environment file. `PI_CODING_AGENT_DIR` selects the active Pi directory, or setup uses `~/.pi/agent`. Paseo must launch Pi with the same directory. No other global or project Pi profile receives the key.
+
+A changed key replaces the stored Go credential on the next setup run. A missing or empty entry preserves the stored credential. Go credential setup preserves other credentials and does not add a Zen credential or change `models.json`. Pi itself recognizes the shared `OPENCODE_API_KEY` variable for both Zen and Go, but this setup uses `OPENCODE_GO_API_KEY` only. Do not rename it to the shared variable.
+
+Setup adds a Paseo profile named `Muse 1.3 Contributor`. It selects Pi, model `opencode-go/muse-spark-1.3-contributor`, and native `xhigh` reasoning. The profile is a selectable alternative, not a new default. It lives in `<PASEO_HOME>/config.json` under `daemon.agentProfiles`, or in `~/.paseo/config.json` when no override exists. This is separate from Electron's `desktop-settings.json` and from Pi's global profile directory.
+
+A custom `PASEO_HOME` must be an existing, private, account-owned directory below HOME, without linked paths. Use an absolute path without `..` segments. Empty, relative, outside-HOME, and HOME-itself overrides defer synchronization. A running managed daemon and its service manager must select the same home. After custom-home synchronization, setup skips the later managed-daemon installer because that installer assumes the default home. Keep the custom owner's launch environment and update that owner separately.
+
+Later runs recreate a deleted managed profile and restore its provider, model, and reasoning level. Other profiles and optional customizations remain unchanged. Setup can add the profile before you supply a key, with a warning that authentication is missing. If Pi installation or Go validation fails, subsequent Pi package operations, profile setup, and managed-daemon setup are deferred.
+
+### Subscription and data policy
+
+The [Go Contributor offering](https://opencode.ai/docs/go/#privacy) permits Meta to retain prompts and responses and use them for model training. It has geographic restrictions and requires account-level training consent. This profile is available on work machines too, so follow your employer's data policy when selecting it.
+
+Maintain an active Go subscription and keep **Use balance** disabled in the OpenCode console. With that option enabled, the Go service can spend Zen balance after subscription limits are reached. Selecting the Go provider alone does not guarantee subscription-only billing. Setup does not purchase subscriptions, enable consent, change billing settings, test account entitlement, or fall back to the paid Zen model.
+
+### Daemon updates and recovery
+
+Run setup from a terminal outside the Paseo daemon that it must restart. Restarts interrupt active agent turns, tools, and Paseo terminals. Saved sessions can be resumed, but a restart does not preserve uninterrupted work. Do not edit Paseo configuration during setup. Setup reserves `paseo.pid` to block daemon startup, but external editors can ignore this protection.
+
+When a profile change needs a stopped daemon, setup can stop and start its identified, setup-managed local service. A changed Go credential also needs a refresh of Paseo's cached model list. Setup keeps unchanged runs nondisruptive and attempts to restore the service even if the profile write fails. Native Linux headless support and the macOS canary gate remain unchanged. Windows and WSL do not gain managed headless daemons, and WSL does not change Windows-host profiles.
+
+If setup cannot safely control the owning daemon, it leaves the profile unchanged and reports a deferred update. This includes a running Desktop-managed daemon, uncertain ownership or home selection, service drop-ins or environment files (including Chezmoi's GitHub-token drop-in), and setup running inside the daemon. Pause and stop the local daemon through its owner, close Desktop if applicable, and rerun setup from an outside terminal. Do not start a second daemon to bypass the warning.
+
+Malformed configuration and linked managed paths require manual review rather than replacement. An explicit `opencode-go` provider override in the active Pi `models.json` also blocks this addition instead of silently changing its endpoint or reasoning policy. Review that override yourself before rerunning setup. Keep existing custom home overrides aligned with the actual daemon and Pi launch configuration. Setup does not change remote hosts or shell profiles.
+
+Run `bash tests/pi-opencode-go-contract.sh`, `bash tests/paseo-muse-profile-contract.sh`, and `bash tests/opencode-go-wiring-contract.sh` for offline fixtures. Set `PWSH_BIN` to include PowerShell wrapper coverage. Tests use temporary homes and mocked daemon controls, not live setup or model requests. These tests do not prove account acceptance or native Windows, macOS, or ARM behavior. For an additional offline native-lock and catalog check, set `PI_GO_LOCK_MODULE` to the installed Pi dependency's `proper-lockfile/index.js`. Set `PASEO_MUSE_PID_LOCK_MODULE` to Paseo 0.8.0's `dist/src/server/pid-lock.js` to test native daemon-start exclusion. These probes use only temporary fixtures and do not start a daemon.
+
 ## Pi package maintenance
 
 Setup pins `pi-mcp-adapter` to `2.32.1`. Version `2.33.0` depends on preview packages from `pkg.pr.new`, which the managed npm policy rejects with `EALLOWREMOTE`. The compatible version uses registry dependencies. Setup does not relax npm security restrictions.
@@ -138,7 +178,7 @@ Setup defaults to the Paseo beta channel on personal and work machines. `PASEO_C
 
 Set `PASEO_CHANNEL` in the process environment or `~/.env.local`. A nonempty process value takes priority. Setup adds only a commented example to new environment files and preserves existing files.
 
-Each machine adopts the channel on its next setup run. These changes do not update remote machines automatically. Managed daemons retain the headless limits below and restart when their package or managed service changes. Non-headless runs do not install a standalone daemon.
+Each machine adopts the channel on its next setup run. These changes do not update remote machines automatically. Managed daemons retain the headless limits below and restart when their package, managed service, or managed Muse profile requires it. Non-headless runs do not install a standalone daemon.
 
 For Desktop clients, setup selects the update channel on macOS, native Linux, and Windows. It does not install or replace the Desktop app, launch a client, or start a bundled daemon. If Desktop is not installed, get it from the [Paseo download page](https://paseo.sh/download?channel=beta).
 

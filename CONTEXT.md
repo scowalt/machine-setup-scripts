@@ -24,6 +24,18 @@ _Avoid_: Provisioned tool, setup tool
 The user-level Node runtime used by managed tools and projects without a runtime override. A project-specific selection takes precedence.
 _Avoid_: System Node, Pi-only runtime
 
+**Managed Paseo profile**:
+A named Paseo agent launch choice included in the desired machine state. Its managed core consists of the agent provider, model, and reasoning level.
+_Avoid_: Agent instance, Desktop preference
+
+**OpenCode Go subscription**:
+A coding subscription that provides model access for Pi. It is distinct from paid OpenCode Zen usage and the OpenCode CLI.
+_Avoid_: OpenCode installation, Zen subscription
+
+**Muse Spark 1.3 Contributor**:
+The Muse model offering available through OpenCode Go. Its terms permit retention of prompts and responses and their use for model training.
+_Avoid_: Muse 1.3 paid, Muse Zen
+
 **Pi output style**:
 A named preference for how Pi writes responses. A user default starts new sessions unless a session, command-line, or project choice overrides it.
 _Avoid_: Prose mode, writing preset

@@ -262,6 +262,8 @@ create_env_local() {
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
 # ZAI_API_KEY=<your z.ai API key>
+# OpenCode Go console key (Go subscription; keep Use balance disabled in the console)
+# OPENCODE_GO_API_KEY=<your OpenCode Go API key>
 EOF
         chmod 600 "${HOME}/.env.local"
         print_debug "Created placeholder ~/.env.local"
@@ -1516,6 +1518,679 @@ install_ntn_cli() {
 
 # Install Portless CLI (Tailscale HTTPS tunnel helper)
 # Standalone installer shared verbatim with the other setup entry points.
+# Managed Muse profile: offline merge with an identified local-owner barrier.
+# 0 = saved/unchanged or warned defer; 1 = failed validation/write/restoration.
+# The caller MUST skip later headless lifecycle when the defer flag is 1.
+# shellcheck disable=SC2034 # Output flag is consumed by the caller, not on WSL.
+configure_paseo_muse_profile() {
+    PASEO_MUSE_DEFER_DAEMON_SETUP=0
+    if ! command -v node &> /dev/null; then
+        PASEO_MUSE_DEFER_DAEMON_SETUP=1
+        print_warning "Paseo Muse deferred: Node.js is unavailable. Rerun setup outside Paseo after installing Node.js."
+        return 0
+    fi
+    local result status=0 line
+    result=$(HEADLESS="${HEADLESS:-}" PASEO_MACOS_HEADLESS_CANARY="${PASEO_MACOS_HEADLESS_CANARY:-}" \
+        PASEO_MUSE_GO_CHANGED="${PI_OPENCODE_GO_CHANGED:-0}" env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - 2>/dev/null <<'PASEO_MUSE_PROFILE_JS'
+// BEGIN PASEO MUSE PROFILE
+// Paseo 0.8 AgentProfileSchema uses z.string() for IDs (not PluginIdSchema).
+// pid-lock.js reserves <home>/paseo.pid before starting its config-owning worker.
+// Do not replace this offline transaction with a live whole-array config patch.
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const { spawnSync } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
+const id = 'setup:pi:opencode-go:muse-spark-1.3-contributor';
+const core = {provider: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', thinkingOptionId: 'xhigh'};
+const marker = 'Managed by scowalt machine setup: headless-paseo-daemon';
+const service = 'paseo.service';
+const label = 'com.scowalt.paseo-daemon';
+const platform = process.platform;
+const uid = process.getuid?.() ?? 0;
+const headless = process.env.HEADLESS === '1';
+const refresh = process.env.PASEO_MUSE_GO_CHANGED === '1';
+const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+class Refusal extends Error { constructor(code, failed = false) { super(code); this.code = code; this.failed = failed; } }
+const refuse = code => { throw new Refusal(code); };
+const fail = code => { throw new Refusal(code, true); };
+const maxSnapshotBytes = 4 * 1024 * 1024;
+const maxPidBytes = 64 * 1024;
+let home, logicalHome, paseoHome, configPath, pidPath, accountRoots, customHome;
+let heldLock = null, restore = null, temporary = null, interrupted = false;
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => { interrupted = true; });
+const checkpoint = async () => { await new Promise(resolve => setImmediate(resolve)); if (interrupted) fail('interrupted'); };
+function stat(file) {
+    try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+function same(a, b) { return a === null ? b === null : b !== null && a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs; }
+function rootDirectory(file) {
+    const s = stat(file);
+    return s && s.isDirectory() && !s.isSymbolicLink() && s.uid === 0 && !(s.mode & 0o022);
+}
+function trustedSystemHomeAlias() {
+    const s = stat('/home');
+    return platform === 'linux' && s?.isSymbolicLink() && s.uid === 0 &&
+        ['var/home', '/var/home'].includes(fs.readlinkSync('/home')) &&
+        ['/', '/var', '/var/home'].every(rootDirectory);
+}
+function checkedPath(file, directory = false) {
+    const absolute = path.resolve(file);
+    let current = path.parse(absolute).root;
+    const parts = absolute.slice(current.length).split(path.sep).filter(Boolean);
+    for (let n = 0; n < parts.length; n++) {
+        current = path.join(current, parts[n]);
+        const s = stat(current);
+        if (!s) continue;
+        if (s.isSymbolicLink()) {
+            // Only Bazzite's root-owned system alias; never a linked user/profile.
+            if (current === '/home' && trustedSystemHomeAlias()) continue;
+            fail('linked-path');
+        }
+        const dir = n < parts.length - 1 || directory;
+        if (dir ? !s.isDirectory() : !s.isFile() || s.nlink !== 1) fail('unsafe-file-type');
+        if ((current === home || current.startsWith(home + path.sep)) && platform !== 'win32' &&
+            (s.uid !== uid || (s.mode & 0o022))) fail('unsafe-owner-or-mode');
+    }
+    return stat(absolute);
+}
+function checkWindowsMetadataAcl(file) {
+    if (platform !== 'win32') return;
+    let current = path.resolve(file);
+    const relative = path.relative(home, current);
+    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) fail('windows-acl-unverified');
+    const existing = [];
+    while (true) {
+        if (stat(current)) existing.push(current);
+        if (current === home) break;
+        const parent = path.dirname(current);
+        if (parent === current) fail('windows-acl-unverified');
+        current = parent;
+    }
+    // Include HOME even when the default directory/file does not exist yet.
+    // Repeat for every snapshot, including native PID and staged JSON metadata.
+    const command = String.raw`$ErrorActionPreference='Stop'
+$env:PSModulePath = "$PSHOME\Modules"
+try {
+    $owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $trusted = @($owner.Value, 'S-1-5-18', 'S-1-5-32-544')
+    $paths = @($env:PASEO_MUSE_ACL_PATHS | ConvertFrom-Json)
+    if ($paths.Count -eq 0 -or $paths[-1] -ne $env:PASEO_MUSE_ACCOUNT_HOME) { throw 'unverified-boundary' }
+    $writes = [System.Security.AccessControl.FileSystemRights]'Write,Delete,DeleteSubdirectoriesAndFiles,ChangePermissions,TakeOwnership'
+    foreach ($current in $paths) {
+        $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'linked' }
+        $acl = Get-Acl -LiteralPath $current
+        $sddl = $acl.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access)
+        if (-not $sddl.StartsWith('D:') -or $sddl.Contains('NO_ACCESS_CONTROL')) { throw 'unverified-access' }
+        if ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -notin $trusted) { throw 'unverified-owner' }
+        foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
+            if ($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
+            if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin $trusted -and
+                ($rule.FileSystemRights -band $writes)) { throw 'unverified-writer' }
+        }
+    }
+    [Console]::Out.Write('ok')
+} catch { exit 1 }`;
+    const result = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], true,
+        {PASEO_MUSE_ACL_PATHS: JSON.stringify(existing), PASEO_MUSE_ACCOUNT_HOME: home});
+    if (result?.trim() !== 'ok') fail('windows-acl-unverified');
+}
+function snapshot(file) {
+    const s = checkedPath(file);
+    checkWindowsMetadataAcl(file);
+    if (!s) return {s: null, text: null};
+    const limit = file === pidPath ? maxPidBytes : maxSnapshotBytes;
+    if (!Number.isSafeInteger(s.size) || s.size < 0 || s.size > limit) fail('metadata-too-large');
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    try {
+        if (!same(s, fs.fstatSync(fd))) fail('file-changed');
+        // Read at most the checked size plus one byte, even if a writer grows it.
+        const bytes = Buffer.alloc(s.size + 1);
+        let used = 0;
+        while (used < bytes.length) {
+            const count = fs.readSync(fd, bytes, used, bytes.length - used, null);
+            if (count === 0) break;
+            used += count;
+        }
+        if (used !== s.size || !same(s, fs.fstatSync(fd)) || !same(s, checkedPath(file))) fail('file-changed');
+        return {s, text: bytes.subarray(0, used).toString('utf8')};
+    } finally { fs.closeSync(fd); }
+}
+function json(snap) {
+    if (snap.text === null) return null;
+    // JSON.parse silently discards duplicate keys. Refuse that ambiguous input.
+    const text = snap.text;
+    let at = 0;
+    const space = () => { while (/\s/.test(text[at] || '') && at < text.length) at++; };
+    function string() {
+        const start = at++;
+        while (at < text.length) { if (text[at++] === '"') return JSON.parse(text.slice(start, at)); if (text[at - 1] === '\\') at++; }
+        throw new Error();
+    }
+    function value() {
+        space();
+        if (text[at] === '"') { string(); return; }
+        if (text[at] === '{' || text[at] === '[') {
+            const object = text[at++] === '{', end = object ? '}' : ']';
+            const keys = new Set();
+            space();
+            if (text[at] === end) { at++; return; }
+            do {
+                space();
+                if (object) {
+                    if (text[at] !== '"') throw new Error();
+                    const key = string();
+                    if (keys.has(key)) fail('duplicate-json-key');
+                    keys.add(key); space(); if (text[at++] !== ':') throw new Error();
+                }
+                value(); space();
+                if (text[at] === end) { at++; return; }
+            } while (text[at++] === ',');
+            throw new Error();
+        }
+        const token = text.slice(at).match(/^(?:true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/);
+        if (!token) throw new Error();
+        at += token[0].length;
+    }
+    try {
+        const parsed = JSON.parse(text, (_key, item) => {
+            if (typeof item === 'number' && (!Number.isFinite(item) || Number.isInteger(item) && !Number.isSafeInteger(item))) fail('unsafe-json-number');
+            return item;
+        });
+        value(); space(); if (at !== text.length) throw new Error(); return parsed;
+    } catch (error) { if (error instanceof Refusal) throw error; fail('invalid-json'); }
+}
+function merge(snap) {
+    const config = snap.text === null ? {} : json(snap);
+    if (!record(config) || ('daemon' in config && !record(config.daemon))) fail('invalid-config');
+    const daemon = config.daemon || {};
+    const profiles = daemon.agentProfiles === undefined ? [] : daemon.agentProfiles;
+    if (!Array.isArray(profiles)) fail('invalid-profiles');
+    const ids = new Set();
+    for (const p of profiles) {
+        if (!record(p) || typeof p.id !== 'string' || typeof p.name !== 'string' || typeof p.provider !== 'string' || ids.has(p.id)) fail('invalid-profiles');
+        ids.add(p.id);
+        for (const key of ['model', 'modeId', 'thinkingOptionId', 'icon', 'color', 'notes']) {
+            if (key in p && typeof p[key] !== 'string') fail('invalid-profiles');
+        }
+        if ('featureValues' in p && !record(p.featureValues)) fail('invalid-profiles');
+    }
+    const managed = profiles.find(p => p.id === id);
+    if (managed && Object.entries(core).every(([key, value]) => managed[key] === value)) return null;
+    // A same-name user profile is not setup-owned. ID is the only ownership key.
+    const next = managed ? profiles.map(p => p.id === id ? {...p, ...core} : p) :
+        [...profiles, {id, name: 'Muse 1.3 Contributor', ...core}];
+    return JSON.stringify({...config, daemon: {...daemon, agentProfiles: next}}, null, 2) + '\n';
+}
+function run(command, args, optional = false, env = {}) {
+    if (platform === 'win32' && command === 'powershell.exe') {
+        const at = args.indexOf('-Command');
+        if (at >= 0) args = args.map((arg, n) => n === at + 1 ? '$env:PSModulePath = "$PSHOME\\Modules"; ' + arg : arg);
+    }
+    const result = spawnSync(command, args, {encoding: 'utf8', timeout: 30000, maxBuffer: 8 * 1024 * 1024,
+        windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
+        env: {...process.env, ...env, HOME: logicalHome, PASEO_HOME: paseoHome}});
+    if (result.error || result.status !== 0) {
+        if (optional) return null;
+        refuse('command-unverified');
+    }
+    return result.stdout;
+}
+function systemctl(args) {
+    const env = {XDG_RUNTIME_DIR: `/run/user/${uid}`, DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/${uid}/bus`};
+    const direct = run('systemctl', ['--user', ...args], true, env);
+    if (direct !== null) return direct;
+    return run('systemctl', [`--machine=${os.userInfo().username}@`, '--user', ...args], false, env);
+}
+function properties(text) {
+    const result = {};
+    for (const line of text.trim().split('\n')) {
+        const at = line.indexOf('=');
+        if (at <= 0 || Object.hasOwn(result, line.slice(0, at))) refuse('invalid-service-state');
+        result[line.slice(0, at)] = line.slice(at + 1);
+    }
+    return result;
+}
+function serviceState() {
+    return properties(systemctl(['show', service, '--property=Id,LoadState,ActiveState,SubState,MainPID,FragmentPath,DropInPaths,NeedDaemonReload,ControlGroup,User,ExecStart,Environment,EnvironmentFiles,KillMode']));
+}
+function live(pid) {
+    try { process.kill(pid, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; refuse('pid-unverified'); }
+}
+function pidInfo() {
+    const snap = snapshot(pidPath);
+    if (!snap.s) return {snap, info: null};
+    const info = json(snap);
+    if (!record(info) || !Number.isInteger(info.pid) || info.pid <= 1 ||
+        info.hostname !== os.hostname() || info.uid !== uid || typeof info.startedAt !== 'string' ||
+        !Number.isFinite(Date.parse(info.startedAt)) || !(info.listen === null || typeof info.listen === 'string') ||
+        ('desktopManaged' in info && typeof info.desktopManaged !== 'boolean')) refuse('pid-metadata-unverified');
+    return {snap, info};
+}
+function inventory() {
+    const processes = [];
+    if (platform === 'linux') {
+        for (const entry of fs.readdirSync('/proc')) {
+            if (!/^\d+$/.test(entry)) continue;
+            const dir = `/proc/${entry}`;
+            try {
+                const processUid = fs.statSync(dir).uid;
+                const raw = fs.readFileSync(`${dir}/stat`, 'utf8');
+                const fields = raw.slice(raw.lastIndexOf(')') + 2).split(' ');
+                const command = fs.readFileSync(`${dir}/cmdline`, 'utf8').replace(/\0/g, ' ');
+                const owned = processUid === uid;
+                const env = owned ? Object.fromEntries(fs.readFileSync(`${dir}/environ`, 'utf8').split('\0').filter(v => v.includes('=')).map(v => [v.slice(0, v.indexOf('=')), v.slice(v.indexOf('=') + 1)])) : {};
+                const cgroup = owned ? fs.readFileSync(`${dir}/cgroup`, 'utf8') : '';
+                processes.push({pid: Number(entry), parent: Number(fields[1]), command, env, cgroup, owned});
+            } catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ESRCH') refuse('process-inventory-unverified'); }
+        }
+    } else if (platform === 'darwin') {
+        const text = run('ps', ['-axww', '-o', 'pid=,ppid=,uid=,command=']);
+        for (const line of text.trim().split('\n')) {
+            const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
+            if (!match) refuse('process-inventory-unverified');
+            processes.push({pid: Number(match[1]), parent: Number(match[2]), command: match[4], owned: Number(match[3]) === uid});
+        }
+    } else if (platform === 'win32') {
+        const text = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+            '$ErrorActionPreference="Stop"; @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine) | ConvertTo-Json -Compress']);
+        let rows;
+        try { rows = JSON.parse(text); } catch { refuse('process-inventory-unverified'); }
+        if (!Array.isArray(rows)) refuse('process-inventory-unverified');
+        for (const row of rows) {
+            if (!Number.isInteger(row.ProcessId) || !Number.isInteger(row.ParentProcessId)) refuse('process-inventory-unverified');
+            processes.push({pid: row.ProcessId, parent: row.ParentProcessId,
+                command: `${row.Name || ''} ${row.ExecutablePath || ''} ${row.CommandLine || ''}`});
+        }
+    } else refuse('unsupported-platform');
+    if (!processes.some(p => p.pid === process.pid)) refuse('process-inventory-unverified');
+    return processes;
+}
+function descends(pid, parent, rows) {
+    const seen = new Set();
+    while (pid > 1 && !seen.has(pid)) {
+        if (pid === parent) return true;
+        seen.add(pid);
+        const p = rows.find(row => row.pid === pid);
+        if (!p) return false;
+        pid = p.parent;
+    }
+    return false;
+}
+function verifySetupAncestry(rows) {
+    let pid = process.pid;
+    const seen = new Set();
+    while (pid > 1) {
+        if (seen.has(pid)) refuse('ancestry-unverified');
+        seen.add(pid);
+        const row = rows.find(p => p.pid === pid);
+        if (!row || !Number.isInteger(row.parent) || row.parent < 0) refuse('ancestry-unverified');
+        pid = row.parent;
+    }
+}
+function inGroup(p, group) {
+    return !!group && (p.cgroup || '').split('\n').some(line => {
+        const value = line.slice(line.indexOf(':', line.indexOf(':') + 1) + 1);
+        return value === group || value.startsWith(group + '/');
+    });
+}
+function candidates(rows) {
+    return rows.filter(p => p.pid !== process.pid && p.owned !== false && (
+        /(?:@getpaseo[\\/]|paseo(?:\.exe|\.app|[\\/\s]|$)|supervisor-entrypoint|daemon-worker|node-entrypoint-runner)/i.test(p.command) ||
+        p.env?.PASEO_DESKTOP_MANAGED === '1' ||
+        (p.env?.PASEO_HOME && samePaseoHome(p.env.PASEO_HOME) && !descends(process.pid, p.pid, rows))));
+}
+function ensureNoWriters(owner = null) {
+    const rows = inventory();
+    if (candidates(rows).length || (owner && rows.some(p => inGroup(p, owner.group) || descends(p.pid, owner.pid, rows)))) refuse('writer-still-present');
+    if (owner && live(owner.pid)) refuse('owner-still-present');
+    return rows;
+}
+function checkWrapper() {
+    const file = path.join(home, '.local/bin/paseo-daemon-start');
+    const snap = snapshot(file);
+    const lines = snap.text?.trimEnd().split('\n');
+    // Match setup's shell-quoted HOME without executing the wrapper or sourcing it.
+    const quoted = "'" + logicalHome.replace(/'/g, "'\\''") + "'";
+    if (!lines || lines.length !== 8 || lines[0] !== '#!/bin/bash' || lines[1] !== `# ${marker}` ||
+        lines[2] !== 'set -euo pipefail' || lines[3] !== `export HOME=${quoted}` ||
+        !/^export PATH='[^'\r\n]*'$/.test(lines[4]) ||
+        !/^\[\[ -x '[^'\r\n]+' \]\] \|\| exit 127$/.test(lines[5]) ||
+        !/^\[\[ -x '[^'\r\n]+' \]\] \|\| exit 127$/.test(lines[6]) ||
+        !/^exec '[^'\r\n]+' daemon start --foreground --listen '[^'\r\n]+'$/.test(lines[7])) refuse('unmanaged-wrapper');
+    return {file, snap};
+}
+function sameHome(value) { return accountRoots.includes(value); }
+function accountPath(value) {
+    if (typeof value !== 'string' || !path.isAbsolute(value) || value.includes('\0') || value.split(path.sep).includes('..')) return null;
+    const absolute = path.resolve(value);
+    for (const root of accountRoots) {
+        const relative = path.relative(root, absolute);
+        if (relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)) return path.join(home, relative);
+    }
+    return null;
+}
+function samePaseoHome(value) { return accountPath(value) === paseoHome; }
+function daemonHomeMatches(value) {
+    // Upstream treats an explicitly empty PASEO_HOME as cwd, not as unset.
+    return value === undefined ? !customHome : samePaseoHome(value);
+}
+function checkCustomHome() {
+    if (!customHome) return;
+    const s = checkedPath(paseoHome, true);
+    // Only pre-existing, private custom directories have an established boundary.
+    if (!s) refuse('custom-home-unverified');
+    if (platform !== 'win32') {
+        if (s.uid !== uid || (s.mode & 0o077)) refuse('custom-home-permissions-unverified');
+        return;
+    }
+    const command = `$ErrorActionPreference='Stop';
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$trusted = @($sid, 'S-1-5-18', 'S-1-5-32-544')
+$directory = $env:PASEO_HOME
+while ($true) {
+    $acl = Get-Acl -LiteralPath $directory
+    if ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid) { throw 'unverified-owner' }
+    foreach ($rule in $acl.Access) {
+        if ($rule.AccessControlType -ne 'Allow') { continue }
+        $identity = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+        if ($identity -in $trusted) { continue }
+        $writes = [System.Security.AccessControl.FileSystemRights]'Write,Delete,DeleteSubdirectoriesAndFiles,ChangePermissions,TakeOwnership'
+        if ($directory -eq $env:PASEO_HOME -or ($rule.FileSystemRights -band $writes)) { throw 'unverified-access' }
+    }
+    if ($directory -eq $env:PASEO_MUSE_ACCOUNT_HOME) { break }
+    $parent = [System.IO.Path]::GetDirectoryName($directory)
+    if (-not $parent -or $parent -eq $directory) { throw 'unverified-boundary' }
+    $directory = $parent
+}`;
+    if (run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], true,
+        {PASEO_MUSE_ACCOUNT_HOME: home}) === null) refuse('custom-home-permissions-unverified');
+}
+function verifyOwnerProcess(info, mainPid, group, rows) {
+    if (info.desktopManaged) refuse('desktop-owned');
+    if (!descends(info.pid, mainPid, rows)) refuse('service-pid-mismatch');
+    if (process.env.PASEO_AGENT_ID || descends(process.pid, mainPid, rows) ||
+        rows.some(p => p.pid === process.pid && inGroup(p, group))) refuse('self-hosted-setup');
+    if (candidates(rows).some(p => !descends(p.pid, mainPid, rows))) refuse('unknown-writer');
+    const owner = rows.find(p => p.pid === info.pid);
+    if (!owner || owner.owned === false) refuse('owner-unverified');
+    if (platform === 'linux') {
+        if (!inGroup(owner, group) || !sameHome(owner.env?.HOME) ||
+            !daemonHomeMatches(owner.env?.PASEO_HOME)) refuse('service-home-mismatch');
+    } else {
+        // ps supplies the actual owner's environment; don't trust only the plist.
+        if (/\s/.test(logicalHome) || /\s/.test(paseoHome)) refuse('service-home-unverified');
+        const env = run('ps', ['eww', '-p', String(info.pid), '-o', 'command=']);
+        const account = [...env.matchAll(/(?:^|\s)HOME=([^\s]*)/g)];
+        const overrides = [...env.matchAll(/(?:^|\s)PASEO_HOME=([^\s]*)/g)];
+        if (account.length !== 1 || !sameHome(account[0][1]) || overrides.length > 1 ||
+            !daemonHomeMatches(overrides[0]?.[1])) refuse('service-home-mismatch');
+    }
+}
+function safeToRestore() {
+    // A new owner must not be masked by starting a replacement supervisor.
+    if (snapshot(pidPath).s) fail('restore-owner-conflict');
+    ensureNoWriters();
+}
+function linuxManagerHome() {
+    const environment = systemctl(['show-environment']);
+    const overrides = environment.split('\n').filter(line => line.startsWith('PASEO_HOME='));
+    if (overrides.length > 1 || !daemonHomeMatches(overrides[0]?.slice('PASEO_HOME='.length))) refuse('service-home-mismatch');
+}
+function linuxOwner(info, rows) {
+    if (!headless || /microsoft/i.test(os.release())) refuse('headless-control-not-authorized');
+    const file = path.join(home, '.config/systemd/user', service);
+    const unit = snapshot(file), wrapper = checkWrapper();
+    // Disallow user edits, extra directives, drop-ins and a stale loaded definition.
+    const expected = `# ${marker}\n[Unit]\nDescription=Paseo headless daemon\nDocumentation=https://www.getpaseo.com/\n\n[Service]\nType=simple\nExecStart=${logicalHome}/.local/bin/paseo-daemon-start\nWorkingDirectory=${logicalHome}\nEnvironment=HOME=${logicalHome}\nEnvironment=PATH=`;
+    const tail = '\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n';
+    if (!unit.text?.startsWith(expected) || !unit.text.endsWith(tail) || unit.text.slice(expected.length, -tail.length).includes('\n')) refuse('unmanaged-service');
+    const state = serviceState();
+    if (state.Id !== service || state.LoadState !== 'loaded' || state.ActiveState !== 'active' || state.SubState !== 'running' ||
+        state.FragmentPath !== path.join(logicalHome, '.config/systemd/user', service) || state.DropInPaths !== '' ||
+        state.NeedDaemonReload !== 'no' || state.EnvironmentFiles !== '' || !['', os.userInfo().username].includes(state.User) ||
+        state.KillMode !== 'control-group' || !state.ControlGroup?.startsWith(`/user.slice/user-${uid}.slice/`) ||
+        !state.ExecStart?.includes(`path=${logicalHome}/.local/bin/paseo-daemon-start ;`) ||
+        !state.Environment?.includes(`HOME=${logicalHome}`)) refuse('service-state-unverified');
+    linuxManagerHome();
+    const pid = Number(state.MainPID);
+    if (!Number.isInteger(pid) || pid <= 1) refuse('service-pid-unverified');
+    verifyOwnerProcess(info, pid, state.ControlGroup, rows);
+    return {pid, group: state.ControlGroup, file, unit, wrapper,
+        stop() { systemctl(['stop', service]); },
+        stopped() { const s = serviceState(); if (s.ActiveState !== 'inactive' || s.SubState !== 'dead' || s.MainPID !== '0') refuse('stopped-state-unverified'); },
+        start() {
+            const before = serviceState();
+            if (before.ActiveState === 'active' && before.SubState === 'running' && Number(before.MainPID) === pid) return;
+            safeToRestore(); linuxManagerHome(); systemctl(['start', service]);
+            const s = serviceState();
+            if (s.ActiveState !== 'active' || s.SubState !== 'running' || Number(s.MainPID) <= 1) fail('restore-unverified');
+        }};
+}
+function launchList() {
+    const text = run('sudo', ['-n', 'launchctl', 'list']);
+    const rows = text.trim().split('\n');
+    if (!/^PID\s+Status\s+Label$/.test(rows.shift())) refuse('launchd-state-unverified');
+    return rows.map(line => { const m = line.match(/^(\d+|-)\s+(-?\d+)\s+(\S+)$/); if (!m) refuse('launchd-state-unverified'); return {pid: m[1] === '-' ? 0 : Number(m[1]), label: m[3]}; });
+}
+function macManagerHome() {
+    const domain = run('sudo', ['-n', 'launchctl', 'print', 'system']);
+    const environment = domain.match(/\benvironment = \{([^}]*?)\}/);
+    if (!environment) refuse('service-environment-unverified');
+    const overrides = environment[1].split('\n').map(line => line.trim()).filter(line => /^PASEO_HOME\s+=>/.test(line));
+    if (overrides.length > 1 || !daemonHomeMatches(overrides[0]?.replace(/^PASEO_HOME\s+=>\s*/, ''))) refuse('service-home-mismatch');
+}
+function macOwner(info, rows) {
+    if (!headless || process.env.PASEO_MACOS_HEADLESS_CANARY !== '1') refuse('headless-control-not-authorized');
+    const file = `/Library/LaunchDaemons/${label}.plist`;
+    const unit = snapshot(file), wrapper = checkWrapper();
+    if (!['/', '/Library', '/Library/LaunchDaemons'].every(rootDirectory) || !unit.s || unit.s.uid !== 0 ||
+        unit.s.mode & 0o022 || !unit.text.includes(`<!-- ${marker} -->`)) refuse('unmanaged-service');
+    let plist;
+    try { plist = JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', file])); } catch (error) { if (error instanceof Refusal) throw error; refuse('invalid-service-state'); }
+    if (plist.Label !== label || plist.UserName !== os.userInfo().username || plist.WorkingDirectory !== logicalHome ||
+        JSON.stringify(plist.ProgramArguments) !== JSON.stringify([path.join(logicalHome, '.local/bin/paseo-daemon-start')]) ||
+        plist.EnvironmentVariables?.HOME !== logicalHome || typeof plist.EnvironmentVariables?.PATH !== 'string' ||
+        Object.keys(plist.EnvironmentVariables).some(key => !['HOME', 'PATH'].includes(key)) ||
+        plist.RunAtLoad !== true || plist.KeepAlive !== true ||
+        Object.keys(plist).some(key => !['Label', 'UserName', 'ProgramArguments', 'WorkingDirectory', 'EnvironmentVariables', 'RunAtLoad', 'KeepAlive'].includes(key))) refuse('service-state-unverified');
+    const entry = launchList().find(p => p.label === label);
+    if (!entry || entry.pid <= 1) refuse('service-pid-unverified');
+    const printed = run('sudo', ['-n', 'launchctl', 'print', `system/${label}`]);
+    if (!printed.includes(`path = ${file}\n`) || !printed.includes(`program = ${logicalHome}/.local/bin/paseo-daemon-start\n`)) refuse('service-state-unverified');
+    verifyOwnerProcess(info, entry.pid, null, rows);
+    macManagerHome();
+    return {pid: entry.pid, group: null, file, unit, wrapper,
+        stop() { run('sudo', ['-n', 'launchctl', 'bootout', `system/${label}`]); },
+        stopped() { if (launchList().some(p => p.label === label)) refuse('stopped-state-unverified'); },
+        start() {
+            const loaded = launchList().find(p => p.label === label);
+            if (loaded?.pid === entry.pid) return;
+            if (loaded) fail('restore-owner-conflict');
+            safeToRestore(); macManagerHome(); run('sudo', ['-n', 'launchctl', 'bootstrap', 'system', file]);
+            if (!launchList().some(p => p.label === label && p.pid > 1)) fail('restore-unverified');
+        }};
+}
+function reservePid() {
+    // Never unlink a stale/foreign native lock: its owner may be racing startup.
+    if (snapshot(pidPath).s) refuse('pid-lock-present');
+    const text = JSON.stringify({pid: process.pid, startedAt: new Date().toISOString(), hostname: os.hostname(), uid, listen: null, heartbeat: true});
+    const fd = fs.openSync(pidPath, 'wx', 0o600);
+    heldLock = {fd, text, initial: fs.fstatSync(fd)};
+    fs.writeFileSync(fd, text);
+    fs.fsyncSync(fd);
+    heldLock.s = fs.fstatSync(fd);
+}
+function releasePid() {
+    if (!heldLock) return;
+    const held = heldLock;
+    heldLock = null;
+    try {
+        const current = snapshot(pidPath);
+        // A failed initial write still owns this inode; remove only our partial lock.
+        if (!current.s || held.initial.dev !== current.s.dev || held.initial.ino !== current.s.ino ||
+            !same(fs.fstatSync(held.fd), current.s) || (held.s && current.text !== held.text)) fail('pid-lock-changed');
+        fs.unlinkSync(pidPath);
+    } finally { fs.closeSync(held.fd); }
+}
+function secureTemporary(file, existing) {
+    if (platform !== 'win32') return;
+    const command = `$ErrorActionPreference='Stop';
+if ($env:PASEO_MUSE_EXISTING -eq '1') { $acl = Get-Acl -LiteralPath $env:PASEO_MUSE_CONFIG }
+else {
+    $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl = New-Object System.Security.AccessControl.FileSecurity
+    $acl.SetOwner($sid)
+    $acl.SetAccessRuleProtection($true, $false)
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')))
+    $system = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, 'FullControl', 'Allow')))
+}
+Set-Acl -LiteralPath $env:PASEO_MUSE_TEMP -AclObject $acl`;
+    run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], false,
+        {PASEO_MUSE_EXISTING: existing ? '1' : '0', PASEO_MUSE_CONFIG: configPath, PASEO_MUSE_TEMP: file});
+}
+function lockUnchanged() {
+    const current = snapshot(pidPath);
+    if (!heldLock || !same(heldLock.s, current.s) || current.text !== heldLock.text) fail('pid-lock-changed');
+}
+async function main() {
+    logicalHome = path.resolve(os.homedir());
+    // HOME is trusted only for the effective account, not an arbitrary profile link.
+    const accountHome = path.resolve(os.userInfo().homedir);
+    if (fs.realpathSync(logicalHome) !== fs.realpathSync(accountHome)) refuse('account-home-mismatch');
+    home = fs.realpathSync(logicalHome);
+    checkedPath(logicalHome, true);
+    checkedPath(home, true);
+    accountRoots = [...new Set([home, logicalHome])];
+    if (platform === 'linux' && home.startsWith('/var/home/') && trustedSystemHomeAlias()) {
+        accountRoots.push(path.join('/home', path.relative('/var/home', home)));
+    }
+    const requested = process.env.PASEO_HOME;
+    if (requested !== undefined && (requested === '' || !path.isAbsolute(requested))) refuse('invalid-home-override');
+    paseoHome = requested === undefined ? path.join(home, '.paseo') : accountPath(requested);
+    if (!paseoHome) refuse('custom-home-unverified');
+    // Validate the supplied spelling too; only the trusted account aliases map.
+    if (requested !== undefined) checkedPath(requested, true);
+    customHome = paseoHome !== path.join(home, '.paseo');
+    configPath = path.join(paseoHome, 'config.json');
+    pidPath = path.join(paseoHome, 'paseo.pid');
+    checkedPath(paseoHome, true);
+    checkCustomHome();
+    if (customHome) {
+        // The later legacy service installer assumes the default home. It must
+        // not undo this transaction's verified custom-home owner selection.
+        console.log('PASEO_MUSE_DEFER_DAEMON_SETUP=1');
+        console.log('Paseo Muse custom home: later managed-daemon setup is skipped. Keep this owner\'s launch environment and update that owner separately.');
+    }
+    const initial = snapshot(configPath);
+    if (merge(initial) === null && !refresh) { console.log('PASEO_MUSE_UNCHANGED'); return; }
+    if (process.env.PASEO_AGENT_ID) refuse('self-hosted-setup');
+    const existing = pidInfo();
+    const rows = inventory();
+    verifySetupAncestry(rows);
+    let owner = null;
+    if (existing.info) {
+        if (!live(existing.info.pid)) refuse('stale-pid-lock');
+        if (existing.info.desktopManaged) refuse('desktop-owned');
+        owner = platform === 'linux' ? linuxOwner(existing.info, rows) : platform === 'darwin' ? macOwner(existing.info, rows) : null;
+        if (!owner) refuse('unknown-owner');
+        if (!same(existing.snap.s, snapshot(pidPath).s) || !same(owner.unit.s, snapshot(owner.file).s) ||
+            !same(owner.wrapper.snap.s, snapshot(owner.wrapper.file).s)) refuse('ownership-changed');
+        console.log('PASEO_MUSE_RESTARTING');
+        await checkpoint();
+        // Arm restoration BEFORE stop: a timeout/failure can still have stopped it.
+        restore = owner;
+        owner.stop();
+        await checkpoint();
+        owner.stopped();
+    } else if (candidates(rows).length) refuse('unknown-writer');
+    ensureNoWriters(owner);
+    checkedPath(paseoHome, true);
+    fs.mkdirSync(paseoHome, {recursive: true, mode: 0o700});
+    reservePid();
+    await checkpoint();
+    ensureNoWriters(owner);
+    if (owner) owner.stopped();
+    // Re-read AFTER shutdown. Daemon shutdown and concurrent unrelated updates win.
+    const before = snapshot(configPath);
+    const next = merge(before);
+    if (next !== null) {
+        if (Buffer.byteLength(next, 'utf8') > maxSnapshotBytes) fail('metadata-too-large');
+        temporary = path.join(paseoHome, `.config.setup-muse-${randomUUID()}.tmp`);
+        const fd = fs.openSync(temporary, 'wx', before.s ? before.s.mode & 0o777 : 0o600);
+        try {
+            if (before.s && platform !== 'win32') {
+                if (fs.fstatSync(fd).gid !== before.s.gid) fs.fchownSync(fd, before.s.uid, before.s.gid);
+                fs.fchmodSync(fd, before.s.mode & 0o777);
+            }
+            secureTemporary(temporary, !!before.s);
+            fs.writeFileSync(fd, next); fs.fsyncSync(fd);
+        } finally { fs.closeSync(fd); }
+        const pending = snapshot(temporary);
+        await checkpoint();
+        ensureNoWriters(owner);
+        if (owner) owner.stopped();
+        lockUnchanged();
+        const current = snapshot(configPath);
+        if (!same(before.s, current.s) || before.text !== current.text) fail('concurrent-config-change');
+        const ready = snapshot(temporary);
+        if (!same(pending.s, ready.s) || ready.text !== next) fail('temporary-file-changed');
+        fs.renameSync(temporary, configPath);
+        temporary = null;
+        console.log('PASEO_MUSE_UPDATED');
+    } else console.log('PASEO_MUSE_UNCHANGED');
+}
+(async () => {
+    let failure = null;
+    try { await main(); } catch (error) { failure = error; }
+    finally {
+        try { if (temporary) fs.unlinkSync(temporary); } catch { failure = new Refusal('temporary-cleanup-failed', true); }
+        try { releasePid(); } catch { failure = new Refusal('pid-release-failed', true); }
+        if (restore) {
+            try {
+                if (!same(restore.unit.s, snapshot(restore.file).s) || !same(restore.wrapper.snap.s, snapshot(restore.wrapper.file).s)) fail('service-changed-before-restore');
+                restore.start();
+                console.log('PASEO_MUSE_RESTORED');
+            }
+            catch { failure = new Refusal('service-restore-failed', true); }
+        }
+    }
+    if (failure) {
+        const controlled = failure instanceof Refusal;
+        const failed = !controlled || failure.failed;
+        console.log(`PASEO_MUSE_DEFER_DAEMON_SETUP=1`);
+        console.log(`Paseo Muse ${failed ? 'failed' : 'deferred'}: ${controlled ? failure.code : 'operation-failed'}.`);
+        if (controlled && failure.code === 'stale-pid-lock') console.log('Paseo Muse recovery: inspect the stale paseo.pid privately; remove it manually only after every local owner is confirmed stopped.');
+        if (controlled && ['custom-home-unverified', 'custom-home-permissions-unverified', 'invalid-home-override'].includes(failure.code)) console.log('Paseo Muse home: PASEO_HOME must be unset or an absolute directory below the account HOME, not HOME itself. Custom directories must already exist, be private and account-owned, and contain no linked paths.');
+        console.log('Quit Paseo Desktop or stop the owning local daemon, then rerun setup from a terminal outside Paseo. Keep Desktop closed during setup. If Go authentication changed, restart that owner to refresh its model catalog.');
+        // Deferred lifecycle cases are warnings, not a claim that a profile was saved.
+        process.exitCode = failed ? 1 : 0;
+    }
+})();
+// END PASEO MUSE PROFILE
+PASEO_MUSE_PROFILE_JS
+    ) || status=$?
+    while IFS= read -r line; do
+        case "${line}" in
+            PASEO_MUSE_DEFER_DAEMON_SETUP=1) PASEO_MUSE_DEFER_DAEMON_SETUP=1 ;;
+            PASEO_MUSE_UPDATED) print_success "Paseo Muse managed profile synchronized." ;;
+            PASEO_MUSE_UNCHANGED) print_debug "Paseo Muse managed profile is unchanged." ;;
+            PASEO_MUSE_RESTARTING) print_warning "Restarting the setup-managed local Paseo daemon to refresh Muse. Active agents may be interrupted." ;;
+            PASEO_MUSE_RESTORED) print_debug "Paseo Muse restored the local managed service." ;;
+            'Paseo Muse '*|'Quit Paseo Desktop '*) print_warning "${line}" ;;
+            *) ;;
+        esac
+    done <<< "${result}"
+    if [[ "${status}" != "0" ]]; then
+        PASEO_MUSE_DEFER_DAEMON_SETUP=1
+        print_warning "Paseo Muse profile setup failed; later daemon setup must be skipped. Inspect the local service privately and rerun outside Paseo."
+        return 1
+    fi
+    return 0
+}
+
 install_paseo_plain() {
     if ! command -v node &> /dev/null; then
         print_warning "Paseo Plain deferred: install Node.js >=22.19 and rerun setup."
@@ -3139,6 +3814,355 @@ cleanup_noncanonical_pi_installs() {
     else
         print_debug "No non-canonical Bun Pi installs found."
     fi
+}
+
+# Native Go auth only. Success also verifies the installed catalog offline.
+# Keep the embedded Node body identical in all six setup scripts.
+configure_pi_opencode_go() {
+    local _result=""
+    PI_OPENCODE_GO_CHANGED=0
+    if ! command -v node > /dev/null 2>&1; then
+        print_warning "Pi Go setup failed: shared Node runtime unavailable."
+        return 1
+    fi
+    if ! _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${HOME}" "${PI_CODING_AGENT_DIR:-}" sync 2>/dev/null <<'PI_OPENCODE_GO_JS'
+// BEGIN PI_OPENCODE_GO_SETUP
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const {createRequire} = require('node:module');
+const {spawn} = require('node:child_process');
+const crypto = require('node:crypto');
+class GoSetupError extends Error {}
+const fail = code => { throw new GoSetupError(code); };
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const windows = process.platform === 'win32';
+const uid = windows ? null : process.getuid();
+const within = (file, base) => {
+    const key = value => windows ? value.toLowerCase() : value;
+    return key(file) === key(base) || key(file).startsWith(key(base + path.sep));
+};
+function info(file) {
+    try { return fs.lstatSync(file); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+function absolute(value) {
+    if (!value || !path.isAbsolute(value) || value.split(/[\\/]/).some(part => part === '.' || part === '..')) fail('unsafe-path');
+    return path.resolve(value);
+}
+function systemHomeAlias(file, stat) {
+    if (process.platform !== 'linux' || file !== '/home' || stat.uid !== 0) return false;
+    if (!['var/home', '/var/home'].includes(fs.readlinkSync(file))) return false;
+    return ['/', '/var', '/var/home'].every(dir => {
+        const entry = info(dir);
+        return entry && entry.isDirectory() && !entry.isSymbolicLink() && entry.uid === 0 && !(entry.mode & 0o022);
+    });
+}
+function directoryChain(directory, missing = false, installed = false) {
+    const chain = [];
+    for (let current = directory; ; current = path.dirname(current)) {
+        chain.unshift(current);
+        if (current === path.dirname(current)) break;
+    }
+    for (const current of chain) {
+        const stat = info(current);
+        if (!stat && missing) continue;
+        if (!stat) fail('missing-directory');
+        if (stat.isSymbolicLink() && systemHomeAlias(current, stat)) continue;
+        if (!stat.isDirectory() || stat.isSymbolicLink()) fail('linked-directory');
+        // A root-owned sticky temporary ancestor cannot replace this user's child.
+        const stickyRoot = stat.uid === 0 && (stat.mode & 0o1000);
+        if (!windows && (![0, uid].includes(stat.uid) || ((stat.mode & (installed ? 0o002 : 0o022)) && !stickyRoot))) fail('untrusted-directory');
+    }
+}
+function regular(file, privateFile = false, installed = false) {
+    directoryChain(path.dirname(file), false, installed);
+    const stat = info(file);
+    if (!stat) return null;
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) fail('linked-or-nonregular-file');
+    if (!windows && (stat.uid !== uid && stat.uid !== 0 || stat.mode & (privateFile ? 0o077 : installed ? 0o002 : 0o022))) fail('unsafe-file-permissions');
+    if (privateFile && !windows && stat.uid !== uid) fail('unowned-auth-file');
+    if (stat.size > 2 * 1024 * 1024) fail('oversized-metadata');
+    return stat;
+}
+function readText(file, privateFile = false, installed = false) {
+    const before = regular(file, privateFile, installed);
+    if (!before) return null;
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    try {
+        const opened = fs.fstatSync(fd);
+        if (opened.ino !== before.ino || opened.dev !== before.dev || opened.nlink !== 1) fail('file-changed');
+        return fs.readFileSync(fd, 'utf8');
+    } finally { fs.closeSync(fd); }
+}
+function json(text) {
+    let value;
+    try {
+        value = JSON.parse(text.replace(/^\uFEFF/, ''), (_key, item) => {
+            if (typeof item === 'number' && (!Number.isFinite(item) || Number.isInteger(item) && !Number.isSafeInteger(item))) fail('unsafe-json-number');
+            return item;
+        });
+    } catch { fail('invalid-json'); }
+    // JSON.parse silently discards duplicate keys, which could discard credentials.
+    const tokens = text.match(/"(?:[^"\\]|\\.)*"|[{}\[\]:,]/g) || [];
+    const stack = [];
+    for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        if (token === '{' || token === '[') stack.push(token === '{' ? new Set() : null);
+        else if (token === '}' || token === ']') stack.pop();
+        else if (token.startsWith('"') && tokens[i + 1] === ':') {
+            const name = JSON.parse(token);
+            const names = stack[stack.length - 1];
+            if (!names || names.has(name)) fail('duplicate-json-key');
+            names.add(name);
+        }
+    }
+    if (!object(value)) fail('invalid-json-object');
+    return value;
+}
+// No provider SDK, auth resolver, extension, or model process is loaded here.
+function installedPackages(home) {
+    const prefix = path.join(home, '.local', ...(windows ? [] : ['lib']), 'node_modules');
+    const manifest = path.join(prefix, '@earendil-works/pi-coding-agent/package.json');
+    // npm inherits the account umask. This already-installed/executed code is trusted
+    // like Pi itself; credential paths still require private, non-writable boundaries.
+    const metadata = json(readText(manifest, false, true) || 'null');
+    if (metadata.name !== '@earendil-works/pi-coding-agent') fail('pi-package-unavailable');
+    const request = createRequire(manifest);
+    function dependency(name) {
+        for (const search of request.resolve.paths(name) || []) {
+            if (!within(search, prefix)) continue;
+            const root = path.join(search, name);
+            directoryChain(root, true, true);
+            const contents = info(path.join(root, 'package.json')) ? readText(path.join(root, 'package.json'), false, true) : null;
+            if (contents !== null) {
+                const data = json(contents);
+                if (data.name !== name) fail('unexpected-dependency');
+                return {root, data};
+            }
+        }
+        fail('pi-dependency-unavailable');
+    }
+    const ai = dependency('@earendil-works/pi-ai');
+    const catalog = json(readText(path.join(ai.root, 'dist/providers/data/opencode-go.json'), false, true) || 'null');
+    const id = 'muse-spark-1.3-contributor';
+    const matches = Object.values(catalog).flatMap(group => object(group) ? Object.values(group).filter(model => model?.id === id) : []);
+    const model = catalog['openai-responses']?.[id];
+    if (matches.length !== 1 || matches[0] !== model || model.provider !== 'opencode-go' ||
+        model.api !== 'openai-responses' || model.baseUrl !== 'https://opencode.ai/zen/go/v1' ||
+        model.reasoning !== true || model.thinkingLevelMap?.xhigh !== 'xhigh') fail('catalog-incompatible');
+    return {request, dependency, prefix};
+}
+// PowerShell receives only a path/action, never credentials, via its environment.
+// Async execution keeps the native lock heartbeat alive while Windows checks ACLs.
+async function acl(file, action) {
+    if (!windows) return;
+    const script = String.raw`$ErrorActionPreference = 'Stop'
+$env:PSModulePath = "$PSHOME\Modules"
+try {
+    $file = $env:PI_GO_ACL_PATH
+    $action = $env:PI_GO_ACL_ACTION
+    $owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $allowed = @($owner.Value, 'S-1-5-18', 'S-1-5-32-544')
+    $target = Get-Item -LiteralPath $file -Force -ErrorAction Stop
+    $boundary = if ($target.PSIsContainer) { $file } else { Split-Path -Parent $file }
+    $current = $file
+    while ($current) {
+        $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'linked' }
+        $security = Get-Acl -LiteralPath $current
+        $owners = $allowed
+        if ($current -ne $file -and $current -ne $boundary) {
+            # TrustedInstaller can own system ancestors, never the secret or its parent.
+            $owners += 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+        }
+        if ($security.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -notin $owners) { throw 'owner' }
+        $write = [System.Security.AccessControl.FileSystemRights]::Delete -bor [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor [System.Security.AccessControl.FileSystemRights]::TakeOwnership
+        if ($current -eq $file -or $current -eq $boundary) { $write = $write -bor [System.Security.AccessControl.FileSystemRights]::Write }
+        foreach ($rule in $security.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
+            if ($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
+            if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin $allowed) {
+                if (($rule.FileSystemRights -band $write) -or ($current -eq $file -and $action -eq 'private')) { throw 'access' }
+            }
+        }
+        $current = Split-Path -Parent $current
+    }
+    if ($action -eq 'secure') {
+        $security = [System.Security.AccessControl.FileSecurity]::new()
+        $security.SetOwner($owner)
+        $security.SetAccessRuleProtection($true, $false)
+        foreach ($sid in $allowed) {
+            $security.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new([System.Security.Principal.SecurityIdentifier]::new($sid), 'FullControl', 'Allow'))
+        }
+        Set-Acl -LiteralPath $file -AclObject $security
+    }
+    [Console]::Out.Write('ok')
+} catch { exit 1 }`;
+    const systemRoot = absolute(process.env.SystemRoot || 'C:\\Windows');
+    const executable = path.join(systemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
+    await new Promise((resolve, reject) => {
+        const child = spawn(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+            env: {SystemRoot: systemRoot, WINDIR: systemRoot, PI_GO_ACL_PATH: file, PI_GO_ACL_ACTION: action},
+            windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let output = '';
+        const timer = setTimeout(() => { child.kill(); reject(new GoSetupError('acl-timeout')); }, 15000);
+        child.stdout.on('data', data => { if (output.length < 32) output += data.toString(); });
+        child.stderr.resume();
+        child.on('error', () => { clearTimeout(timer); reject(new GoSetupError('acl-unavailable')); });
+        child.on('close', code => {
+            clearTimeout(timer);
+            if (code === 0 && output === 'ok') resolve(); else reject(new GoSetupError('acl-unsafe'));
+        });
+    });
+}
+function envKey(home) {
+    const text = readText(path.join(home, '.env.local'));
+    if (text === null) return '';
+    let result = '';
+    for (const line of text.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+        const match = line.match(/^[ \t]*(?:export[ \t]+)?OPENCODE_GO_API_KEY[ \t]*=[ \t]*(.*)$/);
+        if (!match) continue;
+        result = match[1].trim();
+        if (result.length >= 2 && ['"', "'"].includes(result[0]) && result.at(-1) === result[0]) result = result.slice(1, -1).trim();
+    }
+    // Accept plain token syntax, never Pi's $ interpolation or ! command syntax.
+    if (result && !/^[A-Za-z0-9._~+/=-]{1,4096}$/.test(result)) fail('invalid-key-format');
+    if (result) regular(path.join(home, '.env.local'), true);
+    return result;
+}
+function authDocument(text) {
+    const document = json(text);
+    for (const credential of Object.values(document)) {
+        if (!object(credential) || typeof credential.type !== 'string' || !credential.type) fail('invalid-credential');
+        if (credential.type === 'api_key' &&
+            (credential.key !== undefined && typeof credential.key !== 'string' || credential.env !== undefined &&
+                (!object(credential.env) || Object.values(credential.env).some(value => typeof value !== 'string')))) fail('invalid-credential');
+    }
+    return document;
+}
+async function main() {
+    process.umask(0o077);
+    if (!['sync', 'check-catalog'].includes(process.argv[4] || 'sync')) fail('invalid-mode');
+    const [major, minor] = process.versions.node.split('.').map(Number);
+    if (major < 22 || major === 22 && minor < 20 || typeof fs.globSync !== 'function') fail('node-incompatible');
+    const logicalHome = absolute(process.argv[2]);
+    directoryChain(logicalHome);
+    const home = fs.realpathSync(logicalHome); // Only the verified account HOME boundary is resolved.
+    if (!windows && fs.statSync(home).uid !== uid) fail('unowned-home');
+    await acl(home, 'directory');
+    const packages = installedPackages(home);
+    if (process.argv[4] === 'check-catalog') return 'catalog-ready';
+    const envFile = path.join(home, '.env.local');
+    if (info(envFile)) await acl(envFile, 'directory');
+    const key = envKey(home);
+    if (key) await acl(envFile, 'private');
+    let selected = process.argv[3] || path.join(logicalHome, '.pi/agent');
+    if (selected === '~' || selected.startsWith('~/') || windows && selected.startsWith('~\\')) selected = path.join(logicalHome, selected.slice(2));
+    selected = absolute(selected);
+    const profile = within(selected, logicalHome) ? path.join(home, path.relative(logicalHome, selected)) : selected;
+    if (profile === path.parse(profile).root || profile === home) fail('unsafe-profile');
+    directoryChain(profile, true);
+    if (info(profile)) {
+        const modelsText = readText(path.join(profile, 'models.json'));
+        if (modelsText !== null) {
+            const models = json(modelsText);
+            if (models.providers !== undefined && !object(models.providers)) fail('invalid-providers');
+            if (models.providers && Object.hasOwn(models.providers, 'opencode-go')) fail('go-provider-overridden');
+        }
+    }
+    if (!key) return 'missing-key'; // Never open auth.json or create a profile for absent input.
+    const auth = path.join(profile, 'auth.json');
+    const lockPath = auth + '.lock';
+    function inspectLock() {
+        const stat = info(lockPath);
+        if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || !windows && (stat.uid !== uid || stat.mode & 0o002) || fs.readdirSync(lockPath).length)) fail('unsafe-lock');
+        return stat;
+    }
+    inspectLock();
+    const dependency = packages.dependency('proper-lockfile');
+    if (dependency.data.version !== '4.1.2') fail('lock-version-unsupported');
+    const expectedEntry = path.join(dependency.root, 'index.js');
+    if (!regular(expectedEntry, false, true)) fail('unsafe-lock-dependency');
+    const lockEntry = packages.request.resolve('proper-lockfile');
+    if (lockEntry !== expectedEntry) fail('unsafe-lock-dependency');
+    await acl(lockEntry, 'directory');
+    const lockfile = packages.request(lockEntry); // Only Pi's installed native lock dependency executes.
+    if (typeof lockfile.lock !== 'function') fail('lock-unavailable');
+    // Preflight existing metadata before creating directories or lock files.
+    if (info(profile)) {
+        await acl(profile, 'directory');
+        if (regular(auth, true)) {
+            await acl(auth, 'private');
+            // Actual content is read only after locking; OAuth may be writing now.
+        }
+    }
+    fs.mkdirSync(profile, {recursive: true, mode: 0o700});
+    directoryChain(profile);
+    await acl(profile, 'directory');
+    let compromised = false;
+    let release;
+    let temporary;
+    try {
+        // realpath:false matches Pi; locking by pathname also survives atomic rename.
+        // A short update interval interoperates with Pi's synchronous 10s stale timeout.
+        release = await lockfile.lock(auth, {realpath: false, stale: 30000, update: 1000,
+            retries: {retries: 30, minTimeout: 100, maxTimeout: 1000, factor: 1.2},
+            onCompromised: () => { compromised = true; }});
+        const held = inspectLock();
+        if (!held) fail('lock-unverified');
+        directoryChain(profile);
+        const before = readText(auth, true);
+        if (before !== null) await acl(auth, 'private');
+        const document = before === null ? {} : authDocument(before);
+        if (compromised) fail('lock-compromised');
+        const replacement = {type: 'api_key', key};
+        if (JSON.stringify(document['opencode-go']) === JSON.stringify(replacement)) return 'unchanged';
+        document['opencode-go'] = replacement;
+        temporary = path.join(profile, '.opencode-go-' + crypto.randomBytes(16).toString('hex'));
+        // Empty file first: inherited Windows ACLs are secured before any secret write.
+        const fd = fs.openSync(temporary, 'wx', 0o600);
+        try {
+            await acl(temporary, 'secure');
+            await acl(temporary, 'private');
+            directoryChain(profile);
+            const currentLock = inspectLock();
+            if (compromised || !currentLock || held.ino !== currentLock.ino || held.dev !== currentLock.dev) fail('lock-compromised');
+            if (readText(auth, true) !== before) fail('concurrent-metadata-change');
+            fs.writeFileSync(fd, (before?.startsWith('\uFEFF') ? '\uFEFF' : '') + JSON.stringify(document, null, 2) + '\n');
+            fs.fsyncSync(fd);
+        } finally { fs.closeSync(fd); }
+        fs.renameSync(temporary, auth);
+        temporary = null;
+        if (!windows) {
+            const fd = fs.openSync(profile, 'r');
+            try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        }
+        if (compromised) fail('lock-compromised');
+        return 'updated';
+    } finally {
+        if (temporary && info(temporary)) fs.unlinkSync(temporary);
+        if (release) await release();
+    }
+}
+main().then(result => console.log(result)).catch(error => {
+    console.error('Pi Go setup failed: ' + (error instanceof GoSetupError ? error.message : 'operation-failed') + '.');
+    process.exitCode = 1;
+});
+// END PI_OPENCODE_GO_SETUP
+PI_OPENCODE_GO_JS
+    ); then
+        print_warning "Pi Go setup failed: unsafe paths, credentials, catalog, locking, or permissions. Review these locally and rerun setup."
+        return 1
+    fi
+    case "${_result}" in
+        missing-key) print_warning "Pi Go authentication not supplied: add OPENCODE_GO_API_KEY to ~/.env.local. Existing credentials were preserved; the Muse profile can still be configured." ;;
+        updated) PI_OPENCODE_GO_CHANGED=1; print_success "Pi Go credential synchronized in the active Pi profile." ;;
+        unchanged) print_debug "Pi Go credential is unchanged." ;;
+        catalog-ready) print_debug "Installed Pi supports Go Muse Contributor with native Responses/xhigh." ;;
+        *) print_warning "Pi Go setup failed: invalid helper result."; return 1 ;;
+    esac
+    return 0
 }
 
 # Force Pi defaults: GPT-6 Astra (OpenAI Codex) with xhigh thinking on all machines.
@@ -6556,11 +7580,13 @@ check_pending_reboot() {
 
 run_setup_tasks() {
     local _setup_had_errors=0
+    local _pi_go_ready=0
+    local PASEO_MUSE_DEFER_DAEMON_SETUP=0
 
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 228 | Last changed: Keep the Pi MCP adapter installed and enabled${NC}"
+    echo -e "${GRAY}Version 229 | Last changed: Add Go subscription and Muse Contributor profile${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -6738,7 +7764,6 @@ HELPER_EOF
     install_gitea_client || return 1
     install_bun
     configure_paseo_desktop_channel macos || return 1
-    setup_headless_paseo_daemon || return 1
     install_sfw
     install_claude_code
     install_gemini_cli
@@ -6757,8 +7782,13 @@ HELPER_EOF
         configure_pi_defaults
         remove_pi_synthetic_models
         seed_pi_zai_models
+        if configure_pi_opencode_go; then
+            _pi_go_ready=1
+        else
+            _setup_had_errors=1
+        fi
         # Re-pin the adapter before any operation resolves the shared npm tree.
-        if prepare_pi_mcp_adapter; then
+        if [[ "${_pi_go_ready}" -eq 1 ]] && prepare_pi_mcp_adapter; then
             setup_pi_mcp_adapter || _setup_had_errors=1
             remove_pi_subagents || _setup_had_errors=1
             remove_pi_rpiv_packages || _setup_had_errors=1
@@ -6782,6 +7812,16 @@ HELPER_EOF
         fi
         print_warning "Skipping Pi extension setup because Pi migration failed."
         _setup_had_errors=1
+    fi
+
+    if [[ "${_pi_go_ready}" -eq 1 ]]; then
+        configure_paseo_muse_profile || _setup_had_errors=1
+    else
+        PASEO_MUSE_DEFER_DAEMON_SETUP=1
+        print_warning "Muse profile and Paseo daemon setup deferred because Pi OpenCode Go setup is unavailable."
+    fi
+    if [[ "${PASEO_MUSE_DEFER_DAEMON_SETUP:-0}" != "1" ]]; then
+        setup_headless_paseo_daemon || return 1
     fi
 
     if ! setup_simple_english_skill; then
