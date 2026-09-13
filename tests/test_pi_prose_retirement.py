@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract version 1: retire only Pi-managed prose state in temporary homes."""
+"""Contract version 2: retire Pi-managed prose before packages; preserve final status."""
 import json
 import os
 from pathlib import Path
@@ -419,12 +419,15 @@ if (-not (Remove-PiProse)) { exit 42 }
             with self.subTest(script=script):
                 self.assertEqual(embedded(script), canonical)
                 source = (ROOT / script).read_text()
-                call = 'if (-not (Remove-PiProse)) { throw "Pi prose retirement failed." }' if script == "win.ps1" else 'remove_pi_prose || return 1'
-                install = 'if (Install-PiCli)' if script == "win.ps1" else 'if install_pi_cli; then'
+                call = 'if (-not (Remove-PiProse)) {' if script == "win.ps1" else 'if ! remove_pi_prose; then'
+                install = 'elseif (Install-PiCli)' if script == "win.ps1" else 'elif install_pi_cli; then'
                 entry = 'function Invoke-WindowsSetupTasks {' if script == 'win.ps1' else 'run_setup_tasks() {'
                 body = source.split(entry, 1)[1]
                 self.assertIn(call, body)
                 self.assertLess(body.index(call), body.index(install))
+                failure_branch = body[body.index(call):body.index(install)]
+                self.assertIn('Skipping Pi package setup because prose retirement failed.', failure_branch)
+                self.assertIn('$piSetupFailed = $true' if script == 'win.ps1' else '_setup_had_errors=1', failure_branch)
                 dotfiles = max(body.rfind(command) for command in ('Update-Chezmoi', 'update_chezmoi', 'chezmoi apply --force'))
                 self.assertGreater(dotfiles, -1)
                 self.assertLess(dotfiles, body.index(call))

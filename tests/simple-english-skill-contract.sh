@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract version 8: preserve shared Node coverage with the Pi prose retirement banners.
+# Contract version 9: preserve skill ordering after guarded Pi package maintenance.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -8,18 +8,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=226
-    [ubuntu.sh]=248
-    [wsl.sh]=190
-    [pi.sh]=207
-    [bazzite.sh]=107
+    [mac.sh]=227
+    [ubuntu.sh]=249
+    [wsl.sh]=191
+    [pi.sh]=208
+    [bazzite.sh]=108
 )
 declare -A expected_banners=(
-    [mac.sh]='Retire pi-prose from global Pi profiles'
-    [ubuntu.sh]='Retire pi-prose from global Pi profiles'
-    [wsl.sh]='Retire pi-prose from global Pi profiles'
-    [pi.sh]='Retire pi-prose from global Pi profiles'
-    [bazzite.sh]='Retire pi-prose from global Pi profiles'
+    [mac.sh]='Fix weekly audit package and installer failures'
+    [ubuntu.sh]='Fix weekly audit package and installer failures'
+    [wsl.sh]='Fix weekly audit package and installer failures'
+    [pi.sh]='Fix weekly audit package and installer failures'
+    [bazzite.sh]='Fix weekly audit package and installer failures'
 )
 
 fail() {
@@ -150,7 +150,7 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_function_not_contains "${file}" setup_show_me_skill 'BAN_|WORK_MACHINE|cursor|plugin|output-style' 'show-me opt-out or unrequested target'
     assert_contains "${file}" '^[[:space:]]+(if ! )?setup_simple_english_skill( \|\| return 1|; then)$' 'Simple English main wiring'
     assert_contains "${file}" '^[[:space:]]+(if ! )?setup_show_me_skill( \|\| return 1|; then)$' 'show-me main wiring'
-    assert_order "${file}" '^[[:space:]]+if install_pi_cli; then$' '^[[:space:]]+(if ! )?setup_simple_english_skill' 'managed skill installation after agent provisioning'
+    assert_order "${file}" '^[[:space:]]+elif install_pi_cli; then$' '^[[:space:]]+(if ! )?setup_simple_english_skill' 'managed skill installation after agent provisioning'
     assert_order "${file}" '^[[:space:]]+(if ! )?setup_simple_english_skill' '^[[:space:]]+(if ! )?setup_show_me_skill' 'Simple English before show-me'
     assert_order "${file}" '^[[:space:]]+(if ! )?setup_show_me_skill' '^[[:space:]]+(if ! )?configure_pi_skill_ownership' 'show-me validation before Pi ownership'
     assert_order "${file}" '^[[:space:]]+(if ! )?setup_show_me_skill' '^[[:space:]]+remove_impeccable_resources$' 'show-me validation before cleanup'
@@ -200,7 +200,7 @@ assert_powershell_function_contains win.ps1 Install-ShowMeSkill 'humanlayer/skil
 assert_powershell_function_contains win.ps1 Set-PiSkillOwnership '"simple-english", "show-me"' 'show-me canonical shared ownership'
 assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal Simple English failure propagation'
 assert_contains win.ps1 'Required show-me skill setup failed' 'PowerShell fatal show-me failure propagation'
-assert_contains win.ps1 'Version 143 \| Last changed: Make Windows setup log uploads recoverable' 'PowerShell version banner'
+assert_contains win.ps1 'Version 144 \| Last changed: Fix weekly audit package and installer failures' 'PowerShell version banner'
 assert_powershell_function_contains win.ps1 Install-PrLensSkill 'coldteadotai/pr-lens.*pr-lens.*PR Lens' 'PR Lens source and specific skill'
 assert_powershell_function_not_contains win.ps1 Install-PrLensSkill 'BAN_|WORK_MACHINE|cursor|plugin|output-style|canvas|npx' 'PR Lens opt-out, policy, or runtime workflow'
 for artifact in LICENSE references/graph-document.md references/config.md references/example.graph.json; do
@@ -213,7 +213,7 @@ windows_setup_body=$(powershell_function_body win.ps1 Invoke-WindowsSetupTasks)
 [[ "${windows_setup_body}" == *$'if (-not (Install-PrLensSkill)) {\n        $prLensSetupFailed = $true\n    }'* && "${windows_setup_body}" == *$'if ($prLensSetupFailed) {\n        throw "Required PR Lens skill setup failed."\n    }'* ]] || fail 'win.ps1: PR Lens failure does not reach the setup error'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-ShowMeSkill\)\) \{$' '^[[:space:]]+if \(-not \(Install-PrLensSkill\)\) \{$' 'PowerShell PR Lens after other skills'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-PrLensSkill\)\) \{$' '^[[:space:]]+if \(-not \(Set-PiSkillOwnership\)\) \{$' 'PowerShell PR Lens before ownership cleanup'
-assert_order win.ps1 '^[[:space:]]+if \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
+assert_order win.ps1 '^[[:space:]]+elseif \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+if \(-not \(Install-ShowMeSkill\)\) \{$' 'PowerShell Simple English before show-me'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-ShowMeSkill\)\) \{$' '^[[:space:]]+if \(-not \(Set-PiSkillOwnership\)\) \{$' 'PowerShell show-me before Pi ownership'
 

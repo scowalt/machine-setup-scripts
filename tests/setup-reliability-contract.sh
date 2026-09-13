@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Version 1 | Last changed: Respect explicit Codex installer destinations in fixtures
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -539,9 +540,10 @@ chmod +x "${codex_tmp}/codex-binary"
 cat > "${codex_tmp}/installer" <<'EOF'
 #!/bin/sh
 [ "${CODEX_NON_INTERACTIVE:-}" = "1" ] || exit 43
-mkdir -p "${HOME}/.local/bin"
-cp "${CODEX_TMP}/codex-binary" "${HOME}/.local/bin/codex"
-chmod +x "${HOME}/.local/bin/codex"
+install_dir="${CODEX_INSTALL_DIR:-${HOME}/.local/bin}"
+mkdir -p "${install_dir}"
+cp "${CODEX_TMP}/codex-binary" "${install_dir}/codex"
+chmod +x "${install_dir}/codex"
 printf '%s\n' "standalone ${CODEX_NON_INTERACTIVE}" >> "${CODEX_TMP}/calls"
 EOF
 chmod +x "${codex_tmp}/installer"

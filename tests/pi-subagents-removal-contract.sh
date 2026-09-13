@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Version 1 | Last changed: Assert aggregated managed Pi package failures
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -55,12 +56,12 @@ for file in "${bash_setup_scripts[@]}"; do
     # Removal must run unconditionally in both main() branches.
     assert_contains "${file}" '^remove_pi_subagents\(\)' 'Pi subagents removal function'
     assert_contains "${file}" 'pi remove' 'pi remove uninstall path'
-    assert_min_count "${file}" '^[[:space:]]+remove_pi_subagents$' 2 'remove_pi_subagents call sites'
+    assert_min_count "${file}" '^[[:space:]]+remove_pi_subagents \|\| _setup_had_errors=1$' 2 'remove_pi_subagents call sites'
 done
 
 assert_contains win.ps1 '^function Remove-PiSubagents' 'PowerShell Pi subagents removal function'
 assert_contains win.ps1 'pi remove' 'PowerShell pi remove uninstall path'
-assert_min_count win.ps1 '^\s+Remove-PiSubagents$' 2 'Remove-PiSubagents call sites'
+assert_min_count win.ps1 '^\s+if \(-not \(Remove-PiSubagents\)\) \{ [$]piSetupFailed = [$]true \}$' 2 'Remove-PiSubagents call sites'
 assert_not_contains win.ps1 'pi install npm:@tintinweb/pi-subagents' 'install of npm:@tintinweb/pi-subagents'
 assert_not_contains win.ps1 'pi install npm:pi-subagents' 'install of npm:pi-subagents'
 assert_not_contains win.ps1 'BAN_PI_SUBAGENTS' 'legacy opt-out flag'

@@ -1,4 +1,4 @@
-"""Exercise only the embedded installer, never the full provisioning scripts or real CLIs."""
+"""Contract v2: exercise the embedded installer, never full setup or real CLIs."""
 import json
 import os
 from pathlib import Path
@@ -38,6 +38,7 @@ if (at < 0 || (globals.length && !(globals.length === 2 && globals[0] === '--hos
 }
 const command = args.slice(at);
 if (command[0] === 'daemon' && command[1] === 'status') {
+  if (state.failAt === 'invalid-status-json') { console.log('provider-secret-must-not-be-logged'); process.exit(0); }
   console.log(JSON.stringify({localDaemon:'running', connectedDaemon:'reachable', home,
     listen:'127.0.0.1:19991', cliVersion:'0.8.0-beta.1', daemonVersion:'0.8.0-beta.1', ...state.status}));
 } else if (command[0] === 'plugin' && command[1] === 'ls') {
@@ -151,6 +152,43 @@ class SetupTest(unittest.TestCase):
         self.assertTrue(saved['values']['enabled'])
         self.assertTrue(json.loads((self.paseo / 'config.json').read_text())['pluginsEnabled'])
         self.assertFalse(any('rewrite' in arg or 'preview' in arg for args in self.calls() for arg in args))
+
+    def test_failure_identifies_command_and_status_without_sensitive_output(self):
+        self.state['fail'] = True
+        result = self.run_installer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Paseo Plain failure: plugin add: exit-1.', result.stdout)
+        self.assertIn('Setup did not reset rewrite preferences', result.stdout)
+
+    def test_failure_diagnostics_cover_timeout_response_and_validation(self):
+        for failure, reason in [('add-timeout', 'plugin add: timeout'),
+                                ('invalid-status-json', 'daemon status: invalid-response-json'),
+                                ('catalog', 'plugin ls: invalid-catalog')]:
+            with self.subTest(failure=failure):
+                self.state = {'plugins': {} if failure == 'catalog' else [], 'failAt': failure}
+                result = self.run_installer(cli_timeout=100)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f'Paseo Plain failure: {reason}.', result.stdout)
+
+    def test_unexpected_errors_do_not_claim_a_filesystem_cause(self):
+        self.state['plugins'] = [None]
+        result = self.run_installer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Paseo Plain failure: plugin ls: unexpected-error.', result.stdout)
+
+    def test_invalid_local_json_does_not_echo_its_contents(self):
+        (self.paseo / 'config.json').write_text('{provider-secret-must-not-be-logged')
+        result = self.run_installer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Paseo Plain failure: preflight: invalid-json.', result.stdout)
+
+    def test_migration_validation_has_specific_safe_reason(self):
+        self.seed_release()
+        self.state['plugins'][0]['commit'] = 'invalid'
+        result = self.run_installer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('release migration validation: unverified-release-source', result.stdout)
+        self.assertFalse(any('remove' in args for args in self.calls()))
 
     def seed_release(self):
         checkout = self.paseo / 'plugins/paseo-plain/aaaaaaaaaaaa-old/checkout'
@@ -386,11 +424,11 @@ class SetupTest(unittest.TestCase):
             text = (ROOT / script).read_text()
             if script.endswith('.sh'):
                 self.assertGreater(text.rindex('    install_paseo_plain') if script == 'bazzite.sh' else text.rindex('    if ! install_paseo_plain'),
-                                   text.rindex('    if install_pi_cli; then'), script)
+                                   text.rindex('    elif install_pi_cli; then'), script)
                 if script != 'wsl.sh':
                     self.assertGreater(text.rindex('install_paseo_plain'), text.rindex('    setup_headless_paseo_daemon'), script)
             else:
-                self.assertGreater(text.rindex('    if (-not (Install-PaseoPlain))'), text.rindex('    if (Install-PiCli)'), script)
+                self.assertGreater(text.rindex('    if (-not (Install-PaseoPlain))'), text.rindex('    elseif (Install-PiCli)'), script)
 
     @unittest.skipIf(os.name == 'nt', 'headless CLI provisioning uses Bash')
     def test_headless_setup_retains_the_selected_channel_instead_of_pinning_old_beta(self):

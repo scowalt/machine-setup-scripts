@@ -26,9 +26,9 @@ All machines default Pi to GPT-6 Astra (`openai-codex/gpt-6-astra`) with `xhigh`
 
 Setup removes the retired `pi-prose` package on each machine's next run, including previously user-selected copies. It cleans the default global Pi profile and the profile selected by `PI_CODING_AGENT_DIR`. Cleanup removes the Pi package declarations, direct npm dependency declarations, matching lockfile records, and installed package directory. It does not change project-local packages, unrelated packages, credentials, or existing custom prose files, including empty or malformed `prose/config.json` files.
 
-Cleanup runs after dotfiles application and before Pi package operations. It does not run npm or Pi, resolve dependencies, or change npm security policy. A linked package is unlinked without deleting its source. Linked profile directories, package stores, JSON metadata, and unverified package contents require manual review. Cleanup validates both profiles before writing, but individual file replacements are not one transaction. Any failed write or removal stops setup rather than reporting success.
+Cleanup runs after dotfiles application and before Pi package operations. It does not run npm or Pi, resolve dependencies, or change npm security policy. A linked package is unlinked without deleting its source. Linked profile directories, package stores, JSON metadata, and unverified package contents require manual review. Cleanup validates both profiles before writing, but individual file replacements are not one transaction. A failed write or removal stops Pi package operations. Unrelated work continues, logs finish, and setup returns a failure.
 
-Dotfiles no longer declare this package or seed its initial configuration. The [matching dotfiles change](https://github.com/scowalt/dotfiles/pull/19) prevents later chezmoi applies from restoring the declaration. Already-running Pi sessions need a restart to unload the extension. This retirement does not fix the separate npm 12 restriction on MCP adapter URL dependencies, and setup does not contact other machines.
+Dotfiles no longer declare this package or seed its initial configuration. The [matching dotfiles change](https://github.com/scowalt/dotfiles/pull/19) prevents later chezmoi applies from restoring the declaration. Already-running Pi sessions need a restart to unload the extension. Separate adapter recovery handles the npm 12 restriction described below. Setup does not contact other machines.
 
 Setup installs the managed Matt Pocock engineering skills on personal and work machines. Pi and Codex share the canonical copies in `~/.agents/skills`. Work machines also install Google Cloud CLI.
 
@@ -44,9 +44,29 @@ Claude Code is installed with Anthropic's native installer rather than npm/Bun. 
 
 Codex CLI is installed per user with OpenAI's standalone installer on Ubuntu, WSL, Raspberry Pi, and Bazzite, from Homebrew's native `codex` cask on macOS, and from OpenAI's native GitHub release binary on Windows. The per-user Linux install keeps `codex` in `~/.local/bin`, so headless Paseo can use it without trusting another user's shared Homebrew prefix. Setup removes the older Bun package and smoke-tests the binary with Node stripped from PATH.
 
+On Linux, setup gives the Codex installer a temporary `HOME`. Explicit `CODEX_INSTALL_DIR` and `CODEX_HOME` values keep the binary and data in the account. Existing `CODEX_HOME` choices remain in use. Installer profile changes stay in the temporary home, which setup removes afterward. Chezmoi alone manages the real shell profiles. Run `bash tests/codex-profile-isolation-contract.sh` for isolated regression tests.
+
 Setup removes legacy global Impeccable skill copies and Cursor subagent files that earlier versions installed. It leaves project-scoped Impeccable data and hooks untouched.
 
 Notion CLI is installed with Notion's native installer on macOS and Linux and with WinGet on Windows. The native installer supports x64 and ARM64, while the Windows package supports x64 only; unsupported architectures warn and continue setup. Setup does not authenticate Notion CLI or configure shell completions. Run `ntn login` manually when you are ready to connect a workspace.
+
+## Pi package maintenance
+
+Setup pins `pi-mcp-adapter` to `2.32.1`. Version `2.33.0` depends on preview packages from `pkg.pr.new`, which the managed npm policy rejects with `EALLOWREMOTE`. The compatible version uses registry dependencies. Setup does not relax npm security restrictions.
+
+Before other Pi package operations, setup repairs the adapter declarations in the active global profile. `PI_CODING_AGENT_DIR` selects that profile, or setup uses `~/.pi/agent`. Setup changes only matching adapter sources and direct dependency entries in `npm/package.json`. It preserves source filters, unrelated packages, credentials, other profiles, and project data. npm updates its own lockfiles during installation.
+
+With `BAN_PI_MCP_ADAPTER=1`, setup removes matching adapter declarations instead of installing the package. Malformed files, linked metadata, and linked managed directories stop Pi package operations for manual review. Setup records required package failures, continues unrelated work, and finishes logs with a failed result. Old registrations do not turn failed updates into success.
+
+Run `bash tests/pi-package-maintenance-contract.sh` for temporary-home fixtures. Set `PWSH_BIN` for PowerShell coverage. The optional registry probe needs JavaScript entry points for npm 12+ and Pi:
+
+```bash
+PI_PACKAGE_NPM_CLI=/absolute/path/to/npm/bin/npm-cli.js \
+PI_PACKAGE_CLI=/absolute/path/to/pi/dist/cli.js \
+  bash tests/pi-package-maintenance-contract.sh
+```
+
+This probe downloads public packages only into a temporary home. It disables lifecycle scripts and prohibits remote dependency URLs. It tests clean installation, affected-store recovery, repeated runs, and adapter removal. Linux PowerShell fixtures do not prove native Windows provisioning.
 
 ## Shared Node runtime for Pi
 
@@ -160,6 +180,8 @@ PASEO_TEST_PLUGIN_SERVICE_MODULE=/absolute/path/to/server/plugins/index.js \
 ```
 
 This test uses the actual source and configuration managers with temporary homes and local Git repositories. Plugin execution and CLI transport are simulated. No listener, authenticated session, or model is used. It verifies migration, reruns, native deletion behavior, and failed builds. Git configuration and inherited hook variables are isolated. The pre-push wrapper also tests that poisoned Git variables cannot change a caller repository, its index, or its configuration. Native Windows provisioning and successful Windows backup permissions still need separate verification.
+
+Failed operations report a bounded label and reason, such as `Paseo Plain failure: plugin add: exit-1.` The message distinguishes command failures, timeouts, invalid JSON, and migration validation failures. It excludes raw command output, arbitrary exception text, preferences, and credentials. The message provides a diagnostic clue, not proof of the underlying cause.
 
 ### Paseo Plain migration recovery
 

@@ -1,3 +1,4 @@
+# Version 1 | Last changed: Preserve runtime isolation with guarded Pi package setup
 # Offline only: AST-extracted setup functions, temporary homes, mocked tools and
 # persisted environment storage. Child probes run with -NoProfile and fixture
 # activation, never a user's profile. No real Pi, mise installs, or registry writes.
@@ -430,11 +431,13 @@ try {
     }
 
     # Execute only the main Pi if/else AST, never the setup function or entrypoint.
-    $piBranch = $ast.FindAll({ param($node) $node -is [Management.Automation.Language.IfStatementAst] -and $node.Clauses[0].Item1.Extent.Text -eq 'Install-PiCli' }, $true)
+    $piBranch = $ast.FindAll({ param($node) $node -is [Management.Automation.Language.IfStatementAst] -and @($node.Clauses | Where-Object { $_.Item1.Extent.Text -eq 'Install-PiCli' }).Count -eq 1 }, $true)
     Assert ($piBranch.Count -eq 1) 'Cannot isolate the main Pi failure boundary.'
     foreach ($name in @('Set-PiDefaults', 'Remove-PiSyntheticModels', 'Seed-PiZaiModels', 'Remove-PiSubagents', 'Remove-PiRpivPackages', 'Setup-PiMcpAdapter', 'Setup-PiClaudeBridge', 'Setup-PiCompanionPackages', 'Setup-PiGoalAutoresearch')) {
-        Set-Item -Path "function:$name" -Value ([scriptblock]::Create("`$script:Mutations.Add('$name')"))
+        Set-Item -Path "function:$name" -Value ([scriptblock]::Create("`$script:Mutations.Add('$name'); return `$true"))
     }
+    function Remove-PiProse { return $true }
+    function Prepare-PiMcpAdapter { return $true }
     function Test-EnvLocalFlag { return $true }
     Reset-Fixture
     $script:State.InventoryFailAt = 1

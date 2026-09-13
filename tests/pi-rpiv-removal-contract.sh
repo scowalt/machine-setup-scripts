@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Version 1 | Last changed: Assert aggregated managed Pi package failures
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -60,14 +61,14 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" 'npm:@juicesharp/rpiv-ask-user-question' 'RPIV ask-user-question removal source'
     assert_contains "${file}" 'npm:@juicesharp/rpiv-todo' 'RPIV todo removal source'
     assert_contains "${file}" 'pi remove' 'pi remove uninstall path'
-    assert_min_count "${file}" '^[[:space:]]+remove_pi_rpiv_packages$' 2 'remove_pi_rpiv_packages call sites'
+    assert_min_count "${file}" '^[[:space:]]+remove_pi_rpiv_packages \|\| _setup_had_errors=1$' 2 'remove_pi_rpiv_packages call sites'
 done
 
 assert_contains win.ps1 '^function Remove-PiRpivPackages' 'PowerShell Pi RPIV packages removal function'
 assert_contains win.ps1 'npm:@juicesharp/rpiv-ask-user-question' 'PowerShell RPIV ask-user-question removal source'
 assert_contains win.ps1 'npm:@juicesharp/rpiv-todo' 'PowerShell RPIV todo removal source'
 assert_contains win.ps1 'pi remove' 'PowerShell pi remove uninstall path'
-assert_min_count win.ps1 '^\s+Remove-PiRpivPackages$' 2 'Remove-PiRpivPackages call sites'
+assert_min_count win.ps1 '^\s+if \(-not \(Remove-PiRpivPackages\)\) \{ [$]piSetupFailed = [$]true \}$' 2 'Remove-PiRpivPackages call sites'
 assert_not_contains win.ps1 'pi install npm:@juicesharp/rpiv-ask-user-question' 'install of npm:@juicesharp/rpiv-ask-user-question'
 assert_not_contains win.ps1 'pi install npm:@juicesharp/rpiv-todo' 'install of npm:@juicesharp/rpiv-todo'
 

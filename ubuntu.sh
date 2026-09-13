@@ -1339,6 +1339,7 @@ install_codex_cli() {
     local bun_packages=""
     local curl_bin=""
     local installer=""
+    local installer_home=""
     local install_status=0
     local native_path="${HOME}/.local/bin/codex"
     local resolved_codex=""
@@ -1364,23 +1365,29 @@ install_codex_cli() {
         return 1
     fi
 
-    if ! installer=$(mktemp); then
-        print_error "Failed to create a temporary file for the Codex installer."
+    if ! installer_home=$(mktemp -d); then
+        print_error "Failed to create a temporary home for the Codex installer."
         return 1
     fi
+    installer="${installer_home}/install.sh"
     if ! claude_code_run_safely "${curl_bin}" -fsSL --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 2 -o "${installer}" "https://chatgpt.com/codex/install.sh"; then
-        rm -f "${installer}"
+        rm -rf -- "${installer_home}"
         print_error "Failed to download the Codex installer."
         return 1
     fi
 
+    # The native installer has no skip-profile flag. Its HOME is disposable;
+    # explicit destinations keep the CLI/data in the account, not the sandbox.
+    # Chezmoi alone owns the real shell profiles. Keep the trusted tool PATH.
     chmod 700 "${installer}"
-    if claude_code_run_safely /usr/bin/env CODEX_NON_INTERACTIVE=1 /bin/sh "${installer}"; then
+    if claude_code_run_safely /usr/bin/env CODEX_NON_INTERACTIVE=1 \
+        HOME="${installer_home}" CODEX_INSTALL_DIR="${HOME}/.local/bin" \
+        CODEX_HOME="${CODEX_HOME:-${HOME}/.codex}" /bin/sh "${installer}"; then
         install_status=0
     else
         install_status=$?
     fi
-    rm -f "${installer}"
+    rm -rf -- "${installer_home}"
     if [[ "${install_status}" -ne 0 ]]; then
         print_error "Codex installer failed with exit code ${install_status}."
         return 1
@@ -1478,6 +1485,8 @@ const { createHash } = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 let recovery = null;
 let migrationPhase = 'preparing';
+let operation = 'preflight';
+class SetupFailure extends Error {}
 const deferred = message => { console.log(`Paseo Plain deferred: ${message}`); };
 function executable(name, packageName) {
     for (const directory of (process.env.PATH || '').split(path.delimiter)) {
@@ -1502,12 +1511,12 @@ function executable(name, packageName) {
 const info = file => { try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
 function regularPath(home, file) {
     const relative = path.relative(home, file);
-    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new Error('outside-home');
+    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new SetupFailure('outside-home');
     let current = home;
     for (const part of ['', ...relative.split(path.sep).filter(Boolean)]) {
         current = path.join(current, part);
         const stat = info(current);
-        if (stat && (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory()))) throw new Error('unsafe-path');
+        if (stat && (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory()))) throw new SetupFailure('unsafe-path');
     }
 }
 function tree(root, links = false) {
@@ -1516,17 +1525,17 @@ function tree(root, links = false) {
     function visit(relative) {
         const file = path.join(root, relative);
         const stat = fs.lstatSync(file);
-        if (entries.length >= 20000 || (bytes += stat.size) > 256 * 1024 * 1024) throw new Error('backup-limit');
+        if (entries.length >= 20000 || (bytes += stat.size) > 256 * 1024 * 1024) throw new SetupFailure('backup-limit');
         if (stat.isSymbolicLink()) {
             const target = fs.readlinkSync(file);
-            if (!links || path.isAbsolute(target) || !fs.realpathSync(file).startsWith(fs.realpathSync(root) + path.sep)) throw new Error('unsafe-link');
+            if (!links || path.isAbsolute(target) || !fs.realpathSync(file).startsWith(fs.realpathSync(root) + path.sep)) throw new SetupFailure('unsafe-link');
             entries.push([relative, 'link', target]);
         } else if (stat.isDirectory()) {
             entries.push([relative, 'directory']);
             for (const name of fs.readdirSync(file).sort()) visit(path.join(relative, name));
         } else if (stat.isFile()) {
             entries.push([relative, 'file', createHash('sha256').update(fs.readFileSync(file)).digest('hex'), Boolean(stat.mode & 0o111)]);
-        } else throw new Error('unsafe-file');
+        } else throw new SetupFailure('unsafe-file');
     }
     if (info(root)) visit('');
     return entries;
@@ -1554,7 +1563,7 @@ function copyTree(source, destination, links = false) {
             try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
         }
     }
-    if (!isDeepStrictEqual(before, tree(source, links)) || !isDeepStrictEqual(before, tree(destination, links))) throw new Error('backup-changed');
+    if (!isDeepStrictEqual(before, tree(source, links)) || !isDeepStrictEqual(before, tree(destination, links))) throw new SetupFailure('backup-changed');
     return before;
 }
 function privateRecoveryDirectory(directory) {
@@ -1575,10 +1584,11 @@ Set-Acl -LiteralPath $env:PASEO_PLAIN_RECOVERY_DIRECTORY -AclObject $acl`;
             env: {...process.env, PASEO_PLAIN_RECOVERY_DIRECTORY: directory}, shell: false, windowsHide: true,
             timeout: 15000, maxBuffer: 16384, stdio: ['ignore', 'pipe', 'pipe'],
         });
-    if (result.error || result.status !== 0) throw new Error('private-backup-unavailable');
+    if (result.error || result.status !== 0) throw new SetupFailure('private-backup-unavailable');
 }
 function migrationJournal(phase) {
     migrationPhase = phase;
+    operation = `release migration ${phase}`;
     const pending = path.join(recovery, 'state.next');
     const fd = fs.openSync(pending, 'wx', 0o600);
     try { fs.writeFileSync(fd, JSON.stringify({version: 1, from: 'release', to: 'main', phase}) + '\n'); fs.fsyncSync(fd); }
@@ -1590,6 +1600,7 @@ function migrationJournal(phase) {
     }
 }
 function migrateRelease({home, existing, config, args, run, directory}) {
+    operation = 'release migration validation';
     const sourcesFile = path.join(home, 'plugins/sources.json');
     const native = path.join(home, 'plugin-settings', id);
     for (const file of [home, sourcesFile, native, directory]) regularPath(home, file);
@@ -1601,9 +1612,9 @@ function migrateRelease({home, existing, config, args, run, directory}) {
         record.pluginPath !== '.' || !/^[0-9a-f]{40,64}$/.test(record.commit) || record.commit !== existing.commit ||
         typeof record.checkoutRoot !== 'string' || path.dirname(path.dirname(record.checkoutRoot)) !== root ||
         path.basename(record.checkoutRoot) !== 'checkout' || source?.source !== 'directory' ||
-        source.path !== existing.path || source.path !== record.checkoutRoot) throw new Error('unverified-release-source');
+        source.path !== existing.path || source.path !== record.checkoutRoot) throw new SetupFailure('unverified-release-source');
     regularPath(home, record.checkoutRoot);
-    if (!info(record.checkoutRoot)?.isDirectory() || (info(native) && !info(native).isDirectory())) throw new Error('invalid-migration-directory');
+    if (!info(record.checkoutRoot)?.isDirectory() || (info(native) && !info(native).isDirectory())) throw new SetupFailure('invalid-migration-directory');
     const parent = path.join(home, 'setup-recovery');
     regularPath(home, parent);
     if (!info(parent)) fs.mkdirSync(parent, {mode: 0o700});
@@ -1631,16 +1642,16 @@ function migrateRelease({home, existing, config, args, run, directory}) {
     if (!isDeepStrictEqual(config, currentConfig()) ||
         !isDeepStrictEqual(record, JSON.parse(fs.readFileSync(sourcesFile, 'utf8'))[id]) ||
         !isDeepStrictEqual(checkoutSnapshot, tree(record.checkoutRoot, true)) ||
-        !isDeepStrictEqual(dataSnapshot, tree(directory)) || !isDeepStrictEqual(nativeSnapshot, tree(native))) throw new Error('migration-state-changed');
+        !isDeepStrictEqual(dataSnapshot, tree(directory)) || !isDeepStrictEqual(nativeSnapshot, tree(native))) throw new SetupFailure('migration-state-changed');
     migrationJournal('removing');
     run([...args, 'remove', id, '--json'], 180000);
     const remaining = run([...args, 'ls', '--json']);
     if (!Array.isArray(remaining) || remaining.some(item => item.id === id) || currentConfig().plugins?.[id] ||
         !isDeepStrictEqual(otherConfig(config), otherConfig(currentConfig())) ||
-        !isDeepStrictEqual(dataSnapshot, tree(directory))) throw new Error('removal-not-confirmed');
+        !isDeepStrictEqual(dataSnapshot, tree(directory))) throw new SetupFailure('removal-not-confirmed');
     migrationJournal('restoring');
     regularPath(home, native);
-    if (info(native)) throw new Error('native-settings-reappeared');
+    if (info(native)) throw new SetupFailure('native-settings-reappeared');
     if (nativeSnapshot.length) {
         if (!info(path.dirname(native))) fs.mkdirSync(path.dirname(native), {mode: 0o700});
         copyTree(path.join(recovery, 'plugin-settings'), native);
@@ -1652,7 +1663,7 @@ function migrateRelease({home, existing, config, args, run, directory}) {
     if (!Array.isArray(after) || !after.some(item => item.id === id && item.source === 'git' && item.remote === remote &&
         item.ref === 'main' && item.enabled === true && item.status === 'running') ||
         !isDeepStrictEqual(otherConfig(config), otherConfig(currentConfig())) ||
-        !isDeepStrictEqual(dataSnapshot, tree(directory)) || !isDeepStrictEqual(nativeSnapshot, tree(native))) throw new Error('migration-not-verified');
+        !isDeepStrictEqual(dataSnapshot, tree(directory)) || !isDeepStrictEqual(nativeSnapshot, tree(native))) throw new SetupFailure('migration-not-verified');
     migrationJournal('complete');
     console.log('Paseo Plain migrated from release to main; preferences and cache preserved. Private recovery files were retained.');
 }
@@ -1676,14 +1687,17 @@ function main() {
         if (target !== undefined && !localTarget(target)) return deferred('the saved daemon endpoint is not loopback TCP; inspect local Paseo configuration.');
     }
     const run = (args, timeout = 20000) => {
+        operation = args[0] === 'daemon' ? 'daemon status' : `plugin ${args[3]}`;
         // --home is not a global Paseo option. Scope every command via its environment.
         const result = spawnSync(paseo[0], [...paseo.slice(1), ...args], {
             env: {...process.env, PASEO_HOME: home},
             cwd: os.homedir(), encoding: 'utf8', timeout, maxBuffer: 2 * 1024 * 1024,
             stdio: ['ignore', 'pipe', 'pipe'], shell: false,
         });
-        if (result.error || result.status !== 0) throw new Error('paseo-command-failed');
-        return JSON.parse(result.stdout);
+        if (result.error) throw new SetupFailure(result.error.code === 'ETIMEDOUT' ? 'timeout' : 'spawn-failed');
+        if (result.status !== 0) throw new SetupFailure(Number.isInteger(result.status) ? `exit-${result.status}` : 'terminated');
+        try { return JSON.parse(result.stdout); }
+        catch { throw new SetupFailure('invalid-response-json'); }
     };
     const status = run(['daemon', 'status', '--json']);
     if (status.localDaemon !== 'running' || status.connectedDaemon !== 'reachable' ||
@@ -1695,9 +1709,9 @@ function main() {
     }
     const args = ['--host', status.listen, 'plugin'];
     const catalog = run([...args, 'ls', '--json']);
-    if (!Array.isArray(catalog)) throw new Error('invalid-catalog');
+    if (!Array.isArray(catalog)) throw new SetupFailure('invalid-catalog');
     const matches = catalog.filter(item => item.id === id);
-    if (matches.length > 1) throw new Error('duplicate-id');
+    if (matches.length > 1) throw new SetupFailure('duplicate-id');
     const existing = matches[0];
     if (existing?.enabled === false || config.plugins?.[id]?.enabled === false) return deferred('the saved disabled state was preserved.');
     if (existing && (existing.source !== 'git' || existing.remote !== remote || !['main', 'release'].includes(existing.ref))) {
@@ -1712,7 +1726,7 @@ function main() {
         regularPath(home, path.join(recovery, 'state.json'));
         const saved = JSON.parse(fs.readFileSync(path.join(recovery, 'state.json'), 'utf8'));
         if (saved.version !== 1 || saved.from !== 'release' || saved.to !== 'main' || saved.phase !== 'complete' || existing?.ref === 'release') {
-            throw new Error('migration-needs-review');
+            throw new SetupFailure('migration-needs-review');
         }
         recovery = null;
     }
@@ -1726,7 +1740,7 @@ function main() {
     if (fs.existsSync(settings)) {
         if (!fs.lstatSync(settings).isFile() || fs.lstatSync(settings).isSymbolicLink()) return deferred('settings must be a regular file.');
         const saved = JSON.parse(fs.readFileSync(settings, 'utf8'));
-        if (!saved.values || typeof saved.values !== 'object' || !Number.isInteger(saved.revision)) throw new Error('invalid-settings');
+        if (!saved.values || typeof saved.values !== 'object' || !Number.isInteger(saved.revision)) throw new SetupFailure('invalid-settings');
     } else if (!existing) {
         fs.mkdirSync(directory, {recursive: true, mode: 0o700});
         // Defaults are filled by the plugin schema. Never overwrite an existing preference file.
@@ -1736,11 +1750,15 @@ function main() {
     run(existing ? [...args, 'update', id, '--json'] : [...args, 'add', remote, '--ref', 'main', '--id', id, '--json'], 180000);
     const after = run([...args, 'ls', '--json']);
     if (!Array.isArray(after) || !after.some(item => item.id === id && item.status === 'running' && item.enabled === true && item.source === 'git' && item.remote === remote && item.ref === 'main')) {
-        throw new Error('plugin-not-running');
+        throw new SetupFailure('plugin-not-running');
     }
     console.log(`Paseo Plain ${existing ? 'checked for updates' : 'installed'}; saved preferences preserved. Rewrites require an explicit request and an existing Pi login.`);
 }
-try { main(); } catch {
+try { main(); } catch (error) {
+    // Only controlled labels/codes are logged, never stderr, JSON values, or paths from exceptions.
+    const reason = error instanceof SetupFailure ? error.message : error instanceof SyntaxError ? 'invalid-json' :
+        ['EACCES', 'EPERM', 'ENOENT', 'EEXIST', 'ENOSPC', 'EROFS'].includes(error?.code) ? error.code : 'unexpected-error';
+    console.log(`Paseo Plain failure: ${operation}: ${reason}.`);
     if (recovery) console.log(`Paseo Plain migration stopped (${migrationPhase}). Do not retry until reviewed. Private recovery location: ${JSON.stringify(recovery)}. See RECOVERY.md and the setup README.`);
     console.log('Paseo Plain setup could not finish. Inspect local plugin status before retrying. Setup did not reset rewrite preferences.');
     process.exitCode = 1;
@@ -4902,6 +4920,7 @@ setup_headless_paseo_daemon() {
 
 # Remove Pi subagents extension
 remove_pi_subagents() {
+    local _had_failure=0
     local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
     local _settings_file="${_settings_dir}/settings.json"
     local _package=""
@@ -4916,9 +4935,10 @@ remove_pi_subagents() {
                 print_debug "Pi subagents extension not installed (${_package})."
             else
                 print_warning "Failed to remove Pi subagents extension (${_package}): ${_output}"
+                _had_failure=1
             fi
         done
-        return 0
+        return "${_had_failure}"
     fi
 
     # Fallback when the pi CLI is unavailable: strip both package sources
@@ -4930,7 +4950,7 @@ remove_pi_subagents() {
 
     if ! command -v jq &> /dev/null; then
         print_warning "jq not found. Cannot remove Pi subagents from Pi settings."
-        return 0
+        return 1
     fi
 
     _tmp=$(mktemp)
@@ -4945,11 +4965,12 @@ remove_pi_subagents() {
         .packages = (packages_array | map(select((package_source != "npm:pi-subagents") and (package_source != "npm:@tintinweb/pi-subagents"))))
         | if (.packages | length) == 0 then del(.packages) else . end
     ' "${_settings_file}" > "${_tmp}"; then
-        mv "${_tmp}" "${_settings_file}"
+        mv "${_tmp}" "${_settings_file}" || return 1
         print_success "Removed Pi subagents extension from Pi settings."
     else
         rm -f "${_tmp}"
         print_warning "Failed to update Pi settings at ${_settings_file}."
+        return 1
     fi
     return 0
 }
@@ -5136,6 +5157,7 @@ PI_PROSE_RETIREMENT_JS
 
 # Remove retired Pi RPIV packages (ask-user-question and todo)
 remove_pi_rpiv_packages() {
+    local _had_failure=0
     local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
     local _settings_file="${_settings_dir}/settings.json"
     local _package=""
@@ -5150,9 +5172,10 @@ remove_pi_rpiv_packages() {
                 print_debug "Pi RPIV package not installed (${_package})."
             else
                 print_warning "Failed to remove Pi RPIV package (${_package}): ${_output}"
+                _had_failure=1
             fi
         done
-        return 0
+        return "${_had_failure}"
     fi
 
     # Fallback when the pi CLI is unavailable: strip both package sources
@@ -5164,7 +5187,7 @@ remove_pi_rpiv_packages() {
 
     if ! command -v jq &> /dev/null; then
         print_warning "jq not found. Cannot remove Pi RPIV packages from Pi settings."
-        return 0
+        return 1
     fi
 
     _tmp=$(mktemp)
@@ -5179,86 +5202,151 @@ remove_pi_rpiv_packages() {
         .packages = (packages_array | map(select((package_source != "npm:@juicesharp/rpiv-ask-user-question") and (package_source != "npm:@juicesharp/rpiv-todo"))))
         | if (.packages | length) == 0 then del(.packages) else . end
     ' "${_settings_file}" > "${_tmp}"; then
-        mv "${_tmp}" "${_settings_file}"
+        mv "${_tmp}" "${_settings_file}" || return 1
         print_success "Removed Pi RPIV packages from Pi settings."
     else
         rm -f "${_tmp}"
         print_warning "Failed to update Pi settings at ${_settings_file}."
+        return 1
     fi
     return 0
 }
 
-# Remove Pi MCP adapter package source from settings when disabled
-remove_pi_mcp_adapter_settings() {
-    local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
-    local _settings_file="${_settings_dir}/settings.json"
-    local _tmp=""
-
-    if ! command -v jq &> /dev/null; then
-        print_warning "jq not found. Cannot update Pi MCP adapter settings."
+# Repair only the active profile's managed adapter metadata; npm owns lockfiles.
+prepare_pi_mcp_adapter() {
+    local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    if ! command -v node &> /dev/null; then
+        print_warning "Node.js not found. Cannot safely prepare Pi package metadata."
         return 1
     fi
-
-    mkdir -p "${_settings_dir}"
-
-    if [[ ! -f "${_settings_file}" ]]; then
-        printf '{}
-' > "${_settings_file}"
-    fi
-
-    _tmp=$(mktemp)
-    if jq '
-        def package_source:
-            if type == "string" then .
-            elif type == "object" then (.source // "")
-            else ""
-            end;
-        def packages_array:
-            if (.packages | type) == "array" then .packages else [] end;
-        .packages = (packages_array | map(select(package_source != "npm:pi-mcp-adapter")))
-        | if (.packages | length) == 0 then del(.packages) else . end
-    ' "${_settings_file}" > "${_tmp}"; then
-        mv "${_tmp}" "${_settings_file}"
-    else
-        rm -f "${_tmp}"
-        print_warning "Failed to update Pi settings at ${_settings_file}."
-        return 1
-    fi
+    node - "${_agent_dir}" "${BAN_PI_MCP_ADAPTER:-0}" "${1:-prepare}" <<'PI_ADAPTER_POLICY_JS'
+    // Only the active profile's managed adapter records are changed. npm owns locks.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const [agentDir, disabled, mode] = process.argv.slice(2);
+    const version = '2.32.1';
+    const source = `npm:pi-mcp-adapter@${version}`;
+    const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+    const isAdapter = value => typeof value === 'string' && /^npm:pi-mcp-adapter(?:@[^\s]+)?$/.test(value);
+    function stat(file) {
+        try { return fs.lstatSync(file); }
+        catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    }
+    function read(file) {
+        const info = stat(file);
+        if (!info) return { file, data: null };
+        if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) throw new Error('unsafe file');
+        const original = fs.readFileSync(file, 'utf8');
+        const data = JSON.parse(original.replace(/^\uFEFF/, ''));
+        if (!isObject(data)) throw new Error('invalid object');
+        return { file, data, original, info };
+    }
+    try {
+        if (!['prepare', 'verify'].includes(mode)) throw new Error('invalid mode');
+        const store = path.join(agentDir, 'npm');
+        // Reject linked managed directories, but allow platform aliases above agentDir.
+        for (const directory of [agentDir, store, path.join(store, 'node_modules'), path.join(store, 'node_modules/pi-mcp-adapter')]) {
+            const info = stat(directory);
+            if (info && (!info.isDirectory() || info.isSymbolicLink())) throw new Error('unsafe directory');
+        }
+        const settings = read(path.join(agentDir, 'settings.json'));
+        const manifest = read(path.join(store, 'package.json'));
+        const installed = read(path.join(store, 'node_modules/pi-mcp-adapter/package.json'));
+        read(path.join(store, 'package-lock.json'));
+        read(path.join(store, 'node_modules/.package-lock.json'));
+        if (settings.data && 'packages' in settings.data && !Array.isArray(settings.data.packages)) throw new Error('invalid packages');
+        const packages = settings.data?.packages ?? [];
+        if (packages.some(entry => typeof entry !== 'string' && (!isObject(entry) || typeof entry.source !== 'string'))) throw new Error('invalid package');
+        for (const field of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+            if (manifest.data && field in manifest.data && !isObject(manifest.data[field])) throw new Error('invalid dependencies');
+        }
+        if (mode === 'verify') {
+            if (disabled !== '1' && (installed.data?.name !== 'pi-mcp-adapter' || installed.data?.version !== version ||
+                manifest.data?.dependencies?.['pi-mcp-adapter'] !== version ||
+                !packages.some(entry => (typeof entry === 'string' ? entry : entry.source) === source))) throw new Error('unverified adapter');
+        } else {
+            const changes = [];
+            if (settings.data && 'packages' in settings.data) {
+                const next = packages.flatMap(entry => {
+                    const current = typeof entry === 'string' ? entry : entry.source;
+                    if (!isAdapter(current)) return [entry];
+                    if (disabled === '1') return [];
+                    return [typeof entry === 'string' ? source : { ...entry, source }];
+                });
+                if (JSON.stringify(next) !== JSON.stringify(packages)) {
+                    settings.data.packages = next;
+                    changes.push(settings);
+                }
+            }
+            if (manifest.data) {
+                let changed = false;
+                for (const field of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+                    const deps = manifest.data[field];
+                    if (!deps || !Object.hasOwn(deps, 'pi-mcp-adapter')) continue;
+                    if (disabled === '1') { delete deps['pi-mcp-adapter']; changed = true; }
+                    else if (deps['pi-mcp-adapter'] !== version) { deps['pi-mcp-adapter'] = version; changed = true; }
+                }
+                if (changed) changes.push(manifest);
+            }
+            // Validate every input before writing. Replace only changed files, atomically.
+            for (const record of changes) {
+                const temporary = `${record.file}.setup-${process.pid}.tmp`;
+                let created = false;
+                try {
+                    const current = fs.lstatSync(record.file);
+                    if (current.ino !== record.info.ino || current.dev !== record.info.dev || current.nlink !== 1 ||
+                        current.isSymbolicLink() || fs.readFileSync(record.file, 'utf8') !== record.original) throw new Error('concurrent edit');
+                    fs.writeFileSync(temporary, JSON.stringify(record.data, null, 2) + '\n', { flag: 'wx', mode: record.info.mode & 0o777 });
+                    created = true;
+                    fs.renameSync(temporary, record.file);
+                } finally {
+                    if (created && fs.existsSync(temporary)) fs.unlinkSync(temporary);
+                }
+            }
+        }
+    } catch {
+        console.error('Pi MCP adapter metadata recovery/validation failed; inspect the active profile. npm security settings were not changed.');
+        process.exitCode = 1;
+    }
+PI_ADAPTER_POLICY_JS
 }
 
 # Install/update Pi MCP adapter extension
 setup_pi_mcp_adapter() {
-    local _package="npm:pi-mcp-adapter"
+    # 2.33.0 uses remote preview dependencies rejected by managed npm policy.
+    local _package="npm:pi-mcp-adapter@2.32.1"
     local _output=""
     local _list_output=""
 
+    prepare_pi_mcp_adapter || return 1
     if [[ "${BAN_PI_MCP_ADAPTER:-}" == "1" ]]; then
-        if remove_pi_mcp_adapter_settings; then
-            print_success "Pi MCP adapter extension disabled in Pi settings."
-        fi
+        print_success "Pi MCP adapter extension disabled in Pi settings."
         return 0
     fi
 
     if ! command -v npm &> /dev/null; then
         print_warning "npm not found. Cannot install Pi MCP adapter."
-        print_debug "Install Node.js/npm, then run: pi install npm:pi-mcp-adapter"
-        return 0
+        print_debug "Install Node.js/npm, then run: pi install npm:pi-mcp-adapter@2.32.1"
+        return 1
     fi
 
     if ! command -v pi &> /dev/null; then
         print_warning "Pi coding agent not found. Cannot install Pi MCP adapter."
-        return 0
+        return 1
     fi
 
     print_message "Installing/updating Pi MCP adapter..."
-    if _output=$(pi install "${_package}" 2>&1); then
-        if _list_output=$(pi list 2>&1) && grep -q "npm:pi-mcp-adapter" <<< "${_list_output}"; then
+    if _output=$(npm_config_save_exact=true pi install "${_package}" 2>&1); then
+        if _list_output=$(pi list 2>&1) && grep -Fq "${_package}" <<< "${_list_output}"; then
+            prepare_pi_mcp_adapter verify || return 1
             print_success "Pi MCP adapter installed/updated."
         else
             print_warning "Pi MCP adapter install completed, but package validation was inconclusive: ${_list_output}"
+            return 1
         fi
     else
         print_warning "Failed to install Pi MCP adapter: ${_output}"
+        return 1
     fi
 }
 
@@ -5271,12 +5359,12 @@ setup_pi_claude_bridge() {
     if ! command -v npm &> /dev/null; then
         print_warning "npm not found. Cannot install Pi Claude bridge."
         print_debug "Install Node.js/npm, then run: pi install npm:pi-claude-bridge"
-        return 0
+        return 1
     fi
 
     if ! command -v pi &> /dev/null; then
         print_warning "Pi coding agent not found. Cannot install Pi Claude bridge."
-        return 0
+        return 1
     fi
 
     print_message "Installing/updating Pi Claude bridge..."
@@ -5285,14 +5373,17 @@ setup_pi_claude_bridge() {
             print_success "Pi Claude bridge installed/updated."
         else
             print_warning "Pi Claude bridge install completed, but package validation was inconclusive: ${_list_output}"
+            return 1
         fi
     else
         print_warning "Failed to install Pi Claude bridge: ${_output}"
+        return 1
     fi
 }
 
 # Remove legacy Pi Ask User and install/update the Pi companion packages
 setup_pi_companion_packages() {
+    local _had_failure=0
     local _legacy_package="npm:pi-ask-user"
     local -a _packages=(
         "npm:pi-web-access"
@@ -5304,12 +5395,12 @@ setup_pi_companion_packages() {
     if ! command -v npm &> /dev/null; then
         print_warning "npm not found. Cannot install Pi companion packages."
         print_debug "Install Node.js/npm, then install these Pi packages manually: ${_packages[*]}"
-        return 0
+        return 1
     fi
 
     if ! command -v pi &> /dev/null; then
         print_warning "Pi coding agent not found. Cannot install Pi companion packages."
-        return 0
+        return 1
     fi
 
     if _list_output=$(pi list 2>&1); then
@@ -5319,10 +5410,12 @@ setup_pi_companion_packages() {
                 print_success "Legacy Pi Ask User package removed."
             else
                 print_warning "Failed to remove legacy Pi Ask User package: ${_output}"
+                _had_failure=1
             fi
         fi
     else
         print_warning "Cannot inspect Pi packages before legacy cleanup: ${_list_output}"
+        _had_failure=1
     fi
 
     for _package in "${_packages[@]}"; do
@@ -5332,11 +5425,14 @@ setup_pi_companion_packages() {
                 print_success "Pi package ${_package} installed/updated."
             else
                 print_warning "Pi package ${_package} install completed, but validation was inconclusive: ${_list_output}"
+                _had_failure=1
             fi
         else
             print_warning "Failed to install Pi package ${_package}: ${_output}"
+            _had_failure=1
         fi
     done
+    return "${_had_failure}"
 }
 
 # Keep shared skills canonical for Pi and suppress stale direct/package collisions.
@@ -5476,15 +5572,14 @@ setup_pi_goal_autoresearch() {
     local _had_failure=0
 
     if [[ "${BAN_PI_GOAL_AUTORESEARCH:-}" == "1" ]]; then
-        if remove_pi_goal_autoresearch_settings; then
-            print_success "Pi goal/autoresearch extensions disabled in Pi settings."
-        fi
+        remove_pi_goal_autoresearch_settings || return 1
+        print_success "Pi goal/autoresearch extensions disabled in Pi settings."
         return 0
     fi
 
     if ! command -v pi &> /dev/null; then
         print_warning "Pi coding agent not found. Cannot install Pi goal/autoresearch extensions."
-        return 0
+        return 1
     fi
 
     for _package in npm:pi-goal npm:pi-autoresearch; do
@@ -5497,13 +5592,17 @@ setup_pi_goal_autoresearch() {
         fi
     done
 
-    if _list_output=$(pi list 2>&1) && grep -q "npm:pi-goal" <<< "${_list_output}" && grep -q "npm:pi-autoresearch" <<< "${_list_output}"; then
-        print_success "Pi goal/autoresearch extensions are active."
-    elif [[ "${_had_failure}" -eq 0 ]]; then
-        print_warning "Pi goal/autoresearch install completed, but package validation was inconclusive: ${_list_output}"
+    if [[ "${_had_failure}" -eq 0 ]]; then
+        if _list_output=$(pi list 2>&1) && grep -q "npm:pi-goal" <<< "${_list_output}" && grep -q "npm:pi-autoresearch" <<< "${_list_output}"; then
+            print_success "Pi goal/autoresearch extensions are active."
+        else
+            print_warning "Pi goal/autoresearch install completed, but package validation was inconclusive: ${_list_output}"
+            _had_failure=1
+        fi
     fi
 
     configure_pi_autoresearch_shortcut || return 1
+    return "${_had_failure}"
 }
 
 
@@ -6795,7 +6894,7 @@ run_setup_tasks() {
     local _setup_had_errors=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 248 | Last changed: Retire pi-prose from global Pi profiles"
+    echo -e "${GRAY}Version 249 | Last changed: Fix weekly audit package and installer failures"
 
     if ! acquire_setup_lock; then
         return 1
@@ -6962,27 +7061,34 @@ HELPER_EOF
     if ! setup_matt_pocock_skills; then
         _setup_had_errors=1
     fi
-    remove_pi_prose || return 1
-    if install_pi_cli; then
+    if ! remove_pi_prose; then
+        print_warning "Skipping Pi package setup because prose retirement failed."
+        _setup_had_errors=1
+    elif install_pi_cli; then
         configure_pi_defaults
         remove_pi_synthetic_models
         seed_pi_zai_models
-        remove_pi_subagents
-        remove_pi_rpiv_packages
-        setup_pi_mcp_adapter
-        setup_pi_claude_bridge
-        setup_pi_companion_packages
-        setup_pi_goal_autoresearch
+        # Re-pin the adapter before any operation resolves the shared npm tree.
+        if prepare_pi_mcp_adapter; then
+            setup_pi_mcp_adapter || _setup_had_errors=1
+            remove_pi_subagents || _setup_had_errors=1
+            remove_pi_rpiv_packages || _setup_had_errors=1
+            setup_pi_claude_bridge || _setup_had_errors=1
+            setup_pi_companion_packages || _setup_had_errors=1
+            setup_pi_goal_autoresearch || _setup_had_errors=1
+        else
+            _setup_had_errors=1
+        fi
     else
         # Do not run Pi package cleanup after a failed runtime preflight.
-        if [[ "${PI_RUNTIME_PREFLIGHT_PASSED:-0}" -eq 1 ]]; then
-            remove_pi_subagents
-            remove_pi_rpiv_packages
+        if [[ "${PI_RUNTIME_PREFLIGHT_PASSED:-0}" -eq 1 ]] && prepare_pi_mcp_adapter; then
             if [[ "${BAN_PI_MCP_ADAPTER:-}" == "1" ]]; then
-                setup_pi_mcp_adapter
+                setup_pi_mcp_adapter || _setup_had_errors=1
             fi
+            remove_pi_subagents || _setup_had_errors=1
+            remove_pi_rpiv_packages || _setup_had_errors=1
             if [[ "${BAN_PI_GOAL_AUTORESEARCH:-}" == "1" ]]; then
-                setup_pi_goal_autoresearch
+                setup_pi_goal_autoresearch || _setup_had_errors=1
             fi
         fi
         print_warning "Skipping Pi extension setup because Pi migration failed."

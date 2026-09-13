@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline shared-Node setup fixtures; never source a complete setup script."""
+"""Contract v1: offline shared-Node fixtures; never source a complete setup script."""
 
 import json
 import os
@@ -208,12 +208,13 @@ class SharedNodeTests(unittest.TestCase):
 
     def test_pi_failure_branch_defers_cleanup_only_for_failed_runtime(self):
         for script in SCRIPTS:
-            block = re.search(r'^    if install_pi_cli; then\n.*?^    fi$',
+            block = re.search(r'^    if ! remove_pi_prose; then\n.*?^    fi$',
                               (ROOT / script).read_text(), re.M | re.S).group()
             for healthy in (False, True):
                 with self.subTest(script=script, healthy=healthy):
                     f = self.fixture(version='24.20.0' if healthy else None, install_failure=not healthy)
-                    command = ('remove_pi_subagents() { touch "$HOME/cleanup-ran"; }; '
+                    command = ('remove_pi_prose() { return 0; }; prepare_pi_mcp_adapter() { return 0; }; '
+                               'remove_pi_subagents() { touch "$HOME/cleanup-ran"; }; '
                                'remove_pi_rpiv_packages() { touch "$HOME/cleanup-ran"; };\n' + block)
                     f.run(script, command)
                     self.assertEqual((f.home / 'cleanup-ran').exists(), healthy)
