@@ -1,4 +1,4 @@
-"""Contract v2: exercise the embedded installer, never full setup or real CLIs."""
+"""Contract v3: preserve sources and test safe diagnostics without live setup."""
 import json
 import os
 from pathlib import Path
@@ -554,13 +554,32 @@ paseo_command_target() { command -v paseo; }
         self.assertFalse((self.paseo / 'plugin-data').exists())
 
     def test_source_conflicts_and_disabled_installations_remain_untouched(self):
-        for plugin in ({'source':'directory'}, {'source':'git','remote':'https://example.com/other.git','ref':'release'},
-                       {'source':'git','remote':'https://github.com/scowalt/paseo-plain.git','ref':'custom'}, {'enabled':False}):
-            self.state['plugins'] = [{'id':'paseo-plain', **plugin}]
-            result = self.run_installer()
-            self.assertEqual(result.returncode, 0)
-            self.assertIn('deferred', result.stdout)
-        self.assertFalse(any('add' in args or 'update' in args for args in self.calls()))
+        remote = 'https://github.com/scowalt/paseo-plain.git'
+        cases = (
+            ({'source': 'directory', 'path': '/provider-secret-must-not-be-logged'}, 'directory-source'),
+            ({'source': 'provider-secret-must-not-be-logged'}, 'non-git-source'),
+            ({'source': 'git', 'remote': 'https://provider-secret-must-not-be-logged@example.invalid', 'ref': 'release'}, 'repository-mismatch'),
+            ({'source': 'git', 'remote': remote, 'ref': 'provider-secret-must-not-be-logged'}, 'custom-or-pinned-ref'),
+            ({'source': 'git', 'remote': remote, 'ref': 'a' * 40}, 'custom-or-pinned-ref'),
+            ({'source': 'directory', 'enabled': False}, 'the saved disabled state was preserved'),
+        )
+        self.seed_release()
+        preserved = [self.paseo / name for name in (
+            'config.json', 'plugins/sources.json', 'plugin-data/paseo-plain/configuration.json',
+            'plugin-data/paseo-plain/cache.json', 'plugin-settings/paseo-plain/voice.json')]
+        before = {file: file.read_bytes() for file in preserved}
+        for script in SCRIPTS:
+            for plugin, reason in cases:
+                with self.subTest(script=script, reason=reason):
+                    self.state['plugins'] = [{'id': 'paseo-plain', **plugin}]
+                    result = self.run_installer(script)
+                    self.assertEqual(result.returncode, 0)
+                    self.assertIn('Paseo Plain deferred: ' + reason, result.stdout)
+                    if plugin.get('enabled') is not False:
+                        self.assertIn('Review the paseo-plain source in Paseo Settings > Plugins', result.stdout)
+                    self.assertEqual(before, {file: file.read_bytes() for file in preserved})
+                    self.assertFalse((self.paseo / 'setup-recovery').exists())
+        self.assertFalse(any('add' in args or 'update' in args or 'remove' in args for args in self.calls()))
 
     def test_malformed_settings_and_symlink_storage_are_preserved(self):
         directory = self.paseo / 'plugin-data/paseo-plain'
