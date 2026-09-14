@@ -72,6 +72,22 @@ A custom `PASEO_HOME` must be an existing, private, account-owned directory belo
 
 Later runs recreate a deleted managed profile and restore its provider, model, and reasoning level. Other profiles and optional customizations remain unchanged. Setup can add the profile before you supply a key, with a warning that authentication is missing. If Pi installation or Go validation fails, subsequent Pi package operations, profile setup, and managed-daemon setup are deferred.
 
+### Go setup failure diagnostics
+
+Go failures report the operation and a safe reason, for example `Pi Go setup failed: environment-file: unsafe-file-permissions.` This identifies the failed check without printing keys, file contents, custom paths, or arbitrary exception text. Unknown exceptions report `operation-failed` with the operation name, not an assumed cause.
+
+| Operation or reason | What to review locally |
+| --- | --- |
+| `home` or `active-profile` | Account ownership, directory permissions, and linked ancestors. |
+| `environment-file` | The account's `~/.env.local`, its permissions, and the literal `OPENCODE_GO_API_KEY` format. |
+| `models-json` | The active Pi profile's `models.json`. Keep explicit provider overrides until you review them. |
+| `auth-preflight` or `auth-read` | The active profile's `auth.json`, its permissions, and its JSON structure. Do not print credential contents. |
+| `pi-package`, `pi-dependency`, or `go-catalog` | Installed Pi package metadata and the built-in Go Muse Contributor model. |
+| `auth-lock`, `lock-dependency`, `lock-acquire`, or `lock-release` | Pi's credential lock and installed lock dependency. Do not delete a lock held by a running process. |
+| `auth-write` or `auth-cleanup` | Private credential storage. For example, `ENOSPC` reports a space failure and `EACCES` reports denied access. |
+
+For permission failures, inspect the named boundary before changing anything. Do not make credentials public or bypass linked-path protections to continue setup. If the helper exits without a recognized diagnostic, setup reports `helper-exit-N: diagnostic-unavailable`, where `N` is its exit status. `helper-execution: diagnostic-unavailable` means PowerShell did not complete the helper invocation. `invalid-helper-result` means a successful helper exit produced an unrecognized result. These fallback messages do not establish the underlying cause.
+
 ### Subscription and data policy
 
 The [Go Contributor offering](https://opencode.ai/docs/go/#privacy) permits Meta to retain prompts and responses and use them for model training. It has geographic restrictions and requires account-level training consent. This profile is available on work machines too, so follow your employer's data policy when selecting it.
@@ -209,6 +225,8 @@ See [Paseo update instructions](https://paseo.sh/docs/updates.md). The client do
 Future setup runs install [Paseo Plain](https://github.com/scowalt/paseo-plain) for the local daemon when Paseo CLI/daemon 0.8.x, Node.js >=22.19, Pi, and enabled Paseo plugins are available. The six standalone setup scripts share the same installer logic. Setup does not inventory or contact other machines.
 
 Setup installs `main` through Paseo's Git installer. Later runs update matching Git-managed `paseo-plain` installations to the latest `main` commit. No GitHub release or version tag is required. Directory installations, other repositories or branches, pinned revisions, and disabled installations remain unchanged. Ordinary failed updates do not trigger a remove/reinstall cycle.
+
+Source-preservation warnings identify `directory-source`, `non-git-source`, `repository-mismatch`, or `custom-or-pinned-ref` without printing the source values. Review the `paseo-plain` source in Paseo Settings > Plugins before planning a migration. Keep local source files and recovery directories in place. A preserved source does not mean that the plugin is broken, and rerunning setup does not authorize takeover.
 
 Existing setup-managed `release` installations move to `main` on their next setup run. Paseo 0.8 requires a one-time remove/add operation under the same plugin ID. Setup verifies the source record and makes private recovery copies before removal. It preserves live rewrite preferences and cache, and restores Paseo-owned settings before adding `main`. Only the plugin is briefly interrupted. The migration does not restart the daemon. Do not change the plugin or its settings during migration. Paseo 0.8 does not make the entire migration atomic.
 

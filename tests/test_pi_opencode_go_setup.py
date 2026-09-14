@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -36,7 +37,11 @@ const fs = require('node:fs');
 exports.lock = async (file, options) => {
     const action = process.env.GO_TEST_ACTION;
     if (options.realpath !== false || options.update > 1000 || !options.onCompromised) throw Error('bad-lock-options');
-    if (action === 'lock-failure') throw Error('PRIVATE-FAILURE-SENTINEL');
+    if (['lock-failure', 'lock-busy', 'unknown-code'].includes(action)) {
+        const error = Error('PRIVATE-FAILURE-SENTINEL');
+        if (action !== 'lock-failure') error.code = action === 'lock-busy' ? 'ELOCKED' : 'PRIVATE-FAILURE-SENTINEL';
+        throw error;
+    }
     const lock = file + '.lock';
     fs.mkdirSync(lock, {mode: 0o700});
     if (action === 'refresh') {
@@ -47,9 +52,15 @@ exports.lock = async (file, options) => {
     if (action === 'compromised') options.onCompromised();
     if (action === 'rename-failure') {
         const rename = fs.renameSync;
-        fs.renameSync = (from, to) => { if (to === file) throw Error('PRIVATE-FAILURE-SENTINEL'); return rename(from, to); };
+        fs.renameSync = (from, to) => {
+            if (to === file) throw Object.assign(Error('PRIVATE-FAILURE-SENTINEL'), {code: 'ENOSPC'});
+            return rename(from, to);
+        };
     }
-    return async () => fs.rmdirSync(lock);
+    return async () => {
+        fs.rmdirSync(lock);
+        if (action === 'release-failure') throw Object.assign(Error('PRIVATE-FAILURE-SENTINEL'), {code: 'EIO'});
+    };
 };
 '''
 
@@ -96,11 +107,13 @@ class GoSetupTests(unittest.TestCase):
         if use_wrapper and script == "win.ps1":
             fixture = self.root / "wrapper.ps1"
             fixture.write_text("$ErrorActionPreference = 'Stop'\n"
+                               "$PSNativeCommandUseErrorActionPreference = $true\n"
                                "if ($env:GO_TEST_LEGACY_ARGS) { $PSNativeCommandArgumentPassing = 'Legacy' }\n"
                                "function Write-Warning($Message) { [Console]::WriteLine($Message) }\n"
                                "function Write-Success($Message) { [Console]::WriteLine($Message) }\n"
                                "function Write-Debug($Message) { [Console]::WriteLine($Message) }\n" + wrapper(script) +
                                "\n$ok = Set-PiOpenCodeGoProvider\n"
+                               "if (-not $PSNativeCommandUseErrorActionPreference) { throw 'caller preference changed' }\n"
                                "[Console]::WriteLine('changed:' + $script:PiOpenCodeGoChanged)\n"
                                "if (-not $ok) { exit 1 }\n")
             args = [PWSH, "-NoProfile", "-NonInteractive", "-File", str(fixture)]
@@ -130,6 +143,17 @@ class GoSetupTests(unittest.TestCase):
         self.assertNotIn("ModelRuntime", bodies[0])
         self.assertNotIn("fetch(", bodies[0])
         self.assertNotIn("process.env.OPENCODE_API_KEY", bodies[0])
+
+    def test_every_wrapper_allowlist_matches_the_controlled_helper_protocol(self):
+        code = embedded('ubuntu.sh')
+        operations = set(re.findall(r"operation = '([^']+)'", code))
+        reasons = set(re.findall(r"(?:fail\(|new GoSetupError\()'([^']+)'", code)) | {'operation-failed'}
+        reasons.update(re.search(r"const nativeErrors = new Set\('([^']+)'", code)[1].split())
+        for script in SCRIPTS:
+            text = wrapper(script)
+            with self.subTest(script=script):
+                self.assertEqual(operations, set(re.search(r"(?:local _operations|\$operations)\s*=\s*'([^']+)'", text)[1].split('|')))
+                self.assertEqual(reasons, set(re.search(r"(?:local _reasons|\$reasons)\s*=\s*'([^']+)'", text)[1].split('|')))
 
     def test_creation_rotation_idempotence_and_other_credentials(self):
         self.put(self.auth, {"keep": {"type": "oauth", "access": "old-fixture-token", "nested": [1, True]},
@@ -180,7 +204,7 @@ class GoSetupTests(unittest.TestCase):
                 self.put(self.envfile, "OPENCODE_GO_API_KEY=" + value + "\n")
                 result = self.run_helper()
                 self.assertEqual(result.returncode, 1)
-                self.assertIn("invalid-key-format", result.stderr)
+                self.assertIn("go-failure:environment-file:invalid-key-format", result.stdout)
                 self.assertEqual(self.auth.read_bytes(), before)
                 self.assertFalse((self.root / "sentinel").exists())
 
@@ -214,7 +238,7 @@ class GoSetupTests(unittest.TestCase):
             before = models.read_bytes()
             result = self.run_helper()
             self.assertEqual(result.returncode, 1)
-            self.assertIn("go-provider-overridden", result.stderr)
+            self.assertIn("go-failure:models-json:go-provider-overridden", result.stdout)
             self.assertEqual(models.read_bytes(), before)
             self.assertFalse(self.auth.exists())
         self.put(models, {"providers": {"keep": {"apiKey": "!never-execute"}}})
@@ -231,7 +255,7 @@ class GoSetupTests(unittest.TestCase):
                 self.put(self.catalog, {"openai-responses": {MODEL: model}})
                 result = self.run_helper()
                 self.assertEqual(result.returncode, 1)
-                self.assertIn("catalog-incompatible", result.stderr)
+                self.assertIn("go-failure:go-catalog:catalog-incompatible", result.stdout)
                 self.assertFalse(self.auth.exists())
 
     @unittest.skipIf(os.name == "nt", "POSIX link/permission fixture")
@@ -332,6 +356,117 @@ console.log('alias-fixtures-passed');
                 self.assertEqual(self.auth.read_bytes(), before)
                 self.assertEqual(list(self.profile.glob(".opencode-go-*")), [])
                 self.assertFalse(self.auth.with_suffix(".json.lock").exists())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX permission and link fixtures, including portable PowerShell wrappers')
+    def test_failure_details_reach_every_wrapper_without_changing_metadata(self):
+        self.put(self.auth, {'keep': {'type': 'api_key', 'key': KEY}})
+        before = self.auth.read_bytes()
+        models = self.profile / 'models.json'
+        scenarios = (
+            ('environment-permissions', 'environment-file: unsafe-file-permissions'),
+            ('profile-permissions', 'active-profile: untrusted-directory'),
+            ('linked-environment', 'environment-file: linked-or-nonregular-file'),
+            ('models-json', 'models-json: invalid-json'),
+            ('auth-json', 'auth-read: invalid-json'),
+            ('catalog', 'go-catalog: catalog-incompatible'),
+            ('lock-version', 'lock-dependency: lock-version-unsupported'),
+            ('lock-busy', 'lock-acquire: ELOCKED'),
+            ('lock-failure', 'lock-acquire: operation-failed'),
+            ('unknown-code', 'lock-acquire: operation-failed'),
+            ('rename-failure', 'auth-write: ENOSPC'),
+        )
+        for script in SCRIPTS:
+            if script == 'win.ps1' and not PWSH:
+                continue
+            for scenario, diagnostic in scenarios:
+                with self.subTest(script=script, scenario=scenario):
+                    self.put(self.auth, before.decode())
+                    self.put(self.envfile, 'OPENCODE_GO_API_KEY=' + KEY + '\n')
+                    self.put(self.catalog, {'openai-responses': {MODEL: self.model}})
+                    self.put(self.lock / 'package.json', {'name': 'proper-lockfile', 'version': '4.1.2', 'main': 'index.js'})
+                    self.env.pop('GO_TEST_ACTION', None)
+                    if scenario == 'environment-permissions':
+                        self.envfile.chmod(0o644)
+                    elif scenario == 'profile-permissions':
+                        self.profile.chmod(0o775)
+                    elif scenario == 'linked-environment':
+                        self.envfile.rename(self.home / 'private-input')
+                        self.envfile.symlink_to(self.home / 'private-input')
+                    elif scenario == 'models-json':
+                        self.put(models, '{PRIVATE-FAILURE-SENTINEL')
+                    elif scenario == 'auth-json':
+                        self.put(self.auth, '{PRIVATE-FAILURE-SENTINEL')
+                    elif scenario == 'catalog':
+                        self.put(self.catalog, {'openai-responses': {MODEL: {**self.model, 'reasoning': False}}})
+                    elif scenario == 'lock-version':
+                        self.put(self.lock / 'package.json', {'name': 'proper-lockfile', 'version': '0.0.0'})
+                    else:
+                        self.env['GO_TEST_ACTION'] = scenario
+                    auth_before = self.auth.read_bytes()
+                    try:
+                        result = self.run_helper(script, use_wrapper=True)
+                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                        self.assertIn('Pi Go setup failed: ' + diagnostic + '.', result.stdout)
+                        self.assertEqual(self.auth.read_bytes(), auth_before)
+                        self.assertFalse(self.auth.with_suffix('.json.lock').exists())
+                        self.assertEqual(list(self.profile.glob('.opencode-go-*')), [])
+                    finally:
+                        self.profile.chmod(0o700)
+                        if self.envfile.is_symlink():
+                            self.envfile.unlink()
+                            (self.home / 'private-input').rename(self.envfile)
+                        if models.exists():
+                            models.unlink()
+
+    def test_release_failure_is_reported_after_a_successful_credential_write(self):
+        self.env['GO_TEST_ACTION'] = 'release-failure'
+        result = self.run_helper('ubuntu.sh', use_wrapper=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('Pi Go setup failed: lock-release: EIO.', result.stdout)
+        self.assertEqual(json.loads(self.auth.read_text())['opencode-go']['key'], KEY)
+        self.assertFalse(self.auth.with_suffix('.json.lock').exists())
+
+    def test_custom_profile_path_is_not_disclosed_in_diagnostics(self):
+        self.active = str(self.root / 'PRIVATE-FAILURE-SENTINEL')
+        self.put(Path(self.active) / 'models.json', '{PRIVATE-FAILURE-SENTINEL')
+        for script in SCRIPTS:
+            if script == 'win.ps1' and not PWSH:
+                continue
+            with self.subTest(script=script):
+                result = self.run_helper(script, use_wrapper=True)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('Pi Go setup failed: models-json: invalid-json.', result.stdout)
+                self.assertFalse((Path(self.active) / 'auth.json').exists())
+
+    @unittest.skipIf(os.name == 'nt', 'Fake node executable requires POSIX')
+    def test_wrappers_reject_untrusted_or_missing_helper_diagnostics(self):
+        self.put(self.auth, {'keep': {'type': 'api_key', 'key': KEY}})
+        before = self.auth.read_bytes()
+        fake_bin = self.root / 'bin'
+        fake_bin.mkdir()
+        self.put(fake_bin / 'node', '#!/bin/sh\n'
+                 'printf "%s" "$GO_TEST_OUTPUT"\n'
+                 'printf "%s" "PRIVATE-FAILURE-SENTINEL" >&2\n'
+                 'exit "$GO_TEST_EXIT"\n', mode=0o700)
+        self.env['PATH'] = str(fake_bin) + os.pathsep + self.env['PATH']
+        for script in SCRIPTS:
+            if script == 'win.ps1' and not PWSH:
+                continue
+            for output in ('', 'PRIVATE-FAILURE-SENTINEL',
+                           'go-failure:environment-file:PRIVATE-FAILURE-SENTINEL',
+                           'go-failure:PRIVATE-FAILURE-SENTINEL:unsafe-file-permissions',
+                           'go-failure:environment-file:unsafe-file-permissions\nPRIVATE-FAILURE-SENTINEL'):
+                with self.subTest(script=script, output=output):
+                    self.env.update(GO_TEST_OUTPUT=output, GO_TEST_EXIT='7')
+                    result = self.run_helper(script, use_wrapper=True)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn('Pi Go setup failed: helper-exit-7: diagnostic-unavailable.', result.stdout)
+                    self.assertEqual(self.auth.read_bytes(), before)
+            self.env.update(GO_TEST_OUTPUT='go-failure:environment-file:unsafe-file-permissions', GO_TEST_EXIT='0')
+            result = self.run_helper(script, use_wrapper=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn('invalid-helper-result', result.stdout)
+            self.assertNotIn('environment-file: unsafe-file-permissions', result.stdout)
 
     def test_every_bash_wrapper_and_windows_wrapper_when_available(self):
         for script in SCRIPTS:

@@ -1802,7 +1802,10 @@ function main() {
     const existing = matches[0];
     if (existing?.enabled === false || config.plugins?.[id]?.enabled === false) return deferred('the saved disabled state was preserved.');
     if (existing && (existing.source !== 'git' || existing.remote !== remote || !['main', 'release'].includes(existing.ref))) {
-        return deferred('the existing paseo-plain source is not managed by setup; it was left unchanged.');
+        const reason = existing.source === 'directory' ? 'directory-source' : existing.source !== 'git' ? 'non-git-source' :
+            existing.remote !== remote ? 'repository-mismatch' : 'custom-or-pinned-ref';
+        return deferred(`${reason}. Setup manages only the canonical Git repository on main or its release migration. ` +
+            'The existing installation was left unchanged. Review the paseo-plain source in Paseo Settings > Plugins before planning a migration.');
     }
     if (!existing && config.plugins?.[id]) return deferred('the configured plugin is absent from the catalog; inspect Paseo before retrying.');
     const recoveryPath = path.join(home, 'setup-recovery/paseo-plain-release-to-main');
@@ -3181,13 +3184,15 @@ cleanup_noncanonical_pi_installs() {
 # Native Go auth only. Success also verifies the installed catalog offline.
 # Keep the embedded Node body identical in all six setup scripts.
 configure_pi_opencode_go() {
-    local _result=""
+    local _result="" _status=0
+    local _operations='preflight|home|pi-package|pi-dependency|go-catalog|environment-file|active-profile|models-json|auth-lock|lock-dependency|auth-preflight|profile-create|lock-acquire|auth-read|auth-write|auth-cleanup|lock-release'
+    local _reasons='acl-timeout|acl-unavailable|acl-unsafe|catalog-incompatible|concurrent-metadata-change|duplicate-json-key|file-changed|go-provider-overridden|invalid-credential|invalid-json|invalid-json-object|invalid-key-format|invalid-mode|invalid-providers|linked-directory|linked-or-nonregular-file|lock-compromised|lock-unavailable|lock-unverified|lock-version-unsupported|missing-directory|node-incompatible|oversized-metadata|pi-dependency-unavailable|pi-package-unavailable|unexpected-dependency|unowned-auth-file|unowned-home|unsafe-file-permissions|unsafe-json-number|unsafe-lock|unsafe-lock-dependency|unsafe-path|unsafe-profile|untrusted-directory|operation-failed|EACCES|EPERM|EROFS|ENOSPC|EDQUOT|ENOENT|ENOTDIR|EISDIR|ELOOP|EEXIST|EIO|ELOCKED|ECOMPROMISED|MODULE_NOT_FOUND|ERR_PACKAGE_PATH_NOT_EXPORTED'
     PI_OPENCODE_GO_CHANGED=0
     if ! command -v node > /dev/null 2>&1; then
         print_warning "Pi Go setup failed: shared Node runtime unavailable."
         return 1
     fi
-    if ! _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${HOME}" "${PI_CODING_AGENT_DIR:-}" sync 2>/dev/null <<'PI_OPENCODE_GO_JS'
+    _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${HOME}" "${PI_CODING_AGENT_DIR:-}" sync 2>/dev/null <<'PI_OPENCODE_GO_JS'
 // BEGIN PI_OPENCODE_GO_SETUP
 'use strict';
 const fs = require('node:fs');
@@ -3195,7 +3200,14 @@ const path = require('node:path');
 const {createRequire} = require('node:module');
 const {spawn} = require('node:child_process');
 const crypto = require('node:crypto');
-class GoSetupError extends Error {}
+let operation = 'preflight';
+class GoSetupError extends Error {
+    constructor(code) { super(code); this.operation = operation; }
+}
+// Only controlled codes cross stdout. Never serialize an exception or a path.
+const nativeErrors = new Set('EACCES EPERM EROFS ENOSPC EDQUOT ENOENT ENOTDIR EISDIR ELOOP EEXIST EIO ELOCKED ECOMPROMISED MODULE_NOT_FOUND ERR_PACKAGE_PATH_NOT_EXPORTED'.split(' '));
+const failureReason = error => error instanceof GoSetupError ? error.message :
+    nativeErrors.has(error?.code) ? error.code : 'operation-failed';
 const fail = code => { throw new GoSetupError(code); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const windows = process.platform === 'win32';
@@ -3284,6 +3296,7 @@ function json(text) {
 }
 // No provider SDK, auth resolver, extension, or model process is loaded here.
 function installedPackages(home) {
+    operation = 'pi-package';
     const prefix = path.join(home, '.local', ...(windows ? [] : ['lib']), 'node_modules');
     const manifest = path.join(prefix, '@earendil-works/pi-coding-agent/package.json');
     // npm inherits the account umask. This already-installed/executed code is trusted
@@ -3305,7 +3318,9 @@ function installedPackages(home) {
         }
         fail('pi-dependency-unavailable');
     }
+    operation = 'pi-dependency';
     const ai = dependency('@earendil-works/pi-ai');
+    operation = 'go-catalog';
     const catalog = json(readText(path.join(ai.root, 'dist/providers/data/opencode-go.json'), false, true) || 'null');
     const id = 'muse-spark-1.3-contributor';
     const matches = Object.values(catalog).flatMap(group => object(group) ? Object.values(group).filter(model => model?.id === id) : []);
@@ -3408,6 +3423,7 @@ async function main() {
     if (!['sync', 'check-catalog'].includes(process.argv[4] || 'sync')) fail('invalid-mode');
     const [major, minor] = process.versions.node.split('.').map(Number);
     if (major < 22 || major === 22 && minor < 20 || typeof fs.globSync !== 'function') fail('node-incompatible');
+    operation = 'home';
     const logicalHome = absolute(process.argv[2]);
     directoryChain(logicalHome);
     const home = fs.realpathSync(logicalHome); // Only the verified account HOME boundary is resolved.
@@ -3415,10 +3431,12 @@ async function main() {
     await acl(home, 'directory');
     const packages = installedPackages(home);
     if (process.argv[4] === 'check-catalog') return 'catalog-ready';
+    operation = 'environment-file';
     const envFile = path.join(home, '.env.local');
     if (info(envFile)) await acl(envFile, 'directory');
     const key = envKey(home);
     if (key) await acl(envFile, 'private');
+    operation = 'active-profile';
     let selected = process.argv[3] || path.join(logicalHome, '.pi/agent');
     if (selected === '~' || selected.startsWith('~/') || windows && selected.startsWith('~\\')) selected = path.join(logicalHome, selected.slice(2));
     selected = absolute(selected);
@@ -3426,6 +3444,7 @@ async function main() {
     if (profile === path.parse(profile).root || profile === home) fail('unsafe-profile');
     directoryChain(profile, true);
     if (info(profile)) {
+        operation = 'models-json';
         const modelsText = readText(path.join(profile, 'models.json'));
         if (modelsText !== null) {
             const models = json(modelsText);
@@ -3434,6 +3453,7 @@ async function main() {
         }
     }
     if (!key) return 'missing-key'; // Never open auth.json or create a profile for absent input.
+    operation = 'auth-lock';
     const auth = path.join(profile, 'auth.json');
     const lockPath = auth + '.lock';
     function inspectLock() {
@@ -3442,6 +3462,7 @@ async function main() {
         return stat;
     }
     inspectLock();
+    operation = 'lock-dependency';
     const dependency = packages.dependency('proper-lockfile');
     if (dependency.data.version !== '4.1.2') fail('lock-version-unsupported');
     const expectedEntry = path.join(dependency.root, 'index.js');
@@ -3452,6 +3473,7 @@ async function main() {
     const lockfile = packages.request(lockEntry); // Only Pi's installed native lock dependency executes.
     if (typeof lockfile.lock !== 'function') fail('lock-unavailable');
     // Preflight existing metadata before creating directories or lock files.
+    operation = 'auth-preflight';
     if (info(profile)) {
         await acl(profile, 'directory');
         if (regular(auth, true)) {
@@ -3459,6 +3481,7 @@ async function main() {
             // Actual content is read only after locking; OAuth may be writing now.
         }
     }
+    operation = 'profile-create';
     fs.mkdirSync(profile, {recursive: true, mode: 0o700});
     directoryChain(profile);
     await acl(profile, 'directory');
@@ -3468,9 +3491,11 @@ async function main() {
     try {
         // realpath:false matches Pi; locking by pathname also survives atomic rename.
         // A short update interval interoperates with Pi's synchronous 10s stale timeout.
+        operation = 'lock-acquire';
         release = await lockfile.lock(auth, {realpath: false, stale: 30000, update: 1000,
             retries: {retries: 30, minTimeout: 100, maxTimeout: 1000, factor: 1.2},
             onCompromised: () => { compromised = true; }});
+        operation = 'auth-read';
         const held = inspectLock();
         if (!held) fail('lock-unverified');
         directoryChain(profile);
@@ -3481,6 +3506,7 @@ async function main() {
         const replacement = {type: 'api_key', key};
         if (JSON.stringify(document['opencode-go']) === JSON.stringify(replacement)) return 'unchanged';
         document['opencode-go'] = replacement;
+        operation = 'auth-write';
         temporary = path.join(profile, '.opencode-go-' + crypto.randomBytes(16).toString('hex'));
         // Empty file first: inherited Windows ACLs are secured before any secret write.
         const fd = fs.openSync(temporary, 'wx', 0o600);
@@ -3502,19 +3528,30 @@ async function main() {
         }
         if (compromised) fail('lock-compromised');
         return 'updated';
+    } catch (error) {
+        // Preserve the failing phase when finally advances to cleanup/release.
+        throw error instanceof GoSetupError ? error : new GoSetupError(failureReason(error));
     } finally {
+        operation = 'auth-cleanup';
         if (temporary && info(temporary)) fs.unlinkSync(temporary);
+        operation = 'lock-release';
         if (release) await release();
     }
 }
 main().then(result => console.log(result)).catch(error => {
-    console.error('Pi Go setup failed: ' + (error instanceof GoSetupError ? error.message : 'operation-failed') + '.');
+    const phase = error instanceof GoSetupError ? error.operation : operation;
+    console.log('go-failure:' + phase + ':' + failureReason(error));
     process.exitCode = 1;
 });
 // END PI_OPENCODE_GO_SETUP
 PI_OPENCODE_GO_JS
-    ); then
-        print_warning "Pi Go setup failed: unsafe paths, credentials, catalog, locking, or permissions. Review these locally and rerun setup."
+    ) || _status=$?
+    if [[ "${_status}" -ne 0 ]]; then
+        if [[ "${_result}" =~ ^go-failure:(${_operations}):(${_reasons})$ ]]; then
+            print_warning "Pi Go setup failed: ${BASH_REMATCH[1]}: ${BASH_REMATCH[2]}. Review this check locally, then rerun setup."
+        else
+            print_warning "Pi Go setup failed: helper-exit-${_status}: diagnostic-unavailable. No safe helper detail was received."
+        fi
         return 1
     fi
     case "${_result}" in
@@ -3522,7 +3559,7 @@ PI_OPENCODE_GO_JS
         updated) PI_OPENCODE_GO_CHANGED=1; print_success "Pi Go credential synchronized in the active Pi profile." ;;
         unchanged) print_debug "Pi Go credential is unchanged." ;;
         catalog-ready) print_debug "Installed Pi supports Go Muse Contributor with native Responses/xhigh." ;;
-        *) print_warning "Pi Go setup failed: invalid helper result."; return 1 ;;
+        *) print_warning "Pi Go setup failed: invalid-helper-result. No safe helper detail was received."; return 1 ;;
     esac
     return 0
 }
@@ -6032,7 +6069,7 @@ run_setup_tasks() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 193 | Last changed: Add Go subscription and Muse Contributor profile${NC}"
+    echo -e "${GRAY}Version 194 | Last changed: Expose safe Go and Plain setup diagnostics${NC}"
 
     if ! acquire_setup_lock; then
         return 1
