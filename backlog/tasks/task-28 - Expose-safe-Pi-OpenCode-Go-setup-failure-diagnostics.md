@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-13 23:30'
-updated_date: '2026-09-14 13:06'
+updated_date: '2026-09-14 13:12'
 labels:
   - bug
   - setup
@@ -59,6 +59,8 @@ All 35 Plain tests and the native manager/Git-hook isolation fixture pass; custo
 ShellCheck, Markdown lint, whitespace checks, and self-review passed. All six Go helpers and all six Plain installers remain identical. No live setup, actual-account cleanup, daemon operations, model requests, or fleet rollout occurred. Native Windows/macOS/ARM execution was not smoke-tested. Changes remain local and uncommitted.
 
 User requested publication and merge into remote main. Fetched origin/main and confirmed it still matches the implementation base (25bfd72), with no incoming changes or existing PR for this branch. Preparing an attributed commit and normal hook-checked PR delivery; no live setup or daemon changes.
+
+Published implementation commit 1581459 and opened PR #96 after normal pre-commit/pre-push hooks passed, including the full default contract suite. Explicit affected PowerShell and native-module fixtures passed during implementation. Main still matched the implementation base at delivery preparation. Recording verification before the requested merge.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
@@ -69,7 +71,7 @@ Expose safe Go setup failure details and clarify preserved Paseo Plain sources o
 Changes:
 
 - All six Go helpers identify a controlled operation and validation/native error code. Bash and PowerShell accept only the exact allowed failure protocol and keep arbitrary output, credentials, and custom paths out of logs. Unknown errors report an explicit fallback rather than an invented cause.
-- Preserve failure status, existing validation and credential-lock behavior, and later Pi/Muse/daemon safety gates. Keep the original failing operation across cleanup.
+- Preserve failure status, validation, credential locking, and later Pi/Muse/daemon safety gates. Preserve the original failing operation across cleanup.
 - Plain warnings distinguish directory/non-Git sources, other repositories, and custom/pinned refs without taking over installations or changing disabled choices.
 - Increment all six setup versions and update documentation and banner fixtures.
 
@@ -77,7 +79,9 @@ Validation:
 
 - 22 Go tests and 35 Plain tests pass, including portable PowerShell wrappers, redaction cases, metadata preservation, native Pi lock/catalog probes, and native Paseo migration/Git-hook isolation.
 - Affected Go/Muse/wiring, package/runtime/prose, AI-agent/model, headless/channel/system-home, skills, and Telegram contracts pass. Explicit PowerShell model/channel/Telegram suites pass.
-- ShellCheck, Markdown lint, whitespace checks, and redacted diff secret scan pass.
+- Normal pre-commit and pre-push hooks passed for implementation commit 1581459: secret scan, full default contract suite, ShellCheck, and Markdown lint.
 
-Limits: Diagnostics do not assert the original machine-specific cause. No live setup, daemon change, model request, or rollout occurred. Native Windows/macOS/ARM smoke tests and optional package registry/dotfiles probes were not run. Changes are local and not published.
+Delivery: <https://github.com/scowalt/machine-setup-scripts/pull/96> targets remote main with the user's approval to merge.
+
+Limits: Diagnostics do not assert the original machine-specific cause. No live setup, daemon change, model request, or rollout occurred. Native Windows/macOS/ARM smoke tests and optional package registry/dotfiles probes were not run.
 <!-- SECTION:FINAL_SUMMARY:END -->
