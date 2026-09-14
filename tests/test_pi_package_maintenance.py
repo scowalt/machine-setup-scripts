@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract v2: managed packages and enabled resources in isolated profiles."""
+"""Contract v3: retain adapter and Claude Bridge registration after dotfiles updates."""
 import json
 import os
 from pathlib import Path
@@ -43,8 +43,9 @@ elif action=='install':
     if state.get('restricted') and package=='npm:pi-mcp-adapter':
         print('npm error code EALLOWREMOTE'); sys.exit(1)
     state['packages']=[p for p in state.get('packages',[]) if identity(p)!=identity(package)]+[package]
+    agent=pathlib.Path(os.environ['PI_CODING_AGENT_DIR'])
     if package.startswith('npm:pi-mcp-adapter'):
-        agent=pathlib.Path(os.environ['PI_CODING_AGENT_DIR']); store=agent/'npm'; store.mkdir(parents=True,exist_ok=True)
+        store=agent/'npm'; store.mkdir(parents=True,exist_ok=True)
         manifest=store/'package.json'; value=json.loads(manifest.read_text()) if manifest.exists() else {}
         version='2.33.0' if state.get('wrong_version') else '2.32.1'
         value.setdefault('dependencies',{})['pi-mcp-adapter']=version if os.environ.get('npm_config_save_exact')=='true' else '^'+version
@@ -58,10 +59,11 @@ elif action=='install':
         if state.get('bad_resource')=='empty': entry.write_text('')
         elif state.get('bad_resource')=='linked': entry.symlink_to(installed/'package.json')
         elif state.get('bad_resource')!='missing': entry.write_text('export default function(pi) {}\n')
-        settings=agent/'settings.json';value=json.loads(settings.read_text()) if settings.exists() else {}
-        entries=value.get('packages',[])
-        if not any((p if isinstance(p,str) else p['source'])==package for p in entries): entries.append(package)
-        value['packages']=entries;settings.write_text(json.dumps(value))
+    # pi install registers packages in the active global settings, not just npm.
+    settings=agent/'settings.json';value=json.loads(settings.read_text()) if settings.exists() else {}
+    entries=value.get('packages',[])
+    if not any((p if isinstance(p,str) else p['source'])==package for p in entries): entries.append(package)
+    value['packages']=entries;settings.write_text(json.dumps(value))
 statefile.write_text(json.dumps(state))
 '''
 
@@ -358,7 +360,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
 
     @unittest.skipUnless(os.environ.get('PI_ADAPTER_DOTFILES_SOURCE'),
                          'Set PI_ADAPTER_DOTFILES_SOURCE for the cross-repository render/setup fixture')
-    def test_dotfiles_and_setup_keep_adapter_enabled_across_repeated_runs(self):
+    def test_dotfiles_and_setup_keep_adapter_and_bridge_enabled_across_repeated_runs(self):
         template = Path(os.environ['PI_ADAPTER_DOTFILES_SOURCE']) / 'private_dot_pi/agent/private_settings.json.tmpl'
         config = self.root / 'chezmoi.json'; config.write_text('{}')
         source = self.root / 'empty-source'; source.mkdir()
@@ -370,6 +372,16 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                         envfile = self.home / '.env.local'
                         envfile.write_text(f'WORK_MACHINE={work}\nBAN_PI_MCP_ADAPTER={disabled}\n')
                         before = envfile.read_bytes()
+                        target = self.agent / 'settings.json'
+                        target.write_text('{"packages":[]}')
+                        # Start with setup registering the bridge before a later
+                        # dotfiles update. Never run real Pi or load extensions.
+                        result = self.run_helper(script, 'bridge')
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertEqual(json.loads(target.read_text())['packages'], ['npm:pi-claude-bridge'])
+                        self.assertIn(['install', 'npm:pi-claude-bridge'], [
+                            json.loads(line) for line in self.statefile.with_suffix('.calls').read_text().splitlines()
+                        ])
                         for _ in range(2):
                             rendered = subprocess.run([
                                 shutil.which('chezmoi'), '--config', str(config), '--source', str(source),
@@ -381,10 +393,13 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                             ], env=self.env, cwd=self.root, capture_output=True, text=True, check=True)
                             settings = json.loads(rendered.stdout)
                             self.assertEqual(PIN in settings['packages'], disabled != '1')
-                            (self.agent / 'settings.json').write_text(rendered.stdout)
-                            result = self.run_helper(script, 'adapter')
-                            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                            self.assertEqual(json.loads((self.agent / 'settings.json').read_text()), settings)
+                            self.assertEqual(settings['packages'].count('npm:pi-claude-bridge'), 1,
+                                             'Dotfiles must retain the enabled bridge registration without another install')
+                            target.write_text(rendered.stdout)
+                            for helper in ('adapter', 'bridge'):
+                                result = self.run_helper(script, helper)
+                                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                                self.assertEqual(json.loads(target.read_text()), settings)
                         self.assertEqual(envfile.read_bytes(), before)
 
     def test_embedded_recovery_policy_is_identical(self):

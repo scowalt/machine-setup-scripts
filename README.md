@@ -130,7 +130,9 @@ PI_PACKAGE_CLI=/absolute/path/to/pi/dist/cli.js \
 
 This probe downloads public packages only into a temporary home. It disables lifecycle scripts and prohibits remote dependency URLs. It tests clean installation, affected-store recovery, repeated runs, and adapter removal. It also uses Pi's SDK to load `2.32.1` and assert registration of `mcp`, `mcpScript`, and `/mcp`. Disabled resources must stay unloaded. The load fixture blocks network calls and uses no model credentials. Linux PowerShell fixtures do not prove native Windows provisioning.
 
-Set `PI_ADAPTER_DOTFILES_SOURCE=/absolute/path/to/dotfiles` when running the contract suite to test repeated template rendering followed by setup. This fixture uses temporary homes, never a live chezmoi apply.
+Set `PI_ADAPTER_DOTFILES_SOURCE=/absolute/path/to/dotfiles` when running the contract suite to test repeated template rendering followed by setup. This fixture also tests that later dotfiles updates retain the Claude Bridge registration from setup. It covers personal and work machines, including the MCP adapter opt-out. The fixture uses temporary homes and mocked Pi commands. It never applies live dotfiles, loads extensions, or makes model requests.
+
+All six setup scripts already run `pi install npm:pi-claude-bridge`. The dotfiles Pi package list must also include `npm:pi-claude-bridge`, or a later chezmoi apply can remove its registration. Installed files alone do not enable the `claude-bridge` provider. If Pi reports `Unknown provider "claude-bridge"`, run `pi install npm:pi-claude-bridge`, then restart Pi or run `/reload`.
 
 ## Shared Node runtime for Pi
 
