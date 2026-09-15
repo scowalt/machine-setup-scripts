@@ -403,6 +403,10 @@ EOF
         uname() { printf 'Linux\n'; }
         paseo_native_linux_preflight() { return 0; }
         paseo_existing_managed_service_check() { return 0; }
+        configure_paseo_muse_profile() {
+            [[ "$1" == "verify-owner" ]] || return 1
+            PASEO_MUSE_DEFER_DAEMON_SETUP=0
+        }
         install_paseo_cli() {
             PASEO_VALIDATED_CMD="${tmp_dir}/bin/paseo"
             PASEO_VALIDATED_NODE=/bin/bash
@@ -921,5 +925,6 @@ assert_failed_cleanup_preserves_enablement
 assert_managed_launchdaemon_is_preserved
 assert_unchanged_launchdaemon_is_not_restarted
 assert_macos_headless_noncanary_is_nonfatal
+python3 "${repo_root}/tests/test_paseo_headless_provenance.py"
 
 printf '✓ headless Paseo daemon contract checks passed\n'

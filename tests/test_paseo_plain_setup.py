@@ -114,8 +114,21 @@ class SetupTest(unittest.TestCase):
             file = self.bin / command
             file.write_text(FAKE if command == 'paseo' else '#!/bin/sh\nexit 99\n')
             file.chmod(0o700)
+        self.cli_package = self.bin / 'node_modules/@getpaseo/cli'
+        (self.cli_package / 'bin').mkdir(parents=True)
+        (self.cli_package / 'package.json').write_text(json.dumps({
+            'name': '@getpaseo/cli', 'version': '0.8.0', 'bin': {'paseo': 'bin/paseo'}}))
+        (self.bin / 'paseo').rename(self.cli_package / 'bin/paseo')
+        (self.bin / 'paseo').symlink_to(self.cli_package / 'bin/paseo')
+        # Windows npm's shim is inspected, never executed by a shell.
+        (self.bin / 'paseo.cmd').write_text('@echo off\n')
+        # Keep real Paseo/Pi installations out of fallback discovery, including Bun cache hardlinks.
+        for name in ('node', 'bash', 'dirname', 'head', 'tr', 'cut', 'env'):
+            command = shutil.which(name)
+            if command:
+                (self.bin / name).symlink_to(command)
         self.env = {**os.environ, 'HOME': str(self.home), 'PASEO_HOME': str(self.paseo),
-                    'PATH': f'{self.bin}{os.pathsep}{os.environ["PATH"]}'}
+                    'PATH': str(self.bin)}
         self.state = {'plugins': []}
         self.configure()
 
@@ -137,6 +150,103 @@ class SetupTest(unittest.TestCase):
     def calls(self):
         file = self.paseo / 'calls.jsonl'
         return [json.loads(line) for line in file.read_text().splitlines()] if file.exists() else []
+
+    def test_old_path_cli_does_not_shadow_compatible_bun_installation(self):
+        old = self.bin / 'paseo'
+        old.write_text('#!/bin/sh\nprintf "old-cli-executed" > "$HOME/old-cli-called"\nexit 1\n')
+        package = self.home / '.bun/install/global/node_modules/@getpaseo/cli'
+        (package / 'bin').mkdir(parents=True)
+        (package / 'package.json').write_text(json.dumps({
+            'name': '@getpaseo/cli', 'version': '0.8.0', 'bin': {'paseo': 'bin/paseo'}}))
+        (package / 'bin/paseo').write_text(FAKE)
+        (package / 'bin/paseo').chmod(0o700)
+        managed_bin = self.home / '.bun/bin'
+        managed_bin.mkdir()
+        (managed_bin / 'paseo').symlink_to(package / 'bin/paseo')
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('installed', result.stdout)
+        self.assertFalse((self.home / 'old-cli-called').exists())
+        self.assertTrue(old.exists(), 'Selection does not itself authorize cleanup')
+
+    def test_incompatible_cli_is_not_executed_before_status(self):
+        metadata = self.cli_package / 'package.json'
+        document = json.loads(metadata.read_text())
+        document['version'] = '0.4.0'
+        metadata.write_text(json.dumps(document))
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('verified compatible Paseo 0.8.x CLI', result.stdout)
+        self.assertEqual(self.calls(), [])
+
+    def test_incompatible_managed_cli_does_not_fall_back_to_older_path_cli(self):
+        package = self.home / '.bun/install/global/node_modules/@getpaseo/cli'
+        (package / 'bin').mkdir(parents=True)
+        (package / 'package.json').write_text(json.dumps({
+            'name': '@getpaseo/cli', 'version': '0.9.0', 'bin': {'paseo': 'bin/paseo'}}))
+        (package / 'bin/paseo').write_text('process.exit(99)')
+        (package / 'bin/paseo').chmod(0o700)
+        directory = self.home / '.bun/bin'
+        directory.mkdir()
+        (directory / 'paseo').symlink_to(package / 'bin/paseo')
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('deferred', result.stdout)
+        self.assertEqual(self.calls(), [])
+
+    def test_unverified_linked_or_foreign_package_identity_is_not_executed(self):
+        metadata = self.cli_package / 'package.json'
+        original = metadata.read_text()
+        for document in ('{bad', original.replace('@getpaseo/cli', 'paseo'),
+                         original.replace('"version":', '"version":"0.4.0","version":'),
+                         original.replace('bin/paseo', '../foreign')):
+            metadata.write_text(document)
+            result = self.run_installer()
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertIn('deferred', result.stdout)
+            self.assertEqual(self.calls(), [])
+        metadata.write_text(original)
+        outside = self.home / 'metadata'
+        metadata.rename(outside)
+        metadata.symlink_to(outside)
+        self.assertIn('deferred', self.run_installer().stdout)
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(outside.read_text(), original)
+
+    def test_installed_bun_cache_hardlinks_are_supported(self):
+        for file in (self.cli_package / 'package.json', self.cli_package / 'bin/paseo'):
+            os.link(file, self.home / (file.name + '-cache'))
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('installed', result.stdout)
+
+    def test_linux_system_home_alias_checks_the_destination_not_symlink_mode(self):
+        code = installer('ubuntu.sh')
+        start = code.index('function cliHomeAlias')
+        end = code.index('function cliRegular', start)
+        fixture = '''
+const path = require('node:path'), assert = require('node:assert/strict');
+const fs = {readlinkSync: () => '/var/home'};
+const directory = () => ({uid:0, mode:0o755, isDirectory:()=>true, isSymbolicLink:()=>false});
+const alias = {uid:0, mode:0o120777, isDirectory:()=>false, isSymbolicLink:()=>true};
+const cliInfo = file => file === '/home' ? alias : directory();
+''' + code[start:end] + '''
+assert.equal(cliDirectory('/home'), process.platform === 'linux');
+console.log('alias supported');
+'''
+        result = subprocess.run([NODE, '-'], input=fixture, text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_explicit_retained_cli_does_not_fall_back_to_another_installation(self):
+        text = (ROOT / 'ubuntu.sh').read_text()
+        function = 'install_paseo_plain() {' + text.split('install_paseo_plain() {', 1)[1].split('\ninstall_portless_cli()', 1)[0]
+        (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
+        result = subprocess.run(['bash'], input='print_warning() { printf "%s\\n" "$1"; }; print_success() { printf "%s\\n" "$1"; };\n' + function + '\ninstall_paseo_plain\n',
+                                env={**self.env, 'PASEO_VALIDATED_CMD': str(self.home / 'missing')},
+                                text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('deferred', result.stdout)
+        self.assertEqual(self.calls(), [])
 
     def test_fresh_install_targets_local_daemon_and_enables_only_manual_controls(self):
         result = self.run_installer()
@@ -455,6 +565,35 @@ paseo_command_target() { command -v paseo; }
                                         env={**self.env, 'PASEO_CHANNEL': channel}, text=True, capture_output=True, timeout=10)
                 self.assertNotEqual(result.returncode, 0, 'fake Bun deliberately stops before any real install')
                 self.assertIn(f'@getpaseo/cli@{tag}', (self.home / 'bun-args').read_text(), (script, channel))
+
+    def test_go_failure_main_block_still_reaches_verified_plain_selection(self):
+        managed = self.home / '.bun/install/global/node_modules/@getpaseo/cli'
+        shutil.copytree(self.cli_package, managed)
+        directory = self.home / '.bun/bin'
+        directory.mkdir()
+        (directory / 'paseo').symlink_to(managed / 'bin/paseo')
+        (self.cli_package / 'bin/paseo').write_text('process.exit(1)')
+        text = (ROOT / 'ubuntu.sh').read_text()
+        main = text.split('run_setup_tasks() {', 1)[1]
+        block = main[main.index('    if ! prepare_pi_profile_permissions; then'):main.index('    print_section "Final Updates"')]
+        wrapper = 'install_paseo_plain() {' + text.split('install_paseo_plain() {', 1)[1].split('\ninstall_portless_cli()', 1)[0]
+        inert = ('prepare_pi_profile_permissions', 'remove_rtk_resources', 'remove_attention_span_resources',
+                 'setup_matt_pocock_skills', 'remove_pi_prose', 'install_pi_cli', 'configure_pi_defaults',
+                 'remove_pi_synthetic_models', 'seed_pi_zai_models', 'setup_simple_english_skill',
+                 'setup_show_me_skill', 'setup_pr_lens_skill', 'configure_pi_skill_ownership',
+                 'remove_impeccable_resources', 'remove_compound_engineering_resources')
+        code = 'set -eu\n_setup_had_errors=0\n_pi_go_ready=0\nPI_PROFILE_MUTATIONS_BLOCKED=0\n'
+        code += '\n'.join(f'{fn}() {{ :; }}' for fn in inert) + '\n'
+        code += 'print_warning() { printf "%s\\n" "$1"; }; print_success() { printf "%s\\n" "$1"; };\n'
+        code += 'configure_pi_opencode_go() { return 1; }\n'
+        code += 'setup_headless_paseo_daemon() { printf unexpected-daemon > "$HOME/daemon-called"; return 1; }\n'
+        code += wrapper + '\nexercise() {\n' + block + '\n}\nexercise\nprintf "result:%s\\n" "${_setup_had_errors}"\n'
+        (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
+        result = subprocess.run(['bash'], input=code, env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('result:1', result.stdout, 'Go failure must remain a failed setup result')
+        self.assertIn('Paseo Plain installed', result.stdout)
+        self.assertFalse((self.home / 'daemon-called').exists())
 
     def test_missing_prerequisites_are_deferred_without_invoking_real_tools(self):
         self.env['PATH'] = ''

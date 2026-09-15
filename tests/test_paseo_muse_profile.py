@@ -56,6 +56,7 @@ os.release = () => state.wsl ? 'microsoft-standard-WSL2' : 'fixture';
 state.calls = [];
 state.nodeOptions = process.env.NODE_OPTIONS ?? null;
 state.nodePath = process.env.NODE_PATH ?? null;
+state.mode = process.argv[2] ?? null;
 state.forbiddenRead = false;
 state.running = !!state.running;
 const saved = () => original.writeFileSync(stateFile, JSON.stringify(state));
@@ -70,7 +71,7 @@ function procRows() {
       env:{HOME:state.ownerHome || home, ...(Object.hasOwn(state, 'ownerPaseoHome') ? {PASEO_HOME:state.ownerPaseoHome} : {})},cgroup:'0:'+group()});
   }
   if (state.otherWriter || state.leftover) rows.push({pid:4300,parent:1,command:state.otherWriter || 'renamed-worker',
-    env:{HOME:home,PASEO_HOME:paseo},cgroup:state.leftover ? '0:'+group() : '0::/other.scope'});
+    env:{HOME:home,...(state.hiddenWriter ? {} : {PASEO_HOME:paseo})},cgroup:state.leftover ? '0:'+group() : '0::/other.scope'});
   return rows;
 }
 function group() { return `:/user.slice/user-${uid}.slice/user@${uid}.service/app.slice/paseo.service`; }
@@ -254,11 +255,11 @@ class MuseProfileTests(unittest.TestCase):
         self.preload.write_text(PRELOAD)
         self.env = {'PATH': os.environ['PATH'], 'HOME': str(self.home), 'MUSE_FIXTURE_ROOT': str(self.root)}
 
-    def run_helper(self, script='ubuntu.sh', suffix=''):
+    def run_helper(self, script='ubuntu.sh', suffix='', mode=None):
         (self.root / 'state.json').write_text(json.dumps(self.state))
         code = self.root / 'profile.cjs'
         code.write_text(embedded(script) + suffix)
-        result = subprocess.run([NODE, '--require', str(self.preload), str(code)], env=self.env,
+        result = subprocess.run([NODE, '--require', str(self.preload), str(code)] + ([] if mode is None else [mode]), env=self.env,
                                 text=True, capture_output=True, timeout=15)
         self.state = json.loads((self.root / 'state.json').read_text())
         self.assertNotIn(SECRET, result.stdout + result.stderr)
@@ -353,6 +354,139 @@ class MuseProfileTests(unittest.TestCase):
         self.assertEqual(self.state['calls'], [])
         self.assertEqual(self.config.stat().st_mtime_ns, before.st_mtime_ns)
         self.assertEqual(self.config.stat().st_ino, before.st_ino)
+
+    def test_verify_owner_is_read_only_even_when_profile_or_credentials_need_refresh(self):
+        for platform in ('linux', 'darwin'):
+            with self.subTest(platform=platform):
+                self.seed_service(platform)
+                self.save({'needs': 'repair', 'keep': SECRET})
+                self.env['PASEO_MUSE_GO_CHANGED'] = '1'
+                pid = self.paseo / 'paseo.pid'
+                before = (self.config.read_bytes(), self.config.stat().st_mtime_ns, pid.read_bytes(), pid.stat().st_ino)
+                self.state['forbiddenReadPaths'] = [str(self.config)]
+                result = self.run_helper(mode='verify-owner')
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertIn('PASEO_MUSE_OWNER_VERIFIED', result.stdout)
+                self.assertNotIn('PASEO_MUSE_DEFER_DAEMON_SETUP=1', result.stdout)
+                self.assertEqual(self.mutations(), [])
+                self.assertTrue(self.state['running'])
+                self.assertFalse(self.state['forbiddenRead'])
+                self.assertEqual((self.config.read_bytes(), self.config.stat().st_mtime_ns, pid.read_bytes(), pid.stat().st_ino), before)
+                self.assertEqual(set(p.name for p in self.paseo.iterdir()), {'config.json', 'paseo.pid'})
+
+    def test_verify_owner_rejects_unsafe_owners_even_when_profile_is_unchanged(self):
+        for platform in ('linux', 'darwin'):
+            for change, reason in (({'selfHosted': True}, 'self-hosted-setup'),
+                                   ({'otherWriter': 'Paseo Supervisor'}, 'unknown-writer'),
+                                   ({'ownerPaseoHome': '/unknown-home'}, 'service-home-mismatch'),
+                                   ({'unknownAncestor': True}, 'ancestry-unverified')):
+                with self.subTest(platform=platform, change=change):
+                    self.state = {}
+                    self.seed_service(platform)
+                    self.save({'daemon': {'agentProfiles': [PROFILE]}})
+                    self.state.update(change)
+                    before = self.config.read_bytes()
+                    result = self.run_helper(mode='verify-owner')
+                    self.assertIn(reason, result.stdout)
+                    self.assertIn('PASEO_MUSE_DEFER_DAEMON_SETUP=1', result.stdout)
+                    self.assertNotIn('PASEO_MUSE_OWNER_VERIFIED', result.stdout)
+                    self.assertEqual(self.mutations(), [])
+                    self.assertEqual(self.config.read_bytes(), before)
+                    self.assertTrue(self.state['running'])
+            self.state = {}
+            self.seed_service(platform)
+            pid = self.paseo / 'paseo.pid'
+            data = json.loads(pid.read_text())
+            data['desktopManaged'] = True
+            pid.write_text(json.dumps(data))
+            result = self.run_helper(mode='verify-owner')
+            self.assertIn('desktop-owned', result.stdout)
+            self.assertEqual(self.mutations(), [])
+
+    def test_verify_owner_missing_pid_does_not_approve_an_active_unknown_service(self):
+        for platform in ('linux', 'darwin'):
+            with self.subTest(platform=platform):
+                self.state = {}
+                self.seed_service(platform)
+                (self.paseo / 'paseo.pid').unlink()
+                self.state['renamed'] = True
+                before = self.config.read_bytes() if self.config.exists() else None
+                result = self.run_helper(mode='verify-owner')
+                self.assertIn('PASEO_MUSE_DEFER_DAEMON_SETUP=1', result.stdout)
+                self.assertNotIn('PASEO_MUSE_OWNER_VERIFIED', result.stdout)
+                self.assertEqual(self.mutations(), [])
+                self.assertTrue(self.state['running'])
+                self.assertFalse((self.paseo / 'paseo.pid').exists())
+                self.assertEqual(self.config.read_bytes() if self.config.exists() else None, before)
+
+    def test_verify_owner_missing_pid_rejects_leftover_service_processes(self):
+        self.env['HEADLESS'] = '1'
+        self.state.update({'leftover': True, 'hiddenWriter': True, 'serviceOverrides': {'ActiveState': 'inactive', 'SubState': 'dead', 'MainPID': '0'}})
+        result = self.run_helper(mode='verify-owner')
+        self.assertIn('PASEO_MUSE_DEFER_DAEMON_SETUP=1', result.stdout)
+        self.assertNotIn('PASEO_MUSE_OWNER_VERIFIED', result.stdout)
+        self.assertEqual(self.mutations(), [])
+
+    def test_verify_owner_does_not_create_a_missing_profile_home(self):
+        self.paseo.rmdir()
+        self.env['HEADLESS'] = '1'
+        result = self.run_helper(mode='verify-owner')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('PASEO_MUSE_OWNER_VERIFIED', result.stdout)
+        self.assertFalse(self.paseo.exists())
+        self.assertEqual(self.mutations(), [])
+
+    def test_verify_owner_preserves_native_platform_canary_and_custom_home_gates(self):
+        for state, env in (({'platform': 'linux'}, {}),
+                           ({'platform': 'linux', 'wsl': True}, {'HEADLESS': '1'}),
+                           ({'platform': 'win32'}, {'HEADLESS': '1'}),
+                           ({'platform': 'darwin'}, {'HEADLESS': '1'})):
+            with self.subTest(state=state):
+                self.state = state
+                self.env.pop('HEADLESS', None)
+                self.env.update(env)
+                result = self.run_helper(mode='verify-owner')
+                self.assertIn('headless-control-not-authorized', result.stdout)
+                self.assertIn('PASEO_MUSE_DEFER_DAEMON_SETUP=1', result.stdout)
+                self.assertFalse(self.config.exists())
+                self.assertEqual(self.mutations(), [])
+        self.select_home(self.home / 'profiles/custom')
+        self.state['platform'] = 'linux'
+        result = self.run_helper(mode='verify-owner')
+        self.assertIn('PASEO_MUSE_DEFER_DAEMON_SETUP=1', result.stdout)
+        self.assertIn('custom home', result.stdout)
+        self.assertNotIn('PASEO_MUSE_OWNER_VERIFIED', result.stdout)
+        self.assertFalse(self.config.exists())
+        self.assertEqual(self.mutations(), [])
+
+    def test_verify_owner_accepts_exact_old_and_bound_provenance_wrappers(self):
+        for platform in ('linux', 'darwin'):
+            self.seed_service(platform)
+            self.save({'daemon': {'agentProfiles': [PROFILE]}})
+            wrapper = self.home / '.local/bin/paseo-daemon-start'
+            old = wrapper.read_text()
+            new = old.replace("exec '/fixture/paseo'", "export PASEO_SETUP_CLI='/fixture/paseo'\nexec '/fixture/paseo'")
+            for text in (old, new):
+                with self.subTest(platform=platform, lines=len(text.splitlines())):
+                    wrapper.write_text(text)
+                    result = self.run_helper(mode='verify-owner')
+                    self.assertIn('PASEO_MUSE_OWNER_VERIFIED', result.stdout)
+                    self.assertEqual(self.mutations(), [])
+            for bad in (new.replace("export PASEO_SETUP_CLI='/fixture/paseo'", "export PASEO_SETUP_CLI='/different/paseo'"),
+                        new.replace("export PASEO_SETUP_CLI='/fixture/paseo'", 'export PASEO_SETUP_CLI="$OTHER"'),
+                        new.replace("[[ -x '/fixture/paseo' ]]", "[[ -x '/different/paseo' ]]"),
+                        new.replace("export PASEO_SETUP_CLI=", "# export PASEO_SETUP_CLI="),
+                        new + '# modified\n'):
+                wrapper.write_text(bad)
+                result = self.run_helper(mode='verify-owner')
+                self.assertIn('unmanaged-wrapper', result.stdout)
+                self.assertEqual(self.mutations(), [])
+            wrapper.write_text(new)
+            self.save({})
+            result = self.run_helper()  # Later normal Muse updates accept the new wrapper too.
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertEqual(self.managed(), PROFILE)
+            self.assertTrue(any('atomic-merge' in call for call in self.mutations()))
 
     def test_deleted_profile_recreated_without_duplicate(self):
         self.save({'daemon': {'agentProfiles': []}})
@@ -945,6 +1079,32 @@ class MuseProfileTests(unittest.TestCase):
                 self.assertIsNone(state['nodeOptions'])
                 self.assertIsNone(state['nodePath'])
                 self.assertEqual(self.managed(), PROFILE)
+
+    def test_bash_verify_owner_argument_and_positive_receipt_gate(self):
+        env, marker = self.prepare_poisoned_wrapper()
+        self.seed_service()
+        env.update(HEADLESS='1')
+        self.save({'daemon': {'agentProfiles': [PROFILE]}})
+        before = self.config.read_bytes()
+        for name in SCRIPTS[:-1]:
+            with self.subTest(script=name):
+                text = (ROOT / name).read_text()
+                function = 'configure_paseo_muse_profile() {' + text.split('configure_paseo_muse_profile() {', 1)[1].split('\ninstall_paseo_plain() {', 1)[0]
+                script = self.root / 'wrapper.sh'
+                script.write_text('set -eu\nprint_warning() { :; }; print_success() { :; }; print_debug() { :; }\n' + function +
+                    '\nconfigure_paseo_muse_profile verify-owner\n[[ "${PASEO_MUSE_DEFER_DAEMON_SETUP}" == 0 ]]\n')
+                (self.root / 'state.json').write_text(json.dumps(self.state))
+                result = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                state = json.loads((self.root / 'state.json').read_text())
+                self.assertEqual(state['mode'], 'verify-owner')
+                self.assertEqual(self.config.read_bytes(), before)
+                self.assertFalse(marker.exists())
+                self.assertFalse(any('atomic-merge' in call or 'stop' in call for call in state['calls']))
+        # A successful Node exit without the positive receipt must not authorize installation.
+        (self.root / 'bin/node').write_text('#!/bin/bash\nprintf "unexpected\\n"\n')
+        result = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True, timeout=15)
+        self.assertNotEqual(result.returncode, 0)
 
     def test_empty_override_guidance_and_skip_flag_reach_bash_caller(self):
         env, marker = self.prepare_poisoned_wrapper()

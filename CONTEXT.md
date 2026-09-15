@@ -28,6 +28,10 @@ _Avoid_: System Node, Pi-only runtime
 A named Paseo agent launch choice included in the desired machine state. Its managed core consists of the agent provider, model, and reasoning level.
 _Avoid_: Agent instance, Desktop preference
 
+**Surplus Paseo CLI installation**:
+A verified redundant global Paseo CLI installation in a known package-manager location, separate from the retained CLI. Age or version alone does not establish this status.
+_Avoid_: Abandoned Paseo, old Paseo
+
 **OpenCode Go subscription**:
 A coding subscription that provides model access for Pi. It is distinct from paid OpenCode Zen usage and the OpenCode CLI.
 _Avoid_: OpenCode installation, Zen subscription

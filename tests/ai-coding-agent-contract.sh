@@ -71,7 +71,7 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '^configure_pi_opencode_go\(\)' 'Pi Go credential helper'
     assert_contains "${file}" '^configure_paseo_muse_profile\(\)' 'managed Muse profile helper'
     assert_order "${file}" '^[[:space:]]+elif install_pi_cli; then$' '^[[:space:]]+if configure_pi_opencode_go; then$' 'Pi installed before Go authentication'
-    assert_order "${file}" '^[[:space:]]+if configure_pi_opencode_go; then$' '^[[:space:]]+configure_paseo_muse_profile \|\| _setup_had_errors=1$' 'Go validated before Muse profile setup'
+    assert_order "${file}" '^[[:space:]]+if configure_pi_opencode_go; then$' '^[[:space:]]+configure_paseo_muse_profile( sync)? \|\| _setup_had_errors=1$' 'Go validated before Muse profile setup'
     assert_contains "${file}" '^setup_pi_mcp_adapter\(\)' 'Pi MCP adapter setup function'
     assert_contains "${file}" 'npm:pi-mcp-adapter' 'Pi MCP adapter package source'
     assert_contains "${file}" '^[[:space:]]+setup_pi_mcp_adapter \|\| _setup_had_errors=1$' 'Pi MCP adapter main wiring'

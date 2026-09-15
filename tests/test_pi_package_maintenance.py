@@ -128,7 +128,7 @@ print_error() { printf 'ERROR: %s\\n' "$*"; }
         # Execute each real orchestration tail and entry point. All unrelated
         # provisioning is replaced at function boundaries; no setup script is sourced.
         for script in (*BASH, *(['win.ps1'] if PWSH else [])):
-            for failure in ('adapter', 'bridge', 'companions', 'goal', 'subagents', 'rpiv', 'prose', 'prepare', 'none'):
+            for failure in ('adapter', 'bridge', 'companions', 'goal', 'subagents', 'rpiv', 'prose', 'prepare', 'permissions', 'none'):
                 with self.subTest(script=script, failure=failure):
                     text = (ROOT / script).read_text()
                     windows = script.endswith('.ps1')
@@ -138,6 +138,7 @@ print_error() { printf 'ERROR: %s\\n' "$*"; }
                         for key, pair in FUNCTIONS.items():
                             code += '\nfunction ' + pair[1] + ' { Write-Host "PACKAGE-STEP:' + key + '"; return $' + ('false' if key == failure else 'true') + ' }'
                         code += '\nfunction Prepare-PiMcpAdapter { return $' + ('false' if failure == 'prepare' else 'true') + ' }'
+                        code += '\nfunction Prepare-PiProfilePermissions { return $' + ('false' if failure == 'permissions' else 'true') + ' }'
                         code += '\nfunction Remove-PiProse { return $' + ('false' if failure == 'prose' else 'true') + ' }'
                         code += '''
 function Test-EnvLocalFlag { return $false }
@@ -155,6 +156,7 @@ function Complete-SetupLog { Write-Host 'LOG-FINALIZED' }
                         for key, pair in FUNCTIONS.items():
                             code += '\n' + pair[0] + '() { echo "PACKAGE-STEP:' + key + '"; return ' + ('1' if key == failure else '0') + '; }'
                         code += '\nprepare_pi_mcp_adapter() { return ' + ('1' if failure == 'prepare' else '0') + '; }'
+                        code += '\nprepare_pi_profile_permissions() { return ' + ('1' if failure == 'permissions' else '0') + '; }'
                         code += '\nremove_pi_prose() { return ' + ('1' if failure == 'prose' else '0') + '; }'
                         code += '''
 print_warning() { printf '%s\\n' "$*"; }
@@ -163,8 +165,8 @@ start_setup_log() { :; }
 finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
 '''
                         tail = extract(script, 'run_setup_tasks')
-                        tail = tail[re.search(r'^    (?:if ! )?remove_pi_prose', tail, re.M).start():]
-                        code += '\nrun_setup_tasks() {\nlocal _setup_had_errors=0\n' + tail
+                        tail = tail[re.search(r'^    if ! prepare_pi_profile_permissions', tail, re.M).start():]
+                        code += '\nrun_setup_tasks() {\nlocal _setup_had_errors=0 _pi_go_ready=0 PI_PROFILE_MUTATIONS_BLOCKED=0\n' + tail
                         code += '\n' + extract(script, 'main') + '\nmain\n'
                         command = ['bash', '--noprofile', '--norc']
                     result = subprocess.run(command, input=code, env=self.env, cwd=self.root, capture_output=True, text=True, timeout=15)
@@ -172,7 +174,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                     self.assertIn('UNRELATED-CONTINUED', result.stdout)
                     self.assertIn('LOG-FINALIZED', result.stdout)
                     if failure != 'none': self.assertNotIn('Setup complete!', result.stdout)
-                    if failure in ('prose', 'prepare'):
+                    if failure in ('prose', 'prepare', 'permissions'):
                         self.assertNotIn('PACKAGE-STEP:', result.stdout)
                     else:
                         self.assertIn('PACKAGE-STEP:goal', result.stdout)

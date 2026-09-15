@@ -105,7 +105,11 @@ async function smoke() {
       fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '');
       fs.symlinkSync(git, path.join(bin, 'git'));
       fs.writeFileSync(path.join(bin, 'pi'), '#!/bin/sh\nexit 99\n', {mode:0o700});
-      fs.writeFileSync(path.join(bin, 'paseo'), `#!/usr/bin/env node\nimport(${JSON.stringify(pathToFileURL(self).href)});\n`, {mode:0o700});
+      const cli = path.join(bin, 'node_modules/@getpaseo/cli');
+      fs.mkdirSync(path.join(cli, 'bin'), {recursive:true});
+      fs.writeFileSync(path.join(cli, 'package.json'), JSON.stringify({name:'@getpaseo/cli', version:'0.8.0', bin:{paseo:'bin/paseo'}}));
+      fs.writeFileSync(path.join(cli, 'bin/paseo'), `#!/usr/bin/env node\nimport(${JSON.stringify(pathToFileURL(self).href)});\n`, {mode:0o700});
+      fs.symlinkSync(path.join(cli, 'bin/paseo'), path.join(bin, 'paseo'));
       fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({version:1, pluginsEnabled:true,
         daemon:{listen:'127.0.0.1:19991'}, plugins:{unrelated:{source:'directory', path:'/fixture/other', enabled:false}}}));
       const run = (command, args, options = {}) => {

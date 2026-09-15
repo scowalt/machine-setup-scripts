@@ -891,9 +891,10 @@ configure_paseo_muse_profile() {
         print_warning "Paseo Muse deferred: Node.js is unavailable. Rerun setup outside Paseo after installing Node.js."
         return 0
     fi
-    local result status=0 line
+    local result status=0 line verified=0
+    local _mode="${1:-sync}"
     result=$(HEADLESS="${HEADLESS:-}" PASEO_MACOS_HEADLESS_CANARY="${PASEO_MACOS_HEADLESS_CANARY:-}" \
-        PASEO_MUSE_GO_CHANGED="${PI_OPENCODE_GO_CHANGED:-0}" env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - 2>/dev/null <<'PASEO_MUSE_PROFILE_JS'
+        PASEO_MUSE_GO_CHANGED="${PI_OPENCODE_GO_CHANGED:-0}" env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${_mode}" 2>/dev/null <<'PASEO_MUSE_PROFILE_JS'
 // BEGIN PASEO MUSE PROFILE
 // Paseo 0.8 AgentProfileSchema uses z.string() for IDs (not PluginIdSchema).
 // pid-lock.js reserves <home>/paseo.pid before starting its config-owning worker.
@@ -912,6 +913,8 @@ const platform = process.platform;
 const uid = process.getuid?.() ?? 0;
 const headless = process.env.HEADLESS === '1';
 const refresh = process.env.PASEO_MUSE_GO_CHANGED === '1';
+const mode = process.argv[2] || 'sync';
+const verifyOnly = mode === 'verify-owner';
 const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 class Refusal extends Error { constructor(code, failed = false) { super(code); this.code = code; this.failed = failed; } }
 const refuse = code => { throw new Refusal(code); };
@@ -1215,12 +1218,13 @@ function checkWrapper() {
     const lines = snap.text?.trimEnd().split('\n');
     // Match setup's shell-quoted HOME without executing the wrapper or sourcing it.
     const quoted = "'" + logicalHome.replace(/'/g, "'\\''") + "'";
-    if (!lines || lines.length !== 8 || lines[0] !== '#!/bin/bash' || lines[1] !== `# ${marker}` ||
+    const exec = lines?.at(-1)?.match(/^exec ('[^'\r\n]+') daemon start --foreground --listen '[^'\r\n]+'$/);
+    if (!lines || ![8, 9].includes(lines.length) || lines[0] !== '#!/bin/bash' || lines[1] !== `# ${marker}` ||
         lines[2] !== 'set -euo pipefail' || lines[3] !== `export HOME=${quoted}` ||
         !/^export PATH='[^'\r\n]*'$/.test(lines[4]) ||
         !/^\[\[ -x '[^'\r\n]+' \]\] \|\| exit 127$/.test(lines[5]) ||
-        !/^\[\[ -x '[^'\r\n]+' \]\] \|\| exit 127$/.test(lines[6]) ||
-        !/^exec '[^'\r\n]+' daemon start --foreground --listen '[^'\r\n]+'$/.test(lines[7])) refuse('unmanaged-wrapper');
+        !exec || lines[6] !== `[[ -x ${exec[1]} ]] || exit 127` ||
+        lines.length === 9 && lines[7] !== `export PASEO_SETUP_CLI=${exec[1]}`) refuse('unmanaged-wrapper');
     return {file, snap};
 }
 function sameHome(value) { return accountRoots.includes(value); }
@@ -1418,6 +1422,7 @@ function lockUnchanged() {
     if (!heldLock || !same(heldLock.s, current.s) || current.text !== heldLock.text) fail('pid-lock-changed');
 }
 async function main() {
+    if (!['sync', 'verify-owner'].includes(mode)) fail('invalid-mode');
     logicalHome = path.resolve(os.homedir());
     // HOME is trusted only for the effective account, not an arbitrary profile link.
     const accountHome = path.resolve(os.userInfo().homedir);
@@ -1445,9 +1450,15 @@ async function main() {
         // not undo this transaction's verified custom-home owner selection.
         console.log('PASEO_MUSE_DEFER_DAEMON_SETUP=1');
         console.log('Paseo Muse custom home: later managed-daemon setup is skipped. Keep this owner\'s launch environment and update that owner separately.');
+        if (verifyOnly) return;
     }
-    const initial = snapshot(configPath);
-    if (merge(initial) === null && !refresh) { console.log('PASEO_MUSE_UNCHANGED'); return; }
+    if (verifyOnly && (!headless || !['linux', 'darwin'].includes(platform) ||
+        platform === 'linux' && /microsoft/i.test(os.release()) ||
+        platform === 'darwin' && process.env.PASEO_MACOS_HEADLESS_CANARY !== '1')) refuse('headless-control-not-authorized');
+    if (!verifyOnly) {
+        const initial = snapshot(configPath);
+        if (merge(initial) === null && !refresh) { console.log('PASEO_MUSE_UNCHANGED'); return; }
+    }
     if (process.env.PASEO_AGENT_ID) refuse('self-hosted-setup');
     const existing = pidInfo();
     const rows = inventory();
@@ -1460,6 +1471,26 @@ async function main() {
         if (!owner) refuse('unknown-owner');
         if (!same(existing.snap.s, snapshot(pidPath).s) || !same(owner.unit.s, snapshot(owner.file).s) ||
             !same(owner.wrapper.snap.s, snapshot(owner.wrapper.file).s)) refuse('ownership-changed');
+    } else if (candidates(rows).length) refuse('unknown-writer');
+    // This read-only preflight must not depend on whether the profile needs a merge.
+    // The caller retains the existing lifecycle implementation; no locks or files here.
+    if (verifyOnly) {
+        // A missing PID file is not evidence that the native service stopped.
+        if (!existing.info) {
+            if (platform === 'linux') {
+                const state = serviceState();
+                const stopped = state.ActiveState === 'inactive' && state.SubState === 'dead' ||
+                    state.ActiveState === 'failed' && state.SubState === 'failed';
+                if (!['loaded', 'not-found'].includes(state.LoadState) || !stopped || state.MainPID !== '0' ||
+                    rows.some(row => inGroup(row, state.ControlGroup))) refuse('service-owner-unresolved');
+            } else if (platform === 'darwin' && launchList().some(entry => entry.label === label)) {
+                // A loaded launchd job can relaunch without a current PID. Do not replace its owner.
+                refuse('service-owner-unresolved');
+            }
+        }
+        console.log('PASEO_MUSE_OWNER_VERIFIED'); return;
+    }
+    if (owner) {
         console.log('PASEO_MUSE_RESTARTING');
         await checkpoint();
         // Arm restoration BEFORE stop: a timeout/failure can still have stopped it.
@@ -1467,7 +1498,7 @@ async function main() {
         owner.stop();
         await checkpoint();
         owner.stopped();
-    } else if (candidates(rows).length) refuse('unknown-writer');
+    }
     ensureNoWriters(owner);
     checkedPath(paseoHome, true);
     fs.mkdirSync(paseoHome, {recursive: true, mode: 0o700});
@@ -1537,6 +1568,7 @@ PASEO_MUSE_PROFILE_JS
     while IFS= read -r line; do
         case "${line}" in
             PASEO_MUSE_DEFER_DAEMON_SETUP=1) PASEO_MUSE_DEFER_DAEMON_SETUP=1 ;;
+            PASEO_MUSE_OWNER_VERIFIED) verified=1; print_debug "Paseo managed-daemon ownership preflight passed." ;;
             PASEO_MUSE_UPDATED) print_success "Paseo Muse managed profile synchronized." ;;
             PASEO_MUSE_UNCHANGED) print_debug "Paseo Muse managed profile is unchanged." ;;
             PASEO_MUSE_RESTARTING) print_warning "Restarting the setup-managed local Paseo daemon to refresh Muse. Active agents may be interrupted." ;;
@@ -1550,6 +1582,11 @@ PASEO_MUSE_PROFILE_JS
         print_warning "Paseo Muse profile setup failed; later daemon setup must be skipped. Inspect the local service privately and rerun outside Paseo."
         return 1
     fi
+    if [[ "${_mode}" == "verify-owner" && "${verified}" -ne 1 && "${PASEO_MUSE_DEFER_DAEMON_SETUP}" -ne 1 ]]; then
+        PASEO_MUSE_DEFER_DAEMON_SETUP=1
+        print_warning "Paseo Muse ownership verification failed: unverified-result. Later daemon setup is skipped; rerun outside Paseo."
+        return 1
+    fi
     return 0
 }
 
@@ -1560,7 +1597,7 @@ install_paseo_plain() {
     fi
     local result
     local status=0
-    result=$(node --input-type=commonjs - <<'PASEO_PLAIN_SETUP_JS'
+    result=$(node --input-type=commonjs - "${PASEO_VALIDATED_CMD:-}" <<'PASEO_PLAIN_SETUP_JS'
 // BEGIN PASEO PLAIN INSTALLER
 const fs = require('node:fs');
 const path = require('node:path');
@@ -1595,6 +1632,99 @@ function executable(name, packageName) {
     }
     return null;
 }
+// BEGIN PASEO CLI IDENTITY
+// Inspect package metadata before executing a CLI. A PATH hit is not proof of identity.
+function cliInfo(file) {
+    try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+function cliHomeAlias(file, stat) {
+    return process.platform === 'linux' && file === '/home' && stat.uid === 0 &&
+        ['var/home', '/var/home'].includes(fs.readlinkSync(file)) && ['/', '/var', '/var/home'].every(dir => {
+            const s = cliInfo(dir);
+            return s?.isDirectory() && !s.isSymbolicLink() && s.uid === 0 && !(s.mode & 0o022);
+        });
+}
+function cliDirectory(directory) {
+    for (let current = path.resolve(directory); ; current = path.dirname(current)) {
+        const s = cliInfo(current);
+        if (!s) return false;
+        if (s.isSymbolicLink() && cliHomeAlias(current, s)) continue;
+        if (!s.isDirectory() || s.isSymbolicLink()) return false;
+        if (process.platform !== 'win32' && (![0, process.getuid()].includes(s.uid) || s.mode & 0o002 && !(s.uid === 0 && s.mode & 0o1000))) return false;
+        if (current === path.dirname(current)) return true;
+    }
+}
+function cliRegular(file) {
+    const s = cliInfo(file);
+    return s?.isFile() && !s.isSymbolicLink() && s.size <= 2 * 1024 * 1024 &&
+        cliDirectory(path.dirname(file)) && (process.platform === 'win32' || [0, process.getuid()].includes(s.uid) && !(s.mode & 0o002));
+}
+function cliPackage(root) {
+    const metadata = path.join(root, 'package.json');
+    if (!cliRegular(metadata)) return null;
+    const text = fs.readFileSync(metadata, 'utf8');
+    const data = JSON.parse(text);
+    // Reject duplicate keys rather than guessing which package declaration is authoritative.
+    const tokens = text.match(/"(?:[^"\\]|\\.)*"|[{}\[\]:,]/g) || [];
+    const stack = [];
+    for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        if (token === '{' || token === '[') stack.push(token === '{' ? new Set() : null);
+        else if (token === '}' || token === ']') stack.pop();
+        else if (token.startsWith('"') && tokens[i + 1] === ':') {
+            const key = JSON.parse(token), names = stack[stack.length - 1];
+            if (!names || names.has(key)) return null;
+            names.add(key);
+        }
+    }
+    const bin = typeof data?.bin === 'string' ? data.bin : data?.bin?.paseo;
+    if (data?.name !== '@getpaseo/cli' || typeof data.version !== 'string' ||
+        !/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(data.version) || typeof bin !== 'string' || path.isAbsolute(bin) ||
+        bin.split(/[\\/]/).some(p => p === '..')) return null;
+    const entry = path.resolve(root, bin);
+    if (!entry.startsWith(root + path.sep) || !cliRegular(entry)) return null;
+    return {root, entry, version: data.version};
+}
+function cliIdentity(command) {
+    try {
+        if (!path.isAbsolute(command) || !cliDirectory(path.dirname(command))) return null;
+        if (process.platform === 'win32' && command.endsWith('.cmd')) {
+            if (!cliRegular(command)) return null;
+            for (const base of [path.join(path.dirname(command), 'node_modules'), path.resolve(path.dirname(command), '../install/global/node_modules')]) {
+                const pkg = cliPackage(path.join(base, '@getpaseo/cli'));
+                if (pkg) return pkg;
+            }
+            return null;
+        }
+        const s = cliInfo(command);
+        if (!s || !s.isFile() && !s.isSymbolicLink()) return null;
+        // Only the command symlink is allowed. Neither its ancestors nor target directories can be links.
+        const target = s.isSymbolicLink() ? path.resolve(path.dirname(command), fs.readlinkSync(command)) : command;
+        if (!cliRegular(target)) return null;
+        for (let root = path.dirname(target); root !== path.dirname(root); root = path.dirname(root)) {
+            if (!cliInfo(path.join(root, 'package.json'))) continue;
+            const pkg = cliPackage(root);
+            return pkg?.entry === target ? pkg : null;
+        }
+    } catch { /* Invalid or unverified candidates remain untouched and are never executed. */ }
+    return null;
+}
+function selectPaseoCli(explicit = '') {
+    const names = process.platform === 'win32' ? ['paseo.cmd', 'paseo.exe'] : ['paseo'];
+    const candidates = explicit ? [explicit] : [
+        ...names.map(name => path.join(os.homedir(), '.bun/bin', name)),
+        ...(process.env.PATH || '').split(path.delimiter).filter(dir => path.isAbsolute(dir))
+            .flatMap(dir => names.map(name => path.join(dir, name))),
+    ];
+    for (const candidate of new Set(candidates)) {
+        const pkg = cliIdentity(candidate);
+        if (pkg && /^0\.8\.\d+(?:[-+][\w.-]+)?$/.test(pkg.version)) return [process.execPath, pkg.entry];
+        // A verified managed release owns selection even when Plain does not support it.
+        if (pkg && (explicit || path.dirname(candidate) === path.join(os.homedir(), '.bun/bin'))) return null;
+    }
+    return null;
+}
+// END PASEO CLI IDENTITY
 const info = file => { try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
 function regularPath(home, file) {
     const relative = path.relative(home, file);
@@ -1757,8 +1887,8 @@ function migrateRelease({home, existing, config, args, run, directory}) {
 function main() {
     const [major, minor] = process.versions.node.split('.').map(Number);
     if (major < 22 || (major === 22 && minor < 19)) return deferred('Node.js >=22.19 is required.');
-    const paseo = executable('paseo', '@getpaseo/cli');
-    if (!paseo || !executable('pi', '@earendil-works/pi-coding-agent')) return deferred('install Paseo and Pi, then rerun setup.');
+    const paseo = selectPaseoCli(process.argv[2] || '');
+    if (!paseo || !executable('pi', '@earendil-works/pi-coding-agent')) return deferred('install Paseo and Pi with a verified compatible Paseo 0.8.x CLI, then rerun setup.');
     const home = path.resolve(process.env.PASEO_HOME || path.join(os.homedir(), '.paseo'));
     const configFile = path.join(home, 'config.json');
     if (!fs.existsSync(configFile)) return deferred('start and configure the local Paseo daemon, then rerun setup.');
@@ -2534,6 +2664,7 @@ remove_rtk_resources() {
     fi
 
     rtk_assert_gemini_md_safe "${HOME}/.gemini/GEMINI.md" || return 1
+    if [[ "${PI_PROFILE_MUTATIONS_BLOCKED:-0}" -eq 1 ]]; then _pi_dirs=(); fi
     for _dir in "${_pi_dirs[@]}"; do
         rtk_clean_pi_instructions "${_dir}/AGENTS.md" || return 1
     done
@@ -2916,6 +3047,7 @@ remove_attention_span_resources() {
         _managed_files+=("${_dir}/AGENTS.md")
     done
     _managed_files+=("${HOME}/.gemini/GEMINI.md")
+    if [[ "${PI_PROFILE_MUTATIONS_BLOCKED:-0}" -eq 1 ]]; then _pi_dirs=(); fi
     for _dir in "${_pi_dirs[@]}"; do
         _managed_files+=("${_dir}/APPEND_SYSTEM.md")
     done
@@ -3052,6 +3184,7 @@ remove_impeccable_resources() {
     local _removed=0
 
     for _path in "${_paths[@]}"; do
+        if [[ "${PI_PROFILE_MUTATIONS_BLOCKED:-0}" -eq 1 && "${_path}" == "${HOME}/.pi/"* ]]; then continue; fi
         if [[ ! -e "${_path}" && ! -L "${_path}" ]]; then
             continue
         fi
@@ -4159,6 +4292,404 @@ remove_pi_subagents() {
 }
 
 # Pi prose retirement. Keep this block identical in the Bash setup scripts.
+# Secure only managed Pi directory boundaries; metadata remains with its validators.
+prepare_pi_profile_permissions() {
+    local _result="" _status=0
+    if ! ensure_shared_node_runtime; then
+        print_warning "Pi profile permissions failed: shared-runtime-unavailable."
+        return 1
+    fi
+    _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${HOME}" "${PI_CODING_AGENT_DIR:-}" 2>/dev/null <<'PI_PROFILE_PERMISSIONS_JS'
+// BEGIN PI_PROFILE_PERMISSIONS
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const {spawnSync} = require('node:child_process');
+class PermissionError extends Error {}
+const fail = code => { throw new PermissionError(code); };
+function absolute(value) {
+    if (!value || !path.isAbsolute(value) || value.split(/[\\/]/).some(p => p === '.' || p === '..')) fail('unsafe-path');
+    return path.resolve(value);
+}
+function info(file) {
+    try { return fs.lstatSync(file); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+function chain(file) {
+    const result = [];
+    for (let current = file; ; current = path.dirname(current)) {
+        result.unshift(current);
+        if (current === path.dirname(current)) return result;
+    }
+}
+function systemHomeAlias(file, stat) {
+    if (process.platform !== 'linux' || file !== '/home' || stat.uid !== 0) return false;
+    if (!['var/home', '/var/home'].includes(fs.readlinkSync(file))) return false;
+    return ['/', '/var', '/var/home'].every(dir => {
+        const entry = info(dir);
+        return entry && entry.isDirectory() && !entry.isSymbolicLink() && entry.uid === 0 && !(entry.mode & 0o022);
+    });
+}
+// Node has no mkdirat binding. Use only the OS Python's isolated stdlib and an
+// inherited, verified parent descriptor; never fall back to path-based creation.
+const mkdirAtProgram = String.raw`
+import os, stat, sys
+try:
+    if (os.mkdir not in os.supports_dir_fd or os.open not in os.supports_dir_fd or
+            not all(hasattr(os, name) for name in ('O_DIRECTORY', 'O_NOFOLLOW'))):
+        sys.exit(1)
+    if sys.argv[1] == 'probe':
+        print('ready')
+        sys.exit(0)
+    if sys.argv[1] != 'create':
+        sys.exit(1)
+    parent = os.fstat(3)
+    if not stat.S_ISDIR(parent.st_mode) or parent.st_dev != int(sys.argv[3]) or parent.st_ino != int(sys.argv[4]):
+        sys.exit(1)
+    leaf = sys.argv[2]
+    if not leaf or leaf in ('.', '..') or '/' in leaf:
+        sys.exit(1)
+    os.mkdir(leaf, mode=0o700, dir_fd=3)
+    fd = os.open(leaf, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=3)
+    try:
+        created = os.fstat(fd)
+        if not stat.S_ISDIR(created.st_mode) or created.st_uid != os.getuid():
+            sys.exit(1)
+        print('created:%d:%d' % (created.st_dev, created.st_ino))
+    finally:
+        os.close(fd)
+except Exception:
+    sys.exit(1)
+`;
+function mkdirAt(args, fd) {
+    return spawnSync('/usr/bin/python3', ['-I', '-S', '-c', mkdirAtProgram, ...args], {
+        env: {}, encoding: 'utf8', timeout: 15000, maxBuffer: 128,
+        stdio: fd === undefined ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe', fd],
+    });
+}
+function unixPrepare(logicalHome, selected) {
+    const uid = process.getuid();
+    function inspect(file, managed = false) {
+        const stat = info(file);
+        if (!stat && managed) return null;
+        if (!stat) fail('missing-ancestor');
+        if (stat.isSymbolicLink() && systemHomeAlias(file, stat)) return stat;
+        if (!stat.isDirectory() || stat.isSymbolicLink()) fail('linked-or-nondirectory');
+        if (managed ? stat.uid !== uid : ![0, uid].includes(stat.uid)) fail('foreign-owner');
+        const stickyRoot = stat.uid === 0 && (stat.mode & 0o1000);
+        if (!managed && (stat.mode & 0o022) && !stickyRoot) fail('unsafe-ancestor');
+        return stat;
+    }
+    chain(logicalHome).forEach(file => inspect(file));
+    if (info(logicalHome).uid !== uid) fail('foreign-owner');
+    // Resolve only the verified account boundary (Linux /home -> /var/home).
+    const home = fs.realpathSync(logicalHome);
+    if (selected.startsWith(logicalHome + path.sep)) selected = path.join(home, path.relative(logicalHome, selected));
+    if (!selected.startsWith(home + path.sep)) fail('outside-home');
+    const managed = new Set([path.join(home, '.pi'), path.join(home, '.pi/agent'), selected]);
+    const plan = new Map();
+    for (const target of managed) {
+        for (const file of chain(target)) {
+            if (!plan.has(file)) plan.set(file, inspect(file, managed.has(file)));
+        }
+    }
+    function unchanged() {
+        for (const [file, before] of plan) {
+            const after = inspect(file, managed.has(file));
+            if (Boolean(before) !== Boolean(after) || before && (before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode)) fail('directory-changed');
+        }
+    }
+    if ([...managed].some(file => !plan.get(file))) {
+        const probe = mkdirAt(['probe']);
+        if (probe.status !== 0 || probe.stdout !== 'ready\n') fail('directory-create-unavailable');
+    }
+    // All default and active boundaries pass preflight before the first mutation.
+    for (const file of [...managed].sort((a, b) => chain(a).length - chain(b).length)) {
+        unchanged();
+        if (!plan.get(file)) {
+            const parent = path.dirname(file);
+            const expected = plan.get(parent);
+            const fd = fs.openSync(parent, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+            try {
+                const pinned = fs.fstatSync(fd);
+                if (!expected || expected.dev !== pinned.dev || expected.ino !== pinned.ino || expected.mode !== pinned.mode) fail('directory-changed');
+                unchanged();
+                const result = mkdirAt(['create', path.basename(file), String(pinned.dev), String(pinned.ino)], fd);
+                const identity = /^created:([0-9]+):([0-9]+)\n$/.exec(result.stdout || '');
+                if (result.status !== 0 || !identity) fail('directory-create-unavailable');
+                const created = inspect(file, true);
+                if (!created || created.dev !== Number(identity[1]) || created.ino !== Number(identity[2])) fail('directory-changed');
+                plan.set(file, created);
+            } finally { fs.closeSync(fd); }
+        }
+        const before = plan.get(file);
+        if ((before.mode & 0o7777) === 0o700) continue;
+        const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+        try {
+            const opened = fs.fstatSync(fd);
+            if (!opened.isDirectory() || opened.uid !== uid || before.ino !== opened.ino || before.dev !== opened.dev) fail('directory-changed');
+            fs.fchmodSync(fd, 0o700); // Only the verified directory inode, never its contents.
+            const after = fs.fstatSync(fd);
+            if ((after.mode & 0o7777) !== 0o700) fail('permission-unverified');
+            plan.set(file, after);
+        } finally { fs.closeSync(fd); }
+    }
+    unchanged();
+}
+function windowsPrepare(home, selected) {
+    // Use only the inbox PowerShell host and native APIs, never custom modules.
+    const script = String.raw`
+$ErrorActionPreference = 'Stop'
+$PSModuleAutoLoadingPreference = 'None'
+$pins = @{}
+try {
+    Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Management/Microsoft.PowerShell.Management.psd1') -ErrorAction Stop
+    Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
+    Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
+    # Root-relative native creation returns the created directory handle atomically.
+    # Pinned ancestors deny write/delete sharing, preventing reparse/rename races.
+    # SetKernelObjectSecurity changes only the pinned directory, never child ACLs.
+    Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using Microsoft.Win32.SafeHandles;
+public static class PiDirectoryAcl {
+    const uint FILE_SHARE_READ = 1, FILE_CREATE = 2;
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Info {
+        public uint Attributes, CreatedLow, CreatedHigh, AccessLow, AccessHigh,
+            WriteLow, WriteHigh, Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct UnicodeString { public ushort Length, MaximumLength; public IntPtr Buffer; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct ObjectAttributes {
+        public uint Length;
+        public IntPtr RootDirectory, ObjectName;
+        public uint Attributes;
+        public IntPtr SecurityDescriptor, SecurityQualityOfService;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct IoStatusBlock { public IntPtr Status; public UIntPtr Information; }
+    public sealed class Pinned : IDisposable {
+        internal SafeFileHandle Handle;
+        internal Info Before;
+        internal Pinned(SafeFileHandle handle) {
+            Handle = handle;
+            try { Before = Read(handle); } catch { handle.Dispose(); throw; }
+        }
+        public void Dispose() { Handle.Dispose(); }
+    }
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern SafeFileHandle CreateFile(string name, uint access, uint share,
+        IntPtr security, uint creation, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool GetFileInformationByHandle(SafeFileHandle file, out Info info);
+    [DllImport("advapi32.dll", SetLastError=true)]
+    static extern bool GetKernelObjectSecurity(SafeFileHandle file, uint information,
+        byte[] descriptor, uint length, out uint needed);
+    [DllImport("advapi32.dll", SetLastError=true)]
+    static extern bool SetKernelObjectSecurity(SafeFileHandle file, uint information, byte[] descriptor);
+    [DllImport("ntdll.dll")]
+    static extern int NtCreateFile(out SafeFileHandle file, uint access,
+        ref ObjectAttributes attributes, out IoStatusBlock ioStatus, IntPtr allocationSize,
+        uint fileAttributes, uint share, uint disposition, uint options, IntPtr eaBuffer, uint eaLength);
+    static Info Read(SafeFileHandle handle) {
+        Info info;
+        if (handle.IsInvalid || !GetFileInformationByHandle(handle, out info)) throw new Win32Exception();
+        if ((info.Attributes & 0x410) != 0x10) throw new InvalidOperationException(); // directory, not reparse
+        return info;
+    }
+    static bool SameIdentity(Info before, Info after) {
+        return before.Volume == after.Volume && before.IndexHigh == after.IndexHigh && before.IndexLow == after.IndexLow;
+    }
+    static uint Access(bool managed, bool parent) {
+        // READ_CONTROL + LIST_DIRECTORY + TRAVERSE; only approved parents need ADD_SUBDIRECTORY.
+        return 0x20021u | (managed ? 0x40000u : 0u) | (parent ? 4u : 0u);
+    }
+    public static Pinned Pin(string name, bool managed, bool parent, bool missing) {
+        // Reject Win32 aliases that could differ from the literal rooted native name.
+        if (name.StartsWith("\\\\") || name.Length < 3 || name[1] != ':') throw new InvalidOperationException();
+        foreach (string part in name.Substring(3).Split('\\')) {
+            if (part.EndsWith(".") || part.EndsWith(" ") || part.Contains(":")) throw new InvalidOperationException();
+        }
+        var handle = CreateFile(name, Access(managed, parent), FILE_SHARE_READ,
+            IntPtr.Zero, 3, 0x02200000, IntPtr.Zero); // OPEN_EXISTING, BACKUP_SEMANTICS, OPEN_REPARSE_POINT
+        if (handle.IsInvalid) {
+            int error = Marshal.GetLastWin32Error();
+            handle.Dispose();
+            if (missing && (error == 2 || error == 3)) return null;
+            throw new Win32Exception(error);
+        }
+        return new Pinned(handle);
+    }
+    public static string Identity(Pinned pin) {
+        Info after = Read(pin.Handle);
+        if (!SameIdentity(pin.Before, after)) throw new InvalidOperationException();
+        return after.Volume + ":" + after.IndexHigh + ":" + after.IndexLow;
+    }
+    public static DirectorySecurity Security(Pinned pin) {
+        Identity(pin);
+        uint needed;
+        GetKernelObjectSecurity(pin.Handle, 7, null, 0, out needed); // owner, group, DACL
+        if (needed == 0 || needed > 65536) throw new InvalidOperationException();
+        var bytes = new byte[needed];
+        if (!GetKernelObjectSecurity(pin.Handle, 7, bytes, needed, out needed)) throw new Win32Exception();
+        var security = new DirectorySecurity();
+        security.SetSecurityDescriptorBinaryForm(bytes);
+        return security;
+    }
+    public static void Secure(Pinned pin, string expectedIdentity, string owner, byte[] descriptor) {
+        if (Identity(pin) != expectedIdentity ||
+            Security(pin).GetOwner(typeof(System.Security.Principal.SecurityIdentifier)).Value != owner)
+            throw new InvalidOperationException();
+        // Protected DACL only. This handle API does not propagate ACEs to children.
+        if (!SetKernelObjectSecurity(pin.Handle, 0x80000004, descriptor)) throw new Win32Exception();
+    }
+    public static Pinned CreateLeaf(Pinned parent, string leaf, byte[] descriptor, bool createParent) {
+        Identity(parent);
+        if (String.IsNullOrEmpty(leaf) || leaf == "." || leaf == ".." || leaf.Length > 32767 ||
+            leaf.IndexOfAny(new char[] {'\\', '/', ':'}) >= 0 || leaf.EndsWith(".") || leaf.EndsWith(" "))
+            throw new InvalidOperationException();
+        IntPtr text = Marshal.StringToHGlobalUni(leaf);
+        IntPtr name = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UnicodeString)));
+        GCHandle security = GCHandle.Alloc(descriptor, GCHandleType.Pinned);
+        try {
+            var unicode = new UnicodeString { Length = (ushort)(leaf.Length * 2),
+                MaximumLength = (ushort)(leaf.Length * 2), Buffer = text };
+            Marshal.StructureToPtr(unicode, name, false);
+            var attributes = new ObjectAttributes { Length = (uint)Marshal.SizeOf(typeof(ObjectAttributes)),
+                RootDirectory = parent.Handle.DangerousGetHandle(), ObjectName = name,
+                Attributes = 0x40, SecurityDescriptor = security.AddrOfPinnedObject() };
+            SafeFileHandle handle;
+            IoStatusBlock io;
+            int status = NtCreateFile(out handle, Access(true, createParent), ref attributes, out io,
+                IntPtr.Zero, 0x10, FILE_SHARE_READ, FILE_CREATE, 0x00200001, IntPtr.Zero, 0);
+            // DIRECTORY_FILE | OPEN_REPARSE_POINT, FILE_CREATE never opens/replaces an existing leaf.
+            if (status != 0) {
+                if (handle != null) handle.Dispose();
+                throw new InvalidOperationException();
+            }
+            return new Pinned(handle);
+        } finally {
+            security.Free();
+            Marshal.FreeHGlobal(name);
+            Marshal.FreeHGlobal(text);
+        }
+    }
+}
+"@
+    $homePath = $env:PI_PERMISSIONS_HOME
+    $selected = $env:PI_PERMISSIONS_ACTIVE
+    $owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $allowed = @($owner.Value, 'S-1-5-18', 'S-1-5-32-544')
+    if (-not $selected.StartsWith($homePath.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'boundary' }
+    $managed = @((Join-Path $homePath '.pi'), (Join-Path $homePath '.pi/agent'), $selected)
+    $creationParents = @($managed | ForEach-Object { Split-Path -Parent $_ })
+    $all = @{}
+    foreach ($target in $managed) {
+        $current = $target
+        while ($current) { $all[$current] = $true; $current = Split-Path -Parent $current }
+    }
+    $ordered = @($all.Keys | Sort-Object Length)
+    $plan = @{}
+    function Inspect-Directory($file, $repair) {
+        if ($null -eq $pins[$file]) {
+            $pins[$file] = [PiDirectoryAcl]::Pin($file, $repair, ($file -in $creationParents), $repair)
+        }
+        if ($null -eq $pins[$file]) { return $null }
+        $identity = [PiDirectoryAcl]::Identity($pins[$file])
+        $acl = [PiDirectoryAcl]::Security($pins[$file])
+        $sid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+        if ($repair -or $file -eq $homePath) {
+            if ($sid -ne $owner.Value) { throw 'owner' }
+        } elseif ($sid -notin ($allowed + @('S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'))) { throw 'owner' }
+        if (-not $repair) {
+            $write = [System.Security.AccessControl.FileSystemRights]::Delete -bor [System.Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [System.Security.AccessControl.FileSystemRights]::ChangePermissions -bor [System.Security.AccessControl.FileSystemRights]::TakeOwnership
+            if ($file -eq $homePath -or $file.StartsWith($homePath.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                $write = $write -bor [System.Security.AccessControl.FileSystemRights]::Write
+            }
+            foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
+                if ($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
+                if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin $allowed -and ($rule.FileSystemRights -band $write)) { throw 'access' }
+            }
+        }
+        return @($identity, $acl.Sddl)
+    }
+    # Root first: every path ancestor remains pinned until the entire transaction ends.
+    foreach ($file in $ordered) { $plan[$file] = Inspect-Directory $file ($file -in $managed) }
+    function Assert-Unchanged {
+        foreach ($file in $ordered) {
+            $after = Inspect-Directory $file ($file -in $managed)
+            if (($after -join '|') -cne ($plan[$file] -join '|')) { throw 'changed' }
+        }
+    }
+    $private = [System.Security.AccessControl.DirectorySecurity]::new()
+    $private.SetOwner($owner)
+    $private.SetAccessRuleProtection($true, $false)
+    foreach ($sid in $allowed) {
+        $private.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new([System.Security.Principal.SecurityIdentifier]::new($sid), 'FullControl', 'Allow'))
+    }
+    foreach ($file in @($managed | Sort-Object -Unique | Sort-Object Length)) {
+        Assert-Unchanged
+        if ($null -eq $plan[$file]) {
+            $parent = Split-Path -Parent $file
+            $pins[$file] = [PiDirectoryAcl]::CreateLeaf($pins[$parent], [IO.Path]::GetFileName($file),
+                $private.GetSecurityDescriptorBinaryForm(), ($file -in $creationParents))
+        } else {
+            [PiDirectoryAcl]::Secure($pins[$file], $plan[$file][0], $owner.Value, $private.GetSecurityDescriptorBinaryForm())
+        }
+        $plan[$file] = Inspect-Directory $file $true
+        $acl = [PiDirectoryAcl]::Security($pins[$file])
+        if (-not $acl.AreAccessRulesProtected) { throw 'unverified' }
+        foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
+            if ($rule.IdentityReference.Value -notin $allowed) { throw 'unverified' }
+        }
+    }
+    Assert-Unchanged
+    [Console]::Out.Write('prepared')
+} catch { exit 1 }
+finally { foreach ($pin in $pins.Values) { if ($null -ne $pin) { $pin.Dispose() } } }
+`;
+    const systemRoot = absolute(process.env.SystemRoot || 'C:\\Windows');
+    const result = spawnSync(path.join(systemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+        ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from('& ([scriptblock]::Create([Console]::In.ReadToEnd()))', 'utf16le').toString('base64')], {
+            input: script, // Avoid the Windows command-line length limit; no temporary script file.
+            env: {SystemRoot: systemRoot, WINDIR: systemRoot, PI_PERMISSIONS_HOME: home, PI_PERMISSIONS_ACTIVE: selected},
+            windowsHide: true, shell: false, encoding: 'utf8', timeout: 30000, maxBuffer: 1024,
+        });
+    if (result.status !== 0 || result.stdout !== 'prepared') fail('acl-unverified');
+}
+try {
+    const home = absolute(process.argv[2]);
+    const selected = absolute(process.argv[3] || path.join(home, '.pi/agent'));
+    if (process.platform === 'win32') windowsPrepare(home, selected);
+    else unixPrepare(home, selected);
+    console.log('prepared');
+} catch (error) {
+    const native = new Set(['EACCES', 'EPERM', 'EROFS', 'ENOSPC', 'EDQUOT', 'ENOENT', 'ENOTDIR', 'ELOOP', 'EEXIST', 'EIO']);
+    const reason = error instanceof PermissionError ? error.message : native.has(error?.code) ? error.code : 'operation-failed';
+    console.log('failed:' + reason);
+    process.exitCode = 1;
+}
+// END PI_PROFILE_PERMISSIONS
+PI_PROFILE_PERMISSIONS_JS
+    ) || _status=$?
+    if [[ "${_status}" -eq 0 && "${_result}" == "prepared" ]]; then
+        print_debug "Pi profile directories are private."
+        return 0
+    fi
+    # Unknown output is never logged: it may contain a path or credential.
+    case "${_result}" in
+        failed:unsafe-path|failed:missing-ancestor|failed:linked-or-nondirectory|failed:foreign-owner|failed:unsafe-ancestor|failed:outside-home|failed:directory-changed|failed:directory-create-unavailable|failed:permission-unverified|failed:acl-unverified|failed:operation-failed|failed:EACCES|failed:EPERM|failed:EROFS|failed:ENOSPC|failed:EDQUOT|failed:ENOENT|failed:ENOTDIR|failed:ELOOP|failed:EEXIST|failed:EIO)
+            print_warning "Pi profile permissions ${_result}." ;;
+        *) print_warning "Pi profile permissions failed: unverified-result." ;;
+    esac
+    return 1
+}
+
 remove_pi_prose() {
     local _default_dir="${HOME}/.pi/agent"
     local _active_dir="${PI_CODING_AGENT_DIR:-${_default_dir}}"
@@ -4663,6 +5194,7 @@ setup_pi_companion_packages() {
 
 # Keep shared skills canonical for Pi and suppress stale direct/package collisions.
 configure_pi_skill_ownership() {
+    [[ "${PI_PROFILE_MUTATIONS_BLOCKED:-0}" -eq 1 ]] && return 0
     local _default_agent_dir="${HOME}/.pi/agent"
     local _active_agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
     local _settings_file="${_active_agent_dir}/settings.json"
@@ -4876,6 +5408,7 @@ remove_matt_pocock_skills() {
         _skills_dirs+=("${_active_agent_dir}/skills")
     fi
 
+    if [[ "${PI_PROFILE_MUTATIONS_BLOCKED:-0}" -eq 1 ]]; then _skills_dirs=("${HOME}/.agents/skills"); fi
     for _skills_dir in "${_skills_dirs[@]}"; do
         while IFS= read -r _skill; do
             _skill_path="${_skills_dir}/${_skill}"
@@ -4913,6 +5446,7 @@ remove_obsolete_matt_pocock_skills() {
         _skills_dirs+=("${_active_agent_dir}/skills")
     fi
 
+    if [[ "${PI_PROFILE_MUTATIONS_BLOCKED:-0}" -eq 1 ]]; then _skills_dirs=("${HOME}/.agents/skills"); fi
     for _skills_dir in "${_skills_dirs[@]}"; do
         while IFS= read -r _skill; do
             _skill_path="${_skills_dir}/${_skill}"
@@ -5207,7 +5741,7 @@ remove_compound_engineering_resources() {
     local _failed=()
     local _agent_dirs=()
 
-    if [[ -d "${_default_agent_dir}" ]]; then
+    if [[ "${PI_PROFILE_MUTATIONS_BLOCKED:-0}" -ne 1 && -d "${_default_agent_dir}" ]]; then
         if compound_path_is_within "${_default_agent_dir}" "${HOME}"; then
             _agent_dirs+=("${_default_agent_dir}")
         else
@@ -5215,7 +5749,7 @@ remove_compound_engineering_resources() {
         fi
     fi
 
-    if [[ "${_active_agent_dir}" != "${_default_agent_dir}" && -d "${_active_agent_dir}" ]]; then
+    if [[ "${PI_PROFILE_MUTATIONS_BLOCKED:-0}" -ne 1 && "${_active_agent_dir}" != "${_default_agent_dir}" && -d "${_active_agent_dir}" ]]; then
         if compound_path_is_within "${_active_agent_dir}" "${HOME}"; then
             _agent_dirs+=("${_active_agent_dir}")
         else
@@ -6066,10 +6600,11 @@ check_pending_reboot() {
 run_setup_tasks() {
     local _setup_had_errors=0
     local _pi_go_ready=0
+    local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 194 | Last changed: Expose safe Go and Plain setup diagnostics${NC}"
+    echo -e "${GRAY}Version 195 | Last changed: Secure Pi profiles and remove surplus Paseo CLIs${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -6174,12 +6709,19 @@ run_setup_tasks() {
     install_codex_cli
     install_portless_cli
     install_ntn_cli
+    if ! prepare_pi_profile_permissions; then
+        PI_PROFILE_MUTATIONS_BLOCKED=1
+        _setup_had_errors=1
+    fi
     remove_rtk_resources || return 1
     remove_attention_span_resources || return 1
     if ! setup_matt_pocock_skills; then
         _setup_had_errors=1
     fi
-    if ! remove_pi_prose; then
+    if [[ "${PI_PROFILE_MUTATIONS_BLOCKED}" -eq 1 ]]; then
+        print_warning "Skipping Pi setup because profile permission preparation failed."
+    elif ! remove_pi_prose; then
+        PI_PROFILE_MUTATIONS_BLOCKED=1
         print_warning "Skipping Pi package setup because prose retirement failed."
         _setup_had_errors=1
     elif install_pi_cli; then
@@ -6189,6 +6731,7 @@ run_setup_tasks() {
         if configure_pi_opencode_go; then
             _pi_go_ready=1
         else
+            PI_PROFILE_MUTATIONS_BLOCKED=1
             _setup_had_errors=1
         fi
         # Re-pin the adapter before any operation resolves the shared npm tree.
@@ -6219,7 +6762,7 @@ run_setup_tasks() {
     fi
 
     if [[ "${_pi_go_ready}" -eq 1 ]]; then
-        configure_paseo_muse_profile || _setup_had_errors=1
+        configure_paseo_muse_profile sync || _setup_had_errors=1
     else
         print_warning "Muse profile setup deferred because Pi OpenCode Go setup is unavailable."
     fi
