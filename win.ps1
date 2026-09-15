@@ -1208,6 +1208,9 @@ const maxSnapshotBytes = 4 * 1024 * 1024;
 const maxPidBytes = 64 * 1024;
 let home, logicalHome, paseoHome, configPath, pidPath, accountRoots, customHome;
 let heldLock = null, restore = null, temporary = null, interrupted = false;
+// This read-only exception exists only while proving a repairable Linux owner.
+// It is cleared before service control or profile writes; verify-owner stays read-only.
+let permissionInspection = null;
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => { interrupted = true; });
 const checkpoint = async () => { await new Promise(resolve => setImmediate(resolve)); if (interrupted) fail('interrupted'); };
 function stat(file) {
@@ -1240,9 +1243,72 @@ function checkedPath(file, directory = false) {
         const dir = n < parts.length - 1 || directory;
         if (dir ? !s.isDirectory() : !s.isFile() || s.nlink !== 1) fail('unsafe-file-type');
         if ((current === home || current.startsWith(home + path.sep)) && platform !== 'win32' &&
-            (s.uid !== uid || (s.mode & 0o022))) fail('unsafe-owner-or-mode');
+            (s.uid !== uid || (s.mode & 0o022))) {
+            if (s.uid !== uid || (s.mode & 0o002) || !permissionInspection?.allowed.has(current)) fail('unsafe-owner-or-mode');
+            // A writable native PID may only be inspected inside an already private home.
+            if (current === pidPath && (stat(paseoHome).mode & 0o077)) fail('permission-recovery-private-home-required');
+            const prior = permissionInspection.paths.get(current);
+            if (prior && !same(prior, s)) fail('permission-path-changed');
+            permissionInspection.paths.set(current, s);
+        }
     }
     return stat(absolute);
+}
+function beginPermissionInspection(pidOnly = false) {
+    if (verifyOnly || !headless || platform !== 'linux' || /microsoft/i.test(os.release()) || customHome) return;
+    const dirs = pidOnly ? [] : ['.config', '.config/systemd', '.config/systemd/user'].map(p => path.join(home, p));
+    permissionInspection = {allowed: new Set([...dirs, pidPath]), paths: new Map()};
+    // Preflight every candidate before repairing anything. No recursion, links,
+    // ownership changes, world-writable paths or user/custom home repairs.
+    for (const dir of dirs) checkedPath(dir, true);
+    checkedPath(pidPath);
+}
+function repairInspectedPermissions() {
+    const planned = permissionInspection?.paths;
+    if (!planned?.size) { permissionInspection = null; return; }
+    const handles = new Map();
+    try {
+        if (!fs.constants.O_NOFOLLOW || !fs.constants.O_DIRECTORY) fail('permission-handles-unavailable');
+        const directoryFlags = fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW;
+        const pin = (file, directory) => {
+            if (handles.has(file)) return handles.get(file);
+            const parent = file === home ? null : pin(path.dirname(file), true);
+            const before = checkedPath(file, directory);
+            if (!before || planned.has(file) && !same(planned.get(file), before)) fail('permission-path-changed');
+            // Linux descriptor-relative traversal: only the verified HOME spelling
+            // is opened by absolute path. Never follow a replaced ancestor.
+            const target = parent ? `/proc/self/fd/${parent.fd}/${path.basename(file)}` : file;
+            const fd = fs.openSync(target, directory ? directoryFlags : fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+            const entry = {fd, s: before};
+            handles.set(file, entry);
+            if (!same(before, fs.fstatSync(fd)) || !same(before, stat(file))) fail('permission-path-changed');
+            return entry;
+        };
+        for (const file of planned.keys()) pin(file, file !== pidPath);
+        const unchanged = () => {
+            for (const [file, entry] of handles) {
+                if (!same(entry.s, fs.fstatSync(entry.fd)) || !same(entry.s, stat(file))) fail('permission-path-changed');
+            }
+        };
+        unchanged();
+        for (const file of planned.keys()) {
+            unchanged();
+            const entry = handles.get(file);
+            const nextMode = (entry.s.mode & 0o7777) & ~0o022;
+            fs.fchmodSync(entry.fd, nextMode);
+            const after = fs.fstatSync(entry.fd);
+            if (after.uid !== uid || after.dev !== entry.s.dev || after.ino !== entry.s.ino ||
+                (after.mode & 0o7777) !== nextMode) fail('permission-repair-unverified');
+            entry.s = after;
+        }
+        unchanged();
+        permissionInspection = null;
+        for (const file of planned.keys()) checkedPath(file, file !== pidPath);
+        console.log('PASEO_MUSE_PERMISSIONS_REPAIRED');
+    } finally {
+        permissionInspection = null;
+        for (const {fd} of handles.values()) fs.closeSync(fd);
+    }
 }
 function checkWindowsMetadataAcl(file) {
     if (platform !== 'win32') return;
@@ -1292,9 +1358,11 @@ function snapshot(file) {
     if (!s) return {s: null, text: null};
     const limit = file === pidPath ? maxPidBytes : maxSnapshotBytes;
     if (!Number.isSafeInteger(s.size) || s.size < 0 || s.size > limit) fail('metadata-too-large');
-    const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    // Nonblocking open prevents a FIFO replacement from hanging read-only inspection.
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
     try {
-        if (!same(s, fs.fstatSync(fd))) fail('file-changed');
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile() || opened.nlink !== 1 || !same(s, opened)) fail('file-changed');
         // Read at most the checked size plus one byte, even if a writer grows it.
         const bytes = Buffer.alloc(s.size + 1);
         let used = 0;
@@ -1501,6 +1569,8 @@ function checkWrapper() {
     const file = path.join(home, '.local/bin/paseo-daemon-start');
     const snap = snapshot(file);
     const lines = snap.text?.trimEnd().split('\n');
+    // Accept the exact legacy shape and the new restrictive launch shape only.
+    if (lines?.length === 10 && lines[3] === 'umask 077') lines.splice(3, 1);
     // Match setup's shell-quoted HOME without executing the wrapper or sourcing it.
     const quoted = "'" + logicalHome.replace(/'/g, "'\\''") + "'";
     const exec = lines?.at(-1)?.match(/^exec ('[^'\r\n]+') daemon start --foreground --listen '[^'\r\n]+'$/);
@@ -1618,6 +1688,30 @@ function linuxOwner(info, rows) {
             const s = serviceState();
             if (s.ActiveState !== 'active' || s.SubState !== 'running' || Number(s.MainPID) <= 1) fail('restore-unverified');
         }};
+}
+async function finishRestoredPermissions(owner) {
+    if (platform !== 'linux' || customHome) return;
+    // Type=simple can report active before the native PID exists or is fully
+    // written. Do not let that race bypass the strict later ownership preflight.
+    for (let attempt = 0; attempt < 50; attempt++) {
+        try {
+            beginPermissionInspection(true);
+            const restarted = pidInfo();
+            if (!restarted.info) refuse('restart-pid-pending');
+            if (!live(restarted.info.pid)) refuse('pid-unverified');
+            const verified = linuxOwner(restarted.info, inventory());
+            if (!same(owner.unit.s, verified.unit.s) || !same(owner.wrapper.snap.s, verified.wrapper.snap.s)) refuse('ownership-changed');
+            if (snapshot(pidPath).text !== restarted.snap.text) fail('file-changed');
+            repairInspectedPermissions();
+            if (snapshot(pidPath).text !== restarted.snap.text) fail('file-changed');
+            return;
+        } catch (error) {
+            const pending = error instanceof Refusal && ['restart-pid-pending', 'invalid-json', 'file-changed', 'permission-path-changed'].includes(error.code);
+            if (!pending && error.code !== 'ENOENT') throw error;
+        } finally { permissionInspection = null; }
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    fail('restart-pid-not-ready');
 }
 function launchList() {
     const text = run('sudo', ['-n', 'launchctl', 'list']);
@@ -1740,9 +1834,15 @@ async function main() {
     if (verifyOnly && (!headless || !['linux', 'darwin'].includes(platform) ||
         platform === 'linux' && /microsoft/i.test(os.release()) ||
         platform === 'darwin' && process.env.PASEO_MACOS_HEADLESS_CANARY !== '1')) refuse('headless-control-not-authorized');
+    let unchanged = false;
     if (!verifyOnly) {
         const initial = snapshot(configPath);
-        if (merge(initial) === null && !refresh) { console.log('PASEO_MUSE_UNCHANGED'); return; }
+        unchanged = merge(initial) === null && !refresh;
+        beginPermissionInspection();
+        if (unchanged && !permissionInspection?.paths.size) {
+            permissionInspection = null;
+            console.log('PASEO_MUSE_UNCHANGED'); return;
+        }
     }
     if (process.env.PASEO_AGENT_ID) refuse('self-hosted-setup');
     const existing = pidInfo();
@@ -1757,6 +1857,19 @@ async function main() {
         if (!same(existing.snap.s, snapshot(pidPath).s) || !same(owner.unit.s, snapshot(owner.file).s) ||
             !same(owner.wrapper.snap.s, snapshot(owner.wrapper.file).s)) refuse('ownership-changed');
     } else if (candidates(rows).length) refuse('unknown-writer');
+    if (permissionInspection?.paths.size) {
+        // No chmod until PID, process ancestry, exact wrapper/unit, loaded service,
+        // home selection and lack of drop-ins/other writers all agree on the owner.
+        if (!owner) refuse('permission-recovery-owner-unverified');
+        repairInspectedPermissions();
+        const secured = pidInfo();
+        if (secured.snap.text !== existing.snap.text) fail('permission-path-changed');
+        existing.snap = secured.snap;
+        const verified = linuxOwner(secured.info, inventory());
+        if (verified.pid !== owner.pid || !same(owner.unit.s, verified.unit.s) ||
+            !same(owner.wrapper.snap.s, verified.wrapper.snap.s)) refuse('ownership-changed');
+    } else permissionInspection = null;
+    if (unchanged) { console.log('PASEO_MUSE_UNCHANGED'); return; }
     // This read-only preflight must not depend on whether the profile needs a merge.
     // The caller retains the existing lifecycle implementation; no locks or files here.
     if (verifyOnly) {
@@ -1824,15 +1937,23 @@ async function main() {
     let failure = null;
     try { await main(); } catch (error) { failure = error; }
     finally {
+        permissionInspection = null;
         try { if (temporary) fs.unlinkSync(temporary); } catch { failure = new Refusal('temporary-cleanup-failed', true); }
         try { releasePid(); } catch { failure = new Refusal('pid-release-failed', true); }
         if (restore) {
             try {
                 if (!same(restore.unit.s, snapshot(restore.file).s) || !same(restore.wrapper.snap.s, snapshot(restore.wrapper.file).s)) fail('service-changed-before-restore');
                 restore.start();
+                // The old wrapper may inherit umask 002 on this intermediate
+                // restart. Re-prove its ready PID owner and secure the new inode;
+                // the later headless installer migrates the wrapper to umask 077.
+                await finishRestoredPermissions(restore);
                 console.log('PASEO_MUSE_RESTORED');
             }
-            catch { failure = new Refusal('service-restore-failed', true); }
+            catch (error) {
+                if (error instanceof Refusal && error.code === 'restart-pid-not-ready') console.log('Paseo Muse recovery: the restarted service did not provide a verified native PID within the retry limit. Inspect that service privately before rerunning setup.');
+                failure = new Refusal('service-restore-failed', true);
+            }
         }
     }
     if (failure) {
@@ -1841,6 +1962,7 @@ async function main() {
         console.log(`PASEO_MUSE_DEFER_DAEMON_SETUP=1`);
         console.log(`Paseo Muse ${failed ? 'failed' : 'deferred'}: ${controlled ? failure.code : 'operation-failed'}.`);
         if (controlled && failure.code === 'stale-pid-lock') console.log('Paseo Muse recovery: inspect the stale paseo.pid privately; remove it manually only after every local owner is confirmed stopped.');
+        if (controlled && (failure.code === 'unsafe-owner-or-mode' || failure.code.startsWith('permission-'))) console.log('Paseo Muse permissions: inspect ownership and write permissions on the selected home, PID and service paths. Automatic repair requires a verified default-home Linux setup-managed owner. Do not use recursive chmod or chown.');
         if (controlled && ['custom-home-unverified', 'custom-home-permissions-unverified', 'invalid-home-override'].includes(failure.code)) console.log('Paseo Muse home: PASEO_HOME must be unset or an absolute directory below the account HOME, not HOME itself. Custom directories must already exist, be private and account-owned, and contain no linked paths.');
         console.log('Quit Paseo Desktop or stop the owning local daemon, then rerun setup from a terminal outside Paseo. Keep Desktop closed during setup. If Go authentication changed, restart that owner to refresh its model catalog.');
         // Deferred lifecycle cases are warnings, not a claim that a profile was saved.
@@ -1854,6 +1976,7 @@ async function main() {
             switch -Exact ($line) {
                 "PASEO_MUSE_UPDATED" { Write-Success "Paseo Muse managed profile synchronized." }
                 "PASEO_MUSE_UNCHANGED" { Write-Debug "Paseo Muse managed profile is unchanged." }
+                "PASEO_MUSE_PERMISSIONS_REPAIRED" { Write-Debug "Paseo Muse repaired verified managed-path permissions." }
                 "PASEO_MUSE_RESTARTING" { Write-Warning "Restarting the setup-managed local Paseo daemon to refresh Muse. Active agents may be interrupted." }
                 "PASEO_MUSE_RESTORED" { Write-Debug "Paseo Muse restored the local managed service." }
                 default { if ($line -like 'Paseo Muse *' -or $line -like 'Quit Paseo Desktop *') { Write-Warning $line } }
@@ -5738,6 +5861,21 @@ function Invoke-MattPocockSkillPolicy {
         return JSON.stringify(names) === JSON.stringify(other) && names.every(name => sameTree(path.join(left, name), path.join(right, name)));
     }
     try {
+        if (mode === 'dispose') {
+            const stage = absolute(reportFile);
+            const tempRoot = fs.realpathSync(require('node:os').tmpdir());
+            if (path.dirname(stage) !== tempRoot || !/^setup-matt-pocock-[a-zA-Z0-9]+$/.test(path.basename(stage))) fail('unsafe-stage');
+            directory(tempRoot);
+            const st = stat(stage);
+            if (st) {
+                owned(stage);
+                if (!st.isSymbolicLink() && (!st.isDirectory() || process.platform !== 'win32' && (st.mode & 0o077))) fail('unsafe-stage');
+                // Explicit unlink traversal also avoids legacy PowerShell junction
+                // recursion. A replaced stage root is unlinked, never followed.
+                remove(stage);
+            }
+            process.exit(0);
+        }
         const home = absolute(homeInput);
         directory(home);
         const profile = (value, fallback) => {
@@ -5774,6 +5912,16 @@ function Invoke-MattPocockSkillPolicy {
         if (!tracked.every(nameOK)) fail('invalid-inventory');
         const inventory = unique([...known, ...(manifest?.skills || []), ...tracked]);
         const checkDirs = dirs => dirs.forEach(dir => { directory(dir); owned(dir); });
+        const preflight = names => {
+            checkDirs(installDirs);
+            for (const dir of installDirs) {
+                for (const name of names) {
+                    const target = path.join(dir, name);
+                    if (stat(target)?.isSymbolicLink()) fail('linked-install-target');
+                    if (stat(target)) copiedTree(target);
+                }
+            }
+        };
         const cleanup = (names, dirs, extraPaths = []) => {
             checkDirs(dirs);
             const paths = dirs.flatMap(dir => names.map(name => path.join(dir, name))).concat(extraPaths);
@@ -5799,32 +5947,40 @@ function Invoke-MattPocockSkillPolicy {
             cleanup(mode === 'remove-matt' ? unique([...inventory, ...obsolete]) : obsolete, allDirs);
             // Retain inventory for offline retries and custom profiles selected on a later run.
         } else if (mode === 'preflight') {
-            checkDirs(installDirs);
-            for (const dir of installDirs) {
-                // The bulk CLI may select newly added upstream names. Reject linked existing
-                // copies before it runs, without recursively inspecting unrelated real skills.
-                for (const name of stat(dir) ? fs.readdirSync(dir) : []) {
-                    if (stat(path.join(dir, name))?.isSymbolicLink()) fail('linked-install-target');
-                }
-                for (const name of inventory) {
-                    const target = path.join(dir, name);
-                    if (stat(target)) copiedTree(target);
-                }
-            }
-        } else if (mode === 'validate') {
-            checkDirs(installDirs);
+            // Known managed names fail early. The complete native selection, including
+            // new upstream names, is checked again before promotion, never after it.
+            preflight(inventory);
+        } else if (mode === 'stage') {
+            const tempRoot = fs.realpathSync(require('node:os').tmpdir());
+            directory(tempRoot);
+            process.stdout.write(fs.mkdtempSync(path.join(tempRoot, 'setup-matt-pocock-')) + '\n');
+        } else if (mode === 'promote') {
+            // Native --list cannot emit JSON. One isolated native install is both
+            // discovery and the source snapshot: do not fetch/reselect during promotion.
+            const stage = absolute(reportFile);
+            directory(stage);
+            owned(stage);
+            if (!stat(stage)?.isDirectory() || (process.platform !== 'win32' && (stat(stage).mode & 0o077))) fail('unsafe-stage');
+            if (path.dirname(stage) !== fs.realpathSync(require('node:os').tmpdir()) ||
+                !/^setup-matt-pocock-[a-zA-Z0-9]+$/.test(path.basename(stage))) fail('unsafe-stage');
+            const sourceDirs = [path.join(stage, '.claude/skills'), path.join(stage, '.agents/skills')];
+            checkDirs(sourceDirs);
+            const reportPath = path.join(stage, 'report.json');
+            const reportStat = stat(reportPath);
+            if (!reportStat?.isFile() || reportStat.isSymbolicLink() || reportStat.nlink !== 1) fail('invalid-install-report');
+            owned(reportPath);
             let report;
-            try { report = JSON.parse(fs.readFileSync(reportFile, 'utf8').replace(/^\uFEFF/, '')); }
+            try { report = JSON.parse(fs.readFileSync(reportPath, 'utf8').replace(/^\uFEFF/, '')); }
             catch { fail('invalid-install-report'); }
             if (!Array.isArray(report) || report.length === 0) fail('invalid-install-report');
             const names = [];
             for (const entry of report) {
                 if (!object(entry) || !nameOK(entry.name) || entry.status !== 'installed' || entry.source !== 'mattpocock/skills' ||
                     entry.scope !== 'global' || entry.mode !== 'copy' || !Array.isArray(entry.agents) ||
-                    !['Claude Code', 'Codex', 'Gemini CLI'].every(agent => entry.agents.includes(agent))) fail('invalid-install-report');
+                    entry.agents.length !== 3 || !['Claude Code', 'Codex', 'Gemini CLI'].every(agent => entry.agents.includes(agent))) fail('invalid-install-report');
                 if (names.includes(entry.name)) fail('invalid-install-report');
                 names.push(entry.name);
-                for (const dir of installDirs) {
+                for (const dir of sourceDirs) {
                     const skill = path.join(dir, entry.name);
                     copiedTree(skill);
                     const md = stat(path.join(skill, 'SKILL.md'));
@@ -5834,6 +5990,42 @@ function Invoke-MattPocockSkillPolicy {
             // A validation floor, never an installation allowlist: newly discovered
             // skills are accepted too. Retired/renamed baseline skills need review.
             if (!known.every(name => names.includes(name))) fail('incomplete-suite');
+            for (const dir of sourceDirs) {
+                const entries = fs.readdirSync(dir);
+                if (entries.length !== names.length || !entries.every(name => names.includes(name))) fail('invalid-install-report');
+            }
+            if (!names.every(name => sameTree(path.join(sourceDirs[0], name), path.join(sourceDirs[1], name)))) fail('invalid-skill-copy');
+            const stageLock = jsonFile(path.join(stage, '.state/skills/.skill-lock.json'));
+            if (!stageLock || stageLock.version !== 3 || !object(stageLock.skills) ||
+                Object.keys(stageLock.skills).length !== names.length || !names.every(name => {
+                    const entry = stageLock.skills[name];
+                    return object(entry) && entry.source === 'mattpocock/skills' && entry.sourceType === 'github' &&
+                        entry.sourceUrl === 'https://github.com/mattpocock/skills.git';
+                })) fail('invalid-skill-lock');
+            // All report, snapshot, metadata, and selected destinations must pass
+            // before touching either real copy. Unrelated entries are never traversed.
+            preflight(unique([...inventory, ...names]));
+            for (const dir of installDirs) {
+                directory(dir);
+                fs.mkdirSync(dir, {recursive: true, mode: 0o700});
+                for (const name of names) {
+                    const source = path.join(sourceDirs[0], name), target = path.join(dir, name);
+                    remove(target);
+                    fs.cpSync(source, target, {recursive: true, dereference: false, errorOnExist: true, force: false});
+                    copiedTree(target);
+                    if (!sameTree(source, target)) fail('invalid-skill-copy');
+                }
+            }
+            // Merge only this run's native records into the selected global lock;
+            // retain unrelated entries, preferences, and the other legacy lock.
+            const selectedLock = locks[locks.length - 1];
+            const data = selectedLock.data || {version: 3, skills: {}};
+            for (const name of names) {
+                const entry = {...stageLock.skills[name]};
+                if (data.skills[name]?.installedAt !== undefined) entry.installedAt = data.skills[name].installedAt;
+                data.skills[name] = entry;
+            }
+            writeJson(selectedLock.file, data);
             writeJson(manifestFile, {version: 1, skills: unique([...inventory, ...names])});
         } else if (mode === 'ownership') {
             if (blocked !== '1') {
@@ -5862,7 +6054,7 @@ function Invoke-MattPocockSkillPolicy {
     } catch (error) {
         const allowed = ['unsafe-path', 'linked-directory', 'not-directory', 'wrong-owner', 'unsafe-metadata', 'malformed-metadata',
             'unsupported-file', 'removal-failed', 'invalid-skill-copy', 'invalid-inventory', 'invalid-skill-lock',
-            'pi-profiles-blocked', 'linked-install-target', 'invalid-install-report', 'incomplete-suite', 'invalid-settings', 'unknown-operation'];
+            'pi-profiles-blocked', 'linked-install-target', 'invalid-install-report', 'incomplete-suite', 'invalid-settings', 'unsafe-stage', 'unknown-operation'];
         const reason = allowed.includes(error.message) ? error.message : ['EACCES', 'EPERM', 'ENOENT', 'ENOSPC', 'EROFS', 'EBUSY'].includes(error.code) ? error.code : 'operation-failed';
         process.stderr.write('Managed skills: ' + reason + '.\n');
         process.exitCode = 1;
@@ -5881,6 +6073,7 @@ function Invoke-MattPocockSkillPolicy {
             return $false
         }
         if ($Mode -eq 'names') { return @($result) }
+        if ($Mode -eq 'stage') { return [string]$result }
         return $true
     }
     catch {
@@ -5909,9 +6102,38 @@ function Setup-MattPocockSkills {
         return $false
     }
     if (-not (Invoke-MattPocockSkillPolicy -Mode preflight)) { return $false }
-    $reportFile = $null
+    $stage = $null
+    $success = $false
+    $savedEnvironment = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::Ordinal)
     try {
-        $reportFile = [System.IO.Path]::GetTempFileName()
+        # Resolve npm's policy before isolating the native CLI's global targets.
+        # Keep cwd and all other npm configuration unchanged.
+        $global:LASTEXITCODE = 0
+        $npmUserConfig = & npm config get userconfig 2>$null
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($npmUserConfig)) { throw 'npm-config' }
+        $npmGlobalConfig = & npm config get globalconfig 2>$null
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($npmGlobalConfig)) { throw 'npm-config' }
+        $stage = Invoke-MattPocockSkillPolicy -Mode stage
+        if (-not ($stage -is [string]) -or [string]::IsNullOrWhiteSpace($stage)) { $stage = $null; return $false }
+        $isolatedEnvironment = @{
+            HOME = $stage; USERPROFILE = $stage
+            CLAUDE_CONFIG_DIR = (Join-Path $stage '.claude'); CODEX_HOME = (Join-Path $stage '.codex')
+            PI_CODING_AGENT_DIR = (Join-Path $stage '.pi/agent'); XDG_STATE_HOME = (Join-Path $stage '.state')
+            XDG_CONFIG_HOME = (Join-Path $stage '.config'); XDG_CACHE_HOME = (Join-Path $stage '.cache')
+            XDG_DATA_HOME = (Join-Path $stage '.local/share')
+            npm_config_userconfig = [string]$npmUserConfig; npm_config_globalconfig = [string]$npmGlobalConfig
+        }
+        # Environment names are case-sensitive on Unix PowerShell, unlike Windows.
+        if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+            foreach ($key in @('NPM_CONFIG_USERCONFIG', 'NPM_CONFIG_GLOBALCONFIG')) {
+                $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key)
+                [Environment]::SetEnvironmentVariable($key, [NullString]::Value)
+            }
+        }
+        foreach ($key in $isolatedEnvironment.Keys) {
+            $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key)
+            [Environment]::SetEnvironmentVariable($key, $isolatedEnvironment[$key])
+        }
         Write-Message "Installing/updating the full Matt Pocock skill suite for Claude Code, Codex, Gemini CLI, and Pi..."
         $npxArgs = @(
             "--yes", "skills@latest", "add", "mattpocock/skills", "--global",
@@ -5920,23 +6142,34 @@ function Setup-MattPocockSkills {
         )
         $global:LASTEXITCODE = 0
         $output = & npx @npxArgs 2>$null
-        if ($LASTEXITCODE -ne 0) {
+        $installExitCode = $LASTEXITCODE
+        foreach ($key in $savedEnvironment.Keys) {
+            if ($null -eq $savedEnvironment[$key]) { [Environment]::SetEnvironmentVariable($key, [NullString]::Value) }
+            else { [Environment]::SetEnvironmentVariable($key, $savedEnvironment[$key]) }
+        }
+        $savedEnvironment.Clear()
+        if ($installExitCode -ne 0) {
             Write-Warning "Failed to install the full Matt Pocock skill suite."
             return $false
         }
-        [System.IO.File]::WriteAllText($reportFile, ($output -join "`n"))
-        if (-not (Invoke-MattPocockSkillPolicy -Mode validate -ReportFile $reportFile)) { return $false }
+        [System.IO.File]::WriteAllText((Join-Path $stage 'report.json'), ($output -join "`n"))
+        if (-not (Invoke-MattPocockSkillPolicy -Mode promote -ReportFile $stage)) { return $false }
         if (-not (Invoke-MattPocockSkillPolicy -Mode remove-obsolete)) { return $false }
-        Write-Success "Full Matt Pocock skill suite installed/updated through copied global skills."
-        return $true
+        $success = $true
     }
     catch {
         Write-Warning "Full Matt Pocock skill setup failed."
         return $false
     }
     finally {
-        if ($reportFile) { Remove-Item -LiteralPath $reportFile -Force -ErrorAction Stop }
+        foreach ($key in $savedEnvironment.Keys) {
+            if ($null -eq $savedEnvironment[$key]) { [Environment]::SetEnvironmentVariable($key, [NullString]::Value) }
+            else { [Environment]::SetEnvironmentVariable($key, $savedEnvironment[$key]) }
+        }
+        if ($stage -and -not (Invoke-MattPocockSkillPolicy -Mode dispose -ReportFile $stage)) { $success = $false }
     }
+    if ($success) { Write-Success "Full Matt Pocock skill suite installed/updated through copied global skills." }
+    return $success
 }
 
 
@@ -6669,7 +6902,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 151 | Last changed: Install full Matt suite and retire legacy global skills"
+    Write-Host "Version 152 | Last changed: Fix skill-link preflight and Paseo permission recovery"
 
     Assert-HeadlessPaseoUnsupported
     $null = Get-PaseoReleaseChannel

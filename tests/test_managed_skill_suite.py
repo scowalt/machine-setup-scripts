@@ -1,4 +1,5 @@
 """Full-suite/retirement contracts: extracted helpers, inert CLI, temporary homes only."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -51,7 +52,10 @@ class ManagedSkills(unittest.TestCase):
             'BAN_MATT_POCOCK_SKILLS', 'BAN_MATT_POCKOCK_SKILLS', 'NODE_OPTIONS', 'NODE_PATH', 'WORK_MACHINE')}
         self.env.update(HOME=str(self.home), USERPROFILE=str(self.home), SKILL_TEST_HOME=str(self.home),
                         SKILL_TEST_CALLS=str(self.root / 'calls'), SKILL_TEST_PYTHON=sys.executable,
-                        SKILL_TEST_MOCK=str(ROOT / 'tests/mock_managed_skills.py'))
+                        SKILL_TEST_MOCK=str(ROOT / 'tests/mock_managed_skills.py'),
+                        SKILL_TEST_STAGES=str(self.root / 'stages'), TMPDIR=str(self.root),
+                        TMP=str(self.root), TEMP=str(self.root), XDG_CACHE_HOME=str(self.root / 'cache'),
+                        XDG_CONFIG_HOME=str(self.root / 'config'), XDG_DATA_HOME=str(self.root / 'data'))
         self.shared = self.home / '.agents/skills'
         self.default_pi = self.home / '.pi/agent'
         self.custom_pi = self.home / 'custom pi'
@@ -66,11 +70,23 @@ class ManagedSkills(unittest.TestCase):
         file.write_text(data)
         return file
 
-    def policy(self, mode, success=True, blocked=False, script='mac.sh'):
+    def snapshot(self):
+        state = {}
+        def visit(file):
+            st = file.lstat()
+            state[str(file)] = (st.st_ino, st.st_mode, st.st_mtime_ns,
+                                os.readlink(file) if file.is_symlink() else hashlib.sha256(file.read_bytes()).hexdigest() if file.is_file() else None)
+            if file.is_dir() and not file.is_symlink():
+                for child in file.iterdir():
+                    visit(child)
+        visit(self.home)
+        return state
+
+    def policy(self, mode, success=True, blocked=False, script='mac.sh', argument=''):
         helper = self.root / 'policy.cjs'
         helper.write_text(embedded(script))
         proc = subprocess.run([NODE, str(helper), str(self.home), self.env.get('PI_CODING_AGENT_DIR', ''),
-                               '1' if blocked else '0', mode], env=self.env, text=True, capture_output=True, timeout=30)
+                               '1' if blocked else '0', mode, str(argument)], env=self.env, text=True, capture_output=True, timeout=30)
         self.assertEqual(proc.returncode == 0, success, proc.stdout + proc.stderr)
         self.assertNotIn('PRIVATE-SENTINEL', proc.stdout + proc.stderr)
         return proc
@@ -88,6 +104,13 @@ function Write-Message($Message) { }
 function Write-Warning($Message) { [Console]::Error.WriteLine($Message) }
 function Write-Success($Message) { }
 function Enable-SkillsCliNodeRuntime { return $env:SKILL_TEST_MODE -ne 'bad-runtime' }
+function npm {
+    param([string]$Command, [string]$Action, [string]$Key)
+    if ($Command -ne 'config' -or $Action -ne 'get' -or $Key -notin @('userconfig','globalconfig')) { throw 'unexpected npm call' }
+    $global:LASTEXITCODE = 0
+    if ($env:SKILL_TEST_MODE -eq 'failed-npm-config') { $global:LASTEXITCODE = 1; return }
+    Join-Path $env:SKILL_TEST_HOME ($Key + '.npmrc')
+}
 function npx {
     param([Parameter(ValueFromRemainingArguments=$true)][object[]]$Arguments)
     # Unix PowerShell expands native '*' arguments. Pass the captured argv as
@@ -96,7 +119,15 @@ function npx {
     try { & $env:SKILL_TEST_PYTHON $env:SKILL_TEST_MOCK }
     finally { $env:SKILL_TEST_ARGS = $null }
 }
-''' + f'\n$script:PiProfileMutationsBlocked=${str(blocked).lower()}\nif (-not ({action})) {{ exit 1 }}\n')
+''' + '\n$trackedEnvironment = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::Ordinal)\n'
+                               + 'foreach ($key in @("HOME","USERPROFILE","CLAUDE_CONFIG_DIR","CODEX_HOME","PI_CODING_AGENT_DIR",'
+                               + '"XDG_STATE_HOME","XDG_CONFIG_HOME","XDG_CACHE_HOME","XDG_DATA_HOME",'
+                               + '"npm_config_userconfig","npm_config_globalconfig","NPM_CONFIG_USERCONFIG","NPM_CONFIG_GLOBALCONFIG")) '
+                               + '{ $trackedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key) }\n'
+                               + f'$script:PiProfileMutationsBlocked=${str(blocked).lower()}\n$result = {action}\n'
+                               + 'foreach ($key in $trackedEnvironment.Keys) { if ([Environment]::GetEnvironmentVariable($key) -cne '
+                               + '$trackedEnvironment[$key]) { throw "Environment was not restored: $key" } }\n'
+                               + 'if (-not $result) { exit 1 }\n')
             command = [PWSH, '-NoProfile', '-NonInteractive', '-File', str(fixture)]
         else:
             action = {'install': 'setup_matt_pocock_skills', 'ownership': 'configure_pi_skill_ownership',
@@ -108,12 +139,21 @@ print_message() { :; }
 print_success() { :; }
 print_warning() { printf '%s\n' "$1" >&2; }
 ensure_skills_cli_node_runtime() { [[ "${SKILL_TEST_MODE:-}" != bad-runtime ]]; }
+npm() {
+    [[ "$1 $2" == 'config get' && ( "$3" == userconfig || "$3" == globalconfig ) ]] || return 90
+    [[ "${SKILL_TEST_MODE:-}" != failed-npm-config ]] || return 1
+    printf '%s/%s.npmrc\n' "${SKILL_TEST_HOME}" "$3"
+}
 npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
 ''' + f'\nPI_PROFILE_MUTATIONS_BLOCKED={int(blocked)}\n{action}\n')
             command = ['bash', str(fixture)]
         proc = subprocess.run(command, env=self.env, text=True, capture_output=True, timeout=30)
         self.assertEqual(proc.returncode == 0, success, script + ': ' + proc.stdout + proc.stderr)
         self.assertNotIn('PRIVATE-SENTINEL', proc.stdout + proc.stderr)
+        self.assertNotIn('Environment was not restored', proc.stdout + proc.stderr)
+        if Path(self.env['SKILL_TEST_STAGES']).exists():
+            for stage in Path(self.env['SKILL_TEST_STAGES']).read_text().splitlines():
+                self.assertFalse(os.path.lexists(stage), 'staging HOME was not removed')
         return proc
 
     def all_dirs(self):
@@ -148,6 +188,10 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
                 self.assertIn('if (-not (Remove-SimpleEnglishSkill))', text)
                 self.assertIn('Required show-me skill removal failed.', text)
                 self.assertIn('if (-not (Remove-ShowMeSkill))', text)
+        powershell = functions('win.ps1')
+        self.assertNotIn('$IsWindows', powershell)  # Absent on Windows PowerShell 5.1.
+        self.assertIn('[Environment]::OSVersion.Platform', powershell)
+        self.assertNotIn('Remove-Item -LiteralPath $stage -Recurse', powershell)
         self.assertEqual(len(KNOWN), 37)
         for name in KNOWN:
             self.assertIn("'" + name + "'", baseline)
@@ -419,7 +463,7 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
             if script == 'win.ps1' and not PWSH:
                 continue
             for mode in ('failed-command', 'partial-report', 'failed-result', 'skipped-result', 'missing-agent',
-                         'wrong-source', 'duplicate-name', 'unsafe-name', 'invalid-json', 'bad-runtime'):
+                         'wrong-source', 'duplicate-name', 'unsafe-name', 'invalid-json', 'bad-runtime', 'failed-npm-config'):
                 with self.subTest(script=script, mode=mode):
                     self.env.pop('SKILL_TEST_MODE', None)
                     self.wrapper(script)
@@ -427,6 +471,77 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
                     self.env['SKILL_TEST_MODE'] = mode
                     self.wrapper(script, success=False)
                     self.assertEqual((self.home / '.agents/.setup-matt-pocock-skills.json').read_bytes(), before)
+
+    def test_incomplete_or_invalid_snapshot_cannot_mutate_any_destination(self):
+        modes = ('failed-command', 'partial-report', 'omit-future-report', 'unreported-directory',
+                 'different-copy', 'invalid-lock', 'missing-lock', 'wrong-lock-source', 'extra-lock-entry')
+        for script in ('mac.sh', 'win.ps1'):
+            if script == 'win.ps1' and not PWSH:
+                continue
+            self.env.pop('SKILL_TEST_MODE', None)
+            self.wrapper(script)
+            before = self.snapshot()
+            for mode in modes:
+                with self.subTest(script=script, mode=mode):
+                    self.env['SKILL_TEST_MODE'] = mode
+                    self.wrapper(script, success=False)
+                    self.assertEqual(self.snapshot(), before)
+
+    def test_stage_disposal_unlinks_external_links_without_following_targets(self):
+        target = self.put(self.home / 'external/SKILL.md', 'PRIVATE-SENTINEL').parent
+        stage = Path(self.policy('stage').stdout.strip())
+        (stage / 'linked-directory').symlink_to(target, target_is_directory=True)
+        (stage / 'linked-file').symlink_to(target / 'SKILL.md')
+        before = self.snapshot()
+        self.policy('dispose', argument=stage)
+        self.assertFalse(stage.exists())
+        self.assertEqual(self.snapshot(), before)
+        # A swapped root must also be unlinked, never recursively followed.
+        stage = Path(self.policy('stage').stdout.strip())
+        stage.rmdir(); stage.symlink_to(target, target_is_directory=True)
+        self.policy('dispose', argument=stage)
+        self.assertFalse(os.path.lexists(stage))
+        self.assertEqual(self.snapshot(), before)
+        self.policy('dispose', argument=target, success=False)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_disposal_is_independent_of_changed_global_metadata(self):
+        stage = Path(self.policy('stage').stdout.strip())
+        self.put(stage / '.agents/skills/tdd/SKILL.md', 'inert')
+        self.put(self.home / '.agents/.skill-lock.json', 'PRIVATE-SENTINEL malformed')
+        before = self.snapshot()
+        self.policy('dispose', argument=stage)
+        self.assertFalse(stage.exists())
+        self.assertEqual(self.snapshot(), before)
+
+    def test_promotion_preserves_unrelated_lock_data_and_effective_npm_configuration(self):
+        self.env['XDG_STATE_HOME'] = str(self.home / 'state')
+        self.env['npm_config_userconfig'] = str(self.home / 'userconfig.npmrc')
+        self.env['NPM_CONFIG_USERCONFIG'] = str(self.home / 'unused-uppercase.npmrc')
+        self.env['npm_config_globalconfig'] = str(self.home / 'globalconfig.npmrc')
+        self.env['NPM_CONFIG_GLOBALCONFIG'] = str(self.home / 'unused-global-uppercase.npmrc')
+        configs = [self.put(self.home / name, 'PRIVATE-SENTINEL preserve npm policy') for name in
+                   ('userconfig.npmrc', 'globalconfig.npmrc', 'unused-uppercase.npmrc', 'unused-global-uppercase.npmrc')]
+        legacy = self.put(self.home / '.agents/.skill-lock.json', json.dumps({'version': 3, 'skills': {
+            'unrelated': {'source': 'other/repo'}, 'tdd': {'source': 'mattpocock/skills'}}}))
+        before = legacy.read_bytes()
+        selected = self.home / 'state/skills/.skill-lock.json'
+        for script in ('mac.sh', 'win.ps1'):
+            if script == 'win.ps1' and not PWSH:
+                continue
+            self.put(selected, json.dumps({'version': 3, 'skills': {'unrelated': {'source': 'other/repo'},
+                                           'tdd': {'source': 'mattpocock/skills', 'installedAt': 'original-install-time'}},
+                                           'dismissed': {'keep': True}, 'custom': 'preserve'}))
+            self.wrapper(script)
+            data = json.loads(selected.read_text())
+            self.assertEqual(data['skills']['unrelated'], {'source': 'other/repo'})
+            self.assertEqual(data['skills']['tdd']['installedAt'], 'original-install-time')
+            self.assertEqual(data['dismissed'], {'keep': True})
+            self.assertEqual(data['custom'], 'preserve')
+            self.assertEqual(data['skills']['new-upstream-skill']['source'], 'mattpocock/skills')
+            self.assertEqual(legacy.read_bytes(), before)
+            for config in configs:
+                self.assertEqual(config.read_text(), 'PRIVATE-SENTINEL preserve npm policy')
 
     def test_all_reported_skills_validate_both_copies_and_nested_links(self):
         for script in ('mac.sh', 'win.ps1'):
@@ -568,6 +683,12 @@ require('node:module').syncBuiltinESMExports();
         env = {k: v for k, v in self.env.items() if not k.startswith('GIT_')}
         env.update(XDG_CONFIG_HOME=str(self.home / '.config'), XDG_CACHE_HOME=str(self.home / '.cache'),
                    XDG_DATA_HOME=str(self.home / '.local/share'), DISABLE_TELEMETRY='1')
+        discovery = subprocess.run([NODE, '--require', str(blocker), os.environ['MANAGED_SKILLS_CLI'],
+                                    'add', str(source), '--list', '--full-depth', '--yes', '--json'],
+                                   env=env, text=True, capture_output=True, timeout=60)
+        self.assertNotEqual(discovery.returncode, 0)
+        self.assertIn('cannot be combined with --list', json.loads(discovery.stdout)[0]['error'])
+        self.assertFalse(self.shared.exists())
         result = subprocess.run([NODE, '--require', str(blocker), os.environ['MANAGED_SKILLS_CLI'],
                                  'add', str(source), '--global', '--agent', 'claude-code', '--agent', 'codex',
                                  '--agent', 'gemini-cli', '--skill', '*', '--full-depth', '--copy', '--yes', '--json'],
@@ -586,6 +707,91 @@ require('node:module').syncBuiltinESMExports();
                 self.assertEqual((base / name / 'references/guide.md').read_text(), 'reference')
         self.assertFalse((self.home / '.gemini/skills').exists())
         self.assertFalse((self.custom_pi / 'skills').exists())
+
+    @unittest.skipUnless(os.environ.get('MANAGED_SKILLS_CLI'), 'Set MANAGED_SKILLS_CLI for offline native snapshot coverage')
+    def test_native_snapshot_promotes_without_reselecting_a_changed_upstream(self):
+        source = self.root / 'upstream'
+        names = KNOWN + ['new-upstream-skill']
+        for name in names:
+            self.put(source / 'skills/in-progress' / name / 'SKILL.md',
+                     f'---\nname: {name}\ndescription: Inert fixture.\n---\nNever execute.\n')
+            self.put(source / 'skills/in-progress' / name / 'references/guide.md', 'snapshot content')
+        hooks = self.root / 'empty-hooks'
+        hooks.mkdir()
+        config = self.put(self.root / 'gitconfig',
+                          f'[core]\n\thooksPath = {hooks}\n[url "{source.as_uri()}"]\n'
+                          '\tinsteadOf = https://github.com/mattpocock/skills.git\n')
+        # Clear every inherited Git control, then add only fixture-owned values.
+        env = {k: v for k, v in self.env.items() if not k.startswith('GIT_') and k not in ('GH_TOKEN', 'GITHUB_TOKEN')}
+        env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=str(config), GIT_TEMPLATE_DIR=str(hooks),
+                   GIT_TERMINAL_PROMPT='0', GIT_ALLOW_PROTOCOL='file', DISABLE_TELEMETRY='1')
+        def git(*args):
+            return subprocess.run(['git', '-C', str(source), '-c', 'user.name=Fixture',
+                                   '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', *args],
+                                  env=env, check=True, text=True, capture_output=True, timeout=30).stdout.strip()
+        git('init')
+        self.assertEqual(Path(git('rev-parse', '--show-toplevel')).resolve(), source.resolve())
+        git('add', '.')
+        git('commit', '-m', 'Inert snapshot')
+        blocker = self.put(self.root / 'offline-native.cjs', '''
+const deny = () => { throw new Error('NETWORK_OR_CHILD_PROCESS_FORBIDDEN'); };
+globalThis.fetch = deny;
+for (const name of ['node:http', 'node:https']) {
+    const api = require(name); api.request = deny; api.get = deny;
+}
+const net = require('node:net'); net.connect = deny; net.createConnection = deny;
+const cp = require('node:child_process'), spawn = cp.spawn;
+for (const method of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync']) cp[method] = deny;
+cp.spawn = (command, args, options) => {
+    // Native simple-git may only clone the inert repository. Even if URL rewriting
+    // fails, file-only transport prevents a network request or credential lookup.
+    if (command !== 'git' || !args.includes('clone') || !args.includes('https://github.com/mattpocock/skills.git')) deny();
+    return spawn(command, args, {...options, env: {...options.env, GIT_ALLOW_PROTOCOL: 'file'}});
+};
+require('node:module').syncBuiltinESMExports();
+''')
+        stage = Path(self.policy('stage').stdout.strip())
+        env.update(HOME=str(stage), USERPROFILE=str(stage), CLAUDE_CONFIG_DIR=str(stage / '.claude'),
+                   CODEX_HOME=str(stage / '.codex'), XDG_STATE_HOME=str(stage / '.state'))
+        try:
+            result = subprocess.run([NODE, '--require', str(blocker), os.environ['MANAGED_SKILLS_CLI'],
+                                     'add', 'mattpocock/skills', '--global', '--agent', 'claude-code', '--agent', 'codex',
+                                     '--agent', 'gemini-cli', '--skill', '*', '--full-depth', '--copy', '--yes', '--json'],
+                                    env=env, text=True, capture_output=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual({entry['name'] for entry in report}, set(names))
+            self.assertTrue(all(entry['source'] == 'mattpocock/skills' for entry in report))
+            self.put(stage / 'report.json', result.stdout)
+            target = self.put(self.home / 'sentinel/SKILL.md', 'PRIVATE-SENTINEL').parent
+            for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
+                self.put(base / 'tdd/SKILL.md', 'previous copy')
+                (base / 'omarchy').symlink_to(self.home / 'missing', target_is_directory=True)
+            collision = self.shared / 'new-upstream-skill'
+            collision.symlink_to(target, target_is_directory=True)
+            before = self.snapshot()
+            self.policy('promote', argument=stage, success=False)
+            self.assertEqual(self.snapshot(), before)
+            collision.unlink()
+            # Advancing the source after discovery cannot introduce an unchecked
+            # destination name or change the bytes of the promoted snapshot.
+            self.put(source / 'skills/in-progress/another-future-name/SKILL.md',
+                     '---\nname: another-future-name\ndescription: New fixture.\n---\nNever execute.\n')
+            self.put(source / 'skills/in-progress/tdd/references/guide.md', 'changed upstream')
+            git('add', '.')
+            git('commit', '-m', 'Advance inert source after staging')
+            self.policy('promote', argument=stage)
+            for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
+                self.assertTrue((base / 'omarchy').is_symlink())
+                self.assertFalse((base / 'another-future-name').exists())
+                for name in names:
+                    self.assertEqual((base / name / 'references/guide.md').read_text(), 'snapshot content')
+            data = json.loads((self.home / '.agents/.skill-lock.json').read_text())
+            self.assertEqual(set(data['skills']), set(names))
+            self.assertEqual(data['skills']['new-upstream-skill']['sourceType'], 'github')
+            self.assertEqual((target / 'SKILL.md').read_text(), 'PRIVATE-SENTINEL')
+        finally:
+            shutil.rmtree(stage)
 
     @unittest.skipUnless(os.environ.get('PI_SKILLS_DOTFILES_SOURCE'), 'Set PI_SKILLS_DOTFILES_SOURCE for render/setup coverage')
     def test_dotfiles_render_preserves_future_skill_exclusions(self):
@@ -627,6 +833,74 @@ require('node:module').syncBuiltinESMExports();
         self.shared.symlink_to(target, target_is_directory=True)
         self.policy('ownership', success=False)
         self.assertTrue((self.default_pi / 'skills/tdd/SKILL.md').exists())
+
+    def test_unrelated_live_and_dangling_links_survive_installation(self):
+        for script in SCRIPTS:
+            if script == 'win.ps1' and not PWSH:
+                continue
+            for live in (False, True):
+                with self.subTest(script=script, live=live):
+                    target = self.home / ('sentinel' if live else 'missing')
+                    if live:
+                        self.put(target / 'SKILL.md', 'PRIVATE-SENTINEL')
+                    links = []
+                    for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
+                        base.mkdir(parents=True, exist_ok=True)
+                        link = base / 'omarchy'
+                        link.unlink(missing_ok=True)
+                        link.symlink_to(target, target_is_directory=True)
+                        links.append((link, link.lstat().st_ino, os.readlink(link)))
+                    self.wrapper(script)
+                    for link, inode, value in links:
+                        self.assertTrue(link.is_symlink())
+                        self.assertEqual(link.lstat().st_ino, inode)
+                        self.assertEqual(os.readlink(link), value)
+                        link.unlink()
+                    if live:
+                        self.assertEqual((target / 'SKILL.md').read_text(), 'PRIVATE-SENTINEL')
+                    else:
+                        self.assertFalse(target.exists())
+                    self.assertTrue((self.shared / 'new-upstream-skill/SKILL.md').is_file())
+
+    def test_future_selected_name_links_block_before_destination_mutation(self):
+        target = self.put(self.home / 'sentinel/SKILL.md', 'PRIVATE-SENTINEL').parent
+        keep = self.put(self.shared / 'tdd/SKILL.md', 'previous installation')
+        for script in SCRIPTS:
+            if script == 'win.ps1' and not PWSH:
+                continue
+            for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
+                for live in (False, True):
+                    with self.subTest(script=script, base=base, live=live):
+                        base.mkdir(parents=True, exist_ok=True)
+                        link = base / 'new-upstream-skill'
+                        link.symlink_to(target if live else self.home / 'missing', target_is_directory=True)
+                        inode, value = link.lstat().st_ino, os.readlink(link)
+                        self.wrapper(script, success=False)
+                        self.assertEqual(link.lstat().st_ino, inode)
+                        self.assertEqual(os.readlink(link), value)
+                        self.assertEqual(keep.read_text(), 'previous installation')
+                        self.assertEqual((target / 'SKILL.md').read_text(), 'PRIVATE-SENTINEL')
+                        self.assertFalse((self.home / '.agents/.setup-matt-pocock-skills.json').exists())
+                        link.unlink()
+
+    def test_future_selected_name_nested_links_block_before_any_destination_mutation(self):
+        target = self.put(self.home / 'sentinel/keep', 'PRIVATE-SENTINEL').parent
+        self.put(self.shared / 'tdd/SKILL.md', 'previous installation')
+        for script in SCRIPTS:
+            if script == 'win.ps1' and not PWSH:
+                continue
+            for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
+                for live in (False, True):
+                    with self.subTest(script=script, base=base, live=live):
+                        skill = base / 'new-upstream-skill'
+                        self.put(skill / 'SKILL.md', 'previous future skill')
+                        link = skill / 'references'
+                        link.unlink(missing_ok=True)
+                        link.symlink_to(target if live else self.home / 'missing', target_is_directory=True)
+                        before = self.snapshot()
+                        self.wrapper(script, success=False)
+                        self.assertEqual(self.snapshot(), before)
+                        link.unlink()
 
     def test_install_preflight_stops_before_cli_on_unsafe_metadata_and_paths(self):
         for script in ('mac.sh', 'win.ps1'):

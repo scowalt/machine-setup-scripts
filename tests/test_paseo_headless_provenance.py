@@ -25,7 +25,8 @@ class HeadlessProvenanceTests(unittest.TestCase):
                 home = root / 'home'
                 home.mkdir(mode=0o700)
                 cli = root / 'retained cli'
-                cli.write_text('#!/bin/bash\nprintf "provenance:%s\\nargs:%s\\n" "$PASEO_SETUP_CLI" "$*"\n')
+                cli.write_text('#!/bin/bash\nprintf "provenance:%s\\nargs:%s\\n" "$PASEO_SETUP_CLI" "$*"\n'
+                               'touch "$HOME/native-pid-fixture"\n')
                 cli.chmod(0o700)
                 wrapper = home / '.local/bin/paseo-daemon-start'
                 wrapper.parent.mkdir(parents=True)
@@ -48,11 +49,15 @@ class HeadlessProvenanceTests(unittest.TestCase):
                 result = subprocess.run(['bash', str(fixture)], env=env, cwd=root, capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 lines = wrapper.read_text().splitlines()
-                self.assertEqual(len(lines), 9)
-                self.assertEqual(shlex.split(lines[7]), ['export', 'PASEO_SETUP_CLI=' + str(cli)])
-                self.assertEqual(shlex.split(lines[8])[1], str(cli))
-                # Execute only the generated wrapper's inert, test-owned CLI.
-                result = subprocess.run(['bash', str(wrapper)], env=env, cwd=root, capture_output=True, text=True, timeout=15)
+                self.assertEqual(len(lines), 10)
+                self.assertEqual(lines[3], 'umask 077')
+                self.assertEqual(shlex.split(lines[8]), ['export', 'PASEO_SETUP_CLI=' + str(cli)])
+                self.assertEqual(shlex.split(lines[9])[1], str(cli))
+                # Execute only the generated wrapper's inert, test-owned CLI. A normal
+                # native file create must be private even under the observed umask.
+                result = subprocess.run(['bash', '-c', 'umask 002; exec bash "$1"', 'fixture', str(wrapper)],
+                                        env=env, cwd=root, capture_output=True, text=True, timeout=15)
+                self.assertEqual((home / 'native-pid-fixture').stat().st_mode & 0o777, 0o600)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.splitlines(), ['provenance:' + str(cli),
                     'args:daemon start --foreground --listen 127.0.0.1:6767'])

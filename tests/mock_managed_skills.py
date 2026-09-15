@@ -13,9 +13,21 @@ arguments = json.loads(os.environ['SKILL_TEST_ARGS']) if os.environ.get('SKILL_T
 if arguments != EXPECTED:
     print('Unexpected fixture arguments: ' + json.dumps(arguments), file=sys.stderr)
     sys.exit(90)
-home = Path(os.environ['SKILL_TEST_HOME'])
-assert str(home) == os.environ['USERPROFILE'] == os.environ['HOME']
-assert (home / '.test-owned').is_file()
+original_home = Path(os.environ['SKILL_TEST_HOME'])
+assert (original_home / '.test-owned').is_file()
+home = Path(os.environ['HOME'])
+assert str(home) == os.environ['USERPROFILE']
+assert home != original_home and home.name.startswith('setup-matt-pocock-')
+assert home.parent == original_home.parent
+for variable, suffix in [('CLAUDE_CONFIG_DIR', '.claude'), ('CODEX_HOME', '.codex'),
+                         ('PI_CODING_AGENT_DIR', '.pi/agent'), ('XDG_STATE_HOME', '.state'),
+                         ('XDG_CONFIG_HOME', '.config'), ('XDG_CACHE_HOME', '.cache'),
+                         ('XDG_DATA_HOME', '.local/share')]:
+    assert Path(os.environ[variable]) == home / suffix
+for key in ('userconfig', 'globalconfig'):
+    assert os.environ['npm_config_' + key] == str(original_home / (key + '.npmrc'))
+with Path(os.environ['SKILL_TEST_STAGES']).open('a') as stages:
+    stages.write(str(home) + '\n')
 with Path(os.environ['SKILL_TEST_CALLS']).open('a') as calls:
     calls.write(json.dumps(arguments) + '\n')
 mode = os.environ.get('SKILL_TEST_MODE', '')
@@ -56,6 +68,22 @@ if mode in ('missing-file', 'empty-file', 'linked-file', 'linked-references', 'd
         artifact.symlink_to(home / 'sentinel', target_is_directory=(mode == 'linked-references'))
 if mode == 'partial-report':
     report.pop(0)
+if mode == 'omit-future-report':
+    report.pop()
+if mode == 'unreported-directory':
+    (roots[0] / 'unreported-upstream-skill').mkdir()
+if mode == 'different-copy':
+    (roots[0] / 'new-upstream-skill/references/guide.md').write_text('mismatched snapshot')
+if mode == 'invalid-lock':
+    lock_file.write_text('PRIVATE-SENTINEL malformed')
+if mode == 'missing-lock':
+    lock_file.unlink()
+if mode == 'wrong-lock-source':
+    lock['skills']['new-upstream-skill']['source'] = 'another/repo'
+    lock_file.write_text(json.dumps(lock))
+if mode == 'extra-lock-entry':
+    lock['skills']['unselected-name'] = {'source': 'mattpocock/skills'}
+    lock_file.write_text(json.dumps(lock))
 if mode == 'failed-result':
     report[0]['status'] = 'failed'
 if mode == 'skipped-result':

@@ -274,6 +274,20 @@ fs.readFileSync = (p, ...args) => {
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertFalse(self.surplus.exists(), result.stdout)
 
+    def test_restrictive_wrapper_retains_exact_provenance_validation(self):
+        self.seed_managed_service()
+        wrapper = self.home / '.local/bin/paseo-daemon-start'
+        original = wrapper.read_text()
+        for bad in ('umask 002', 'umask "$MASK"', 'umask 077; extra-command'):
+            wrapper.write_text(original.replace('set -euo pipefail\n', 'set -euo pipefail\n' + bad + '\n'))
+            result = self.run_cleanup()
+            self.assertIn('deferred', result.stdout)
+            self.assertTrue(self.surplus.exists())
+        wrapper.write_text(original.replace('set -euo pipefail\n', 'set -euo pipefail\numask 077\n'))
+        result = self.run_cleanup()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertFalse(self.surplus.exists(), result.stdout)
+
     def test_process_titles_beyond_the_native_service_tree_remain_unverified(self):
         self.seed_managed_service()
         self.processes += f'{os.getuid()} 4324 4323 Paseo Supervisor\n'

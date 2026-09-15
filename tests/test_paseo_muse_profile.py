@@ -39,7 +39,7 @@ const cp = require('node:child_process');
 const root = process.env.MUSE_FIXTURE_ROOT;
 const stateFile = path.join(root, 'state.json');
 const state = JSON.parse(fs.readFileSync(stateFile));
-const original = Object.fromEntries(['readFileSync','writeFileSync','statSync','lstatSync','readdirSync','openSync','renameSync','unlinkSync','realpathSync','readlinkSync','mkdirSync','existsSync'].map(k => [k,fs[k].bind(fs)]));
+const original = Object.fromEntries(['readFileSync','writeFileSync','statSync','lstatSync','readdirSync','openSync','renameSync','unlinkSync','realpathSync','readlinkSync','mkdirSync','existsSync','fchmodSync','chmodSync','symlinkSync'].map(k => [k,fs[k].bind(fs)]));
 const diskHome = path.join(root, 'home');
 const home = state.aliasHome ? '/var/home/fixture' : diskHome;
 const logicalHome = state.aliasHome ? (state.physicalHome ? home : '/home/fixture') : state.logicalHome || home;
@@ -111,7 +111,19 @@ fs.lstatSync = function(file,...args) {
       isSymbolicLink:()=>file==='/home',isDirectory:()=>file!=='/home',isFile:()=>false};
   }
   if(file==='/Library'||file==='/Library/LaunchDaemons') return {uid:0,mode:0o755,isDirectory:()=>true,isSymbolicLink:()=>false};
-  const s=original.lstatSync(mapped(file),...args); if(file===plist) {s.uid=state.plistBadOwner ? 99 : 0;} return s;
+  if(file===pidFile && state.awaitingRestartPid) {
+    if(state.restartPidMissingChecks > 0) { state.restartPidMissingChecks--; error('ENOENT'); }
+    nativePid(); state.awaitingRestartPid=false;
+    if(state.restartPidPartialChecks > 0) original.writeFileSync(mapped(pidFile),'{');
+  }
+  if(file===pidFile && state.restartStarted && state.restartPidPartialChecks > 0) {
+    state.restartPidPartialChecks--;
+    if(state.restartPidPartialChecks===0) nativePid();
+  }
+  const s=original.lstatSync(mapped(file),...args);
+  if(file===plist) s.uid=state.plistBadOwner ? 99 : 0;
+  if(file===state.badOwnerPath) s.uid=uid+1;
+  return s;
 };
 fs.readlinkSync = function(file,...args) {if((state.alias || state.aliasHome) && file==='/home') return state.aliasTarget || '/var/home'; return original.readlinkSync(file,...args);};
 fs.readdirSync = function(file,...args) { if(file==='/proc') return procRows().map(p=>String(p.pid)); return original.readdirSync(file,...args); };
@@ -142,7 +154,27 @@ fs.openSync = function(file,...args) {
     original.writeFileSync(mapped(config),JSON.stringify({concurrent:state.concurrentEdit}));
   }
   if(String(file).includes('.config.setup-muse-') && state.writeFailure) error('EIO');
+  if(file===path.join(home,'.config/systemd/user/paseo.service') && state.serviceFifoSwap) {
+    original.renameSync(path.join(root,'fifo'),mapped(file)); state.serviceFifoSwap=false;
+  }
+  if(String(file).startsWith('/proc/self/fd/') && String(file).endsWith('/systemd') && state.recoverySwap) {
+    const directory=path.join(diskHome,'.config/systemd');
+    original.renameSync(directory,path.join(root,'moved-systemd'));
+    original.symlinkSync(path.join(root,'outside'),directory);
+    state.recoverySwap=false;
+  }
+  if(String(file).startsWith('/proc/self/fd/') && String(file).endsWith('/paseo.pid') && state.recoveryPidChanged) {
+    original.writeFileSync(mapped(pidFile),JSON.stringify({changed:true}));
+  }
   const fd=original.openSync(mapped(file),...args); opened.set(fd,file); return fd;
+};
+fs.fchmodSync = function(fd,mode) {
+  if(String(opened.get(fd)).startsWith('/proc/self/fd/')) {
+    state.calls.push(['permission-chmod']);
+    state.repairModes ||= []; state.repairModes.push(mode);
+    if(state.permissionChmodFailure) error('EACCES');
+  }
+  return original.fchmodSync(fd,mode);
 };
 fs.writeFileSync = function(file,...args) {
   if(typeof file==='number' && opened.get(file)===pidFile && state.pidWriteFailure) error('EIO');
@@ -161,6 +193,12 @@ fs.renameSync = function(from,to,...args) {
 };
 function nativePid() {
   original.writeFileSync(mapped(pidFile),JSON.stringify({pid:4202,uid,hostname:'fixture-machine',startedAt:'2026-01-01T00:00:00Z',listen:'127.0.0.1:6767'}));
+  if(state.restartPidMode) original.chmodSync(mapped(pidFile),state.restartPidMode);
+  if(state.restartPidBadOwner) state.badOwnerPath=pidFile;
+  if(state.restartPidLinkTarget) {
+    original.unlinkSync(mapped(pidFile));
+    original.symlinkSync(state.restartPidLinkTarget,mapped(pidFile));
+  }
 }
 function stop() {
   if(!state.stopLeavesRunning) {
@@ -175,7 +213,13 @@ function stop() {
   saved();
   return !state.stopFailure;
 }
-function start() { if(state.startFailure) return false; state.running=true; nativePid(); saved(); return true; }
+function start() {
+  if(state.startFailure) return false;
+  state.running=true; state.restartStarted=true;
+  if(state.restartPidMissingChecks || state.restartPidPartialChecks) state.awaitingRestartPid=true;
+  else nativePid();
+  saved(); return true;
+}
 function show() {
   const wrapper=path.join(home,'.local/bin/paseo-daemon-start');
   const values={Id:'paseo.service',LoadState:'loaded',ActiveState:state.running?'active':'inactive',SubState:state.running?'running':'dead',MainPID:state.running?'4200':'0',
@@ -466,7 +510,8 @@ class MuseProfileTests(unittest.TestCase):
             wrapper = self.home / '.local/bin/paseo-daemon-start'
             old = wrapper.read_text()
             new = old.replace("exec '/fixture/paseo'", "export PASEO_SETUP_CLI='/fixture/paseo'\nexec '/fixture/paseo'")
-            for text in (old, new):
+            restricted = new.replace('set -euo pipefail\n', 'set -euo pipefail\numask 077\n')
+            for text in (old, new, restricted):
                 with self.subTest(platform=platform, lines=len(text.splitlines())):
                     wrapper.write_text(text)
                     result = self.run_helper(mode='verify-owner')
@@ -476,12 +521,15 @@ class MuseProfileTests(unittest.TestCase):
                         new.replace("export PASEO_SETUP_CLI='/fixture/paseo'", 'export PASEO_SETUP_CLI="$OTHER"'),
                         new.replace("[[ -x '/fixture/paseo' ]]", "[[ -x '/different/paseo' ]]"),
                         new.replace("export PASEO_SETUP_CLI=", "# export PASEO_SETUP_CLI="),
+                        restricted.replace('umask 077', 'umask 022'),
+                        restricted.replace('umask 077', 'umask "$USER_MASK"'),
+                        restricted.replace('umask 077', 'umask 077; arbitrary-command'),
                         new + '# modified\n'):
                 wrapper.write_text(bad)
                 result = self.run_helper(mode='verify-owner')
                 self.assertIn('unmanaged-wrapper', result.stdout)
                 self.assertEqual(self.mutations(), [])
-            wrapper.write_text(new)
+            wrapper.write_text(restricted)
             self.save({})
             result = self.run_helper()  # Later normal Muse updates accept the new wrapper too.
             self.assertEqual(result.returncode, 0, result.stdout)
@@ -706,6 +754,269 @@ class MuseProfileTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.config.exists())
         self.assertFalse((self.paseo / 'paseo.pid').exists())
+
+    def test_recovers_observed_managed_pid_and_systemd_permissions(self):
+        self.seed_service()
+        self.save({'keep': {'private': SECRET}})
+        pid = self.paseo / 'paseo.pid'
+        pid.chmod(0o664)
+        directories = [self.home / name for name in ('.config', '.config/systemd', '.config/systemd/user')]
+        for directory in directories:
+            directory.chmod(0o775)
+        wrapper = self.home / '.local/bin/paseo-daemon-start'
+        service = directories[-1] / 'paseo.service'
+        before = {p: p.read_bytes() for p in (wrapper, service)}
+        home_mode = self.home.stat().st_mode
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('PASEO_MUSE_UPDATED', result.stdout)
+        self.assertIn('PASEO_MUSE_PERMISSIONS_REPAIRED', result.stdout)
+        self.assertEqual([p.stat().st_mode & 0o777 for p in directories], [0o755] * 3)
+        self.assertEqual(pid.stat().st_mode & 0o022, 0)
+        self.assertEqual(self.home.stat().st_mode, home_mode)
+        self.assertEqual({p: p.read_bytes() for p in before}, before)
+        self.assertEqual(self.read_config()['keep'], {'private': SECRET})
+        self.assertEqual(self.managed()['thinkingOptionId'], 'xhigh')
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn('PASEO_MUSE_PERMISSIONS_REPAIRED', result.stdout)
+        self.assertEqual(self.state['calls'], [])
+
+    def test_permission_recovery_uses_pinned_handles_through_trusted_system_home_alias(self):
+        for physical in (False, True):
+            with self.subTest(physical=physical):
+                self.state = {}
+                self.seed_service()
+                self.save({})
+                (self.paseo / 'paseo.pid').chmod(0o664)
+                for relative in ('.config', '.config/systemd', '.config/systemd/user'):
+                    (self.home / relative).chmod(0o775)
+                logical = '/var/home/fixture' if physical else '/home/fixture'
+                wrapper = self.home / '.local/bin/paseo-daemon-start'
+                unit = self.home / '.config/systemd/user/paseo.service'
+                for file in (wrapper, unit):
+                    file.write_text(file.read_text().replace(str(self.home), logical))
+                self.state.update(aliasHome=True, physicalHome=physical, ownerHome=logical, serviceOverrides={
+                    'FragmentPath': logical + '/.config/systemd/user/paseo.service',
+                    'ExecStart': '{ path=' + logical + '/.local/bin/paseo-daemon-start ; argv[]=' + logical + '/.local/bin/paseo-daemon-start ; }',
+                    'Environment': 'HOME=' + logical + ' PATH=/fixture/bin',
+                })
+                result = self.run_helper()
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertIn('PASEO_MUSE_UPDATED', result.stdout)
+                self.assertIn('PASEO_MUSE_PERMISSIONS_REPAIRED', result.stdout)
+                self.assertEqual((self.paseo / 'paseo.pid').stat().st_mode & 0o022, 0)
+
+    def test_permission_recovery_also_runs_when_profile_is_unchanged(self):
+        self.seed_service()
+        self.save({'daemon': {'agentProfiles': [PROFILE]}})
+        pid = self.paseo / 'paseo.pid'
+        pid.chmod(0o664)
+        before = {p: p.read_bytes() for p in (pid, self.config)}
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('PASEO_MUSE_PERMISSIONS_REPAIRED', result.stdout)
+        self.assertNotIn('PASEO_MUSE_RESTARTING', result.stdout)
+        self.assertEqual(pid.stat().st_mode & 0o022, 0)
+        self.assertEqual({p: p.read_bytes() for p in before}, before)
+
+    def test_old_wrapper_restart_pid_is_resecured_before_later_owner_preflight(self):
+        self.seed_service()
+        self.state['restartPidMode'] = 0o664
+        (self.paseo / 'paseo.pid').chmod(0o664)
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('PASEO_MUSE_RESTORED', result.stdout)
+        self.assertEqual(result.stdout.count('PASEO_MUSE_PERMISSIONS_REPAIRED'), 2)
+        self.assertEqual((self.paseo / 'paseo.pid').stat().st_mode & 0o777, 0o644)
+        result = self.run_helper(mode='verify-owner')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('PASEO_MUSE_OWNER_VERIFIED', result.stdout)
+        self.assertNotIn(['permission-chmod'], self.state['calls'])
+
+    def test_restart_waits_for_missing_and_partial_native_pid(self):
+        for scenario in ('restartPidMissingChecks', 'restartPidPartialChecks'):
+            with self.subTest(scenario=scenario):
+                self.seed_service()
+                self.save({})
+                self.state.update(restartPidMode=0o664, restartStarted=False, awaitingRestartPid=False, **{scenario: 12})
+                result = self.run_helper()
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertIn('PASEO_MUSE_RESTORED', result.stdout)
+                self.assertEqual((self.paseo / 'paseo.pid').stat().st_mode & 0o022, 0)
+                self.assertEqual(self.state[scenario], 0)
+                self.state.pop(scenario)
+
+    def test_pending_restart_does_not_extend_permission_exception_to_unsafe_pid(self):
+        outside = self.root / 'outside-pid'
+        outside.write_text(SECRET); outside.chmod(0o666)
+        for unsafe in ('linked', 'world-write', 'foreign-owner'):
+            with self.subTest(unsafe=unsafe):
+                pid = self.paseo / 'paseo.pid'
+                pid.unlink(missing_ok=True)
+                self.state = {}
+                self.seed_service()
+                self.save({})
+                self.state['restartPidMissingChecks'] = 12
+                if unsafe == 'linked': self.state['restartPidLinkTarget'] = str(outside)
+                elif unsafe == 'world-write': self.state['restartPidMode'] = 0o666
+                else: self.state['restartPidBadOwner'] = True
+                result = self.run_helper()
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertNotIn('PASEO_MUSE_RESTORED', result.stdout)
+                self.assertNotIn(['permission-chmod'], self.state['calls'])
+                self.assertEqual(sum('start' in call for call in self.state['calls']), 1)
+                self.assertEqual(outside.read_text(), SECRET)
+                self.assertEqual(outside.stat().st_mode & 0o777, 0o666)
+
+    def test_restart_missing_pid_times_out_without_claiming_restore(self):
+        self.seed_service()
+        self.state['restartPidMissingChecks'] = 100000
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('service-restore-failed', result.stdout)
+        self.assertIn('retry limit', result.stdout)
+        self.assertNotIn('PASEO_MUSE_RESTORED', result.stdout)
+        self.assertTrue(self.state['running'])  # Never restart or kill a second owner.
+        self.assertEqual(sum('start' in call for call in self.state['calls']), 1)
+
+    def test_writable_service_ancestor_fifo_swap_cannot_block_snapshot(self):
+        self.seed_service()
+        self.home.chmod(0o750)
+        for relative in ('.config', '.config/systemd', '.config/systemd/user'):
+            (self.home / relative).chmod(0o775)
+        os.mkfifo(self.root / 'fifo', mode=0o600)
+        self.state['serviceFifoSwap'] = True
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('file-changed', result.stdout)
+        self.assertNotIn(['permission-chmod'], self.state['calls'])
+        self.assertFalse(self.mutations())
+
+    def test_permission_recovery_is_preflighted_before_any_chmod(self):
+        self.seed_service()
+        pid = self.paseo / 'paseo.pid'
+        pid.chmod(0o664)
+        config_dir = self.home / '.config'
+        config_dir.chmod(0o775)
+        for unsafe in ('wrong-owner', 'world-write', 'linked-pid', 'linked-service', 'malformed-config',
+                       'malformed-pid', 'nonprivate-paseo', 'unsafe-home'):
+            with self.subTest(unsafe=unsafe):
+                before_pid = pid.read_bytes()
+                before_paseo = self.paseo.stat().st_mode & 0o777
+                before_home = self.home.stat().st_mode & 0o777
+                service = config_dir / 'systemd/user/paseo.service'
+                service_text = service.read_bytes()
+                if unsafe == 'wrong-owner': self.state['badOwnerPath'] = str(config_dir / 'systemd')
+                elif unsafe == 'world-write': (config_dir / 'systemd').chmod(0o777)
+                elif unsafe == 'linked-pid':
+                    pid.unlink(); pid.symlink_to(self.root / 'missing')
+                elif unsafe == 'linked-service':
+                    service.unlink(); service.symlink_to(self.root / 'missing')
+                elif unsafe == 'malformed-config': self.config.write_text(SECRET)
+                elif unsafe == 'malformed-pid': pid.write_text(SECRET)
+                elif unsafe == 'nonprivate-paseo': self.paseo.chmod(0o750)
+                elif unsafe == 'unsafe-home': self.home.chmod(0o775)
+                result = self.run_helper()
+                self.assertIn('PASEO_MUSE_DEFER_DAEMON_SETUP=1', result.stdout)
+                self.assertNotIn(['permission-chmod'], self.state['calls'])
+                self.assertFalse(self.mutations())
+                self.assertEqual(config_dir.stat().st_mode & 0o777, 0o775)
+                self.state.pop('badOwnerPath', None)
+                (config_dir / 'systemd').chmod(0o700)
+                if pid.is_symlink(): pid.unlink()
+                pid.write_bytes(before_pid); pid.chmod(0o664)
+                if service.is_symlink(): service.unlink()
+                service.write_bytes(service_text); service.chmod(0o600)
+                self.config.unlink(missing_ok=True)
+                self.paseo.chmod(before_paseo); self.home.chmod(before_home)
+
+    def test_permission_recovery_never_bypasses_lifecycle_or_platform_gates(self):
+        self.seed_service()
+        pid = self.paseo / 'paseo.pid'
+        original_pid = pid.read_bytes()
+        pid.chmod(0o664)
+        config_dir = self.home / '.config'
+        config_dir.chmod(0o775)
+        scenarios = ({'selfHosted': True}, {'ownerHome': '/other'}, {'otherWriter': 'paseo other'},
+                     {'serviceOverrides': {'DropInPaths': '/private/drop-in'}}, {'renamed': True, 'serviceOverrides': {'LoadState': 'not-found'}},
+                     {'platform': 'win32'}, {'platform': 'darwin'}, {'wsl': True}, {'unknownAncestor': True}, {'desktop': True},
+                     {'noHeadless': True}, {'envSelfHosted': True}, {'custom': True})
+        for scenario in scenarios:
+            with self.subTest(scenario=scenario):
+                self.state = {'running': True, **scenario}
+                self.env['HEADLESS'] = '0' if scenario.get('noHeadless') else '1'
+                if scenario.get('envSelfHosted'): self.env['PASEO_AGENT_ID'] = 'fixture'
+                if scenario.get('desktop'):
+                    data = json.loads(original_pid); data['desktopManaged'] = True; pid.write_text(json.dumps(data))
+                if scenario.get('custom'):
+                    self.env['PASEO_HOME'] = str(self.home / 'custom')
+                    (self.home / 'custom').mkdir(mode=0o700)
+                    (self.home / 'custom/paseo.pid').write_bytes(original_pid)
+                    (self.home / 'custom/paseo.pid').chmod(0o664)
+                # Windows ACL policy is separate; make its fixture metadata unsafe too.
+                if scenario.get('platform') == 'win32': self.state['windowsAclCommandFailure'] = True
+                result = self.run_helper()
+                self.assertIn('PASEO_MUSE_DEFER_DAEMON_SETUP=1', result.stdout)
+                self.assertNotIn(['permission-chmod'], self.state['calls'])
+                self.assertFalse(self.mutations())
+                self.assertEqual(pid.stat().st_mode & 0o777, 0o664)
+                self.assertEqual(config_dir.stat().st_mode & 0o777, 0o775)
+                self.env.pop('PASEO_AGENT_ID', None); self.env.pop('PASEO_HOME', None)
+                pid.write_bytes(original_pid)
+
+    def test_recovery_descriptor_swap_and_pid_change_fail_before_chmod(self):
+        for scenario in ('recoverySwap', 'recoveryPidChanged'):
+            with self.subTest(scenario=scenario):
+                self.seed_service()
+                pid = self.paseo / 'paseo.pid'
+                pid.chmod(0o664)
+                directory = self.home / '.config/systemd'
+                directory.chmod(0o775)
+                outside = self.root / 'outside'
+                outside.mkdir(exist_ok=True); outside.chmod(0o775)
+                self.state[scenario] = True
+                result = self.run_helper()
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertNotIn(['permission-chmod'], self.state['calls'])
+                self.assertFalse(self.mutations())
+                self.assertEqual(outside.stat().st_mode & 0o777, 0o775)
+                if directory.is_symlink():
+                    directory.unlink(); (self.root / 'moved-systemd').rename(directory)
+                self.state.pop(scenario, None)
+
+    def test_permission_chmod_failure_does_not_stop_owner_or_claim_success(self):
+        self.seed_service()
+        (self.paseo / 'paseo.pid').chmod(0o664)
+        self.state['permissionChmodFailure'] = True
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertNotIn('PASEO_MUSE_PERMISSIONS_REPAIRED', result.stdout)
+        self.assertFalse(self.mutations())
+        self.assertTrue(self.state['running'])
+
+    def test_read_only_owner_check_never_repairs_permissions(self):
+        self.seed_service()
+        pid = self.paseo / 'paseo.pid'
+        pid.chmod(0o664)
+        result = self.run_helper(mode='verify-owner')
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(pid.stat().st_mode & 0o777, 0o664)
+        self.assertNotIn(['permission-chmod'], self.state['calls'])
+        self.assertFalse(self.mutations())
+
+    def test_permission_recovery_requires_a_running_verified_service(self):
+        (self.home / '.config/systemd/user').mkdir(parents=True)
+        (self.home / '.config').chmod(0o775)
+        result = self.run_helper()
+        # This is a non-headless fresh fixture: never repair its unrelated paths.
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn(['permission-chmod'], self.state['calls'])
+        self.env['HEADLESS'] = '1'
+        result = self.run_helper()
+        self.assertIn('permission-recovery-owner-unverified', result.stdout)
+        self.assertEqual((self.home / '.config').stat().st_mode & 0o777, 0o775)
+        self.assertNotIn(['permission-chmod'], self.state['calls'])
 
     def test_writable_profile_paths_rejected(self):
         self.save({})
@@ -1174,10 +1485,14 @@ for (const options of [{}, {reclaimStaleDesktopLock:true}]) {
 }
 console.log('NATIVE_REJECTED');
 '''
-        released = common + '''await native.acquirePidLock(home,null);
-assert.equal(JSON.parse(fs.readFileSync(file,'utf8')).pid,process.pid);
-await native.releasePidLock(home);
-assert.equal(fs.existsSync(file),false);
+        released = common + '''for (const [mask, expectedMode] of [[0o002,0o664],[0o077,0o600]]) {
+  process.umask(mask);
+  await native.acquirePidLock(home,null);
+  assert.equal(JSON.parse(fs.readFileSync(file,'utf8')).pid,process.pid);
+  assert.equal(fs.statSync(file).mode & 0o777,expectedMode);
+  await native.releasePidLock(home);
+  assert.equal(fs.existsSync(file),false);
+}
 console.log('NATIVE_ACQUIRED_AFTER_RELEASE');
 '''
         # Extract definitions only, initialize temporary fixture paths, then call
