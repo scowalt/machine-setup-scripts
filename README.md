@@ -32,13 +32,13 @@ Cleanup runs after dotfiles application and before Pi package operations. It doe
 
 Dotfiles no longer declare this package or seed its initial configuration. The [matching dotfiles change](https://github.com/scowalt/dotfiles/pull/19) prevents later chezmoi applies from restoring the declaration. Already-running Pi sessions need a restart to unload the extension. Separate adapter recovery handles the npm 12 restriction described below. Setup does not contact other machines.
 
-Setup installs the managed Matt Pocock engineering skills on personal and work machines. Pi and Codex share the canonical copies in `~/.agents/skills`. Work machines also install Google Cloud CLI.
+Setup installs the full [Matt Pocock skill suite](https://github.com/mattpocock/skills) on personal and work machines. Claude Code, Codex, Gemini CLI, and Pi receive the same suite. Codex, Gemini CLI, and Pi share the copies in `~/.agents/skills`. Claude Code uses its own copied files. Work machines also install Google Cloud CLI.
 
 Set `WORK_MACHINE=1` in `~/.env.local` for work machines. Set `BAN_PI_MCP_ADAPTER=1` to keep the Pi MCP adapter inactive. Set `BAN_PI_GOAL_AUTORESEARCH=1` to keep the Pi goal/autoresearch extensions inactive.
 
 Set `BAN_MATT_POCOCK_SKILLS=1` to remove the managed Matt Pocock skills and keep them inactive. The older `BAN_MATT_POCKOCK_SKILLS=1` spelling also works.
 
-Every setup run installs the latest [Simple English](https://github.com/AminBlg/SimpleEnglish), [HumanLayer `show-me`](https://github.com/humanlayer/skills), and [PR Lens](https://github.com/coldteadotai/pr-lens) skills. The skills are available globally to Claude Code, Codex, Gemini CLI, and Pi. The installations are non-interactive and use copied files for cross-platform compatibility. Simple English, `show-me`, and PR Lens are required on personal and work machines and have no setup opt-out.
+Setup removes the retired PR Lens, Simple English, and HumanLayer `show-me` skills on each machine's next setup run. Removal applies to personal and work machines and has no opt-out. The full Matt Pocock suite remains the managed skill suite.
 
 Codex, Gemini CLI, and Pi discover the canonical shared copies in `~/.agents/skills`. Claude Code uses harness-specific copies. If `CLAUDE_CONFIG_DIR` is set, it selects a custom Claude Code location. `PI_CODING_AGENT_DIR` selects the Pi settings location and obsolete-copy exclusions.
 
@@ -150,21 +150,29 @@ After setup, open a new terminal and run `node --version` and `pi --version`. An
 
 Run `bash tests/shared-node-runtime-contract.sh` for isolated fixtures. Set `PWSH_BIN` to a PowerShell executable to include its fixtures. On Windows, run `pwsh -NoProfile -File tests/shared-node-runtime-powershell.ps1` directly. Tests do not run full setup, change live dotfiles, contact arcane, or make model requests. Linux fixtures do not prove native Windows, macOS, or ARM behavior.
 
-## PR Lens skill
+## Full Matt Pocock suite and retired skills
 
-PR Lens draws code changes or system structure as architecture and data-flow diagrams. Each machine receives the latest upstream `pr-lens` skill from `coldteadotai/pr-lens` on its next setup run. This rollout does not remotely install anything on existing machines.
+All six scripts install every skill that the upstream skills CLI discovers in `mattpocock/skills`. Setup uses `--skill '*' --full-depth`, not a fixed installation list. The current baseline contains 37 skills across engineering, productivity, misc, and in-progress categories. This includes eight experimental skills, as approved. Setup also installs newly added upstream skills on later runs.
 
-Setup keeps upstream skill contents unchanged. Default hosted uploads remain enabled, including on work machines, with no added approval gate or local-only policy. The upstream standalone workflow uses `canvas push` to upload the whole graph JSON. Anyone with the hosted view link can read the diagram without a login. CLI 0.4.0 also prints a secret edit link. Keep that edit link out of shared logs and commits.
+Setup keeps upstream files unchanged and does not execute skill instructions. It does not run `/setup-matt-pocock-skills`, create project hooks, install the Claude plugin bundle, or make model requests. Some skills describe Claude-specific commands or require other tools when invoked. Installation alone does not prove that each workflow works in every agent or on every platform.
 
-Setup installs the skill only, not the PR Lens GitHub App or a global PR Lens CLI. It does not require diagrams on every PR, add hooks or provider credentials, or change dotfiles policies or shell profiles. Setup and its offline tests do not render diagrams, upload graphs, or post PR content. Setup requires five nonempty regular files in both managed copies: `SKILL.md`, `LICENSE`, `references/graph-document.md`, `references/config.md`, and `references/example.graph.json`. Missing or empty files and linked files or directories fail validation, including linked `references` directories. Pi ownership removes identical obsolete direct copies and excludes user-modified copies without deleting them.
+Setup checks the skills CLI JSON result and every reported copy. Both copies must contain a nonempty regular `SKILL.md`, with no linked files or directories inside the skill. Missing baseline skills, partial results, and failed updates produce setup failures. If upstream retires or renames a baseline skill, the baseline needs review. Setup keeps the installed names in `~/.agents/.setup-matt-pocock-skills.json` for offline cleanup and duplicate-copy exclusions in Pi.
 
-Runtime limits are separate from skill installation:
+Both `BAN_MATT_POCOCK_SKILLS=1` and `BAN_MATT_POCKOCK_SKILLS=1` remain supported. Either value removes the managed global copies without invoking the skills CLI. Cleanup includes names from the local inventory and upstream update records. `WORK_MACHINE=1` does not disable the suite. Existing `~/.env.local` files remain unchanged.
 
-- The skill invokes `npx @coldtea/pr-lens-cli@latest` on demand. CLI 0.4.0 needs Node.js >=20.11. The setup skill installer requires Node.js >=22.20 and shares the mise runtime described above.
-- Agent-authored graphs need no extra provider key. The optional `analyze` command needs a provider key.
-- The `render` command produces local output but can update the project `.gitignore`. Setup does not run it.
-- PR attachment with `gh --attach` needs GitHub CLI >=2.99, write-level permissions, and a suitable token and host. Some setup platforms use older distro versions. This rollout does not upgrade `gh`.
-- Native Windows and Linux ARM64 viability comes from source inspection, not runtime smoke tests. ARM32 runtime readiness remains unverified. Skill installation does not guarantee every native runtime workflow works.
+Setup removes PR Lens, Simple English, and HumanLayer `show-me` instead of installing them. Removal includes shared copies and global Claude Code, Codex, Gemini CLI, Cursor, and Pi copies. It also covers explicitly selected Claude, Codex, and Pi locations. User-modified global copies of all three retired skills are removed too.
+
+Setup removes their `pr-lens`, `simple-english`, and `show-me` update records from `~/.agents/.skill-lock.json` and the selected `XDG_STATE_HOME/skills/.skill-lock.json`. The full Matt Pocock suite, project skills, other skills, hooks, credentials, diagrams, and hosted content remain unchanged.
+
+Cleanup checks all target paths before removal. It unlinks skill links without following their targets and refuses linked ancestor directories or malformed metadata. The trusted Bazzite `/home` alias remains supported. A rejected Pi profile stays untouched, and retired-skill removal reports failure if those profiles cannot be checked. Missing Node or unsafe installation paths also produce failures, while unrelated setup work continues.
+
+Pi uses the shared suite rather than a second direct copy. Setup removes identical direct duplicates and preserves modified duplicates with exclusions in Pi settings. The matching dotfiles template uses the complete baseline and local inventory so later applies retain these exclusions. Dotfiles do not install skills or restore any retired skill.
+
+Each machine receives these changes on its next setup run. No remote rollout occurs. Restart an existing agent session to refresh its loaded skills.
+
+Run `python3 tests/test_managed_skill_suite.py`, `bash tests/pi-skill-ownership-contract.sh`, and `bash tests/simple-english-skill-contract.sh` for isolated fixtures. Set `PWSH_BIN` to include PowerShell wrapper coverage. These tests use temporary homes and mocked installers, never live setup, skill execution, or uploads. Linux PowerShell fixtures do not prove native Windows ACL behavior.
+
+Set `PI_SKILLS_DOTFILES_SOURCE` to a dotfiles checkout to test repeated setup and template rendering together. Set `MANAGED_SKILLS_CLI` to an installed `skills/dist/cli.mjs` entry point for the optional native CLI fixture. That fixture installs only inert local files into a temporary home, with network access and child processes blocked. It checks full-tree discovery, copied files, and the JSON report format.
 
 ## Telegram alert credentials
 

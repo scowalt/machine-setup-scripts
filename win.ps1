@@ -3308,21 +3308,19 @@ function Install-ManagedAgentSkill {
     return $true
 }
 
-# Preserve the named Simple English setup interface.
-function Install-SimpleEnglishSkill {
-    return (Install-ManagedAgentSkill -Repository "AminBlg/SimpleEnglish" -SkillName "simple-english" -DisplayName "Simple English")
+# Retire Simple English from global skill copies and skills CLI update records.
+function Remove-SimpleEnglishSkill {
+    return (Invoke-MattPocockSkillPolicy -Mode remove-simple-english)
 }
 
-# Install/update HumanLayer show-me for every supported AI coding harness.
-function Install-ShowMeSkill {
-    return (Install-ManagedAgentSkill -Repository "humanlayer/skills" -SkillName "show-me" -DisplayName "show-me")
+# Retire global show-me copies on the next setup run.
+function Remove-ShowMeSkill {
+    return (Invoke-MattPocockSkillPolicy -Mode remove-show-me)
 }
 
-# Install/update upstream PR Lens unchanged, including its default hosted uploads.
-function Install-PrLensSkill {
-    return (Install-ManagedAgentSkill -Repository "coldteadotai/pr-lens" -SkillName "pr-lens" -DisplayName "PR Lens" -AdditionalFiles @(
-        "LICENSE", "references/graph-document.md", "references/config.md", "references/example.graph.json"
-    ))
+# Retire PR Lens from global skill copies and skills CLI update records.
+function Remove-PrLensSkill {
+    return (Invoke-MattPocockSkillPolicy -Mode remove-pr-lens)
 }
 
 # Remove setup-managed Impeccable resources without affecting sibling agent tooling.
@@ -5468,85 +5466,10 @@ function Setup-PiCompanionPackages {
     return (-not $hadFailure)
 }
 
-# Return true only when two ordinary directories have identical file trees.
-function Test-DirectoryTreeEqual {
-    param(
-        [Parameter(Mandatory = $true)][string]$Left,
-        [Parameter(Mandatory = $true)][string]$Right
-    )
-
-    $leftItem = Get-Item -LiteralPath $Left -Force -ErrorAction SilentlyContinue
-    $rightItem = Get-Item -LiteralPath $Right -Force -ErrorAction SilentlyContinue
-    if ($null -eq $leftItem -or $null -eq $rightItem -or -not $leftItem.PSIsContainer -or -not $rightItem.PSIsContainer) { return $false }
-    if ((($leftItem.Attributes -bor $rightItem.Attributes) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
-
-    $leftFiles = @(Get-ChildItem -LiteralPath $Left -Recurse -Force -ErrorAction SilentlyContinue)
-    $rightFiles = @(Get-ChildItem -LiteralPath $Right -Recurse -Force -ErrorAction SilentlyContinue)
-    if (@($leftFiles | Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -gt 0) { return $false }
-    if (@($rightFiles | Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -gt 0) { return $false }
-
-    $leftLeafFiles = @($leftFiles | Where-Object { -not $_.PSIsContainer })
-    $rightLeafFiles = @($rightFiles | Where-Object { -not $_.PSIsContainer })
-    if ($leftLeafFiles.Count -ne $rightLeafFiles.Count) { return $false }
-
-    foreach ($leftFile in $leftLeafFiles) {
-        $relativePath = $leftFile.FullName.Substring($leftItem.FullName.Length).TrimStart('\', '/')
-        $rightFile = Join-Path $Right $relativePath
-        if (-not (Test-Path -LiteralPath $rightFile -PathType Leaf)) { return $false }
-        if ((Get-FileHash -LiteralPath $leftFile.FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $rightFile -Algorithm SHA256).Hash) { return $false }
-    }
-    return $true
-}
-
 # Keep shared skills canonical for Pi and suppress stale direct/package collisions.
 function Set-PiSkillOwnership {
     if ($script:PiProfileMutationsBlocked) { return $true }
-    $defaultAgentDir = Join-Path $env:USERPROFILE ".pi\agent"
-    $activeAgentDir = if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { $defaultAgentDir }
-    $canonicalDir = Join-Path $env:USERPROFILE ".agents\skills"
-    $agentDirs = @($defaultAgentDir)
-    if ($activeAgentDir -ne $defaultAgentDir) { $agentDirs += $activeAgentDir }
-    $sharedSkills = @(
-        "simple-english", "show-me", "pr-lens", "setup-matt-pocock-skills", "diagnosing-bugs", "tdd",
-        "improve-codebase-architecture", "grill-with-docs", "grilling", "domain-modeling", "codebase-design"
-    )
-    $managedExclusions = @(
-        "!$(Join-Path $canonicalDir 'pi-goal-writer')/**",
-        "!$(Join-Path $canonicalDir 'autoresearch-create')/**",
-        "!$(Join-Path $canonicalDir 'autoresearch-finalize')/**",
-        "!$(Join-Path $canonicalDir 'autoresearch-hooks')/**"
-    )
-
-    foreach ($agentDir in $agentDirs) {
-        foreach ($skill in $sharedSkills) {
-            $duplicate = Join-Path $agentDir "skills\$skill"
-            $canonical = Join-Path $canonicalDir $skill
-            $managedExclusions += "!$duplicate/**"
-            if ((Test-DirectoryTreeEqual -Left $canonical -Right $duplicate) -and (Remove-MattPocockSkillPath -Path $duplicate)) {
-                Write-Debug "Removed obsolete duplicate Pi skill: $duplicate"
-            }
-        }
-    }
-
-    New-Item -ItemType Directory -Force -Path $activeAgentDir | Out-Null
-    $settingsPath = Join-Path $activeAgentDir "settings.json"
-    $settingsJson = if (Test-Path $settingsPath) { Get-Content -LiteralPath $settingsPath -Raw } else { "{}" }
-    try { $settings = $settingsJson | ConvertFrom-Json } catch {
-        Write-Warning "Failed to parse Pi settings at $settingsPath. Leaving settings unchanged."
-        return $false
-    }
-    if ($null -eq $settings) { $settings = New-Object PSObject }
-    $skills = if ($settings.PSObject.Properties["skills"] -and $settings.skills -is [array]) { @($settings.skills) } else { @() }
-    foreach ($exclusion in $managedExclusions) {
-        if ($skills -notcontains $exclusion) { $skills += $exclusion }
-    }
-    Set-JsonProperty -Object $settings -Name "skills" -Value ([object[]]$skills)
-    try { $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $settingsPath -Encoding UTF8 } catch {
-        Write-Warning "Failed to configure Pi skill ownership at $settingsPath."
-        return $false
-    }
-    Write-Success "Pi skill ownership configured without removing shared harness copies."
-    return $true
+    return (Invoke-MattPocockSkillPolicy -Mode ownership)
 }
 
 # Configure pi-autoresearch without overriding Pi transcript search.
@@ -5696,201 +5619,324 @@ function Test-MattPocockSkillsDisabled {
     return ((Test-EnvLocalFlag "BAN_MATT_POCOCK_SKILLS") -or (Test-EnvLocalFlag "BAN_MATT_POCKOCK_SKILLS"))
 }
 
-function Remove-MattPocockSkillPath {
-    param([Parameter(Mandatory = $true)][string]$Path)
-
-    try {
-        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+# Shared policy for full-suite inventory, safe retirement, and Pi ownership.
+function Invoke-MattPocockSkillPolicy {
+    param([Parameter(Mandatory = $true)][string]$Mode, [string]$ReportFile = "")
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        Write-Warning "Node.js is unavailable; managed skill policy cannot run."
+        return $false
     }
-    catch [System.Management.Automation.ItemNotFoundException] {
+    $helper = @'
+    // Shared by all six standalone setup scripts. Never execute installed skills.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const [homeInput, activePiInput, blocked, mode, reportFile] = process.argv.slice(2);
+    const env = process.env;
+    const fail = reason => { throw new Error(reason); };
+    const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+    const nameOK = name => typeof name === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) && name.length <= 64;
+    const unique = values => [...new Set(values)];
+    const known = [
+        'ask-matt', 'code-review', 'codebase-design', 'diagnosing-bugs', 'domain-modeling',
+        'grill-with-docs', 'implement', 'improve-codebase-architecture', 'prototype', 'research',
+        'resolving-merge-conflicts', 'setup-matt-pocock-skills', 'tdd', 'to-spec', 'to-tickets',
+        'triage', 'wayfinder', 'wizard', 'claude-handoff', 'implement-spec', 'loop-me', 'retro',
+        'setup-ts-deep-modules', 'writing-beats', 'writing-fragments', 'writing-shape',
+        'git-guardrails-claude-code', 'migrate-to-shoehorn', 'scaffold-exercises', 'setup-pre-commit',
+        'grill-me', 'grilling', 'handoff', 'teach', 'to-questionnaire', 'wait-what', 'writing-for-agents'
+    ];
+    const obsolete = ['diagnose', 'zoom-out'];
+    function stat(file) {
+        try { return fs.lstatSync(file); }
+        catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    }
+    // The only ancestor link allowed is Bazzite's root-owned system /home alias.
+    function systemHomeAlias(file, st) {
+        if (process.platform !== 'linux' || file !== '/home' || st.uid !== 0) return false;
+        if (!['var/home', '/var/home'].includes(fs.readlinkSync(file))) return false;
+        return ['/', '/var', '/var/home'].every(dir => {
+            const item = stat(dir);
+            return item && item.isDirectory() && !item.isSymbolicLink() && item.uid === 0 && !(item.mode & 0o022);
+        });
+    }
+    function absolute(file) {
+        if (!file || !path.isAbsolute(file) || file.split(/[\\/]/).includes('..')) fail('unsafe-path');
+        const resolved = path.resolve(file);
+        if (resolved === path.parse(resolved).root) fail('unsafe-path');
+        return resolved;
+    }
+    function directory(file) {
+        const parent = path.dirname(file);
+        if (parent !== file) directory(parent);
+        const st = stat(file);
+        if (!st) return;
+        if (st.isSymbolicLink()) {
+            if (!systemHomeAlias(file, st)) fail('linked-directory');
+        } else if (!st.isDirectory()) fail('not-directory');
+    }
+    function owned(file) {
+        const st = stat(file);
+        if (st && process.platform !== 'win32' && st.uid !== process.getuid()) fail('wrong-owner');
+    }
+    function jsonFile(file) {
+        directory(path.dirname(file));
+        const st = stat(file);
+        if (!st) return null;
+        if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1) fail('unsafe-metadata');
+        owned(file);
+        let value;
+        try { value = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
+        catch { fail('malformed-metadata'); }
+        if (!object(value)) fail('malformed-metadata');
+        return value;
+    }
+    function writeJson(file, value) {
+        directory(path.dirname(file));
+        jsonFile(file);
+        fs.mkdirSync(path.dirname(file), {recursive: true, mode: 0o700});
+        const temp = file + '.setup-' + require('node:crypto').randomUUID();
+        try {
+            fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', {flag: 'wx', mode: stat(file)?.mode & 0o777 || 0o600});
+            fs.renameSync(temp, file);
+        } finally { if (stat(temp)) fs.unlinkSync(temp); }
+    }
+    // Preflight the complete bounded tree before removal. Links are unlinked, never traversed.
+    function removable(file) {
+        directory(path.dirname(file));
+        const st = stat(file);
+        if (!st) return;
+        owned(file);
+        if (st.isSymbolicLink()) return;
+        if (st.isDirectory()) {
+            for (const entry of fs.readdirSync(file)) removable(path.join(file, entry));
+        } else if (!st.isFile()) fail('unsupported-file');
+    }
+    function remove(file) {
+        removable(file);
+        const st = stat(file);
+        if (!st) return;
+        if (st.isDirectory() && !st.isSymbolicLink()) {
+            for (const entry of fs.readdirSync(file)) remove(path.join(file, entry));
+            fs.rmdirSync(file);
+        } else fs.unlinkSync(file);
+        if (stat(file)) fail('removal-failed');
+    }
+    function copiedTree(file) {
+        const st = stat(file);
+        if (!st || st.isSymbolicLink()) fail('invalid-skill-copy');
+        owned(file);
+        if (st.isDirectory()) {
+            for (const entry of fs.readdirSync(file)) copiedTree(path.join(file, entry));
+        } else if (!st.isFile()) fail('invalid-skill-copy');
+    }
+    function sameTree(left, right) {
+        const a = stat(left), b = stat(right);
+        if (!a || !b || a.isSymbolicLink() || b.isSymbolicLink()) return false;
+        if (a.isFile() && b.isFile()) return fs.readFileSync(left).equals(fs.readFileSync(right));
+        if (!a.isDirectory() || !b.isDirectory()) return false;
+        const names = fs.readdirSync(left).sort(), other = fs.readdirSync(right).sort();
+        return JSON.stringify(names) === JSON.stringify(other) && names.every(name => sameTree(path.join(left, name), path.join(right, name)));
+    }
+    try {
+        const home = absolute(homeInput);
+        directory(home);
+        const profile = (value, fallback) => {
+            const result = absolute(value || path.join(home, fallback));
+            if (result === home) fail('unsafe-path');
+            return result;
+        };
+        const defaultPi = path.join(home, '.pi/agent');
+        // Do not inspect rejected Pi profiles, including a rejected custom override.
+        const piDirs = blocked === '1' ? [] : unique([defaultPi, profile(activePiInput, '.pi/agent')]);
+        const claude = profile(env.CLAUDE_CONFIG_DIR, '.claude');
+        const shared = path.join(home, '.agents/skills');
+        const installDirs = unique([path.join(claude, 'skills'), shared]);
+        const allDirs = unique([
+            shared, path.join(home, '.claude/skills'), path.join(claude, 'skills'),
+            path.join(home, '.codex/skills'), path.join(profile(env.CODEX_HOME, '.codex'), 'skills'),
+            path.join(home, '.gemini/skills'), path.join(home, '.cursor/skills'),
+            ...piDirs.map(dir => path.join(dir, 'skills'))
+        ]);
+        const manifestFile = path.join(home, '.agents/.setup-matt-pocock-skills.json');
+        const manifest = jsonFile(manifestFile);
+        if (manifest && (manifest.version !== 1 || !Array.isArray(manifest.skills) || !manifest.skills.every(nameOK))) fail('invalid-inventory');
+        const lockPaths = unique([
+            path.join(home, '.agents/.skill-lock.json'),
+            ...(env.XDG_STATE_HOME ? [path.join(absolute(env.XDG_STATE_HOME), 'skills/.skill-lock.json')] : [])
+        ]);
+        const locks = lockPaths.map(file => {
+            const data = jsonFile(file);
+            if (data && (data.version !== 3 || !object(data.skills) || !Object.values(data.skills).every(object))) fail('invalid-skill-lock');
+            return {file, data};
+        });
+        const tracked = locks.flatMap(({data}) => Object.entries(data?.skills || {})
+            .filter(([, entry]) => entry.source === 'mattpocock/skills').map(([name]) => name));
+        if (!tracked.every(nameOK)) fail('invalid-inventory');
+        const inventory = unique([...known, ...(manifest?.skills || []), ...tracked]);
+        const checkDirs = dirs => dirs.forEach(dir => { directory(dir); owned(dir); });
+        const cleanup = (names, dirs, extraPaths = []) => {
+            checkDirs(dirs);
+            const paths = dirs.flatMap(dir => names.map(name => path.join(dir, name))).concat(extraPaths);
+            paths.forEach(removable);
+            paths.forEach(remove);
+            for (const {file, data} of locks) {
+                if (!data) continue;
+                let changed = false;
+                for (const name of names) {
+                    if (Object.hasOwn(data.skills, name)) { delete data.skills[name]; changed = true; }
+                }
+                if (changed) writeJson(file, data);
+            }
+        };
+        if (mode === 'names') {
+            process.stdout.write(inventory.join('\n') + '\n');
+        } else if (['remove-pr-lens', 'remove-simple-english', 'remove-show-me'].includes(mode)) {
+            const skill = mode.slice('remove-'.length);
+            // Direct Markdown skills are also discoverable in Pi's own skills directory.
+            cleanup([skill], allDirs, piDirs.map(dir => path.join(dir, 'skills', skill + '.md')));
+            if (blocked === '1') fail('pi-profiles-blocked');
+        } else if (mode === 'remove-matt' || mode === 'remove-obsolete') {
+            cleanup(mode === 'remove-matt' ? unique([...inventory, ...obsolete]) : obsolete, allDirs);
+            // Retain inventory for offline retries and custom profiles selected on a later run.
+        } else if (mode === 'preflight') {
+            checkDirs(installDirs);
+            for (const dir of installDirs) {
+                // The bulk CLI may select newly added upstream names. Reject linked existing
+                // copies before it runs, without recursively inspecting unrelated real skills.
+                for (const name of stat(dir) ? fs.readdirSync(dir) : []) {
+                    if (stat(path.join(dir, name))?.isSymbolicLink()) fail('linked-install-target');
+                }
+                for (const name of inventory) {
+                    const target = path.join(dir, name);
+                    if (stat(target)) copiedTree(target);
+                }
+            }
+        } else if (mode === 'validate') {
+            checkDirs(installDirs);
+            let report;
+            try { report = JSON.parse(fs.readFileSync(reportFile, 'utf8').replace(/^\uFEFF/, '')); }
+            catch { fail('invalid-install-report'); }
+            if (!Array.isArray(report) || report.length === 0) fail('invalid-install-report');
+            const names = [];
+            for (const entry of report) {
+                if (!object(entry) || !nameOK(entry.name) || entry.status !== 'installed' || entry.source !== 'mattpocock/skills' ||
+                    entry.scope !== 'global' || entry.mode !== 'copy' || !Array.isArray(entry.agents) ||
+                    !['Claude Code', 'Codex', 'Gemini CLI'].every(agent => entry.agents.includes(agent))) fail('invalid-install-report');
+                if (names.includes(entry.name)) fail('invalid-install-report');
+                names.push(entry.name);
+                for (const dir of installDirs) {
+                    const skill = path.join(dir, entry.name);
+                    copiedTree(skill);
+                    const md = stat(path.join(skill, 'SKILL.md'));
+                    if (!md?.isFile() || md.size === 0) fail('invalid-skill-copy');
+                }
+            }
+            // A validation floor, never an installation allowlist: newly discovered
+            // skills are accepted too. Retired/renamed baseline skills need review.
+            if (!known.every(name => names.includes(name))) fail('incomplete-suite');
+            writeJson(manifestFile, {version: 1, skills: unique([...inventory, ...names])});
+        } else if (mode === 'ownership') {
+            if (blocked !== '1') {
+                checkDirs([shared, ...piDirs.flatMap(dir => [dir, path.join(dir, 'skills')])]);
+                const settings = piDirs.map(dir => {
+                    const file = path.join(dir, 'settings.json');
+                    const data = jsonFile(file) || {};
+                    if (data.skills !== undefined && (!Array.isArray(data.skills) || !data.skills.every(value => typeof value === 'string'))) fail('invalid-settings');
+                    return {file, data};
+                });
+                const names = inventory;
+                const duplicates = piDirs.flatMap(dir => names.map(name => ({file: path.join(dir, 'skills', name), canonical: path.join(shared, name)})));
+                const equal = duplicates.filter(({file, canonical}) => sameTree(file, canonical));
+                equal.forEach(({file}) => removable(file));
+                equal.forEach(({file}) => remove(file));
+                const excluded = ['pi-goal-writer', 'autoresearch-create', 'autoresearch-finalize', 'autoresearch-hooks']
+                    .map(name => '!' + path.join(shared, name) + '/**')
+                    .concat(duplicates.map(({file}) => '!' + file + '/**'));
+                for (const {file, data} of settings) {
+                    const before = JSON.stringify(data);
+                    data.skills = unique([...(data.skills || []), ...excluded]);
+                    if (JSON.stringify(data) !== before) writeJson(file, data);
+                }
+            }
+        } else fail('unknown-operation');
+    } catch (error) {
+        const allowed = ['unsafe-path', 'linked-directory', 'not-directory', 'wrong-owner', 'unsafe-metadata', 'malformed-metadata',
+            'unsupported-file', 'removal-failed', 'invalid-skill-copy', 'invalid-inventory', 'invalid-skill-lock',
+            'pi-profiles-blocked', 'linked-install-target', 'invalid-install-report', 'incomplete-suite', 'invalid-settings', 'unknown-operation'];
+        const reason = allowed.includes(error.message) ? error.message : ['EACCES', 'EPERM', 'ENOENT', 'ENOSPC', 'EROFS', 'EBUSY'].includes(error.code) ? error.code : 'operation-failed';
+        process.stderr.write('Managed skills: ' + reason + '.\n');
+        process.exitCode = 1;
+    }
+'@
+    $nodeOptions = $env:NODE_OPTIONS
+    $nodePath = $env:NODE_PATH
+    $blocked = if ($script:PiProfileMutationsBlocked) { '1' } else { '0' }
+    try {
+        $env:NODE_OPTIONS = $null
+        $env:NODE_PATH = $null
+        $global:LASTEXITCODE = 0
+        $result = $helper | & node --input-type=commonjs - $env:USERPROFILE "$env:PI_CODING_AGENT_DIR" $blocked $Mode $ReportFile 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Managed skill policy failed ($Mode). Review profile paths, skill files, and metadata."
+            return $false
+        }
+        if ($Mode -eq 'names') { return @($result) }
         return $true
     }
     catch {
+        Write-Warning "Managed skill policy could not run."
         return $false
     }
-
-    try {
-        $isReparsePoint = ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
-        if ($isReparsePoint -or -not $item.PSIsContainer) {
-            Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
-        }
-        else {
-            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
-        }
-        try {
-            Get-Item -LiteralPath $Path -Force -ErrorAction Stop | Out-Null
-            return $false
-        }
-        catch [System.Management.Automation.ItemNotFoundException] {
-            return $true
-        }
-        catch {
-            return $false
-        }
-    }
-    catch {
-        return $false
+    finally {
+        $env:NODE_OPTIONS = $nodeOptions
+        $env:NODE_PATH = $nodePath
     }
 }
 
-# Remove setup-managed Matt Pocock skills without following symlink targets.
 function Remove-MattPocockSkills {
-    $skills = @(
-        "setup-matt-pocock-skills",
-        "diagnosing-bugs",
-        "tdd",
-        "improve-codebase-architecture",
-        "grill-with-docs",
-        "grilling",
-        "domain-modeling",
-        "codebase-design"
-    )
-    $obsoleteSkills = @("diagnose", "zoom-out")
-    $skills += $obsoleteSkills
-
-    $defaultAgentDir = Join-Path $env:USERPROFILE ".pi\agent"
-    if ($env:PI_CODING_AGENT_DIR) {
-        $activeAgentDir = $env:PI_CODING_AGENT_DIR
-    }
-    else {
-        $activeAgentDir = $defaultAgentDir
-    }
-
-    $skillsDirs = @(
-        (Join-Path $defaultAgentDir "skills"),
-        (Join-Path $env:USERPROFILE ".agents\skills")
-    )
-    if ($activeAgentDir -ne $defaultAgentDir) {
-        $skillsDirs += (Join-Path $activeAgentDir "skills")
-    }
-
-    $removed = $false
-    $failed = @()
-    if ($script:PiProfileMutationsBlocked) { $skillsDirs = @((Join-Path $env:USERPROFILE '.agents/skills')) }
-    foreach ($skillsDir in $skillsDirs) {
-        foreach ($skill in $skills) {
-            $skillPath = Join-Path $skillsDir $skill
-            try {
-                Get-Item -LiteralPath $skillPath -Force -ErrorAction Stop | Out-Null
-            }
-            catch [System.Management.Automation.ItemNotFoundException] {
-                continue
-            }
-            catch {
-                $failed += $skill
-                continue
-            }
-
-            if (Remove-MattPocockSkillPath -Path $skillPath) {
-                $removed = $true
-            }
-            else {
-                $failed += $skill
-            }
-        }
-    }
-
-    if ($failed.Count -gt 0) {
-        Write-Warning "Failed to remove Matt Pocock skills: $($failed -join ', ')"
-        return $false
-    }
-    if ($removed) {
-        Write-Success "Matt Pocock skills disabled."
-    }
-    else {
-        Write-Debug "Matt Pocock skills disabled; no installed copies found."
-    }
-    return $true
+    return (Invoke-MattPocockSkillPolicy -Mode remove-matt)
 }
 
-# Install/update Matt Pocock engineering skills in the shared Codex/Pi path.
+# Install all upstream categories, including experimental skills, for four agents.
 function Setup-MattPocockSkills {
-    $skills = @(
-        "setup-matt-pocock-skills",
-        "diagnosing-bugs",
-        "tdd",
-        "improve-codebase-architecture",
-        "grill-with-docs",
-        "grilling",
-        "domain-modeling",
-        "codebase-design"
-    )
-    $obsoleteSkills = @("diagnose", "zoom-out")
-
-    if (Test-MattPocockSkillsDisabled) {
-        return (Remove-MattPocockSkills)
-    }
-
+    if (Test-MattPocockSkillsDisabled) { return (Remove-MattPocockSkills) }
     if (-not (Enable-SkillsCliNodeRuntime)) {
         Write-Warning "Cannot install Matt Pocock skills because the skills CLI runtime is not ready."
         return $false
     }
-
     if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
         Write-Warning "npx is not available; cannot install Matt Pocock skills."
-        Write-Debug "Install Node.js >=22.20, then run: npx --yes skills@latest add mattpocock/skills --global --agent codex --copy --yes"
         return $false
     }
-
-    $codexSkillsDir = Join-Path $env:USERPROFILE ".agents\skills"
-    $npxArgs = @(
-        "--yes", "skills@latest", "add", "mattpocock/skills",
-        "--global",
-        "--agent", "codex",
-        "--copy",
-        "--yes"
-    )
-    foreach ($skill in $skills) {
-        $npxArgs += @("--skill", $skill)
-    }
-
-    Write-Message "Installing/updating Matt Pocock skills for Pi and Codex through the shared skill path..."
-    $global:LASTEXITCODE = 0
-    $output = & npx @npxArgs 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Failed to install Matt Pocock skills."
-        if ($output) { Write-Debug ($output | Out-String) }
-        return $false
-    }
-
-    $missing = @()
-    $managedSkillsDirs = @($codexSkillsDir)
-    foreach ($managedSkillsDir in $managedSkillsDirs) {
-        foreach ($skill in $skills) {
-            $skillDir = Join-Path $managedSkillsDir $skill
-            $skillFile = Join-Path $skillDir "SKILL.md"
-            $skillDirItem = Get-Item -LiteralPath $skillDir -Force -ErrorAction SilentlyContinue
-            $skillFileItem = Get-Item -LiteralPath $skillFile -Force -ErrorAction SilentlyContinue
-            $skillDirIsLink = $null -ne $skillDirItem -and (($skillDirItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
-            $skillFileIsLink = $null -ne $skillFileItem -and (($skillFileItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
-            if ($null -eq $skillFileItem -or $skillFileItem.PSIsContainer -or $skillDirIsLink -or $skillFileIsLink) {
-                $missing += $skillDir
-            }
+    if (-not (Invoke-MattPocockSkillPolicy -Mode preflight)) { return $false }
+    $reportFile = $null
+    try {
+        $reportFile = [System.IO.Path]::GetTempFileName()
+        Write-Message "Installing/updating the full Matt Pocock skill suite for Claude Code, Codex, Gemini CLI, and Pi..."
+        $npxArgs = @(
+            "--yes", "skills@latest", "add", "mattpocock/skills", "--global",
+            "--agent", "claude-code", "--agent", "codex", "--agent", "gemini-cli",
+            "--skill", "*", "--full-depth", "--copy", "--yes", "--json"
+        )
+        $global:LASTEXITCODE = 0
+        $output = & npx @npxArgs 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Failed to install the full Matt Pocock skill suite."
+            return $false
         }
+        [System.IO.File]::WriteAllText($reportFile, ($output -join "`n"))
+        if (-not (Invoke-MattPocockSkillPolicy -Mode validate -ReportFile $reportFile)) { return $false }
+        if (-not (Invoke-MattPocockSkillPolicy -Mode remove-obsolete)) { return $false }
+        Write-Success "Full Matt Pocock skill suite installed/updated through copied global skills."
+        return $true
     }
-
-    if ($missing.Count -gt 0) {
-        Write-Warning "Matt Pocock skills are missing required files: $($missing -join ', ')"
+    catch {
+        Write-Warning "Full Matt Pocock skill setup failed."
         return $false
     }
-
-    $obsoleteCleanupFailed = @()
-    foreach ($managedSkillsDir in $managedSkillsDirs) {
-        foreach ($obsoleteSkill in $obsoleteSkills) {
-            $obsoletePath = Join-Path $managedSkillsDir $obsoleteSkill
-            if (-not (Remove-MattPocockSkillPath -Path $obsoletePath)) {
-                $obsoleteCleanupFailed += $obsoletePath
-            }
-        }
+    finally {
+        if ($reportFile) { Remove-Item -LiteralPath $reportFile -Force -ErrorAction Stop }
     }
-    if ($obsoleteCleanupFailed.Count -gt 0) {
-        Write-Warning "Failed to remove obsolete Matt Pocock skills: $($obsoleteCleanupFailed -join ', ')"
-        return $false
-    }
-
-    Write-Success "Matt Pocock skills installed/updated for Pi and Codex through the shared skill path."
-    if ($output) { Write-Debug ($output | Out-String) }
-    return $true
 }
 
 
@@ -6623,7 +6669,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 148 | Last changed: Secure Pi profiles and remove surplus Paseo CLIs"
+    Write-Host "Version 151 | Last changed: Install full Matt suite and retire legacy global skills"
 
     Assert-HeadlessPaseoUnsupported
     $null = Get-PaseoReleaseChannel
@@ -6715,13 +6761,13 @@ function Invoke-WindowsSetupTasks {
     else {
         Write-Warning "Muse profile setup deferred because Pi OpenCode Go setup is unavailable."
     }
-    if (-not (Install-SimpleEnglishSkill)) {
+    if (-not (Remove-SimpleEnglishSkill)) {
         $simpleEnglishSetupFailed = $true
     }
-    if (-not (Install-ShowMeSkill)) {
+    if (-not (Remove-ShowMeSkill)) {
         $showMeSetupFailed = $true
     }
-    if (-not (Install-PrLensSkill)) {
+    if (-not (Remove-PrLensSkill)) {
         $prLensSetupFailed = $true
     }
     if (-not (Set-PiSkillOwnership)) {
@@ -6751,13 +6797,13 @@ function Invoke-WindowsSetupTasks {
         throw "Required Matt Pocock skill setup failed."
     }
     if ($simpleEnglishSetupFailed) {
-        throw "Required Simple English skill setup failed."
+        throw "Required Simple English skill removal failed."
     }
     if ($showMeSetupFailed) {
-        throw "Required show-me skill setup failed."
+        throw "Required show-me skill removal failed."
     }
     if ($prLensSetupFailed) {
-        throw "Required PR Lens skill setup failed."
+        throw "Required PR Lens skill removal failed."
     }
 
     Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen

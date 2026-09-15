@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Contract version 13: track profile permission and CLI cleanup banners.
+# Contract version 16: retire show-me and retain generic copied-file validation.
+# Historical filename retained for existing test runners.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -8,18 +9,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=231
-    [ubuntu.sh]=253
-    [wsl.sh]=195
-    [pi.sh]=212
-    [bazzite.sh]=112
+    [mac.sh]=234
+    [ubuntu.sh]=256
+    [wsl.sh]=198
+    [pi.sh]=215
+    [bazzite.sh]=115
 )
 declare -A expected_banners=(
-    [mac.sh]='Secure Pi profiles and remove surplus Paseo CLIs'
-    [ubuntu.sh]='Secure Pi profiles and remove surplus Paseo CLIs'
-    [wsl.sh]='Secure Pi profiles and remove surplus Paseo CLIs'
-    [pi.sh]='Secure Pi profiles and remove surplus Paseo CLIs'
-    [bazzite.sh]='Secure Pi profiles and remove surplus Paseo CLIs'
+    [mac.sh]='Install full Matt suite and retire legacy global skills'
+    [ubuntu.sh]='Install full Matt suite and retire legacy global skills'
+    [wsl.sh]='Install full Matt suite and retire legacy global skills'
+    [pi.sh]='Install full Matt suite and retire legacy global skills'
+    [bazzite.sh]='Install full Matt suite and retire legacy global skills'
 )
 
 fail() {
@@ -123,8 +124,8 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '^skills_cli_node_runtime_ready\(\)' 'skills CLI Node.js runtime check'
     assert_contains "${file}" '^ensure_skills_cli_node_runtime\(\)' 'skills CLI Node.js runtime setup'
     assert_contains "${file}" '^install_managed_agent_skill\(\)' 'reusable managed skill installer'
-    assert_contains "${file}" '^setup_simple_english_skill\(\)' 'Simple English installer wrapper'
-    assert_contains "${file}" '^setup_show_me_skill\(\)' 'show-me installer wrapper'
+    assert_contains "${file}" '^remove_simple_english_skill\(\)' 'Simple English removal wrapper'
+    assert_contains "${file}" '^remove_show_me_skill\(\)' 'show-me removal wrapper'
     assert_function_contains "${file}" skills_cli_node_runtime_ready 'shared_node_runtime_ready' 'shared readiness check'
     assert_function_contains "${file}" shared_node_runtime_ready 'major > 22.*major === 22 && minor >= 20' 'Node.js 22.20 minimum'
     assert_function_contains "${file}" ensure_skills_cli_node_runtime 'ensure_shared_node_runtime' 'durable shared runtime selection'
@@ -145,29 +146,18 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_function_contains "${file}" install_managed_agent_skill '\$\{HOME\}/\.agents/skills/\$\{_skill_name\}' 'canonical shared skill validation'
     assert_function_contains "${file}" install_managed_agent_skill '\[\[ -L "\$\{_artifact_path\}" \]\]' 'directory and file symlink rejection'
     assert_function_not_contains "${file}" install_managed_agent_skill 'PI_CODING_AGENT_DIR|\.codex/skills|\.gemini/skills' 'obsolete agent-specific installation path'
-    assert_function_contains "${file}" setup_simple_english_skill 'install_managed_agent_skill "AminBlg/SimpleEnglish" "simple-english" "Simple English"' 'unchanged Simple English source and name'
-    assert_function_contains "${file}" setup_show_me_skill 'install_managed_agent_skill "humanlayer/skills" "show-me" "show-me"' 'HumanLayer show-me source and name'
-    assert_function_not_contains "${file}" setup_show_me_skill 'BAN_|WORK_MACHINE|cursor|plugin|output-style' 'show-me opt-out or unrequested target'
-    assert_contains "${file}" '^[[:space:]]+(if ! )?setup_simple_english_skill( \|\| return 1|; then)$' 'Simple English main wiring'
-    assert_contains "${file}" '^[[:space:]]+(if ! )?setup_show_me_skill( \|\| return 1|; then)$' 'show-me main wiring'
-    assert_order "${file}" '^[[:space:]]+elif install_pi_cli; then$' '^[[:space:]]+(if ! )?setup_simple_english_skill' 'managed skill installation after agent provisioning'
-    assert_order "${file}" '^[[:space:]]+(if ! )?setup_simple_english_skill' '^[[:space:]]+(if ! )?setup_show_me_skill' 'Simple English before show-me'
-    assert_order "${file}" '^[[:space:]]+(if ! )?setup_show_me_skill' '^[[:space:]]+(if ! )?configure_pi_skill_ownership' 'show-me validation before Pi ownership'
-    assert_order "${file}" '^[[:space:]]+(if ! )?setup_show_me_skill' '^[[:space:]]+remove_impeccable_resources$' 'show-me validation before cleanup'
-    assert_function_contains "${file}" configure_pi_skill_ownership 'simple-english show-me pr-lens setup-matt-pocock-skills' 'canonical shared ownership'
-    assert_function_contains "${file}" setup_pr_lens_skill 'install_managed_agent_skill "coldteadotai/pr-lens" "pr-lens" "PR Lens"' 'PR Lens source and specific skill'
-    assert_function_not_contains "${file}" setup_pr_lens_skill 'BAN_|WORK_MACHINE|cursor|plugin|output-style|canvas|npx' 'PR Lens opt-out, policy, or runtime workflow'
-    for artifact in LICENSE references/graph-document.md references/config.md references/example.graph.json; do
-        assert_function_contains "${file}" setup_pr_lens_skill "\"${artifact}\"" 'complete PR Lens footprint'
-    done
-    assert_contains "${file}" '^[[:space:]]+(if ! )?setup_pr_lens_skill( \|\| return 1|; then)$' 'required PR Lens main wiring'
-    assert_order "${file}" '^[[:space:]]+(if ! )?setup_show_me_skill' '^[[:space:]]+(if ! )?setup_pr_lens_skill' 'PR Lens after other managed skills'
-    assert_order "${file}" '^[[:space:]]+(if ! )?setup_pr_lens_skill' '^[[:space:]]+(if ! )?configure_pi_skill_ownership' 'PR Lens before ownership cleanup'
-    if [[ "${file}" != bazzite.sh ]]; then
-        setup_body=$(function_body "${file}" run_setup_tasks)
-        [[ "${setup_body}" == *$'if ! setup_pr_lens_skill; then\n        _setup_had_errors=1\n    fi'* ]] || fail "${file}: PR Lens failure is not recorded by setup"
-    fi
-    for shared_function in install_managed_agent_skill setup_pr_lens_skill configure_pi_skill_ownership; do
+    assert_function_contains "${file}" remove_simple_english_skill 'matt_pocock_skill_policy remove-simple-english' 'Simple English retirement'
+    assert_function_contains "${file}" remove_show_me_skill 'matt_pocock_skill_policy remove-show-me' 'show-me retirement'
+    assert_function_not_contains "${file}" remove_show_me_skill 'BAN_|WORK_MACHINE|cursor|plugin|output-style' 'show-me opt-out or unrequested target'
+    assert_contains "${file}" '^[[:space:]]+(if ! )?remove_simple_english_skill( \|\| _setup_had_errors=1|; then)$' 'Simple English removal main wiring'
+    assert_contains "${file}" '^[[:space:]]+(if ! )?remove_show_me_skill( \|\| _setup_had_errors=1|; then)$' 'show-me main wiring'
+    assert_order "${file}" '^[[:space:]]+elif install_pi_cli; then$' '^[[:space:]]+(if ! )?remove_simple_english_skill' 'managed skill installation after agent provisioning'
+    assert_order "${file}" '^[[:space:]]+(if ! )?remove_simple_english_skill' '^[[:space:]]+(if ! )?remove_show_me_skill' 'Simple English before show-me'
+    assert_order "${file}" '^[[:space:]]+(if ! )?remove_show_me_skill' '^[[:space:]]+(if ! )?configure_pi_skill_ownership' 'show-me removal before Pi ownership'
+    assert_order "${file}" '^[[:space:]]+(if ! )?remove_show_me_skill' '^[[:space:]]+remove_impeccable_resources$' 'show-me removal before cleanup'
+    assert_function_contains "${file}" configure_pi_skill_ownership 'matt_pocock_skill_policy ownership' 'shared ownership policy'
+    assert_function_contains "${file}" remove_pr_lens_skill 'matt_pocock_skill_policy remove-pr-lens' 'PR Lens retirement'
+    for shared_function in install_managed_agent_skill remove_simple_english_skill remove_show_me_skill remove_pr_lens_skill configure_pi_skill_ownership; do
         shared_body=$(function_body "${file}" "${shared_function}")
         canonical_body=$(function_body mac.sh "${shared_function}")
         [[ "${shared_body}" == "${canonical_body}" ]] || fail "${file}: ${shared_function} drifted from the shared Bash implementation"
@@ -178,8 +168,8 @@ done
 assert_contains win.ps1 '^function Test-SkillsCliNodeRuntimeReady' 'PowerShell Node.js runtime check'
 assert_contains win.ps1 '^function Enable-SkillsCliNodeRuntime' 'PowerShell Node.js runtime setup'
 assert_contains win.ps1 '^function Install-ManagedAgentSkill' 'PowerShell reusable managed skill installer'
-assert_contains win.ps1 '^function Install-SimpleEnglishSkill' 'PowerShell Simple English wrapper'
-assert_contains win.ps1 '^function Install-ShowMeSkill' 'PowerShell show-me wrapper'
+assert_contains win.ps1 '^function Remove-SimpleEnglishSkill' 'PowerShell Simple English wrapper'
+assert_contains win.ps1 '^function Remove-ShowMeSkill' 'PowerShell show-me wrapper'
 assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill '"skills@latest"' 'latest skills CLI package'
 for agent in claude-code codex gemini-cli; do
     assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill '"--agent", "'"${agent}"'"' "${agent} target"
@@ -195,27 +185,17 @@ assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill '\$env:CLA
 assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill '\.agents\\skills\\\$SkillName' 'shared artifact validation'
 assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill 'FileAttributes]::ReparsePoint' 'directory and file symlink rejection'
 assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill 'FileInfo.*Length -le 0' 'missing, empty, and non-regular artifact rejection'
-assert_powershell_function_contains win.ps1 Install-SimpleEnglishSkill 'AminBlg/SimpleEnglish.*simple-english.*Simple English' 'unchanged Simple English source and name'
-assert_powershell_function_contains win.ps1 Install-ShowMeSkill 'humanlayer/skills.*show-me.*show-me' 'HumanLayer show-me source and name'
-assert_powershell_function_contains win.ps1 Set-PiSkillOwnership '"simple-english", "show-me"' 'show-me canonical shared ownership'
-assert_contains win.ps1 'Required Simple English skill setup failed' 'PowerShell fatal Simple English failure propagation'
-assert_contains win.ps1 'Required show-me skill setup failed' 'PowerShell fatal show-me failure propagation'
-assert_contains win.ps1 'Version 148 \| Last changed: Secure Pi profiles and remove surplus Paseo CLIs' 'PowerShell version banner'
-assert_powershell_function_contains win.ps1 Install-PrLensSkill 'coldteadotai/pr-lens.*pr-lens.*PR Lens' 'PR Lens source and specific skill'
-assert_powershell_function_not_contains win.ps1 Install-PrLensSkill 'BAN_|WORK_MACHINE|cursor|plugin|output-style|canvas|npx' 'PR Lens opt-out, policy, or runtime workflow'
-for artifact in LICENSE references/graph-document.md references/config.md references/example.graph.json; do
-    assert_powershell_function_contains win.ps1 Install-PrLensSkill "\"${artifact}\"" 'complete PR Lens footprint'
-done
-assert_powershell_function_contains win.ps1 Set-PiSkillOwnership '"simple-english", "show-me", "pr-lens"' 'PR Lens canonical shared ownership'
-assert_contains win.ps1 'Required PR Lens skill setup failed' 'PowerShell fatal PR Lens failure propagation'
-windows_setup_body=$(powershell_function_body win.ps1 Invoke-WindowsSetupTasks)
-# shellcheck disable=SC2016 # Preserve literal PowerShell variable syntax.
-[[ "${windows_setup_body}" == *$'if (-not (Install-PrLensSkill)) {\n        $prLensSetupFailed = $true\n    }'* && "${windows_setup_body}" == *$'if ($prLensSetupFailed) {\n        throw "Required PR Lens skill setup failed."\n    }'* ]] || fail 'win.ps1: PR Lens failure does not reach the setup error'
-assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-ShowMeSkill\)\) \{$' '^[[:space:]]+if \(-not \(Install-PrLensSkill\)\) \{$' 'PowerShell PR Lens after other skills'
-assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-PrLensSkill\)\) \{$' '^[[:space:]]+if \(-not \(Set-PiSkillOwnership\)\) \{$' 'PowerShell PR Lens before ownership cleanup'
-assert_order win.ps1 '^[[:space:]]+elseif \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
-assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+if \(-not \(Install-ShowMeSkill\)\) \{$' 'PowerShell Simple English before show-me'
-assert_order win.ps1 '^[[:space:]]+if \(-not \(Install-ShowMeSkill\)\) \{$' '^[[:space:]]+if \(-not \(Set-PiSkillOwnership\)\) \{$' 'PowerShell show-me before Pi ownership'
+assert_powershell_function_contains win.ps1 Remove-SimpleEnglishSkill 'Invoke-MattPocockSkillPolicy -Mode remove-simple-english' 'Simple English retirement'
+assert_powershell_function_contains win.ps1 Remove-ShowMeSkill 'Invoke-MattPocockSkillPolicy -Mode remove-show-me' 'show-me retirement'
+assert_powershell_function_contains win.ps1 Set-PiSkillOwnership 'Invoke-MattPocockSkillPolicy -Mode ownership' 'shared ownership policy'
+assert_contains win.ps1 'Required Simple English skill removal failed' 'PowerShell fatal Simple English failure propagation'
+assert_contains win.ps1 'Required show-me skill removal failed' 'PowerShell fatal show-me failure propagation'
+assert_contains win.ps1 'Version 151 \| Last changed: Install full Matt suite and retire legacy global skills' 'PowerShell version banner'
+assert_powershell_function_contains win.ps1 Remove-PrLensSkill 'Invoke-MattPocockSkillPolicy -Mode remove-pr-lens' 'PR Lens retirement'
+assert_contains win.ps1 'Required PR Lens skill removal failed' 'PowerShell fatal PR Lens failure propagation'
+assert_order win.ps1 '^[[:space:]]+elseif \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Remove-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
+assert_order win.ps1 '^[[:space:]]+if \(-not \(Remove-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+if \(-not \(Remove-ShowMeSkill\)\) \{$' 'PowerShell Simple English before show-me'
+assert_order win.ps1 '^[[:space:]]+if \(-not \(Remove-ShowMeSkill\)\) \{$' '^[[:space:]]+if \(-not \(Set-PiSkillOwnership\)\) \{$' 'PowerShell show-me before Pi ownership'
 
 # Mock the upstream installer. This proves repeat updates, exact targets, custom
 # Claude paths, failure propagation, artifact validation, and copy enforcement.
@@ -248,9 +228,6 @@ for file in "${bash_setup_scripts[@]}"; do
                 local skill_dir=""
                 local relative_file=""
                 local -a required_files=(SKILL.md)
-                if [[ "${skill_name}" == pr-lens ]]; then
-                    required_files+=(LICENSE references/graph-document.md references/config.md references/example.graph.json)
-                fi
                 for skill_dir in \
                     "${CLAUDE_CONFIG_DIR}/skills/${skill_name}" \
                     "${HOME}/.agents/skills/${skill_name}"; do
@@ -263,35 +240,24 @@ for file in "${bash_setup_scripts[@]}"; do
             }
             for WORK_MACHINE in 0 1; do
                 export WORK_MACHINE
-                setup_simple_english_skill > /dev/null || exit 1
-                setup_show_me_skill > /dev/null || exit 1
-                setup_pr_lens_skill > /dev/null || exit 1
-                setup_pr_lens_skill > /dev/null || exit 1
+                install_managed_agent_skill example/fixture tdd "Copy fixture" > /dev/null || exit 1
             done
         '
 
-    simple_args='--yes skills@latest add AminBlg/SimpleEnglish --global --agent claude-code --agent codex --agent gemini-cli --skill simple-english --copy --yes'
-    show_me_args='--yes skills@latest add humanlayer/skills --global --agent claude-code --agent codex --agent gemini-cli --skill show-me --copy --yes'
-    simple_count=$(grep -Fxc -- "${simple_args}" "${test_root}/calls" || true)
-    show_me_count=$(grep -Fxc -- "${show_me_args}" "${test_root}/calls" || true)
-    [[ "${simple_count}" -eq 2 ]] || fail "${file}: Simple English did not update on both setup runs"
-    [[ "${show_me_count}" -eq 2 ]] || fail "${file}: show-me did not update on both setup runs"
-    pr_lens_args='--yes skills@latest add coldteadotai/pr-lens --global --agent claude-code --agent codex --agent gemini-cli --skill pr-lens --copy --yes'
-    pr_lens_count=$(grep -Fxc -- "${pr_lens_args}" "${test_root}/calls" || true)
-    [[ "${pr_lens_count}" -eq 4 ]] || fail "${file}: PR Lens did not update twice on personal and work machines"
+    copy_fixture_args='--yes skills@latest add example/fixture --global --agent claude-code --agent codex --agent gemini-cli --skill tdd --copy --yes'
+    copy_fixture_count=$(grep -Fxc -- "${copy_fixture_args}" "${test_root}/calls" || true)
+    [[ "${copy_fixture_count}" -eq 2 ]] || fail "${file}: tdd did not update on both setup runs"
     call_count=$(wc -l < "${test_root}/calls")
-    [[ "${call_count}" -eq 8 ]] || fail "${file}: installer used unexpected arguments"
+    [[ "${call_count}" -eq 2 ]] || fail "${file}: installer used unexpected arguments"
 
-    for skill in simple-english show-me pr-lens; do
-        for skill_file in \
-            "${claude_home}/skills/${skill}/SKILL.md" \
-            "${test_home}/.agents/skills/${skill}/SKILL.md"; do
-            [[ -f "${skill_file}" ]] || fail "${file}: missing mocked artifact ${skill_file}"
-            [[ ! -L "$(dirname "${skill_file}")" && ! -L "${skill_file}" ]] || fail "${file}: ${skill_file} was installed as a symlink"
-        done
-        [[ ! -e "${codex_home}/skills/${skill}" ]] || fail "${file}: used custom CODEX_HOME instead of the shared path"
-        [[ ! -e "${pi_home}/skills/${skill}" ]] || fail "${file}: created a redundant direct Pi copy"
+    for skill_file in \
+        "${claude_home}/skills/tdd/SKILL.md" \
+        "${test_home}/.agents/skills/tdd/SKILL.md"; do
+        [[ -f "${skill_file}" ]] || fail "${file}: missing mocked artifact ${skill_file}"
+        [[ ! -L "$(dirname "${skill_file}")" && ! -L "${skill_file}" ]] || fail "${file}: ${skill_file} was installed as a symlink"
     done
+    [[ ! -e "${codex_home}/skills/tdd" ]] || fail "${file}: used custom CODEX_HOME instead of the shared path"
+    [[ ! -e "${pi_home}/skills/tdd" ]] || fail "${file}: created a redundant direct Pi copy"
     [[ -f "${pi_home}/skills/keep-me/SKILL.md" ]] || fail "${file}: custom Pi handling removed a sibling skill"
 
     failure_root=$(mktemp -d)
@@ -303,35 +269,35 @@ for file in "${bash_setup_scripts[@]}"; do
             ensure_skills_cli_node_runtime() { return 0; }
 
             npx() { return 1; }
-            if setup_show_me_skill > /dev/null; then
+            if install_managed_agent_skill example/fixture tdd "Copy fixture" > /dev/null; then
                 exit 91
             fi
 
             npx() { return 0; }
-            if setup_show_me_skill > /dev/null; then
+            if install_managed_agent_skill example/fixture tdd "Copy fixture" > /dev/null; then
                 exit 92
             fi
 
-            mkdir -p "${CLAUDE_CONFIG_DIR}/skills" "${HOME}/.agents/skills/show-me" "${HOME}/directory-link-target"
-            printf "show-me\n" > "${HOME}/.agents/skills/show-me/SKILL.md"
-            printf "show-me\n" > "${HOME}/directory-link-target/SKILL.md"
-            ln -s "${HOME}/directory-link-target" "${CLAUDE_CONFIG_DIR}/skills/show-me"
-            if setup_show_me_skill > /dev/null; then
+            mkdir -p "${CLAUDE_CONFIG_DIR}/skills" "${HOME}/.agents/skills/tdd" "${HOME}/directory-link-target"
+            printf "tdd\n" > "${HOME}/.agents/skills/tdd/SKILL.md"
+            printf "tdd\n" > "${HOME}/directory-link-target/SKILL.md"
+            ln -s "${HOME}/directory-link-target" "${CLAUDE_CONFIG_DIR}/skills/tdd"
+            if install_managed_agent_skill example/fixture tdd "Copy fixture" > /dev/null; then
                 exit 93
             fi
 
-            rm -rf "${CLAUDE_CONFIG_DIR}/skills/show-me" "${HOME}/.agents/skills/simple-english"
-            mkdir -p "${CLAUDE_CONFIG_DIR}/skills/simple-english" "${HOME}/.agents/skills/simple-english"
-            printf "simple-english\n" > "${HOME}/simple-english-target.md"
-            ln -s "${HOME}/simple-english-target.md" "${CLAUDE_CONFIG_DIR}/skills/simple-english/SKILL.md"
-            printf "simple-english\n" > "${HOME}/.agents/skills/simple-english/SKILL.md"
-            if setup_simple_english_skill > /dev/null; then
+            rm -rf "${CLAUDE_CONFIG_DIR}/skills/tdd" "${HOME}/.agents/skills/tdd"
+            mkdir -p "${CLAUDE_CONFIG_DIR}/skills/tdd" "${HOME}/.agents/skills/tdd"
+            printf "tdd\n" > "${HOME}/tdd-target.md"
+            ln -s "${HOME}/tdd-target.md" "${CLAUDE_CONFIG_DIR}/skills/tdd/SKILL.md"
+            printf "tdd\n" > "${HOME}/.agents/skills/tdd/SKILL.md"
+            if install_managed_agent_skill example/fixture tdd "Copy fixture" > /dev/null; then
                 exit 94
             fi
 
             ensure_skills_cli_node_runtime() { return 1; }
             npx() { printf "called\n" >> "${CALL_LOG}"; return 0; }
-            if setup_show_me_skill > /dev/null; then
+            if install_managed_agent_skill example/fixture tdd "Copy fixture" > /dev/null; then
                 exit 95
             fi
             [[ ! -e "${CALL_LOG}" ]] || exit 96
@@ -339,14 +305,18 @@ for file in "${bash_setup_scripts[@]}"; do
             ensure_skills_cli_node_runtime() { return 0; }
             unset -f npx
             PATH=${EMPTY_PATH}
-            if setup_show_me_skill > /dev/null; then
+            if install_managed_agent_skill example/fixture tdd "Copy fixture" > /dev/null; then
                 exit 97
             fi
         ' || fail "${file}: a required managed skill failure was not propagated"
 
     SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" \
-        HOME="${failure_root}/pr-lens-home" CLAUDE_CONFIG_DIR="${failure_root}/custom claude" bash -c '
+        HOME="${failure_root}/reference-fixture-home" CLAUDE_CONFIG_DIR="${failure_root}/custom claude" bash -c '
             source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+            setup_reference_fixture_skill() {
+                install_managed_agent_skill example/fixture reference-fixture "Reference fixture" \
+                    LICENSE references/graph-document.md references/config.md references/example.graph.json
+            }
             ensure_skills_cli_node_runtime() { return 0; }
             npx() { return 0; }
             required_files=(SKILL.md LICENSE references/graph-document.md references/config.md references/example.graph.json)
@@ -357,7 +327,7 @@ for file in "${bash_setup_scripts[@]}"; do
             done
             for claude_mode in custom default; do
                 [[ "${claude_mode}" == custom ]] || unset CLAUDE_CONFIG_DIR
-                skill_dirs=("${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/skills/pr-lens" "${HOME}/.agents/skills/pr-lens")
+                skill_dirs=("${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/skills/reference-fixture" "${HOME}/.agents/skills/reference-fixture")
                 reset_copies() {
                     local dir=""
                     for dir in "${skill_dirs[@]}"; do
@@ -368,14 +338,14 @@ for file in "${bash_setup_scripts[@]}"; do
                 }
                 expect_failure() {
                     local output=""
-                    if output=$(setup_pr_lens_skill); then
-                        printf "Accepted invalid PR Lens artifact: %s\n" "$*" >&2
+                    if output=$(setup_reference_fixture_skill); then
+                        printf "Accepted invalid Reference fixture artifact: %s\n" "$*" >&2
                         exit 1
                     fi
-                    [[ "${output}" == *"PR Lens validation failed:"* ]] || exit 2
+                    [[ "${output}" == *"Reference fixture validation failed:"* ]] || exit 2
                 }
                 reset_copies
-                setup_pr_lens_skill > /dev/null || exit 3
+                setup_reference_fixture_skill > /dev/null || exit 3
                 for dir in "${skill_dirs[@]}"; do
                     diff -qr "${fixture}" "${dir}" || exit 4
                     for relative_file in "${required_files[@]}"; do
@@ -408,32 +378,29 @@ for file in "${bash_setup_scripts[@]}"; do
                 done
                 reset_copies
                 npx() { return 1; }
-                if setup_pr_lens_skill > /dev/null; then exit 5; fi
+                if setup_reference_fixture_skill > /dev/null; then exit 5; fi
                 ensure_skills_cli_node_runtime() { return 1; }
                 npx() { printf "unexpected call\n" > "${HOME}/unexpected-call"; }
-                if setup_pr_lens_skill > /dev/null; then exit 6; fi
+                if setup_reference_fixture_skill > /dev/null; then exit 6; fi
                 [[ ! -e "${HOME}/unexpected-call" ]] || exit 7
                 ensure_skills_cli_node_runtime() { return 0; }
                 unset -f npx
                 saved_path=${PATH}
                 PATH="${HOME}/empty-path"
-                if setup_pr_lens_skill > /dev/null; then exit 8; fi
+                if setup_reference_fixture_skill > /dev/null; then exit 8; fi
                 PATH=${saved_path}
                 npx() { return 0; }
             done
-        ' || fail "${file}: PR Lens complete-file validation failed"
+        ' || fail "${file}: Reference fixture complete-file validation failed"
 
     rm -rf "${failure_root}" "${test_root}"
 done
 
-assert_contains README.md 'Every setup run installs the latest.*Simple English.*HumanLayer.*show-me' 'latest managed skill documentation'
-# shellcheck disable=SC2016 # Preserve literal Markdown code spans.
-assert_contains README.md 'Simple English, `show-me`, and PR Lens are required on personal and work machines and have no setup opt-out' 'required all-machine behavior documentation'
-# shellcheck disable=SC2016 # Preserve literal Markdown code spans.
-assert_contains CLAUDE.md 'always installs the latest Simple English, HumanLayer `show-me`, and PR Lens skills globally' 'repository guidance'
+assert_contains README.md 'Setup installs the full.*Matt Pocock skill suite' 'managed skill documentation'
+assert_contains README.md 'Removal applies to personal and work machines and has no opt-out' 'retired skill all-machine behavior'
+assert_contains CLAUDE.md 'full Matt Pocock suite is the managed global skill suite' 'repository guidance'
 assert_contains CONTEXT.md '^\*\*Managed agent skill\*\*:' 'managed agent skill glossary term'
 
-assert_contains README.md 'Default hosted uploads remain enabled, including on work machines' 'approved hosted-upload behavior'
+assert_contains README.md 'Setup removes PR Lens, Simple English, and HumanLayer' 'all retired skills documented'
 assert_contains README.md 'next setup run' 'next-run rollout'
-assert_contains README.md 'gh.*2\.99' 'attachment runtime limitation'
-printf '✓ Managed Simple English, show-me, and PR Lens skill contract checks passed\n'
+printf '✓ Managed and retired-skill contract checks passed\n'

@@ -17,7 +17,7 @@ class WiringTests(unittest.TestCase):
     def bash_block(self, name):
         main = (ROOT / name).read_text().split("run_setup_tasks() {", 1)[1]
         begin = main.index("    if ! prepare_pi_profile_permissions; then")
-        end = re.search(r"^    (?:if ! )?setup_simple_english_skill", main, re.M).start()
+        end = re.search(r"^    (?:if ! )?remove_simple_english_skill", main, re.M).start()
         block = main[begin:end]
         if name == "pi.sh":
             # Pi configures its shell between these blocks; that work is not executed.
@@ -105,7 +105,7 @@ exercise() {
     def test_powershell_wiring_and_failure_aggregation(self):
         main = (ROOT / "win.ps1").read_text().split("function Invoke-WindowsSetupTasks {", 1)[1]
         block = main[main.index("    if (-not (Prepare-PiProfilePermissions))"):
-                     main.index("    if (-not (Install-SimpleEnglishSkill))")]
+                     main.index("    if (-not (Remove-SimpleEnglishSkill))")]
         inert = ("Remove-RtkResources", "Remove-AttentionSpanResources", "Setup-MattPocockSkills",
                  "Set-PiDefaults", "Remove-PiSyntheticModels", "Seed-PiZaiModels",
                  "Setup-PiMcpAdapter", "Remove-PiSubagents", "Remove-PiRpivPackages",

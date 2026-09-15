@@ -20,26 +20,26 @@ for file in "${bash_setup_scripts[@]}"; do
     default_pi="${test_home}/.pi/agent/skills"
     custom_pi="${active_pi}/skills"
 
-    mkdir -p "${shared}/simple-english" "${default_pi}/simple-english" \
-        "${custom_pi}/simple-english" "${shared}/show-me" "${default_pi}/show-me" \
-        "${custom_pi}/show-me" "${shared}/diagnosing-bugs" \
+    mkdir -p "${shared}/tdd" "${default_pi}/tdd" \
+        "${custom_pi}/tdd" "${shared}/codebase-design" "${default_pi}/codebase-design" \
+        "${custom_pi}/codebase-design" "${shared}/diagnosing-bugs" \
         "${default_pi}/diagnosing-bugs" "${custom_pi}/diagnosing-bugs"
-    printf 'canonical\n' > "${shared}/simple-english/SKILL.md"
-    cp "${shared}/simple-english/SKILL.md" "${default_pi}/simple-english/SKILL.md"
-    cp "${shared}/simple-english/SKILL.md" "${custom_pi}/simple-english/SKILL.md"
-    printf 'canonical-show-me\n' > "${shared}/show-me/SKILL.md"
-    cp "${shared}/show-me/SKILL.md" "${default_pi}/show-me/SKILL.md"
-    printf 'user-modified-show-me\n' > "${custom_pi}/show-me/SKILL.md"
+    printf 'canonical\n' > "${shared}/tdd/SKILL.md"
+    cp "${shared}/tdd/SKILL.md" "${default_pi}/tdd/SKILL.md"
+    cp "${shared}/tdd/SKILL.md" "${custom_pi}/tdd/SKILL.md"
+    printf 'canonical-codebase-design\n' > "${shared}/codebase-design/SKILL.md"
+    cp "${shared}/codebase-design/SKILL.md" "${default_pi}/codebase-design/SKILL.md"
+    printf 'user-modified-codebase-design\n' > "${custom_pi}/codebase-design/SKILL.md"
     printf 'canonical\n' > "${shared}/diagnosing-bugs/SKILL.md"
     printf 'user-modified\n' > "${default_pi}/diagnosing-bugs/SKILL.md"
     cp "${shared}/diagnosing-bugs/SKILL.md" "${custom_pi}/diagnosing-bugs/SKILL.md"
-    mkdir -p "${shared}/pr-lens/references"
+    mkdir -p "${shared}/code-review/references"
     for artifact in SKILL.md LICENSE references/graph-document.md references/config.md references/example.graph.json; do
-        printf 'canonical %s\n' "${artifact}" > "${shared}/pr-lens/${artifact}"
+        printf 'canonical %s\n' "${artifact}" > "${shared}/code-review/${artifact}"
     done
-    cp -R "${shared}/pr-lens" "${default_pi}/pr-lens"
-    cp -R "${shared}/pr-lens" "${custom_pi}/pr-lens"
-    printf 'user-modified reference\n' > "${custom_pi}/pr-lens/references/config.md"
+    cp -R "${shared}/code-review" "${default_pi}/code-review"
+    cp -R "${shared}/code-review" "${custom_pi}/code-review"
+    printf 'user-modified reference\n' > "${custom_pi}/code-review/references/config.md"
     mkdir -p "${active_pi}/extensions"
     printf '%s\n' '{"theme":"keep","skills":["user-skill"]}' > "${active_pi}/settings.json"
     printf '%s\n' '{"display":{"keep":true},"shortcuts":{"another":"ctrl+x"}}' > "${active_pi}/extensions/pi-autoresearch.json"
@@ -53,24 +53,24 @@ for file in "${bash_setup_scripts[@]}"; do
             configure_pi_autoresearch_shortcut > /dev/null
         '
 
-    [[ ! -e "${default_pi}/simple-english" ]] || fail "${file}: identical default Pi duplicate remains"
-    [[ ! -e "${custom_pi}/simple-english" ]] || fail "${file}: identical custom Pi duplicate remains"
-    [[ ! -e "${default_pi}/show-me" ]] || fail "${file}: identical default show-me duplicate remains"
-    [[ -f "${custom_pi}/show-me/SKILL.md" ]] || fail "${file}: modified show-me copy was removed"
-    [[ $(< "${custom_pi}/show-me/SKILL.md") == user-modified-show-me ]] || fail "${file}: modified show-me copy changed"
+    [[ ! -e "${default_pi}/tdd" ]] || fail "${file}: identical default Pi duplicate remains"
+    [[ ! -e "${custom_pi}/tdd" ]] || fail "${file}: identical custom Pi duplicate remains"
+    [[ ! -e "${default_pi}/codebase-design" ]] || fail "${file}: identical default codebase-design duplicate remains"
+    [[ -f "${custom_pi}/codebase-design/SKILL.md" ]] || fail "${file}: modified codebase-design copy was removed"
+    [[ $(< "${custom_pi}/codebase-design/SKILL.md") == user-modified-codebase-design ]] || fail "${file}: modified codebase-design copy changed"
     [[ ! -e "${custom_pi}/diagnosing-bugs" ]] || fail "${file}: identical custom Matt Pocock duplicate remains"
     [[ -f "${default_pi}/diagnosing-bugs/SKILL.md" ]] || fail "${file}: modified user copy was removed"
     [[ $(< "${default_pi}/diagnosing-bugs/SKILL.md") == user-modified ]] || fail "${file}: modified user copy changed"
 
-    [[ ! -e "${default_pi}/pr-lens" ]] || fail "${file}: identical default PR Lens duplicate remains"
-    [[ $(< "${custom_pi}/pr-lens/references/config.md") == 'user-modified reference' ]] || fail "${file}: modified PR Lens reference changed"
-    [[ -s "${shared}/pr-lens/references/config.md" ]] || fail "${file}: canonical PR Lens copy was removed"
+    [[ ! -e "${default_pi}/code-review" ]] || fail "${file}: identical default code-review duplicate remains"
+    [[ $(< "${custom_pi}/code-review/references/config.md") == 'user-modified reference' ]] || fail "${file}: modified code-review reference changed"
+    [[ -s "${shared}/code-review/references/config.md" ]] || fail "${file}: canonical code-review copy was removed"
     for direct_pi in "${default_pi}" "${custom_pi}"; do
-        exclusion="!${direct_pi}/pr-lens/**"
+        exclusion="!${direct_pi}/code-review/**"
         count=$(jq --arg entry "${exclusion}" '[.skills[] | select(. == $entry)] | length' "${active_pi}/settings.json")
-        [[ "${count}" -eq 1 ]] || fail "${file}: PR Lens exclusion missing or repeated at ${direct_pi}"
+        [[ "${count}" -eq 1 ]] || fail "${file}: code-review exclusion missing or repeated at ${direct_pi}"
     done
-    jq -e --arg entry "!${shared}/pr-lens/**" '.skills | index($entry) == null' "${active_pi}/settings.json" > /dev/null || fail "${file}: canonical PR Lens copy was excluded"
+    jq -e --arg entry "!${shared}/code-review/**" '.skills | index($entry) == null' "${active_pi}/settings.json" > /dev/null || fail "${file}: canonical code-review copy was excluded"
 
     jq -e '.theme == "keep" and (.skills | index("user-skill"))' "${active_pi}/settings.json" > /dev/null || fail "${file}: existing Pi settings changed"
     for skill in pi-goal-writer autoresearch-create autoresearch-finalize autoresearch-hooks; do
@@ -90,7 +90,7 @@ grep -q 'fullscreenDashboard.*ctrl+shift+r' win.ps1 || fail 'win.ps1: missing Ct
 if sed -n '/^function Install-ManagedAgentSkill/,/^}/p' win.ps1 | grep -q '"--agent", "pi"'; then
     fail 'win.ps1: managed agent skills still target direct Pi installation'
 fi
-grep -q '"simple-english", "show-me", "pr-lens"' win.ps1 || fail 'win.ps1: PR Lens is not a canonical shared Pi skill'
+grep -q 'Invoke-MattPocockSkillPolicy -Mode ownership' win.ps1 || fail 'win.ps1: missing shared ownership policy'
 if sed -n '/^function Setup-MattPocockSkills/,/^}/p' win.ps1 | grep -q '"--agent", "pi"'; then
     fail 'win.ps1: Matt Pocock skills still target direct Pi installation'
 fi

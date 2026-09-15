@@ -49,7 +49,7 @@ An agent skill whose upstream identity and managed footprint are part of the des
 _Avoid_: Setup-managed skill, bundled skill
 
 **PR Lens skill**:
-A managed agent skill that draws code changes or system structure as architecture and data-flow diagrams. It is distinct from the PR Lens GitHub App.
+A retired agent skill that draws code changes or system structure as architecture and data-flow diagrams. It is distinct from the PR Lens GitHub App.
 _Avoid_: PR review bot, PR Lens app
 
 **Managed footprint**:

@@ -3150,20 +3150,19 @@ install_managed_agent_skill() {
     print_debug "${_install_output}"
 }
 
-# Preserve the named Simple English setup interface.
-setup_simple_english_skill() {
-    install_managed_agent_skill "AminBlg/SimpleEnglish" "simple-english" "Simple English"
+# Retire Simple English from global skill copies and skills CLI update records.
+remove_simple_english_skill() {
+    matt_pocock_skill_policy remove-simple-english
 }
 
-# Install/update HumanLayer show-me for every supported AI coding harness.
-setup_show_me_skill() {
-    install_managed_agent_skill "humanlayer/skills" "show-me" "show-me"
+# Retire global show-me copies on the next setup run.
+remove_show_me_skill() {
+    matt_pocock_skill_policy remove-show-me
 }
 
-# Install/update upstream PR Lens unchanged, including its default hosted uploads.
-setup_pr_lens_skill() {
-    install_managed_agent_skill "coldteadotai/pr-lens" "pr-lens" "PR Lens" \
-        "LICENSE" "references/graph-document.md" "references/config.md" "references/example.graph.json"
+# Retire PR Lens from global skill copies and skills CLI update records.
+remove_pr_lens_skill() {
+    matt_pocock_skill_policy remove-pr-lens
 }
 
 # Remove setup-managed Impeccable resources without affecting sibling agent tooling.
@@ -5195,69 +5194,7 @@ setup_pi_companion_packages() {
 # Keep shared skills canonical for Pi and suppress stale direct/package collisions.
 configure_pi_skill_ownership() {
     [[ "${PI_PROFILE_MUTATIONS_BLOCKED:-0}" -eq 1 ]] && return 0
-    local _default_agent_dir="${HOME}/.pi/agent"
-    local _active_agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
-    local _settings_file="${_active_agent_dir}/settings.json"
-    local _canonical_dir="${HOME}/.agents/skills"
-    local _agent_dir=""
-    local _skill=""
-    local _duplicate=""
-    local _managed_json=""
-    local _tmp=""
-    local -a _agent_dirs=("${_default_agent_dir}")
-    local -a _shared_exclusions=(
-        "!${_canonical_dir}/pi-goal-writer/**"
-        "!${_canonical_dir}/autoresearch-create/**"
-        "!${_canonical_dir}/autoresearch-finalize/**"
-        "!${_canonical_dir}/autoresearch-hooks/**"
-    )
-    local -a _shared_skills=(
-        simple-english show-me pr-lens setup-matt-pocock-skills diagnosing-bugs tdd
-        improve-codebase-architecture grill-with-docs grilling domain-modeling codebase-design
-    )
-    local -a _managed_exclusions=("${_shared_exclusions[@]}")
-
-    if [[ "${_active_agent_dir}" != "${_default_agent_dir}" ]]; then
-        _agent_dirs+=("${_active_agent_dir}")
-    fi
-
-    for _agent_dir in "${_agent_dirs[@]}"; do
-        for _skill in "${_shared_skills[@]}"; do
-            _duplicate="${_agent_dir}/skills/${_skill}"
-            _managed_exclusions+=("!${_duplicate}/**")
-            if [[ -d "${_duplicate}" && ! -L "${_duplicate}" && -d "${_canonical_dir}/${_skill}" && ! -L "${_canonical_dir}/${_skill}" ]] &&
-                diff -qr -- "${_canonical_dir}/${_skill}" "${_duplicate}" > /dev/null 2>&1; then
-                if rm -rf -- "${_duplicate:?}"; then
-                    print_debug "Removed obsolete duplicate Pi skill: ${_duplicate}"
-                else
-                    print_warning "Failed to remove obsolete duplicate Pi skill: ${_duplicate}"
-                fi
-            fi
-        done
-    done
-
-    if ! command -v jq &> /dev/null; then
-        print_warning "jq not found. Cannot configure Pi skill ownership."
-        return 1
-    fi
-
-    mkdir -p "${_active_agent_dir}"
-    [[ -f "${_settings_file}" ]] || printf '{}\n' > "${_settings_file}"
-    _managed_json=$(printf '%s\n' "${_managed_exclusions[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')
-    _tmp=$(mktemp)
-    if jq --argjson managed "${_managed_json}" '
-        .skills = (reduce $managed[] as $entry (
-            (if (.skills | type) == "array" then .skills else [] end);
-            if index($entry) then . else . + [$entry] end
-        ))
-    ' "${_settings_file}" > "${_tmp}"; then
-        mv "${_tmp}" "${_settings_file}"
-        print_success "Pi skill ownership configured without removing shared harness copies."
-    else
-        rm -f "${_tmp}"
-        print_warning "Failed to configure Pi skill ownership at ${_settings_file}."
-        return 1
-    fi
+    matt_pocock_skill_policy ownership
 }
 
 # Configure pi-autoresearch without overriding Pi transcript search.
@@ -5364,28 +5301,268 @@ setup_pi_goal_autoresearch() {
 }
 
 
-# Matt Pocock skills to install in the shared Codex/Pi path.
-matt_pocock_skills() {
-    printf '%s\n' \
-        setup-matt-pocock-skills \
-        diagnosing-bugs \
-        tdd \
-        improve-codebase-architecture \
-        grill-with-docs \
-        grilling \
-        domain-modeling \
-        codebase-design
+# Shared policy for full-suite inventory, safe retirement, and Pi ownership.
+matt_pocock_skill_policy() {
+    if ! command -v node &> /dev/null; then
+        print_warning "Node.js is unavailable; managed skill policy cannot run."
+        return 1
+    fi
+    env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - \
+        "${HOME}" "${PI_CODING_AGENT_DIR:-}" "${PI_PROFILE_MUTATIONS_BLOCKED:-0}" "$@" <<'MANAGED_SKILL_POLICY_JS'
+    // Shared by all six standalone setup scripts. Never execute installed skills.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const [homeInput, activePiInput, blocked, mode, reportFile] = process.argv.slice(2);
+    const env = process.env;
+    const fail = reason => { throw new Error(reason); };
+    const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+    const nameOK = name => typeof name === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) && name.length <= 64;
+    const unique = values => [...new Set(values)];
+    const known = [
+        'ask-matt', 'code-review', 'codebase-design', 'diagnosing-bugs', 'domain-modeling',
+        'grill-with-docs', 'implement', 'improve-codebase-architecture', 'prototype', 'research',
+        'resolving-merge-conflicts', 'setup-matt-pocock-skills', 'tdd', 'to-spec', 'to-tickets',
+        'triage', 'wayfinder', 'wizard', 'claude-handoff', 'implement-spec', 'loop-me', 'retro',
+        'setup-ts-deep-modules', 'writing-beats', 'writing-fragments', 'writing-shape',
+        'git-guardrails-claude-code', 'migrate-to-shoehorn', 'scaffold-exercises', 'setup-pre-commit',
+        'grill-me', 'grilling', 'handoff', 'teach', 'to-questionnaire', 'wait-what', 'writing-for-agents'
+    ];
+    const obsolete = ['diagnose', 'zoom-out'];
+    function stat(file) {
+        try { return fs.lstatSync(file); }
+        catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    }
+    // The only ancestor link allowed is Bazzite's root-owned system /home alias.
+    function systemHomeAlias(file, st) {
+        if (process.platform !== 'linux' || file !== '/home' || st.uid !== 0) return false;
+        if (!['var/home', '/var/home'].includes(fs.readlinkSync(file))) return false;
+        return ['/', '/var', '/var/home'].every(dir => {
+            const item = stat(dir);
+            return item && item.isDirectory() && !item.isSymbolicLink() && item.uid === 0 && !(item.mode & 0o022);
+        });
+    }
+    function absolute(file) {
+        if (!file || !path.isAbsolute(file) || file.split(/[\\/]/).includes('..')) fail('unsafe-path');
+        const resolved = path.resolve(file);
+        if (resolved === path.parse(resolved).root) fail('unsafe-path');
+        return resolved;
+    }
+    function directory(file) {
+        const parent = path.dirname(file);
+        if (parent !== file) directory(parent);
+        const st = stat(file);
+        if (!st) return;
+        if (st.isSymbolicLink()) {
+            if (!systemHomeAlias(file, st)) fail('linked-directory');
+        } else if (!st.isDirectory()) fail('not-directory');
+    }
+    function owned(file) {
+        const st = stat(file);
+        if (st && process.platform !== 'win32' && st.uid !== process.getuid()) fail('wrong-owner');
+    }
+    function jsonFile(file) {
+        directory(path.dirname(file));
+        const st = stat(file);
+        if (!st) return null;
+        if (!st.isFile() || st.isSymbolicLink() || st.nlink !== 1) fail('unsafe-metadata');
+        owned(file);
+        let value;
+        try { value = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
+        catch { fail('malformed-metadata'); }
+        if (!object(value)) fail('malformed-metadata');
+        return value;
+    }
+    function writeJson(file, value) {
+        directory(path.dirname(file));
+        jsonFile(file);
+        fs.mkdirSync(path.dirname(file), {recursive: true, mode: 0o700});
+        const temp = file + '.setup-' + require('node:crypto').randomUUID();
+        try {
+            fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', {flag: 'wx', mode: stat(file)?.mode & 0o777 || 0o600});
+            fs.renameSync(temp, file);
+        } finally { if (stat(temp)) fs.unlinkSync(temp); }
+    }
+    // Preflight the complete bounded tree before removal. Links are unlinked, never traversed.
+    function removable(file) {
+        directory(path.dirname(file));
+        const st = stat(file);
+        if (!st) return;
+        owned(file);
+        if (st.isSymbolicLink()) return;
+        if (st.isDirectory()) {
+            for (const entry of fs.readdirSync(file)) removable(path.join(file, entry));
+        } else if (!st.isFile()) fail('unsupported-file');
+    }
+    function remove(file) {
+        removable(file);
+        const st = stat(file);
+        if (!st) return;
+        if (st.isDirectory() && !st.isSymbolicLink()) {
+            for (const entry of fs.readdirSync(file)) remove(path.join(file, entry));
+            fs.rmdirSync(file);
+        } else fs.unlinkSync(file);
+        if (stat(file)) fail('removal-failed');
+    }
+    function copiedTree(file) {
+        const st = stat(file);
+        if (!st || st.isSymbolicLink()) fail('invalid-skill-copy');
+        owned(file);
+        if (st.isDirectory()) {
+            for (const entry of fs.readdirSync(file)) copiedTree(path.join(file, entry));
+        } else if (!st.isFile()) fail('invalid-skill-copy');
+    }
+    function sameTree(left, right) {
+        const a = stat(left), b = stat(right);
+        if (!a || !b || a.isSymbolicLink() || b.isSymbolicLink()) return false;
+        if (a.isFile() && b.isFile()) return fs.readFileSync(left).equals(fs.readFileSync(right));
+        if (!a.isDirectory() || !b.isDirectory()) return false;
+        const names = fs.readdirSync(left).sort(), other = fs.readdirSync(right).sort();
+        return JSON.stringify(names) === JSON.stringify(other) && names.every(name => sameTree(path.join(left, name), path.join(right, name)));
+    }
+    try {
+        const home = absolute(homeInput);
+        directory(home);
+        const profile = (value, fallback) => {
+            const result = absolute(value || path.join(home, fallback));
+            if (result === home) fail('unsafe-path');
+            return result;
+        };
+        const defaultPi = path.join(home, '.pi/agent');
+        // Do not inspect rejected Pi profiles, including a rejected custom override.
+        const piDirs = blocked === '1' ? [] : unique([defaultPi, profile(activePiInput, '.pi/agent')]);
+        const claude = profile(env.CLAUDE_CONFIG_DIR, '.claude');
+        const shared = path.join(home, '.agents/skills');
+        const installDirs = unique([path.join(claude, 'skills'), shared]);
+        const allDirs = unique([
+            shared, path.join(home, '.claude/skills'), path.join(claude, 'skills'),
+            path.join(home, '.codex/skills'), path.join(profile(env.CODEX_HOME, '.codex'), 'skills'),
+            path.join(home, '.gemini/skills'), path.join(home, '.cursor/skills'),
+            ...piDirs.map(dir => path.join(dir, 'skills'))
+        ]);
+        const manifestFile = path.join(home, '.agents/.setup-matt-pocock-skills.json');
+        const manifest = jsonFile(manifestFile);
+        if (manifest && (manifest.version !== 1 || !Array.isArray(manifest.skills) || !manifest.skills.every(nameOK))) fail('invalid-inventory');
+        const lockPaths = unique([
+            path.join(home, '.agents/.skill-lock.json'),
+            ...(env.XDG_STATE_HOME ? [path.join(absolute(env.XDG_STATE_HOME), 'skills/.skill-lock.json')] : [])
+        ]);
+        const locks = lockPaths.map(file => {
+            const data = jsonFile(file);
+            if (data && (data.version !== 3 || !object(data.skills) || !Object.values(data.skills).every(object))) fail('invalid-skill-lock');
+            return {file, data};
+        });
+        const tracked = locks.flatMap(({data}) => Object.entries(data?.skills || {})
+            .filter(([, entry]) => entry.source === 'mattpocock/skills').map(([name]) => name));
+        if (!tracked.every(nameOK)) fail('invalid-inventory');
+        const inventory = unique([...known, ...(manifest?.skills || []), ...tracked]);
+        const checkDirs = dirs => dirs.forEach(dir => { directory(dir); owned(dir); });
+        const cleanup = (names, dirs, extraPaths = []) => {
+            checkDirs(dirs);
+            const paths = dirs.flatMap(dir => names.map(name => path.join(dir, name))).concat(extraPaths);
+            paths.forEach(removable);
+            paths.forEach(remove);
+            for (const {file, data} of locks) {
+                if (!data) continue;
+                let changed = false;
+                for (const name of names) {
+                    if (Object.hasOwn(data.skills, name)) { delete data.skills[name]; changed = true; }
+                }
+                if (changed) writeJson(file, data);
+            }
+        };
+        if (mode === 'names') {
+            process.stdout.write(inventory.join('\n') + '\n');
+        } else if (['remove-pr-lens', 'remove-simple-english', 'remove-show-me'].includes(mode)) {
+            const skill = mode.slice('remove-'.length);
+            // Direct Markdown skills are also discoverable in Pi's own skills directory.
+            cleanup([skill], allDirs, piDirs.map(dir => path.join(dir, 'skills', skill + '.md')));
+            if (blocked === '1') fail('pi-profiles-blocked');
+        } else if (mode === 'remove-matt' || mode === 'remove-obsolete') {
+            cleanup(mode === 'remove-matt' ? unique([...inventory, ...obsolete]) : obsolete, allDirs);
+            // Retain inventory for offline retries and custom profiles selected on a later run.
+        } else if (mode === 'preflight') {
+            checkDirs(installDirs);
+            for (const dir of installDirs) {
+                // The bulk CLI may select newly added upstream names. Reject linked existing
+                // copies before it runs, without recursively inspecting unrelated real skills.
+                for (const name of stat(dir) ? fs.readdirSync(dir) : []) {
+                    if (stat(path.join(dir, name))?.isSymbolicLink()) fail('linked-install-target');
+                }
+                for (const name of inventory) {
+                    const target = path.join(dir, name);
+                    if (stat(target)) copiedTree(target);
+                }
+            }
+        } else if (mode === 'validate') {
+            checkDirs(installDirs);
+            let report;
+            try { report = JSON.parse(fs.readFileSync(reportFile, 'utf8').replace(/^\uFEFF/, '')); }
+            catch { fail('invalid-install-report'); }
+            if (!Array.isArray(report) || report.length === 0) fail('invalid-install-report');
+            const names = [];
+            for (const entry of report) {
+                if (!object(entry) || !nameOK(entry.name) || entry.status !== 'installed' || entry.source !== 'mattpocock/skills' ||
+                    entry.scope !== 'global' || entry.mode !== 'copy' || !Array.isArray(entry.agents) ||
+                    !['Claude Code', 'Codex', 'Gemini CLI'].every(agent => entry.agents.includes(agent))) fail('invalid-install-report');
+                if (names.includes(entry.name)) fail('invalid-install-report');
+                names.push(entry.name);
+                for (const dir of installDirs) {
+                    const skill = path.join(dir, entry.name);
+                    copiedTree(skill);
+                    const md = stat(path.join(skill, 'SKILL.md'));
+                    if (!md?.isFile() || md.size === 0) fail('invalid-skill-copy');
+                }
+            }
+            // A validation floor, never an installation allowlist: newly discovered
+            // skills are accepted too. Retired/renamed baseline skills need review.
+            if (!known.every(name => names.includes(name))) fail('incomplete-suite');
+            writeJson(manifestFile, {version: 1, skills: unique([...inventory, ...names])});
+        } else if (mode === 'ownership') {
+            if (blocked !== '1') {
+                checkDirs([shared, ...piDirs.flatMap(dir => [dir, path.join(dir, 'skills')])]);
+                const settings = piDirs.map(dir => {
+                    const file = path.join(dir, 'settings.json');
+                    const data = jsonFile(file) || {};
+                    if (data.skills !== undefined && (!Array.isArray(data.skills) || !data.skills.every(value => typeof value === 'string'))) fail('invalid-settings');
+                    return {file, data};
+                });
+                const names = inventory;
+                const duplicates = piDirs.flatMap(dir => names.map(name => ({file: path.join(dir, 'skills', name), canonical: path.join(shared, name)})));
+                const equal = duplicates.filter(({file, canonical}) => sameTree(file, canonical));
+                equal.forEach(({file}) => removable(file));
+                equal.forEach(({file}) => remove(file));
+                const excluded = ['pi-goal-writer', 'autoresearch-create', 'autoresearch-finalize', 'autoresearch-hooks']
+                    .map(name => '!' + path.join(shared, name) + '/**')
+                    .concat(duplicates.map(({file}) => '!' + file + '/**'));
+                for (const {file, data} of settings) {
+                    const before = JSON.stringify(data);
+                    data.skills = unique([...(data.skills || []), ...excluded]);
+                    if (JSON.stringify(data) !== before) writeJson(file, data);
+                }
+            }
+        } else fail('unknown-operation');
+    } catch (error) {
+        const allowed = ['unsafe-path', 'linked-directory', 'not-directory', 'wrong-owner', 'unsafe-metadata', 'malformed-metadata',
+            'unsupported-file', 'removal-failed', 'invalid-skill-copy', 'invalid-inventory', 'invalid-skill-lock',
+            'pi-profiles-blocked', 'linked-install-target', 'invalid-install-report', 'incomplete-suite', 'invalid-settings', 'unknown-operation'];
+        const reason = allowed.includes(error.message) ? error.message : ['EACCES', 'EPERM', 'ENOENT', 'ENOSPC', 'EROFS', 'EBUSY'].includes(error.code) ? error.code : 'operation-failed';
+        process.stderr.write('Managed skills: ' + reason + '.\n');
+        process.exitCode = 1;
+    }
+MANAGED_SKILL_POLICY_JS
 }
 
-# Setup-managed skill names retired or renamed upstream.
+# The full repository is selected by the installer. This inventory is for cleanup.
+matt_pocock_skills() {
+    matt_pocock_skill_policy names
+}
+
 matt_pocock_obsolete_skills() {
-    printf '%s\n' \
-        diagnose \
-        zoom-out
+    printf '%s\n' diagnose zoom-out
 }
 
 matt_pocock_all_managed_skills() {
-    matt_pocock_skills
+    matt_pocock_skills || return 1
     matt_pocock_obsolete_skills
 }
 
@@ -5393,134 +5570,48 @@ matt_pocock_skills_disabled() {
     [[ "${BAN_MATT_POCOCK_SKILLS:-}" == "1" || "${BAN_MATT_POCKOCK_SKILLS:-}" == "1" ]]
 }
 
-# Remove setup-managed Matt Pocock skills without following symlink targets.
 remove_matt_pocock_skills() {
-    local _default_agent_dir="${HOME}/.pi/agent"
-    local _active_agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
-    local _skills_dir=""
-    local _skill=""
-    local _skill_path=""
-    local _removed=0
-    local _failed=()
-    local _skills_dirs=("${_default_agent_dir}/skills" "${HOME}/.agents/skills")
-
-    if [[ "${_active_agent_dir}" != "${_default_agent_dir}" ]]; then
-        _skills_dirs+=("${_active_agent_dir}/skills")
-    fi
-
-    if [[ "${PI_PROFILE_MUTATIONS_BLOCKED:-0}" -eq 1 ]]; then _skills_dirs=("${HOME}/.agents/skills"); fi
-    for _skills_dir in "${_skills_dirs[@]}"; do
-        while IFS= read -r _skill; do
-            _skill_path="${_skills_dir}/${_skill}"
-            if [[ -e "${_skill_path}" || -L "${_skill_path}" ]]; then
-                if rm -rf -- "${_skill_path:?}" && [[ ! -e "${_skill_path}" && ! -L "${_skill_path}" ]]; then
-                    _removed=1
-                else
-                    _failed+=("${_skill}")
-                fi
-            fi
-        done < <(matt_pocock_all_managed_skills || true)
-    done
-
-    if [[ "${#_failed[@]}" -gt 0 ]]; then
-        print_warning "Failed to remove Matt Pocock skills: ${_failed[*]}"
-        return 1
-    elif [[ "${_removed}" -eq 1 ]]; then
-        print_success "Matt Pocock skills disabled."
-    else
-        print_debug "Matt Pocock skills disabled; no installed copies found."
-    fi
+    matt_pocock_skill_policy remove-matt
 }
 
-# Remove only retired setup-managed names after their replacements validate.
 remove_obsolete_matt_pocock_skills() {
-    local _default_agent_dir="${HOME}/.pi/agent"
-    local _active_agent_dir="${PI_CODING_AGENT_DIR:-${_default_agent_dir}}"
-    local _skills_dir=""
-    local _skill=""
-    local _skill_path=""
-    local _failed=()
-    local _skills_dirs=("${_default_agent_dir}/skills" "${HOME}/.agents/skills")
-
-    if [[ "${_active_agent_dir}" != "${_default_agent_dir}" ]]; then
-        _skills_dirs+=("${_active_agent_dir}/skills")
-    fi
-
-    if [[ "${PI_PROFILE_MUTATIONS_BLOCKED:-0}" -eq 1 ]]; then _skills_dirs=("${HOME}/.agents/skills"); fi
-    for _skills_dir in "${_skills_dirs[@]}"; do
-        while IFS= read -r _skill; do
-            _skill_path="${_skills_dir}/${_skill}"
-            if [[ -e "${_skill_path}" || -L "${_skill_path}" ]]; then
-                if ! rm -rf -- "${_skill_path:?}" || [[ -e "${_skill_path}" || -L "${_skill_path}" ]]; then
-                    _failed+=("${_skill_path}")
-                fi
-            fi
-        done < <(matt_pocock_obsolete_skills || true)
-    done
-
-    if [[ "${#_failed[@]}" -gt 0 ]]; then
-        print_warning "Failed to remove obsolete Matt Pocock skills: ${_failed[*]}"
-        return 1
-    fi
+    matt_pocock_skill_policy remove-obsolete
 }
 
-# Install/update Matt Pocock engineering skills for Codex and Pi.
+# Install all upstream categories, including experimental skills, for four agents.
 setup_matt_pocock_skills() {
-    local _repo="mattpocock/skills"
-    local _codex_skills_dir="${HOME}/.agents/skills"
-    local _validation_dir=""
-    local _skill=""
-    local _output=""
-    local _source_path=""
-    local _args=(--yes skills@latest add "${_repo}" --global --agent codex --copy --yes)
-    local _validation_dirs=("${_codex_skills_dir}")
-    local _missing=()
-
+    local _report=""
+    local _matt_failed=0
     if matt_pocock_skills_disabled; then
         remove_matt_pocock_skills
         return
     fi
-
     if ! ensure_skills_cli_node_runtime; then
         print_warning "Cannot install Matt Pocock skills because the skills CLI runtime is not ready."
         return 1
     fi
-
     if ! command -v npx &> /dev/null; then
         print_warning "npx is not available; cannot install Matt Pocock skills."
-        print_debug "Install Node.js >=22.20, then run: npx --yes skills@latest add mattpocock/skills --global --agent codex --copy --yes"
         return 1
     fi
-
-    while IFS= read -r _skill; do
-        _args+=(--skill "${_skill}")
-    done < <(matt_pocock_skills || true)
-
-    print_message "Installing/updating Matt Pocock skills for Pi and Codex..."
-    if ! _output=$(npx "${_args[@]}" < /dev/null 2>&1); then
-        print_warning "Failed to install Matt Pocock skills."
-        print_debug "${_output}"
-        return 1
-    fi
-
-    for _validation_dir in "${_validation_dirs[@]}"; do
-        while IFS= read -r _skill; do
-            _source_path="${_validation_dir}/${_skill}"
-            if [[ ! -d "${_source_path}" || -L "${_source_path}" || ! -f "${_source_path}/SKILL.md" || -L "${_source_path}/SKILL.md" ]]; then
-                _missing+=("${_source_path}")
-            fi
-        done < <(matt_pocock_skills || true)
-    done
-
-    if [[ "${#_missing[@]}" -gt 0 ]]; then
-        print_warning "Matt Pocock skills are missing required files: ${_missing[*]}"
-        return 1
+    matt_pocock_skill_policy preflight || return 1
+    _report=$(mktemp) || return 1
+    print_message "Installing/updating the full Matt Pocock skill suite for Claude Code, Codex, Gemini CLI, and Pi..."
+    if ! npx --yes skills@latest add mattpocock/skills --global \
+        --agent claude-code --agent codex --agent gemini-cli \
+        --skill '*' --full-depth --copy --yes --json < /dev/null > "${_report}" 2>/dev/null; then
+        print_warning "Failed to install the full Matt Pocock skill suite."
+        _matt_failed=1
+    elif ! matt_pocock_skill_policy validate "${_report}"; then
+        _matt_failed=1
     elif ! remove_obsolete_matt_pocock_skills; then
-        return 1
+        _matt_failed=1
     fi
-
-    print_success "Matt Pocock skills installed/updated for Pi and Codex through the shared path."
-    print_debug "${_output}"
+    rm -f -- "${_report}" || _matt_failed=1
+    if [[ "${_matt_failed}" -eq 0 ]]; then
+        print_success "Full Matt Pocock skill suite installed/updated through copied global skills."
+    fi
+    return "${_matt_failed}"
 }
 
 
@@ -6604,7 +6695,7 @@ run_setup_tasks() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 195 | Last changed: Secure Pi profiles and remove surplus Paseo CLIs${NC}"
+    echo -e "${GRAY}Version 198 | Last changed: Install full Matt suite and retire legacy global skills${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -6767,13 +6858,13 @@ run_setup_tasks() {
         print_warning "Muse profile setup deferred because Pi OpenCode Go setup is unavailable."
     fi
 
-    if ! setup_simple_english_skill; then
+    if ! remove_simple_english_skill; then
         _setup_had_errors=1
     fi
-    if ! setup_show_me_skill; then
+    if ! remove_show_me_skill; then
         _setup_had_errors=1
     fi
-    if ! setup_pr_lens_skill; then
+    if ! remove_pr_lens_skill; then
         _setup_had_errors=1
     fi
     if ! configure_pi_skill_ownership; then

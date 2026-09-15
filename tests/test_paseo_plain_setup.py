@@ -579,8 +579,8 @@ paseo_command_target() { command -v paseo; }
         wrapper = 'install_paseo_plain() {' + text.split('install_paseo_plain() {', 1)[1].split('\ninstall_portless_cli()', 1)[0]
         inert = ('prepare_pi_profile_permissions', 'remove_rtk_resources', 'remove_attention_span_resources',
                  'setup_matt_pocock_skills', 'remove_pi_prose', 'install_pi_cli', 'configure_pi_defaults',
-                 'remove_pi_synthetic_models', 'seed_pi_zai_models', 'setup_simple_english_skill',
-                 'setup_show_me_skill', 'setup_pr_lens_skill', 'configure_pi_skill_ownership',
+                 'remove_pi_synthetic_models', 'seed_pi_zai_models', 'remove_simple_english_skill',
+                 'remove_show_me_skill', 'remove_pr_lens_skill', 'configure_pi_skill_ownership',
                  'remove_impeccable_resources', 'remove_compound_engineering_resources')
         code = 'set -eu\n_setup_had_errors=0\n_pi_go_ready=0\nPI_PROFILE_MUTATIONS_BLOCKED=0\n'
         code += '\n'.join(f'{fn}() {{ :; }}' for fn in inert) + '\n'
