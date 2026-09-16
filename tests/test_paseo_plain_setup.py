@@ -1,582 +1,503 @@
-"""Contract v3: preserve sources and test safe diagnostics without live setup."""
+"""Contract v4: retire Plain using extracted helpers and inert local CLIs only."""
 import json
 import os
 from pathlib import Path
-import subprocess
 import shutil
+import subprocess
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ('mac.sh', 'ubuntu.sh', 'wsl.sh', 'pi.sh', 'bazzite.sh', 'win.ps1')
 NODE = shutil.which('node')
+PWSH = os.environ.get('PWSH_BIN') or shutil.which('pwsh')
 
 
-def installer(script):
+def retirement(script='ubuntu.sh'):
     text = (ROOT / script).read_text()
-    start = '// BEGIN PASEO PLAIN INSTALLER\n'
-    end = '// END PASEO PLAIN INSTALLER'
-    assert start in text, f'{script}: missing Paseo Plain installer'
-    return text.split(start, 1)[1].split(end, 1)[0]
+    return text.split('// BEGIN PASEO PLAIN RETIREMENT\n', 1)[1].split('// END PASEO PLAIN RETIREMENT', 1)[0]
+
+
+def wrapper(script):
+    text = (ROOT / script).read_text()
+    start, end = ('function Remove-PaseoPlain {', '\nfunction Install-PortlessCli') if script == 'win.ps1' else (
+        'remove_paseo_plain() {', '\ninstall_portless_cli()')
+    return start + text.split(start, 1)[1].split(end, 1)[0]
 
 
 FAKE = r'''#!/usr/bin/env node
-const fs = require('node:fs');
-const path = require('node:path');
+const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
 const home = process.env.PASEO_HOME;
+assert.equal(process.env.PASEO_HOST, undefined);
 const statePath = path.join(home, 'fake-state.json');
 const state = JSON.parse(fs.readFileSync(statePath));
 const args = process.argv.slice(2);
 fs.appendFileSync(path.join(home, 'calls.jsonl'), JSON.stringify(args) + '\n');
-const at = args.findIndex(a => ['daemon', 'plugin'].includes(a));
-// Match the global arguments used by setup against Paseo 0.8's CLI contract.
-// In particular, --home is NOT a global option, even before daemon status.
-const globals = args.slice(0, at);
-if (at < 0 || (globals.length && !(globals.length === 2 && globals[0] === '--host'))) {
-  console.error(`error: unknown option '${globals[0]}'`);
-  process.exit(1);
-}
-const command = args.slice(at);
-if (command[0] === 'daemon' && command[1] === 'status') {
-  if (state.failAt === 'invalid-status-json') { console.log('provider-secret-must-not-be-logged'); process.exit(0); }
+const at = args.indexOf('plugin');
+const action = at < 0 ? 'status' : args[at + 1];
+if (state.fail === action) { console.error('private-error-must-not-escape'); process.exit(23); }
+if (state.invalid === action) { console.log('private-error-must-not-escape'); process.exit(0); }
+if (action === 'status') {
+  assert.deepEqual(args, ['daemon', 'status', '--json']);
   console.log(JSON.stringify({localDaemon:'running', connectedDaemon:'reachable', home,
-    listen:'127.0.0.1:19991', cliVersion:'0.8.0-beta.1', daemonVersion:'0.8.0-beta.1', ...state.status}));
-} else if (command[0] === 'plugin' && command[1] === 'ls') {
-  if (state.failAt === 'disable-during-check') {
-    const file = path.join(home, 'config.json');
-    const config = JSON.parse(fs.readFileSync(file));
-    config.pluginsEnabled = false;
-    fs.writeFileSync(file, JSON.stringify(config));
-  }
-  console.log(JSON.stringify(state.plugins || []));
-} else if (command[0] === 'plugin' && command[1] === 'add') {
-  if (state.failAt === 'add-timeout') { setInterval(() => {}, 1000); return; }
-  if (state.fail || state.failAt === 'add-before') { console.error('provider-secret-must-not-be-logged'); process.exit(1); }
-  if (state.plugins.some(p => p.id === 'paseo-plain')) { console.error('ID already configured'); process.exit(1); }
-  if (state.expectedNative && fs.readFileSync(path.join(home, 'plugin-settings/paseo-plain/voice.json'), 'utf8') !== state.expectedNative) {
-    console.error('native settings not restored before activation'); process.exit(1);
-  }
-  const ref = command[command.indexOf('--ref') + 1];
-  const commit = (state.addCommit || 'a').repeat(40);
-  const checkout = path.join(home, 'plugins/paseo-plain', commit.slice(0, 12) + '-new', 'checkout');
-  fs.mkdirSync(checkout, {recursive:true});
-  fs.writeFileSync(path.join(checkout, 'index.server.ts'), 'new fixture plugin');
-  const installed = {id:'paseo-plain', source:'git', remote:'https://github.com/scowalt/paseo-plain.git',
-    ref, commit, path:checkout, enabled:true, status:state.failAt === 'add-after' ? 'failed' : 'running'};
-  state.plugins.push(installed);
-  const config = JSON.parse(fs.readFileSync(path.join(home, 'config.json')));
-  config.plugins = {...config.plugins, 'paseo-plain':{source:'directory', path:checkout, enabled:true}};
-  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify(config));
-  const sourcesFile = path.join(home, 'plugins/sources.json');
-  const sources = fs.existsSync(sourcesFile) ? JSON.parse(fs.readFileSync(sourcesFile)) : {};
-  sources['paseo-plain'] = {remote:installed.remote, requestedRef:ref, trackingBranch:ref, commit, pluginPath:'.', checkoutRoot:checkout};
-  fs.writeFileSync(sourcesFile, JSON.stringify(sources));
-  fs.writeFileSync(statePath, JSON.stringify(state));
-  if (['add-after', 'add-lost-response'].includes(state.failAt)) { console.error('provider-secret-must-not-be-logged'); process.exit(1); }
-  console.log(JSON.stringify(installed));
-} else if (command[0] === 'plugin' && command[1] === 'remove') {
-  if (state.failAt === 'remove-before') { console.error('provider-secret-must-not-be-logged'); process.exit(1); }
-  state.plugins = state.plugins.filter(p => p.id !== 'paseo-plain');
-  const config = JSON.parse(fs.readFileSync(path.join(home, 'config.json')));
-  delete config.plugins['paseo-plain'];
-  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify(config));
-  const sourcesFile = path.join(home, 'plugins/sources.json');
-  const sources = JSON.parse(fs.readFileSync(sourcesFile));
-  delete sources['paseo-plain'];
-  fs.writeFileSync(sourcesFile, JSON.stringify(sources));
-  fs.rmSync(path.join(home, 'plugins/paseo-plain'), {recursive:true, force:true});
-  fs.rmSync(path.join(home, 'plugin-settings/paseo-plain'), {recursive:true, force:true});
-  if (state.failAt === 'native-reappeared') {
-    fs.mkdirSync(path.join(home, 'plugin-settings/paseo-plain'), {recursive:true});
-    fs.writeFileSync(path.join(home, 'plugin-settings/paseo-plain/new.json'), 'new concurrent settings');
-  }
-  fs.writeFileSync(statePath, JSON.stringify(state));
-  if (state.failAt === 'remove-after') { console.error('provider-secret-must-not-be-logged'); process.exit(1); }
-  console.log(JSON.stringify({id:'paseo-plain', enabled:false, status:'disabled'}));
-} else if (command[0] === 'plugin' && command[1] === 'update') {
-  if (state.fail || command.includes('--ref')) { console.error('provider-secret-must-not-be-logged'); process.exit(1); }
-  console.log(JSON.stringify([{id:'paseo-plain', updated:false}]));
-} else { console.error('forbidden command'); process.exit(99); }
+    listen:'127.0.0.1:19991', cliVersion:'0.8.0', daemonVersion:'0.8.0', ...state.status}));
+} else {
+  assert.deepEqual(args.slice(0, 3), ['--host', '127.0.0.1:19991', 'plugin']);
+  if (action === 'ls') {
+    assert.deepEqual(args.slice(3), ['ls', '--json']);
+    if (state.changeConfig) {
+      const file = path.join(home, 'config.json');
+      const config = JSON.parse(fs.readFileSync(file));
+      config.changed = true; fs.writeFileSync(file, JSON.stringify(config));
+    }
+    console.log(JSON.stringify(state.catalog ?? state.plugins));
+  } else if (action === 'remove') {
+    assert.deepEqual(args.slice(3), ['remove', 'paseo-plain', '--json']);
+    if (state.timeout) { setInterval(() => {}, 1000); return; }
+    if (!state.noop) {
+      state.plugins = state.plugins.filter(p => p.id !== 'paseo-plain');
+      const file = path.join(home, 'config.json');
+      const config = JSON.parse(fs.readFileSync(file));
+      delete config.plugins['paseo-plain'];
+      if (state.changeUnrelated) delete config.plugins.unrelated;
+      fs.writeFileSync(file, JSON.stringify(config));
+      const sourcesFile = path.join(home, 'plugins/sources.json');
+      if (fs.existsSync(sourcesFile)) {
+        const sources = JSON.parse(fs.readFileSync(sourcesFile));
+        if (sources['paseo-plain']) {
+          delete sources['paseo-plain'];
+          fs.writeFileSync(sourcesFile, JSON.stringify(sources));
+          fs.rmSync(path.join(home, 'plugins/paseo-plain'), {recursive:true, force:true});
+        }
+      }
+      fs.rmSync(path.join(home, 'plugin-settings/paseo-plain'), {recursive:true, force:true});
+      fs.writeFileSync(statePath, JSON.stringify(state));
+    }
+    if (state.lostResponse) { console.error('private-error-must-not-escape'); process.exit(23); }
+    console.log(JSON.stringify({id:'paseo-plain', enabled:false, status:'disabled'}));
+  } else { throw new Error('forbidden operation'); }
+}
 '''
 
 
-@unittest.skipIf(os.name == 'nt', 'Fake CLI executables require POSIX; the PowerShell wrapper runs on POSIX')
-class SetupTest(unittest.TestCase):
+@unittest.skipIf(os.name == 'nt', 'Fake CLI uses POSIX executables; PowerShell wrapper is tested on POSIX')
+class RetirementTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='plain-setup-test-')
-        self.addCleanup(self.temp.cleanup)
-        self.home = Path(self.temp.name)
+        previous_umask = os.umask(0o077)
+        self.addCleanup(os.umask, previous_umask)
+        temp = tempfile.TemporaryDirectory(prefix='plain-retirement-test-')
+        self.addCleanup(temp.cleanup)
+        self.home = Path(temp.name)
         self.paseo = self.home / '.paseo'
         self.paseo.mkdir()
         self.bin = self.home / 'bin'
         self.bin.mkdir()
-        for command in ('paseo', 'pi', 'npm', 'git'):
-            file = self.bin / command
-            file.write_text(FAKE if command == 'paseo' else '#!/bin/sh\nexit 99\n')
-            file.chmod(0o700)
-        self.cli_package = self.bin / 'node_modules/@getpaseo/cli'
-        (self.cli_package / 'bin').mkdir(parents=True)
-        (self.cli_package / 'package.json').write_text(json.dumps({
+        self.package = self.bin / 'node_modules/@getpaseo/cli'
+        (self.package / 'bin').mkdir(parents=True)
+        (self.package / 'package.json').write_text(json.dumps({
             'name': '@getpaseo/cli', 'version': '0.8.0', 'bin': {'paseo': 'bin/paseo'}}))
-        (self.bin / 'paseo').rename(self.cli_package / 'bin/paseo')
-        (self.bin / 'paseo').symlink_to(self.cli_package / 'bin/paseo')
-        # Windows npm's shim is inspected, never executed by a shell.
+        (self.package / 'bin/paseo').write_text(FAKE)
+        (self.bin / 'paseo').symlink_to(self.package / 'bin/paseo')
         (self.bin / 'paseo.cmd').write_text('@echo off\n')
-        # Keep real Paseo/Pi installations out of fallback discovery, including Bun cache hardlinks.
-        for name in ('node', 'bash', 'dirname', 'head', 'tr', 'cut', 'env'):
-            command = shutil.which(name)
-            if command:
-                (self.bin / name).symlink_to(command)
+        for name in ('node', 'bash', 'env'):
+            (self.bin / name).symlink_to(shutil.which(name))
+        for name in ('pi', 'npm', 'git', 'bun'):
+            (self.bin / name).write_text('#!/bin/sh\nexit 99\n')
+            (self.bin / name).chmod(0o700)
         self.env = {**os.environ, 'HOME': str(self.home), 'PASEO_HOME': str(self.paseo),
-                    'PATH': str(self.bin)}
-        self.state = {'plugins': []}
-        self.configure()
+                    'PASEO_HOST': 'remote.example:9999', 'PATH': str(self.bin), 'PASEO_VALIDATED_CMD': ''}
+        self.config = {'version': 1, 'pluginsEnabled': True, 'daemon': {'listen': '127.0.0.1:19991'},
+                       'plugins': {'unrelated': {'source': 'directory', 'path': str(self.home / 'other'), 'enabled': False}}}
+        self.state = {'plugins': [{'id': 'unrelated', 'enabled': False}]}
+        self.save_config()
 
-    def configure(self, config=None):
-        (self.paseo / 'config.json').write_text(json.dumps(
-            config if config is not None else {'pluginsEnabled': True, 'daemon': {'listen': '127.0.0.1:19991'}}))
+    def save_config(self):
+        (self.paseo / 'config.json').write_text(json.dumps(self.config))
 
-    def run_installer(self, script='ubuntu.sh', cwd=None, cli_timeout=None):
+    def seed(self, managed=True, enabled=True, ref='main'):
+        source = self.paseo / 'plugins/paseo-plain/aaaaaaaaaaaa-fixture/checkout' if managed else self.home / 'source'
+        source.mkdir(parents=True, exist_ok=True)
+        (source / 'index.server.ts').write_text('inert fixture; never execute')
+        self.config['plugins']['paseo-plain'] = {'source': 'directory', 'path': str(source), 'enabled': enabled}
+        self.state['plugins'].append({'id': 'paseo-plain', 'enabled': enabled, 'source': 'git' if managed else 'directory',
+                                      'path': str(source), 'ref': ref})
+        if managed:
+            record = {'remote': 'https://example.invalid/custom.git', 'requestedRef': ref, 'trackingBranch': None,
+                      'commit': 'a' * 40, 'pluginPath': '.', 'checkoutRoot': str(source)}
+            (self.paseo / 'plugins/sources.json').write_text(json.dumps({'paseo-plain': record}))
+        for relative, text in (('plugin-settings/paseo-plain/voice.json', 'malformed settings preserved verbatim'),
+                               ('plugin-data/paseo-plain/configuration.json', '{"saved":"preferences"}'),
+                               ('plugin-data/paseo-plain/cache.json', '["private cached text"]'),
+                               ('setup-recovery/paseo-plain-release-to-main/state.json', '{"phase":"complete"}'),
+                               ('setup-recovery/paseo-plain-release-to-main/checkout/keep.txt', 'old recovery source')):
+            file = self.paseo / relative
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text(text)
+        self.save_config()
+        return source
+
+    def run_helper(self, script='ubuntu.sh', code=None, wrapped=False):
         (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
-        code = installer(script)
-        if cli_timeout is not None:
-            code = code.replace('180000', str(cli_timeout))
-        result = subprocess.run([NODE, '-'], input=code, env=self.env, cwd=cwd,
-                                text=True, capture_output=True, timeout=15)
+        if wrapped and script == 'win.ps1':
+            file = self.home / 'wrapper.ps1'
+            file.write_text('function Write-Success($message) { Write-Host $message }\n' + wrapper(script) +
+                            '\nif (-not (Remove-PaseoPlain)) { exit 1 }\n')
+            args, content = [PWSH, '-NoProfile', '-NonInteractive', '-File', str(file)], None
+        elif wrapped:
+            args = [shutil.which('bash')]
+            content = 'print_warning() { printf "%s\\n" "$1"; }; print_success() { printf "%s\\n" "$1"; };\n'
+            content += wrapper(script) + '\nremove_paseo_plain\n'
+        else:
+            args, content = [NODE, '-'], code or retirement(script)
+        result = subprocess.run(args, input=content, env=self.env, text=True, capture_output=True, timeout=20)
         self.state = json.loads((self.paseo / 'fake-state.json').read_text())
-        self.assertNotIn('provider-secret-must-not-be-logged', result.stdout + result.stderr)
+        self.assertNotIn('private-error-must-not-escape', result.stdout + result.stderr)
         return result
 
     def calls(self):
         file = self.paseo / 'calls.jsonl'
         return [json.loads(line) for line in file.read_text().splitlines()] if file.exists() else []
 
-    def test_old_path_cli_does_not_shadow_compatible_bun_installation(self):
-        old = self.bin / 'paseo'
-        old.write_text('#!/bin/sh\nprintf "old-cli-executed" > "$HOME/old-cli-called"\nexit 1\n')
-        package = self.home / '.bun/install/global/node_modules/@getpaseo/cli'
-        (package / 'bin').mkdir(parents=True)
-        (package / 'package.json').write_text(json.dumps({
-            'name': '@getpaseo/cli', 'version': '0.8.0', 'bin': {'paseo': 'bin/paseo'}}))
-        (package / 'bin/paseo').write_text(FAKE)
-        (package / 'bin/paseo').chmod(0o700)
-        managed_bin = self.home / '.bun/bin'
-        managed_bin.mkdir()
-        (managed_bin / 'paseo').symlink_to(package / 'bin/paseo')
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('installed', result.stdout)
-        self.assertFalse((self.home / 'old-cli-called').exists())
-        self.assertTrue(old.exists(), 'Selection does not itself authorize cleanup')
+    def removals(self):
+        return [args for args in self.calls() if 'remove' in args]
 
-    def test_incompatible_cli_is_not_executed_before_status(self):
-        metadata = self.cli_package / 'package.json'
-        document = json.loads(metadata.read_text())
-        document['version'] = '0.4.0'
-        metadata.write_text(json.dumps(document))
-        result = self.run_installer()
+    def assert_failed(self, result, reason=None):
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        if reason:
+            self.assertIn(reason, result.stdout)
+        self.assertNotIn('Paseo Plain removed;', result.stdout)
+
+    def test_absence_is_offline_noop_and_creates_no_storage(self):
+        self.env['PATH'] = ''
+        before = (self.paseo / 'config.json').read_bytes()
+        result = self.run_helper()
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn('verified compatible Paseo 0.8.x CLI', result.stdout)
+        self.assertIn('already absent', result.stdout)
         self.assertEqual(self.calls(), [])
-
-    def test_incompatible_managed_cli_does_not_fall_back_to_older_path_cli(self):
-        package = self.home / '.bun/install/global/node_modules/@getpaseo/cli'
-        (package / 'bin').mkdir(parents=True)
-        (package / 'package.json').write_text(json.dumps({
-            'name': '@getpaseo/cli', 'version': '0.9.0', 'bin': {'paseo': 'bin/paseo'}}))
-        (package / 'bin/paseo').write_text('process.exit(99)')
-        (package / 'bin/paseo').chmod(0o700)
-        directory = self.home / '.bun/bin'
-        directory.mkdir()
-        (directory / 'paseo').symlink_to(package / 'bin/paseo')
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn('deferred', result.stdout)
-        self.assertEqual(self.calls(), [])
-
-    def test_unverified_linked_or_foreign_package_identity_is_not_executed(self):
-        metadata = self.cli_package / 'package.json'
-        original = metadata.read_text()
-        for document in ('{bad', original.replace('@getpaseo/cli', 'paseo'),
-                         original.replace('"version":', '"version":"0.4.0","version":'),
-                         original.replace('bin/paseo', '../foreign')):
-            metadata.write_text(document)
-            result = self.run_installer()
-            self.assertEqual(result.returncode, 0, result.stdout)
-            self.assertIn('deferred', result.stdout)
-            self.assertEqual(self.calls(), [])
-        metadata.write_text(original)
-        outside = self.home / 'metadata'
-        metadata.rename(outside)
-        metadata.symlink_to(outside)
-        self.assertIn('deferred', self.run_installer().stdout)
-        self.assertEqual(self.calls(), [])
-        self.assertEqual(outside.read_text(), original)
-
-    def test_installed_bun_cache_hardlinks_are_supported(self):
-        for file in (self.cli_package / 'package.json', self.cli_package / 'bin/paseo'):
-            os.link(file, self.home / (file.name + '-cache'))
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn('installed', result.stdout)
-
-    def test_linux_system_home_alias_checks_the_destination_not_symlink_mode(self):
-        code = installer('ubuntu.sh')
-        start = code.index('function cliHomeAlias')
-        end = code.index('function cliRegular', start)
-        fixture = '''
-const path = require('node:path'), assert = require('node:assert/strict');
-const fs = {readlinkSync: () => '/var/home'};
-const directory = () => ({uid:0, mode:0o755, isDirectory:()=>true, isSymbolicLink:()=>false});
-const alias = {uid:0, mode:0o120777, isDirectory:()=>false, isSymbolicLink:()=>true};
-const cliInfo = file => file === '/home' ? alias : directory();
-''' + code[start:end] + '''
-assert.equal(cliDirectory('/home'), process.platform === 'linux');
-console.log('alias supported');
-'''
-        result = subprocess.run([NODE, '-'], input=fixture, text=True, capture_output=True, timeout=10)
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_explicit_retained_cli_does_not_fall_back_to_another_installation(self):
-        text = (ROOT / 'ubuntu.sh').read_text()
-        function = 'install_paseo_plain() {' + text.split('install_paseo_plain() {', 1)[1].split('\ninstall_portless_cli()', 1)[0]
-        (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
-        result = subprocess.run(['bash'], input='print_warning() { printf "%s\\n" "$1"; }; print_success() { printf "%s\\n" "$1"; };\n' + function + '\ninstall_paseo_plain\n',
-                                env={**self.env, 'PASEO_VALIDATED_CMD': str(self.home / 'missing')},
-                                text=True, capture_output=True, timeout=15)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('deferred', result.stdout)
-        self.assertEqual(self.calls(), [])
-
-    def test_fresh_install_targets_local_daemon_and_enables_only_manual_controls(self):
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('installed', result.stdout)
-        plugin_calls = [args for args in self.calls() if 'plugin' in args]
-        install = next(args for args in plugin_calls if 'add' in args)
-        self.assertIn('https://github.com/scowalt/paseo-plain.git', install)
-        self.assertEqual(install[install.index('--ref') + 1], 'main')
-        for args in plugin_calls:
-            self.assertEqual(args[args.index('--host') + 1], '127.0.0.1:19991')
-        saved = json.loads((self.paseo / 'plugin-data/paseo-plain/configuration.json').read_text())
-        self.assertTrue(saved['values']['enabled'])
-        self.assertTrue(json.loads((self.paseo / 'config.json').read_text())['pluginsEnabled'])
-        self.assertFalse(any('rewrite' in arg or 'preview' in arg for args in self.calls() for arg in args))
-
-    def test_failure_identifies_command_and_status_without_sensitive_output(self):
-        self.state['fail'] = True
-        result = self.run_installer()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('Paseo Plain failure: plugin add: exit-1.', result.stdout)
-        self.assertIn('Setup did not reset rewrite preferences', result.stdout)
-
-    def test_failure_diagnostics_cover_timeout_response_and_validation(self):
-        for failure, reason in [('add-timeout', 'plugin add: timeout'),
-                                ('invalid-status-json', 'daemon status: invalid-response-json'),
-                                ('catalog', 'plugin ls: invalid-catalog')]:
-            with self.subTest(failure=failure):
-                self.state = {'plugins': {} if failure == 'catalog' else [], 'failAt': failure}
-                result = self.run_installer(cli_timeout=100)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(f'Paseo Plain failure: {reason}.', result.stdout)
-
-    def test_unexpected_errors_do_not_claim_a_filesystem_cause(self):
-        self.state['plugins'] = [None]
-        result = self.run_installer()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('Paseo Plain failure: plugin ls: unexpected-error.', result.stdout)
-
-    def test_invalid_local_json_does_not_echo_its_contents(self):
-        (self.paseo / 'config.json').write_text('{provider-secret-must-not-be-logged')
-        result = self.run_installer()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('Paseo Plain failure: preflight: invalid-json.', result.stdout)
-
-    def test_migration_validation_has_specific_safe_reason(self):
-        self.seed_release()
-        self.state['plugins'][0]['commit'] = 'invalid'
-        result = self.run_installer()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('release migration validation: unverified-release-source', result.stdout)
-        self.assertFalse(any('remove' in args for args in self.calls()))
-
-    def seed_release(self):
-        checkout = self.paseo / 'plugins/paseo-plain/aaaaaaaaaaaa-old/checkout'
-        checkout.mkdir(parents=True)
-        (checkout / 'index.server.ts').write_text('old fixture plugin')
-        (checkout / 'paseo-plugin.json').write_text('{"id":"paseo-plain"}')
-        record = {'remote': 'https://github.com/scowalt/paseo-plain.git', 'requestedRef': 'release',
-                  'trackingBranch': 'release', 'commit': 'a' * 40, 'pluginPath': '.', 'checkoutRoot': str(checkout)}
-        (self.paseo / 'plugins/sources.json').write_text(json.dumps({'paseo-plain': record, 'unrelated': {'keep': True}}))
-        self.configure({'pluginsEnabled': True, 'daemon': {'listen': '127.0.0.1:19991'}, 'unrelated': 'keep',
-                        'plugins': {'paseo-plain': {'source': 'directory', 'path': str(checkout), 'enabled': True},
-                                    'unrelated': {'source': 'directory', 'path': '/fixture/other', 'enabled': False}}})
-        self.state['plugins'] = [{'id': 'paseo-plain', 'source': 'git', 'remote': record['remote'],
-                                 'ref': 'release', 'commit': record['commit'], 'path': str(checkout),
-                                 'enabled': True, 'status': 'running'}, {'id': 'unrelated', 'enabled': False}]
-        self.state['addCommit'] = 'b'
-        data = self.paseo / 'plugin-data/paseo-plain'
-        data.mkdir(parents=True, exist_ok=True)
-        (data / 'configuration.json').write_text('{"values":{"enabled":false,"style":"Keep my voice"},"revision":7,"error":null}')
-        (data / 'cache.json').write_text('[{"text":"private cached text"}]')
-        native = self.paseo / 'plugin-settings/paseo-plain'
-        native.mkdir(parents=True, exist_ok=True)
-        (native / 'voice.json').write_text('{"custom":"native setting"}\n')
-        self.state['expectedNative'] = (native / 'voice.json').read_text()
-        return checkout
-
-    def test_release_migration_preserves_state_and_runs_only_once(self):
-        checkout = self.seed_release()
-        data = self.paseo / 'plugin-data/paseo-plain'
-        before = {p.name: p.read_bytes() for p in data.iterdir()}
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('migrated', result.stdout)
-        installed = next(p for p in self.state['plugins'] if p['id'] == 'paseo-plain')
-        self.assertEqual(installed['ref'], 'main')
-        self.assertEqual(installed['status'], 'running')
-        self.assertFalse(checkout.exists())
-        self.assertEqual({p.name: p.read_bytes() for p in data.iterdir()}, before)
-        native = self.paseo / 'plugin-settings/paseo-plain/voice.json'
-        self.assertEqual(native.read_text(), self.state['expectedNative'])
-        recovery = self.paseo / 'setup-recovery/paseo-plain-release-to-main'
-        self.assertEqual(json.loads((recovery / 'state.json').read_text())['phase'], 'complete')
-        self.assertEqual((recovery / 'checkout/index.server.ts').read_text(), 'old fixture plugin')
-        self.assertEqual((recovery / 'checkout').stat().st_mode & 0o777, 0o700)
-        self.assertTrue((recovery / 'RECOVERY.md').is_file())
-        config = json.loads((self.paseo / 'config.json').read_text())
-        self.assertEqual(config['unrelated'], 'keep')
-        self.assertFalse(config['plugins']['unrelated']['enabled'])
-        self.assertEqual(json.loads((self.paseo / 'plugins/sources.json').read_text())['unrelated'], {'keep': True})
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('checked for updates', result.stdout)
-        self.assertEqual(sum('remove' in args for args in self.calls()), 1)
-        self.assertEqual(sum('add' in args for args in self.calls()), 1)
-        self.assertEqual(sum('update' in args for args in self.calls()), 1)
-
-    def assert_stopped_migration_is_not_retried(self, failure, phase):
-        checkout = self.seed_release()
-        data = self.paseo / 'plugin-data/paseo-plain'
-        before = {p.name: p.read_bytes() for p in data.iterdir()}
-        self.state['failAt'] = failure
-        result = self.run_installer(cli_timeout=300)
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn('migration stopped', result.stdout)
-        recovery = self.paseo / 'setup-recovery/paseo-plain-release-to-main'
-        self.assertEqual(json.loads((recovery / 'state.json').read_text())['phase'], phase)
-        self.assertEqual((recovery / 'checkout/index.server.ts').read_text(), 'old fixture plugin')
-        self.assertEqual({p.name: p.read_bytes() for p in data.iterdir()}, before)
-        self.assertEqual(checkout.exists(), failure == 'remove-before')
-        mutations = [args for args in self.calls() if any(op in args for op in ('remove', 'add', 'update'))]
-        self.state.pop('failAt')
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn('migration stopped', result.stdout)
-        self.assertEqual([args for args in self.calls() if any(op in args for op in ('remove', 'add', 'update'))], mutations)
-        self.assertEqual(sum('remove' in args for args in mutations), 1)
-
-    def test_failed_removal_keeps_recovery_and_blocks_retries(self):
-        self.assert_stopped_migration_is_not_retried('remove-before', 'removing')
-
-    def test_lost_removal_response_does_not_trigger_install_or_restore(self):
-        self.assert_stopped_migration_is_not_retried('remove-after', 'removing')
-        self.assertFalse(any('add' in args for args in self.calls()))
-        self.assertFalse((self.paseo / 'plugin-settings/paseo-plain').exists())
-
-    def test_failed_new_install_keeps_recovery_and_restored_native_settings(self):
-        self.assert_stopped_migration_is_not_retried('add-before', 'adding')
-        self.assertEqual((self.paseo / 'plugin-settings/paseo-plain/voice.json').read_text(), self.state['expectedNative'])
-
-    def test_failed_activation_is_not_removed_by_a_retry(self):
-        self.assert_stopped_migration_is_not_retried('add-after', 'adding')
-        self.assertEqual(next(p for p in self.state['plugins'] if p['id'] == 'paseo-plain')['status'], 'failed')
-
-    def test_lost_success_response_keeps_running_main_and_blocks_retries(self):
-        self.assert_stopped_migration_is_not_retried('add-lost-response', 'adding')
-        self.assertEqual(next(p for p in self.state['plugins'] if p['id'] == 'paseo-plain')['status'], 'running')
-
-    def test_timed_out_install_keeps_recovery_and_blocks_retries(self):
-        self.assert_stopped_migration_is_not_retried('add-timeout', 'adding')
-
-    def test_restore_does_not_overwrite_reappearing_native_settings(self):
-        self.assert_stopped_migration_is_not_retried('native-reappeared', 'restoring')
-        self.assertEqual((self.paseo / 'plugin-settings/paseo-plain/new.json').read_text(), 'new concurrent settings')
-        self.assertFalse(any('add' in args for args in self.calls()))
-
-    def test_disabled_release_and_unverified_tracking_metadata_are_not_migrated(self):
-        self.seed_release()
-        self.state['plugins'][0]['enabled'] = False
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn('disabled', result.stdout)
-        self.state['plugins'][0]['enabled'] = True
-        sources = self.paseo / 'plugins/sources.json'
-        original = json.loads(sources.read_text())
-        for change in ({'trackingBranch': None}, {'commit': 'b' * 40}, {'pluginPath': 'other'},
-                       {'checkoutRoot': str(self.home)}, {'remote': 'https://example.com/other.git'}):
-            with self.subTest(change=change):
-                invalid = {**original, 'paseo-plain': {**original['paseo-plain'], **change}}
-                sources.write_text(json.dumps(invalid))
-                result = self.run_installer()
-                self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual((self.paseo / 'config.json').read_bytes(), before)
         self.assertFalse((self.paseo / 'setup-recovery').exists())
-        self.assertFalse(any('remove' in args or 'add' in args for args in self.calls()))
+        self.env['PASEO_HOME'] = str(self.home / 'missing/nested')
+        self.assertEqual(self.run_helper().returncode, 0)
+        self.assertFalse((self.home / 'missing').exists())
 
-    def test_unsafe_backup_link_is_rejected_before_removal(self):
-        checkout = self.seed_release()
-        target = self.home / 'outside'
-        target.write_text('do not copy this outside data')
-        (checkout / 'external-link').symlink_to(target)
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertTrue(checkout.exists())
-        self.assertFalse(any('remove' in args for args in self.calls()))
-        self.assertEqual(target.read_text(), 'do not copy this outside data')
+    def test_removes_main_release_pinned_and_directory_even_disabled(self):
+        # Each subcase uses a fresh fixture so backup reuse cannot conceal a retry bug.
+        for managed, enabled, ref in ((True, True, 'main'), (True, False, 'release'),
+                                      (True, True, 'a' * 40), (False, False, 'custom')):
+            with self.subTest(managed=managed, enabled=enabled, ref=ref):
+                child = RetirementTest()
+                child.setUp()
+                try:
+                    source = child.seed(managed, enabled, ref)
+                    child.config['pluginsEnabled'] = False
+                    child.save_config()
+                    data = child.paseo / 'plugin-data/paseo-plain/cache.json'
+                    before = data.read_bytes()
+                    result = child.run_helper()
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(data.read_bytes(), before)
+                    self.assertEqual(source.exists(), not managed)
+                    backup = child.paseo / 'setup-recovery/paseo-plain-retirement/plugin-settings/voice.json'
+                    self.assertEqual(backup.read_text(), 'malformed settings preserved verbatim')
+                    self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
+                    self.assertEqual(backup.parent.stat().st_mode & 0o777, 0o700)
+                    self.assertTrue((child.paseo / 'setup-recovery/paseo-plain-release-to-main/checkout/keep.txt').exists())
+                    saved = json.loads((child.paseo / 'config.json').read_text())
+                    self.assertFalse(saved['pluginsEnabled'])
+                    self.assertEqual(saved['plugins'], {'unrelated': child.config['plugins']['unrelated']})
+                    self.assertEqual(len(child.removals()), 1)
+                    self.assertEqual(child.run_helper().returncode, 0)
+                    self.assertEqual(len(child.removals()), 1)
+                finally:
+                    child.doCleanups()
 
-    def test_concurrent_trust_change_aborts_before_removal(self):
-        checkout = self.seed_release()
-        self.state['failAt'] = 'disable-during-check'
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertTrue(checkout.exists())
-        self.assertFalse(json.loads((self.paseo / 'config.json').read_text())['pluginsEnabled'])
-        self.assertFalse(any('remove' in args or 'add' in args for args in self.calls()))
-
-    def test_windows_backup_permission_failure_copies_no_state_and_removes_nothing(self):
-        self.seed_release()
-        for name in ('paseo', 'pi'):
-            shutil.copyfile(self.bin / name, self.bin / (name + '.exe'))
-            (self.bin / (name + '.exe')).chmod(0o700)
-        windows = self.home / 'Windows'
-        powershell = windows / 'System32/WindowsPowerShell/v1.0/powershell.exe'
-        powershell.parent.mkdir(parents=True)
-        powershell.write_text('#!/bin/sh\nexit 1\n')
-        powershell.chmod(0o700)
-        (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
-        code = "Object.defineProperty(process, 'platform', {value:'win32'});\n" + installer('ubuntu.sh')
-        result = subprocess.run([NODE, '-'], input=code, env={**self.env, 'SystemRoot': str(windows)},
-                                text=True, capture_output=True, timeout=15)
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        recovery = self.paseo / 'setup-recovery/paseo-plain-release-to-main'
-        self.assertTrue(recovery.is_dir())
-        self.assertEqual(list(recovery.iterdir()), [])
-        self.assertFalse(any('remove' in args or 'add' in args for args in self.calls()))
-
-    def test_internal_relative_checkout_links_survive_recovery_copy(self):
-        checkout = self.seed_release()
-        (checkout / 'internal-link').symlink_to('index.server.ts')
-        result = self.run_installer()
+    def test_removal_without_native_settings_needs_no_backup(self):
+        self.seed()
+        shutil.rmtree(self.paseo / 'plugin-settings')
+        result = self.run_helper()
         self.assertEqual(result.returncode, 0, result.stdout)
-        copied = self.paseo / 'setup-recovery/paseo-plain-release-to-main/checkout/internal-link'
-        self.assertTrue(copied.is_symlink())
-        self.assertEqual(copied.read_text(), 'old fixture plugin')
+        self.assertFalse((self.paseo / 'setup-recovery/paseo-plain-retirement').exists())
 
-    def test_symlinked_or_incomplete_recovery_records_never_allow_a_fresh_install(self):
-        recovery = self.paseo / 'setup-recovery/paseo-plain-release-to-main'
-        recovery.mkdir(parents=True)
-        for contents in ('not json', '{"version":1,"from":"release","to":"main","phase":"adding"}'):
-            (recovery / 'state.json').write_text(contents)
-            result = self.run_installer()
-            self.assertEqual(result.returncode, 1)
-            self.assertFalse((self.paseo / 'plugin-data').exists())
-        (recovery / 'state.json').unlink()
-        (recovery / 'state.json').symlink_to(self.home / 'nonexistent')
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 1)
-        self.assertFalse(any('add' in args for args in self.calls()))
-        self.assertFalse((self.home / 'nonexistent').exists())
+    def test_custom_home_only_default_is_untouched(self):
+        default = self.paseo
+        self.paseo = self.home / 'custom home'
+        self.paseo.mkdir()
+        self.env['PASEO_HOME'] = str(self.paseo)
+        before = (default / 'config.json').read_bytes()
+        self.seed()
+        self.assertEqual(self.run_helper().returncode, 0)
+        self.assertEqual((default / 'config.json').read_bytes(), before)
+        self.assertEqual(list(default.iterdir()), [default / 'config.json'])
 
-    def test_default_home_is_forwarded_when_environment_override_is_unset_or_empty(self):
-        for override in (None, ''):
-            with self.subTest(override=override):
-                if override is None:
-                    self.env.pop('PASEO_HOME', None)
-                else:
-                    self.env['PASEO_HOME'] = override
-                result = self.run_installer()
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertEqual(self.state['plugins'][0]['id'], 'paseo-plain')
-                self.assertEqual(self.state['plugins'][0]['status'], 'running')
-                self.assertEqual(self.env.get('PASEO_HOME'), override)
+    def test_unset_home_uses_default(self):
+        self.seed()
+        del self.env['PASEO_HOME']
+        self.assertEqual(self.run_helper().returncode, 0)
 
-    def test_relative_custom_home_is_resolved_before_child_working_directory_changes(self):
-        default_home = self.paseo
-        self.paseo = self.home / 'custom daemon home'
-        default_home.rename(self.paseo)
-        default_home.mkdir()
-        untouched = default_home / 'config.json'
-        untouched.write_text('{"pluginsEnabled":false,"unrelated":"keep me"}')
-        before = untouched.read_bytes()
-        invocation = self.home / 'invocation'
-        invocation.mkdir()
-        self.env['PASEO_HOME'] = '../custom daemon home'
-        self.env['PASEO_HOST'] = '192.0.2.10:29992'
-        self.configure({'pluginsEnabled': True, 'daemon': {'listen': '127.0.0.1:29992'}})
-        self.state['status'] = {'listen': '127.0.0.1:29992'}
+    def test_invalid_home_never_falls_back(self):
+        self.seed()
+        for value in ('', '.', '../escape', str(self.home), str(self.home.parent / 'outside')):
+            self.env['PASEO_HOME'] = value
+            self.assert_failed(self.run_helper())
+        self.assertEqual(self.calls(), [])
 
-        for outcome in ('installed', 'checked for updates'):
-            result = self.run_installer(cwd=invocation)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn(outcome, result.stdout)
-        self.assertTrue((self.paseo / 'plugin-data/paseo-plain/configuration.json').is_file())
-        for args in self.calls():
-            if 'plugin' in args:
-                self.assertEqual(args[args.index('--host') + 1], '127.0.0.1:29992')
-        self.assertEqual(untouched.read_bytes(), before)
-        self.assertEqual(list(default_home.iterdir()), [untouched])
-        self.assertEqual(self.env['PASEO_HOME'], '../custom daemon home')
+    def test_metadata_links_and_malformed_json_block_before_cli(self):
+        self.seed()
+        for relative in ('config.json', 'plugins/sources.json', 'paseo.pid'):
+            file = self.paseo / relative
+            original = file.read_text() if file.exists() else '{}'
+            for text in ('{bad', '[]', '{"plugins":{},"plugins":{}}'):
+                file.write_text(text)
+                self.assert_failed(self.run_helper())
+            file.write_text(original)
+            target = self.home / 'outside-metadata'
+            file.rename(target)
+            file.symlink_to(target)
+            self.assert_failed(self.run_helper(), 'unsafe-path')
+            self.assertEqual(target.read_text(), original)
+            file.unlink()
+            target.rename(file)
+        self.assertEqual(self.calls(), [])
 
-    def test_every_standalone_entry_uses_the_same_tested_installer_after_prerequisites(self):
-        baseline = installer('ubuntu.sh')
-        for script in SCRIPTS:
-            self.assertEqual(installer(script), baseline, script)
-            text = (ROOT / script).read_text()
-            if script.endswith('.sh'):
-                self.assertGreater(text.rindex('    install_paseo_plain') if script == 'bazzite.sh' else text.rindex('    if ! install_paseo_plain'),
-                                   text.rindex('    elif install_pi_cli; then'), script)
-                if script != 'wsl.sh':
-                    self.assertGreater(text.rindex('install_paseo_plain'), text.rindex('    setup_headless_paseo_daemon'), script)
-            else:
-                self.assertGreater(text.rindex('    if (-not (Install-PaseoPlain))'), text.rindex('    elseif (Install-PiCli)'), script)
+    def test_linked_home_store_settings_or_ancestors_block(self):
+        self.seed()
+        for relative in ('plugins', 'plugins/paseo-plain', 'plugin-settings', 'plugin-settings/paseo-plain'):
+            directory = self.paseo / relative
+            target = self.home / 'outside-directory'
+            directory.rename(target)
+            directory.symlink_to(target, target_is_directory=True)
+            self.assert_failed(self.run_helper(), 'unsafe-path')
+            directory.unlink()
+            target.rename(directory)
+        alias = self.home / 'alias'
+        alias.symlink_to(self.paseo, target_is_directory=True)
+        self.env['PASEO_HOME'] = str(alias)
+        self.assert_failed(self.run_helper(), 'unsafe-path')
+        self.assertEqual(self.calls(), [])
 
-    @unittest.skipIf(os.name == 'nt', 'headless CLI provisioning uses Bash')
-    def test_headless_setup_retains_the_selected_channel_instead_of_pinning_old_beta(self):
-        (self.bin / 'paseo').write_text('#!/bin/sh\nprintf "0.8.0-beta.1\\n"\n')
-        (self.bin / 'bun').write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$HOME/bun-args"\nexit 1\n')
-        (self.bin / 'bun').chmod(0o700)
-        for script in ('mac.sh', 'ubuntu.sh', 'pi.sh', 'bazzite.sh'):
-            text = (ROOT / script).read_text()
-            function = 'install_paseo_cli() {' + text.split('install_paseo_cli() {', 1)[1].split('\nwrite_paseo_daemon_wrapper()', 1)[0]
-            channels = 'paseo_release_channel() {' + text.split('paseo_release_channel() {', 1)[1].split('\npaseo_desktop_is_running()', 1)[0]
-            # Extract only the requested functions. Never source a provisioning entry point.
-            prelude = '''
-PASEO_PACKAGE="@getpaseo/cli"
-HEADLESS=1
-_paseo_setup_channel=""
-read_env_local_value() { return 1; }
-ensure_pi_node_runtime() { node --version >/dev/null; }
-print_message() { :; }; print_warning() { :; }; print_error() { :; }
-paseo_service_path() { printf '%s' "$PATH"; }
-paseo_command_target() { command -v paseo; }
-'''
-            for channel, tag in (('', 'beta'), ('beta', 'beta'), ('stable', 'latest')):
-                result = subprocess.run(['bash'], input=prelude + channels + function + '\ninstall_paseo_cli\n',
-                                        env={**self.env, 'PASEO_CHANNEL': channel}, text=True, capture_output=True, timeout=10)
-                self.assertNotEqual(result.returncode, 0, 'fake Bun deliberately stops before any real install')
-                self.assertIn(f'@getpaseo/cli@{tag}', (self.home / 'bun-args').read_text(), (script, channel))
+    def test_writable_metadata_is_blocked_without_permission_changes(self):
+        self.seed()
+        file = self.paseo / 'config.json'
+        file.chmod(0o664)
+        before = file.read_bytes()
+        self.assert_failed(self.run_helper(), 'unsafe-path')
+        self.assertEqual(file.read_bytes(), before)
+        self.assertEqual(file.stat().st_mode & 0o777, 0o664)
+        self.assertEqual(self.calls(), [])
 
-    def test_go_failure_main_block_still_reaches_verified_plain_selection(self):
-        managed = self.home / '.bun/install/global/node_modules/@getpaseo/cli'
-        shutil.copytree(self.cli_package, managed)
-        directory = self.home / '.bun/bin'
+    def test_fifo_metadata_does_not_hang(self):
+        self.seed()
+        file = self.paseo / 'paseo.pid'
+        os.mkfifo(file)
+        self.assert_failed(self.run_helper(), 'unsafe-path')
+        self.assertEqual(self.calls(), [])
+
+    def test_nested_settings_links_are_rejected_and_targets_preserved(self):
+        self.seed()
+        target = self.home / 'private'
+        target.write_text('keep')
+        (self.paseo / 'plugin-settings/paseo-plain/link').symlink_to(target)
+        self.assert_failed(self.run_helper(), 'unsafe-settings')
+        self.assertEqual(target.read_text(), 'keep')
+        self.assertEqual(self.removals(), [])
+
+    def test_existing_or_incomplete_backups_block_without_overwrite(self):
+        self.seed()
+        journal = self.paseo / 'setup-recovery/paseo-plain-release-to-main/state.json'
+        journal.write_text('{"phase":"adding"}')
+        self.assert_failed(self.run_helper(), 'migration-needs-review')
+        journal.write_text('{"phase":"complete"}')
+        directory = self.paseo / 'setup-recovery/paseo-plain-retirement'
         directory.mkdir()
-        (directory / 'paseo').symlink_to(managed / 'bin/paseo')
-        (self.cli_package / 'bin/paseo').write_text('process.exit(1)')
+        (directory / 'keep').write_text('previous backup')
+        self.assert_failed(self.run_helper(), 'retirement-backup-needs-review')
+        self.assertEqual((directory / 'keep').read_text(), 'previous backup')
+        self.assertEqual(self.removals(), [])
+
+    def test_shared_managed_source_is_preserved(self):
+        source = self.seed()
+        self.config['plugins']['unrelated']['path'] = str(source)
+        self.save_config()
+        self.assert_failed(self.run_helper(), 'shared-source-needs-review')
+        self.assertTrue(source.exists())
+        self.assertEqual(self.calls(), [])
+
+    def test_native_settings_source_and_shared_source_record_are_preserved(self):
+        source = self.seed()
+        self.config['plugins']['paseo-plain']['path'] = str(self.paseo / 'plugin-settings/paseo-plain')
+        self.save_config()
+        self.assert_failed(self.run_helper(), 'shared-source-needs-review')
+        self.config['plugins']['paseo-plain']['path'] = str(source)
+        self.save_config()
+        registry = self.paseo / 'plugins/sources.json'
+        records = json.loads(registry.read_text())
+        records['unrelated'] = {**records['paseo-plain']}
+        registry.write_text(json.dumps(records))
+        self.assert_failed(self.run_helper(), 'shared-source-needs-review')
+        self.assertTrue(source.exists())
+        self.assertEqual(self.calls(), [])
+
+    def test_preserved_storage_alias_into_deleted_tree_is_blocked(self):
+        source = self.seed()
+        original = self.paseo / 'plugin-data'
+        original.rename(self.home / 'saved-data')
+        original.symlink_to(source, target_is_directory=True)
+        self.assert_failed(self.run_helper(), 'shared-source-needs-review')
+        self.assertTrue(source.exists())
+        self.assertEqual(self.calls(), [])
+
+    def test_remote_endpoints_rejected_before_status(self):
+        self.seed()
+        for address in ('192.0.2.1:19991', '/tmp/socket', 'wss://example.invalid', '127.0.0.1:99999'):
+            self.config['daemon']['listen'] = address
+            self.save_config()
+            self.assert_failed(self.run_helper(), 'nonlocal-endpoint')
+        self.config['daemon']['listen'] = '127.0.0.1:19991'
+        self.save_config()
+        for value in ({'listen': 'remote.example:1234'}, {'sockPath': '/tmp/socket'},
+                      {'listen': '127.0.0.1:19991', 'sockPath': 'remote.example:1234'}):
+            (self.paseo / 'paseo.pid').write_text(json.dumps(value))
+            self.assert_failed(self.run_helper(), 'nonlocal-pid-endpoint')
+        self.assertEqual(self.calls(), [])
+
+    def test_stopped_wrong_home_or_incompatible_daemon_deferred(self):
+        self.seed()
+        for status in ({'localDaemon': 'stopped'}, {'connectedDaemon': 'unreachable'},
+                       {'home': str(self.home)}, {'listen': 'remote.example:1234'}, {'daemonVersion': '0.7.0'}):
+            self.state['status'] = status
+            self.assert_failed(self.run_helper(), 'removal deferred')
+        self.assertEqual(self.removals(), [])
+
+    def test_missing_cli_is_failure_not_silent_success(self):
+        self.seed()
+        self.env['PATH'] = ''
+        self.assert_failed(self.run_helper(), 'compatible-cli-unavailable')
+        self.assertEqual(self.calls(), [])
+
+    def test_bad_cli_identity_is_never_executed(self):
+        self.seed()
+        metadata = self.package / 'package.json'
+        original = metadata.read_text()
+        for text in ('{bad', original.replace('@getpaseo/cli', 'foreign'),
+                     original.replace('0.8.0', '0.4.0'), original.replace('bin/paseo', '../escape'),
+                     original.replace('"version":', '"version":"0.4.0","version":')):
+            metadata.write_text(text)
+            self.assert_failed(self.run_helper(), 'compatible-cli-unavailable')
+        self.assertEqual(self.calls(), [])
+
+    def test_bun_cli_preferred_and_incompatible_managed_cli_blocks_fallback(self):
+        self.seed()
+        managed = self.home / '.bun/install/global/node_modules/@getpaseo/cli'
+        shutil.copytree(self.package, managed)
+        bindir = self.home / '.bun/bin'
+        bindir.mkdir()
+        (bindir / 'paseo').symlink_to(managed / 'bin/paseo')
+        metadata = managed / 'package.json'
+        metadata.write_text(metadata.read_text().replace('0.8.0', '0.9.0'))
+        self.assert_failed(self.run_helper(), 'compatible-cli-unavailable')
+        self.assertEqual(self.calls(), [])
+        metadata.write_text(metadata.read_text().replace('0.9.0', '0.8.0'))
+        (self.package / 'bin/paseo').write_text('process.exit(99)')
+        self.assertEqual(self.run_helper().returncode, 0)
+
+    def test_catalog_and_concurrent_config_change_block_removal(self):
+        self.seed()
+        for value in ({}, [None], [{'id': 'paseo-plain'}, {'id': 'paseo-plain'}], []):
+            self.state['catalog'] = value
+            self.assert_failed(self.run_helper())
+        del self.state['catalog']
+        self.state['changeConfig'] = True
+        self.assert_failed(self.run_helper(), 'state-changed')
+        self.assertEqual(self.removals(), [])
+
+    def test_cli_failures_and_invalid_responses_have_safe_diagnostics(self):
+        self.seed()
+        for flag in ('fail', 'invalid'):
+            for command in ('status', 'ls', 'remove'):
+                self.state = {**self.state, flag: command}
+                result = self.run_helper()
+                self.assert_failed(result, 'exit-23' if flag == 'fail' else 'invalid-response-json')
+                # Failed remove preserves settings and its exclusive recovery backup.
+                backup = self.paseo / 'setup-recovery/paseo-plain-retirement'
+                if backup.exists():
+                    shutil.rmtree(backup)
+            del self.state[flag]
+
+    def test_timeout_retains_backup_and_does_not_retry_mutation(self):
+        self.seed()
+        self.state['timeout'] = True
+        self.assert_failed(self.run_helper(code=retirement().replace('180000', '150')), 'timeout')
+        self.assert_failed(self.run_helper(), 'retirement-backup-needs-review')
+        self.assertEqual(len(self.removals()), 1)
+
+    def test_lost_removal_response_never_reinstalls(self):
+        self.seed()
+        self.state['lostResponse'] = True
+        self.assert_failed(self.run_helper(), 'exit-23')
+        self.assertIn('already absent', self.run_helper().stdout)
+        self.assertEqual(len(self.removals()), 1)
+        self.assertTrue((self.paseo / 'setup-recovery/paseo-plain-retirement/plugin-settings/voice.json').exists())
+
+    def test_noop_remove_and_unrelated_mutation_fail_verification(self):
+        for flag in ('noop', 'changeUnrelated'):
+            child = RetirementTest()
+            child.setUp()
+            try:
+                child.seed()
+                child.state[flag] = True
+                child.assert_failed(child.run_helper(), 'removal-not-confirmed')
+            finally:
+                child.doCleanups()
+
+    def test_orphan_sources_are_not_claimed_as_removed(self):
+        self.seed()
+        del self.config['plugins']['paseo-plain']
+        self.save_config()
+        self.assert_failed(self.run_helper(), 'orphan-source-needs-review')
+        self.assertEqual(self.calls(), [])
+
+    def test_all_bash_wrappers_propagate_failure(self):
+        self.seed()
+        for script in SCRIPTS[:-1]:
+            self.state['fail'] = 'status'
+            self.assert_failed(self.run_helper(script, wrapped=True), 'daemon status: exit-23')
+        del self.state['fail']
+        self.assertEqual(self.run_helper(wrapped=True).returncode, 0)
+        self.assertIn('already absent', self.run_helper(wrapped=True).stdout)
+
+    def test_wrappers_missing_node_and_unrecognized_output_fail_safely(self):
+        self.seed()
+        (self.bin / 'node').unlink()
+        scripts = ('ubuntu.sh', 'win.ps1') if PWSH else ('ubuntu.sh',)
+        for script in scripts:
+            self.assert_failed(self.run_helper(script, wrapped=True), 'Node.js >=22.19 is required')
+        fake = self.bin / 'node'
+        fake.write_text('#!/bin/sh\necho private-error-must-not-escape\necho private-error-must-not-escape >&2\n')
+        fake.chmod(0o700)
+        for script in scripts:
+            self.assert_failed(self.run_helper(script, wrapped=True), 'unexpected helper response')
+        self.assertEqual(self.calls(), [])
+
+    def test_explicit_cli_no_fallback(self):
+        self.seed()
+        self.env['PASEO_VALIDATED_CMD'] = str(self.home / 'missing')
+        self.assert_failed(self.run_helper(wrapped=True), 'compatible-cli-unavailable')
+        self.assertEqual(self.calls(), [])
+
+    @unittest.skipUnless(PWSH, 'PowerShell is not available')
+    def test_powershell_wrapper_success_absence_and_failure(self):
+        self.seed()
+        self.state['fail'] = 'status'
+        self.assert_failed(self.run_helper('win.ps1', wrapped=True), 'daemon status: exit-23')
+        del self.state['fail']
+        self.assertEqual(self.run_helper('win.ps1', wrapped=True).returncode, 0)
+        self.assertIn('already absent', self.run_helper('win.ps1', wrapped=True).stdout)
+
+    def test_go_failure_still_reaches_retirement_and_failure_continues_setup(self):
+        self.seed()
         text = (ROOT / 'ubuntu.sh').read_text()
         main = text.split('run_setup_tasks() {', 1)[1]
         block = main[main.index('    if ! prepare_pi_profile_permissions; then'):main.index('    print_section "Final Updates"')]
-        wrapper = 'install_paseo_plain() {' + text.split('install_paseo_plain() {', 1)[1].split('\ninstall_portless_cli()', 1)[0]
         inert = ('prepare_pi_profile_permissions', 'remove_rtk_resources', 'remove_attention_span_resources',
                  'setup_matt_pocock_skills', 'remove_pi_prose', 'install_pi_cli', 'configure_pi_defaults',
                  'remove_pi_synthetic_models', 'seed_pi_zai_models', 'remove_simple_english_skill',
@@ -587,165 +508,43 @@ paseo_command_target() { command -v paseo; }
         code += 'print_warning() { printf "%s\\n" "$1"; }; print_success() { printf "%s\\n" "$1"; };\n'
         code += 'configure_pi_opencode_go() { return 1; }\n'
         code += 'setup_headless_paseo_daemon() { printf unexpected-daemon > "$HOME/daemon-called"; return 1; }\n'
-        code += wrapper + '\nexercise() {\n' + block + '\n}\nexercise\nprintf "result:%s\\n" "${_setup_had_errors}"\n'
-        (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
-        result = subprocess.run(['bash'], input=code, env=self.env, text=True, capture_output=True, timeout=20)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('result:1', result.stdout, 'Go failure must remain a failed setup result')
-        self.assertIn('Paseo Plain installed', result.stdout)
-        self.assertFalse((self.home / 'daemon-called').exists())
-
-    def test_missing_prerequisites_are_deferred_without_invoking_real_tools(self):
-        self.env['PATH'] = ''
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 0)
-        self.assertIn('install Paseo and Pi', result.stdout)
-        self.assertEqual(self.calls(), [])
-
-    def test_nonlocal_configuration_is_rejected_before_cli_use(self):
-        self.configure({'pluginsEnabled': True, 'daemon': {'listen': '192.0.2.10:19991'}})
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 0)
-        self.assertIn('loopback', result.stdout)
-        self.assertEqual(self.calls(), [])
-
-    def test_nonlocal_pid_endpoint_is_rejected_before_status_can_probe_it(self):
-        for endpoint in ({'listen': '192.0.2.10:19991'}, {'sockPath': '/tmp/unsupported.sock'}):
-            (self.paseo / 'paseo.pid').write_text(json.dumps({'pid': 123, **endpoint}))
-            result = self.run_installer()
-            self.assertEqual(result.returncode, 0)
-            self.assertIn('deferred', result.stdout)
-            self.assertEqual(self.calls(), [])
-
-    def test_bash_entry_function_reports_a_deferred_install_without_failing_setup(self):
-        if os.name == 'nt':
-            self.skipTest('Bash wrapper is checked on POSIX')
-        text = (ROOT / 'ubuntu.sh').read_text()
-        function = 'install_paseo_plain() {' + text.split('install_paseo_plain() {', 1)[1].split('\ninstall_portless_cli()', 1)[0]
-        self.configure({'pluginsEnabled': False})
-        result = subprocess.run(['bash'], input='print_warning() { printf "%s\\n" "$1"; }; print_success() { printf "%s\\n" "$1"; };\n' + function + '\ninstall_paseo_plain\n',
-                                env=self.env, text=True, capture_output=True, timeout=15)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('deferred', result.stdout)
-        self.assertEqual(self.calls(), [])
-
-    @unittest.skipUnless(os.environ.get('PWSH_BIN') or shutil.which('pwsh'), 'PowerShell is not available')
-    def test_powershell_entry_function_runs_only_the_installer(self):
-        ps = os.environ.get('PWSH_BIN') or shutil.which('pwsh')
-        text = (ROOT / 'win.ps1').read_text()
-        function = 'function Install-PaseoPlain {' + text.split('function Install-PaseoPlain {', 1)[1].split('\nfunction Install-PortlessCli', 1)[0]
-        fixture = self.home / 'wrapper-test.ps1'
-        fixture.write_text('function Write-Success($message) { Write-Host $message }\n' + function + '\n$ok = Install-PaseoPlain; if (-not $ok) { exit 1 }\n')
-        (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
-        for enabled in (True, False):
-            self.configure({'pluginsEnabled': enabled})
-            result = subprocess.run([ps, '-NoProfile', '-NonInteractive', '-File', str(fixture)],
-                                    env={**self.env, 'POWERSHELL_TELEMETRY_OPTOUT':'1', 'POWERSHELL_UPDATECHECK':'Off'},
+        code += wrapper('ubuntu.sh') + '\nexercise() {\n' + block + '\n}\nexercise\nprintf "continued:%s\\n" "${_setup_had_errors}"\n'
+        for fail in (True, False):
+            self.state['fail'] = 'status' if fail else None
+            (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
+            result = subprocess.run([shutil.which('bash')], input=code, env=self.env,
                                     text=True, capture_output=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn('installed' if enabled else 'deferred', result.stdout)
-        self.seed_release()
-        (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
-        result = subprocess.run([ps, '-NoProfile', '-NonInteractive', '-File', str(fixture)],
-                                env={**self.env, 'POWERSHELL_TELEMETRY_OPTOUT':'1', 'POWERSHELL_UPDATECHECK':'Off'},
-                                text=True, capture_output=True, timeout=20)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('migrated from release to main', result.stdout)
+            self.assertIn('continued:1', result.stdout)
+            self.assertIn('removal failure' if fail else 'Paseo Plain removed;', result.stdout)
+            self.assertFalse((self.home / 'daemon-called').exists())
 
-    def test_rerun_updates_only_owned_main_and_preserves_all_settings(self):
-        self.run_installer()
-        settings = self.paseo / 'plugin-data/paseo-plain/configuration.json'
-        custom = '{"values":{"enabled":false,"style":"My own voice","model":"custom"},"revision":7,"error":null}'
-        settings.write_text(custom)
-        cache = settings.parent / 'cache.json'
-        cache.write_text('[{"text":"private cached text"}]')
-        self.state['plugins'].append({'id': 'unrelated', 'enabled': True, 'status': 'running'})
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(settings.read_text(), custom)
-        self.assertEqual(cache.read_text(), '[{"text":"private cached text"}]')
-        updates = [args for args in self.calls() if 'update' in args]
-        self.assertEqual(len(updates), 1)
-        self.assertEqual(updates[0][updates[0].index('update') + 1], 'paseo-plain')
-        self.assertNotIn('--all', updates[0])
-        self.assertEqual(len([args for args in self.calls() if 'add' in args]), 1)
-
-    def test_disabled_global_switch_never_calls_paseo_or_changes_configuration(self):
-        for config in ({}, {'pluginsEnabled': False}, {'pluginsEnabled': 'true'}):
-            self.configure(config)
-            before = (self.paseo / 'config.json').read_bytes()
-            result = self.run_installer()
-            self.assertEqual(result.returncode, 0)
-            self.assertIn('deferred', result.stdout)
-            self.assertEqual(self.calls(), [])
-            self.assertEqual((self.paseo / 'config.json').read_bytes(), before)
-            self.assertFalse((self.paseo / 'plugin-data').exists())
-
-    def test_incompatible_or_unreachable_daemon_is_not_modified(self):
-        for status in ({'daemonVersion':'0.7.2'}, {'cliVersion':'0.7.2'}, {'daemonVersion':'0.9.0'},
-                       {'localDaemon':'stopped'}, {'connectedDaemon':'auth_failed'},
-                       {'home': str(self.home)}, {'listen':'192.0.2.10:19991'}):
-            self.state['status'] = status
-            result = self.run_installer()
-            self.assertEqual(result.returncode, 0)
-            self.assertIn('deferred', result.stdout)
-        self.assertFalse(any('plugin' in args for args in self.calls()))
-        self.assertFalse((self.paseo / 'plugin-data').exists())
-
-    def test_source_conflicts_and_disabled_installations_remain_untouched(self):
-        remote = 'https://github.com/scowalt/paseo-plain.git'
-        cases = (
-            ({'source': 'directory', 'path': '/provider-secret-must-not-be-logged'}, 'directory-source'),
-            ({'source': 'provider-secret-must-not-be-logged'}, 'non-git-source'),
-            ({'source': 'git', 'remote': 'https://provider-secret-must-not-be-logged@example.invalid', 'ref': 'release'}, 'repository-mismatch'),
-            ({'source': 'git', 'remote': remote, 'ref': 'provider-secret-must-not-be-logged'}, 'custom-or-pinned-ref'),
-            ({'source': 'git', 'remote': remote, 'ref': 'a' * 40}, 'custom-or-pinned-ref'),
-            ({'source': 'directory', 'enabled': False}, 'the saved disabled state was preserved'),
-        )
-        self.seed_release()
-        preserved = [self.paseo / name for name in (
-            'config.json', 'plugins/sources.json', 'plugin-data/paseo-plain/configuration.json',
-            'plugin-data/paseo-plain/cache.json', 'plugin-settings/paseo-plain/voice.json')]
-        before = {file: file.read_bytes() for file in preserved}
+    def test_shared_helpers_wiring_and_no_reinstallation(self):
+        baseline = retirement()
         for script in SCRIPTS:
-            for plugin, reason in cases:
-                with self.subTest(script=script, reason=reason):
-                    self.state['plugins'] = [{'id': 'paseo-plain', **plugin}]
-                    result = self.run_installer(script)
-                    self.assertEqual(result.returncode, 0)
-                    self.assertIn('Paseo Plain deferred: ' + reason, result.stdout)
-                    if plugin.get('enabled') is not False:
-                        self.assertIn('Review the paseo-plain source in Paseo Settings > Plugins', result.stdout)
-                    self.assertEqual(before, {file: file.read_bytes() for file in preserved})
-                    self.assertFalse((self.paseo / 'setup-recovery').exists())
-        self.assertFalse(any('add' in args or 'update' in args or 'remove' in args for args in self.calls()))
+            text = (ROOT / script).read_text()
+            self.assertEqual(retirement(script), baseline)
+            self.assertNotIn('PLAIN INSTALLER', text)
+            self.assertNotIn('install_paseo_plain', text)
+            self.assertNotIn('Install-PaseoPlain', text)
+            self.assertNotIn('https://github.com/scowalt/paseo-plain.git', text)
+            if script.endswith('.sh'):
+                self.assertGreater(text.rindex('    if ! remove_paseo_plain; then'), text.rindex('    elif install_pi_cli; then'))
+                self.assertIn('    if ! remove_paseo_plain; then\n        _setup_had_errors=1\n    fi', text)
+            else:
+                self.assertGreater(text.rindex('    if (-not (Remove-PaseoPlain))'), text.rindex('    elseif (Install-PiCli)'))
 
-    def test_malformed_settings_and_symlink_storage_are_preserved(self):
-        directory = self.paseo / 'plugin-data/paseo-plain'
-        directory.mkdir(parents=True)
-        settings = directory / 'configuration.json'
-        settings.write_text('not json')
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 1)
-        self.assertEqual(settings.read_text(), 'not json')
-        settings.unlink()
-        settings.symlink_to(self.home / 'missing.json')
-        result = self.run_installer()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertTrue(settings.is_symlink())
-        self.assertFalse((self.home / 'missing.json').exists())
-        self.assertFalse(any('add' in args or 'update' in args for args in self.calls()))
-
-    def test_failed_update_keeps_old_preferences_and_does_not_print_cli_errors(self):
-        self.run_installer()
-        self.state['fail'] = True
-        settings = self.paseo / 'plugin-data/paseo-plain/configuration.json'
-        original = settings.read_bytes()
-        result = self.run_installer()
-        self.assertEqual(result.returncode, 1)
-        self.assertNotIn('checked for updates', result.stdout)
-        self.assertEqual(settings.read_bytes(), original)
-        self.assertEqual(self.state['plugins'][0]['commit'], 'a' * 40)
+    def test_linux_system_home_alias_identity_is_unchanged(self):
+        code = retirement()
+        start, end = code.index('function cliHomeAlias'), code.index('function cliRegular')
+        fixture = '''const path = require('node:path'), assert = require('node:assert/strict');
+const fs = {readlinkSync: () => '/var/home'};
+const directory = () => ({uid:0, mode:0o755, isDirectory:()=>true, isSymbolicLink:()=>false});
+const alias = {uid:0, mode:0o120777, isDirectory:()=>false, isSymbolicLink:()=>true};
+const cliInfo = file => file === '/home' ? alias : directory();
+''' + code[start:end] + "assert.equal(cliDirectory('/home'), process.platform === 'linux');"
+        result = subprocess.run([NODE, '-'], input=fixture, text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == '__main__':

@@ -39,7 +39,7 @@ class NativeFixtureIsolationTest(unittest.TestCase):
                                'GIT_COMMON_DIR': str(foreign / '.git'), 'GIT_OBJECT_DIRECTORY': str(foreign / '.git/objects')}):
                 with self.subTest(extra=tuple(extra)):
                     env = {**clean, 'GIT_DIR': str(foreign / '.git'), **extra}
-                    result = subprocess.run([node, str(ROOT / 'tests/paseo-plain-native-migration.mjs')],
+                    result = subprocess.run([node, str(ROOT / 'tests/paseo-plain-native-retirement.mjs')],
                                             cwd=ROOT, env=env, text=True, capture_output=True, timeout=60)
                     self.assertEqual(snapshot(), before, 'Native fixture mutated the caller repository or files')
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

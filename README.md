@@ -238,50 +238,38 @@ To return to stable, set `PASEO_CHANNEL=stable` and rerun setup with Desktop clo
 
 See [Paseo update instructions](https://paseo.sh/docs/updates.md). The client document format matches [the v0.8 beta Desktop settings store](https://github.com/getpaseo/paseo/blob/4eab53e24e1b57c74b00945aa48a89d68ed755e3/packages/desktop/src/settings/desktop-settings.ts). Tests use temporary fixtures and do not install, update, or start Paseo. Run `bash tests/paseo-release-channel-contract.sh` and `pwsh -NoProfile -File tests/paseo-release-channel-powershell.ps1` for channel coverage.
 
-## Paseo Plain plugin
+## Paseo Plain retirement
 
-Future setup runs install [Paseo Plain](https://github.com/scowalt/paseo-plain) for the local daemon when Paseo CLI/daemon 0.8.x, Node.js >=22.19, Pi, and enabled Paseo plugins are available. The six standalone setup scripts share the same installer logic. Setup does not inventory or contact other machines.
+All six setup scripts remove the `paseo-plain` plugin on each machine's next setup run. They no longer install, update, or migrate it. Removal includes disabled installations, custom repositories, pinned revisions, and directory registrations under that exact ID. Other plugin IDs are untouched. Setup does not inventory or contact other machines.
 
-Setup installs `main` through Paseo's Git installer. Later runs update matching Git-managed `paseo-plain` installations to the latest `main` commit. No GitHub release or version tag is required. Directory installations, other repositories or branches, pinned revisions, and disabled installations remain unchanged. Ordinary failed updates do not trigger a remove/reinstall cycle.
+Removal uses the selected local daemon's native plugin command. It preserves other plugins, global plugin enablement, credentials, projects, external source directories, `<PASEO_HOME>/plugin-data/paseo-plain` (preferences and cached rewrites), and existing recovery backups. Native removal deletes the managed checkout and `plugin-settings/paseo-plain`; setup first copies those native settings into a private `setup-recovery/paseo-plain-retirement/plugin-settings` backup. It never reinstalls the plugin. Saved data and backups are retained, not automatically purged.
 
-Source-preservation warnings identify `directory-source`, `non-git-source`, `repository-mismatch`, or `custom-or-pinned-ref` without printing the source values. Review the `paseo-plain` source in Paseo Settings > Plugins before planning a migration. Keep local source files and recovery directories in place. A preserved source does not mean that the plugin is broken, and rerunning setup does not authorize takeover.
+The helper selects `PASEO_HOME`, or `~/.paseo` when unset. Explicit overrides must be absolute directories below the account HOME; empty, relative, HOME-itself, outside-HOME, and linked paths are rejected. The trusted Linux `/home` → `/var/home` system alias remains supported. Missing homes or registrations are an offline no-op. Malformed/linked metadata, shared deletion targets, and unfinished migrations require review instead of automatic removal.
 
-Existing setup-managed `release` installations move to `main` on their next setup run. Paseo 0.8 requires a one-time remove/add operation under the same plugin ID. Setup verifies the source record and makes private recovery copies before removal. It preserves live rewrite preferences and cache, and restores Paseo-owned settings before adding `main`. Only the plugin is briefly interrupted. The migration does not restart the daemon. Do not change the plugin or its settings during migration. Paseo 0.8 does not make the entire migration atomic.
+Removal requires Node.js >=22.19 and a reachable local Paseo 0.8.x daemon with a metadata-verified compatible CLI. The explicitly validated CLI or existing Bun global CLI takes precedence over PATH. An incompatible verified managed release does not fall back to an older PATH installation. Pi and enabled plugins are **not** prerequisites. The helper uses an explicit loopback `--host`, ignores inherited `PASEO_HOST`, and does not enable plugins, start/restart a daemon, change release channels, or make model requests.
 
-New installations initialize manual rewrite controls once. Existing voice, model, display, timeout, disabled choices, configuration files, and cached rewrites remain unchanged. Setup does not copy credentials or make a model request. The plugin uses the daemon user's existing Pi login when the user explicitly requests a rewrite.
+If removal is blocked, setup reports a failed result while continuing unrelated work. Start the intended compatible local daemon and rerun setup, or remove `paseo-plain` from that daemon's **Settings > Plugins**. Do not enable plugins just for removal. Existing headless/platform restrictions remain unchanged; WSL does not manage the Windows host's daemon. Run the appropriate setup separately on each machine/account and selected Paseo home.
 
-Plain inspects Paseo package identity, entry points, and version before invoking daemon status. It uses the explicitly validated CLI from headless setup or the existing compatible Bun global CLI before considering PATH candidates. An incompatible verified managed release defers Plain installation instead of selecting an older PATH copy. This selection also works when a Go failure skips headless daemon setup. CLI selection never removes an installation or changes a release channel.
-
-If prerequisites are missing, setup reports that installation is deferred. Start a compatible local daemon and enable trusted plugins in **Paseo Settings > Plugins**, then rerun setup. Plugins run without isolation and can access the daemon's files, processes, credentials, and network. The plugin installer does not enable the global switch or start another daemon. It follows the separate `PASEO_CHANNEL` policy above. If you select stable and that release lacks the required plugin API, plugin installation remains deferred.
-
-The installer uses `PASEO_HOME`, or `~/.paseo` when the variable is unset or empty, and requires a loopback TCP daemon endpoint. Existing headless support restrictions still apply. Plugin CI uses fake workers; actual model access, client appearance, and ARM/WSL runtime behavior need separate verification. The plugin restricts Windows storage through NTFS permissions and keeps rewriting off if private storage cannot be prepared.
-
-Run `python3 tests/test_paseo_plain_setup.py` for isolated installer regressions. Tests extract only installer functions and use temporary homes and fake CLIs. They do not source full provisioning entry points. The POSIX fixture also tests the PowerShell wrapper when `PWSH_BIN` points to PowerShell. Pre-push hooks run these tests through `tests/paseo-plain-setup-contract.sh`.
-
-The native source-manager test requires an installed Paseo 0.8 server module:
-
-```bash
-PASEO_TEST_PLUGIN_SERVICE_MODULE=/absolute/path/to/server/plugins/index.js \
-  node tests/paseo-plain-native-migration.mjs
-```
-
-This test uses the actual source and configuration managers with temporary homes and local Git repositories. Plugin execution and CLI transport are simulated. No listener, authenticated session, or model is used. It verifies migration, reruns, native deletion behavior, and failed builds. Git configuration and inherited hook variables are isolated. The pre-push wrapper also tests that poisoned Git variables cannot change a caller repository, its index, or its configuration. Native Windows provisioning and successful Windows backup permissions still need separate verification.
-
-Failed operations report a bounded label and reason, such as `Paseo Plain failure: plugin add: exit-1.` The message distinguishes command failures, timeouts, invalid JSON, and migration validation failures. It excludes raw command output, arbitrary exception text, preferences, and credentials. The message provides a diagnostic clue, not proof of the underlying cause.
+Diagnostics contain controlled operation/reason labels, such as `Paseo Plain removal failure: plugin remove: exit-1.`, not raw command output, exception text, credentials, or preferences. A timeout does not prove that the daemon stopped working: inspect plugin status before retrying. Do not edit plugin settings concurrently with removal.
 
 ### Paseo Plain migration recovery
 
-Recovery files remain private under `<PASEO_HOME>/setup-recovery/paseo-plain-release-to-main`, including after success. `state.json` records progress. `RECOVERY.md` explains recovery. The directory contains the old checkout, plugin-specific registration and source records, rewrite preferences/cache, and any Paseo-owned settings. Backup copies of cached rewrites do not expire automatically. After a verified `main` migration, you can delete the backup if no installed source uses it.
+Existing `setup-recovery/paseo-plain-release-to-main` backups remain untouched. An unfinished `state.json` blocks retirement until reviewed. Preserve the backup, confirm any previous operation has finished, and remove the plugin through the intended daemon's Settings rather than resuming the retired release-to-main migration. Never overwrite the entire daemon configuration or source registry with plugin-specific backup records.
 
-A failure, timeout, or incomplete journal stops further automatic changes. Setup does not assume that a failed CLI request stopped work in the daemon. It does not remove a potentially completed new installation or overwrite newer settings to retry. Do not repeatedly rerun setup while a migration needs review.
+An existing retirement backup also blocks another destructive attempt while native settings remain. Inspect the intended local daemon and compare the saved settings first. Once no operation is pending, preserve/archive that retirement backup before retrying. Do not move any recovery directory still used as a directory source by another plugin. If removal already finished, a rerun is a no-op and keeps the backup. Retirement never restores the plugin or overwrites newer settings.
 
-1. Make sure that any pending Paseo operation finishes before recovery. Inspect the same local daemon with an explicit `--host` and `paseo plugin ls --json`.
-2. If `main` is already running, compare the preserved settings and cache before changing anything. Do not remove that installation merely because the CLI timed out.
-3. If the plugin is absent and the backup contains `plugin-settings`, restore it only to an absent `<PASEO_HOME>/plugin-settings/paseo-plain` directory. Do this before activation and preserve private permissions. Do not overwrite a destination that reappeared or newer live rewrite preferences/cache.
-4. If the plugin is absent, the backup `checkout` directory can restore the old code with `paseo plugin install`. Use `--id paseo-plain` and the same explicit `--host`. This creates a directory installation, not an automatically updated Git installation.
-5. Never restore the plugin records over the complete daemon `config.json` or `plugins/sources.json`. Those files also contain unrelated state.
-6. If a recovered directory is the installed source, keep it at that path. Moving the recovery directory would break that installation.
-7. If the installed path is outside the recovery directory, verify its source and settings and confirm that no operation remains pending. Then archive the recovery directory before retrying setup. Keep the old `release` branch and tags until they are no longer needed for recovery.
+### Retirement tests
+
+Run `bash tests/paseo-plain-setup-contract.sh`. Fixtures extract helpers instead of sourcing full setup scripts; they use temporary homes and inert CLIs. Set `PWSH_BIN` for PowerShell wrapper coverage. Native Windows ACL behavior still requires Windows verification.
+
+The optional native source/configuration-manager fixture needs an installed Paseo 0.8 module:
+
+```bash
+PASEO_TEST_PLUGIN_SERVICE_MODULE=/absolute/path/to/server/plugins/index.js \
+  node tests/paseo-plain-native-retirement.mjs
+```
+
+It verifies native removal, disabled plugins/global switch, preserved external sources/data, native-settings backups, and idempotent reruns. Plugin execution and CLI transport are simulated: no listener, authentication, or model request is used. Git is file-only with isolated configuration/hooks. The contract wrapper also verifies that poisoned Git variables cannot mutate the caller's repository.
 
 ## Headless Paseo daemon
 

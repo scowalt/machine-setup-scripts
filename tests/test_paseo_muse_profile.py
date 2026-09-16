@@ -1376,7 +1376,7 @@ class MuseProfileTests(unittest.TestCase):
         for name in SCRIPTS[:-1]:
             with self.subTest(script=name):
                 text = (ROOT / name).read_text()
-                function = 'configure_paseo_muse_profile() {' + text.split('configure_paseo_muse_profile() {', 1)[1].split('\ninstall_paseo_plain() {', 1)[0]
+                function = 'configure_paseo_muse_profile() {' + text.split('configure_paseo_muse_profile() {', 1)[1].split('\nremove_paseo_plain() {', 1)[0]
                 script = self.root / 'wrapper.sh'
                 script.write_text('set -eu\nprint_warning() { :; }; print_success() { :; }; print_debug() { :; }\n' + function +
                     '\nexpected_options=${NODE_OPTIONS}\nexpected_path=${NODE_PATH}\nconfigure_paseo_muse_profile\n' +
@@ -1400,7 +1400,7 @@ class MuseProfileTests(unittest.TestCase):
         for name in SCRIPTS[:-1]:
             with self.subTest(script=name):
                 text = (ROOT / name).read_text()
-                function = 'configure_paseo_muse_profile() {' + text.split('configure_paseo_muse_profile() {', 1)[1].split('\ninstall_paseo_plain() {', 1)[0]
+                function = 'configure_paseo_muse_profile() {' + text.split('configure_paseo_muse_profile() {', 1)[1].split('\nremove_paseo_plain() {', 1)[0]
                 script = self.root / 'wrapper.sh'
                 script.write_text('set -eu\nprint_warning() { :; }; print_success() { :; }; print_debug() { :; }\n' + function +
                     '\nconfigure_paseo_muse_profile verify-owner\n[[ "${PASEO_MUSE_DEFER_DAEMON_SETUP}" == 0 ]]\n')
@@ -1421,7 +1421,7 @@ class MuseProfileTests(unittest.TestCase):
         env, marker = self.prepare_poisoned_wrapper()
         env['PASEO_HOME'] = ''
         text = (ROOT / 'ubuntu.sh').read_text()
-        function = 'configure_paseo_muse_profile() {' + text.split('configure_paseo_muse_profile() {', 1)[1].split('\ninstall_paseo_plain() {', 1)[0]
+        function = 'configure_paseo_muse_profile() {' + text.split('configure_paseo_muse_profile() {', 1)[1].split('\nremove_paseo_plain() {', 1)[0]
         script = self.root / 'wrapper.sh'
         script.write_text('set -eu\nprint_warning() { printf "%s\\n" "$1"; }; print_success() { :; }; print_debug() { :; }\n' + function +
             '\nconfigure_paseo_muse_profile\n[[ "${PASEO_MUSE_DEFER_DAEMON_SETUP}" == 1 ]]\n')
@@ -1437,7 +1437,7 @@ class MuseProfileTests(unittest.TestCase):
     def test_powershell_wrapper_clears_poisoned_node_hook_and_restores_values(self):
         env, marker = self.prepare_poisoned_wrapper()
         text = (ROOT / 'win.ps1').read_text()
-        function = 'function Set-PaseoMuseProfile {' + text.split('function Set-PaseoMuseProfile {', 1)[1].split('\nfunction Install-PaseoPlain {', 1)[0]
+        function = 'function Set-PaseoMuseProfile {' + text.split('function Set-PaseoMuseProfile {', 1)[1].split('\nfunction Remove-PaseoPlain {', 1)[0]
         script = self.root / 'wrapper.ps1'
         script.write_text("$ErrorActionPreference='Stop'\nfunction Write-Success { param($Message) }\nfunction Write-Debug { param($Message) }\n" + function + "\n" +
             "$script:PiOpenCodeGoChanged=$false\n$expectedOptions=$env:NODE_OPTIONS\n$expectedPath=$env:NODE_PATH\n" +
@@ -1523,7 +1523,7 @@ console.log('Native 0.8.0 PID-lock exclusion verified.');
 
     def test_extracted_bash_wrapper_flags_and_changed_input(self):
         text = (ROOT / 'ubuntu.sh').read_text()
-        function = 'configure_paseo_muse_profile() {' + text.split('configure_paseo_muse_profile() {', 1)[1].split('\ninstall_paseo_plain() {', 1)[0]
+        function = 'configure_paseo_muse_profile() {' + text.split('configure_paseo_muse_profile() {', 1)[1].split('\nremove_paseo_plain() {', 1)[0]
         bin_dir = self.root / 'bin'
         bin_dir.mkdir()
         node = bin_dir / 'node'

@@ -142,7 +142,7 @@ print_error() { printf 'ERROR: %s\\n' "$*"; }
                         code += '\nfunction Remove-PiProse { return $' + ('false' if failure == 'prose' else 'true') + ' }'
                         code += '''
 function Test-EnvLocalFlag { return $false }
-function Install-PaseoPlain { Write-Host 'UNRELATED-CONTINUED'; return $true }
+function Remove-PaseoPlain { Write-Host 'UNRELATED-CONTINUED'; return $true }
 function Get-SetupLogDirectory { return (Join-Path $env:HOME 'logs') }
 function Start-Transcript { }
 function Complete-SetupLog { Write-Host 'LOG-FINALIZED' }
@@ -160,7 +160,7 @@ function Complete-SetupLog { Write-Host 'LOG-FINALIZED' }
                         code += '\nremove_pi_prose() { return ' + ('1' if failure == 'prose' else '0') + '; }'
                         code += '''
 print_warning() { printf '%s\\n' "$*"; }
-install_paseo_plain() { printf 'UNRELATED-CONTINUED\\n'; }
+remove_paseo_plain() { printf 'UNRELATED-CONTINUED\\n'; }
 start_setup_log() { :; }
 finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
 '''

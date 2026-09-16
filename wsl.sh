@@ -1713,47 +1713,27 @@ PASEO_MUSE_PROFILE_JS
     return 0
 }
 
-install_paseo_plain() {
+remove_paseo_plain() {
     if ! command -v node &> /dev/null; then
-        print_warning "Paseo Plain deferred: install Node.js >=22.19 and rerun setup."
-        return 0
+        print_warning "Paseo Plain removal not confirmed: Node.js >=22.19 is required. Rerun setup or remove paseo-plain in the local daemon's Settings > Plugins."
+        return 1
     fi
     local result
     local status=0
-    result=$(node --input-type=commonjs - "${PASEO_VALIDATED_CMD:-}" <<'PASEO_PLAIN_SETUP_JS'
-// BEGIN PASEO PLAIN INSTALLER
+    result=$(node --input-type=commonjs - "${PASEO_VALIDATED_CMD:-}" 2>/dev/null <<'PASEO_PLAIN_RETIREMENT_JS'
+// BEGIN PASEO PLAIN RETIREMENT
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { spawnSync } = require('node:child_process');
-const remote = 'https://github.com/scowalt/paseo-plain.git';
-const id = 'paseo-plain';
 const { createHash } = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
-let recovery = null;
-let migrationPhase = 'preparing';
+const id = 'paseo-plain';
 let operation = 'preflight';
 class SetupFailure extends Error {}
-const deferred = message => { console.log(`Paseo Plain deferred: ${message}`); };
-function executable(name, packageName) {
-    for (const directory of (process.env.PATH || '').split(path.delimiter)) {
-        if (!path.isAbsolute(directory)) continue;
-        const file = path.join(directory, name + (process.platform === 'win32' ? '.exe' : ''));
-        try { fs.accessSync(file, fs.constants.X_OK); return [file]; } catch {}
-        if (process.platform !== 'win32' || !packageName || !fs.existsSync(path.join(directory, `${name}.cmd`))) continue;
-        for (const base of [path.join(directory, 'node_modules'), path.resolve(directory, '../install/global/node_modules')]) {
-            try {
-                const root = path.join(base, packageName);
-                const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-                const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.[name];
-                if (pkg.name !== packageName || typeof bin !== 'string') continue;
-                const script = path.resolve(root, bin);
-                if (!script.startsWith(root + path.sep) || !fs.statSync(script).isFile()) continue;
-                return [process.execPath, script];
-            } catch {}
-        }
-    }
-    return null;
+function deferred(reason) {
+    console.log(`Paseo Plain removal deferred: ${reason}. Start the intended compatible local daemon and rerun setup, or remove paseo-plain in its Settings > Plugins. Do not enable plugins just for removal.`);
+    process.exitCode = 1;
 }
 // BEGIN PASEO CLI IDENTITY
 // Inspect package metadata before executing a CLI. A PATH hit is not proof of identity.
@@ -1848,65 +1828,59 @@ function selectPaseoCli(explicit = '') {
     return null;
 }
 // END PASEO CLI IDENTITY
-const info = file => { try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
-function regularPath(home, file) {
-    const relative = path.relative(home, file);
-    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new SetupFailure('outside-home');
-    let current = home;
-    for (const part of ['', ...relative.split(path.sep).filter(Boolean)]) {
-        current = path.join(current, part);
-        const stat = info(current);
-        if (stat && (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory()))) throw new SetupFailure('unsafe-path');
-    }
+const info = cliInfo;
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const owns = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+function checkedPath(file, directory = false) {
+    // Validate every ancestor before reading metadata or asking Paseo to delete anything.
+    if (!cliDirectory(path.dirname(file))) throw new SetupFailure('unsafe-path');
+    const stat = info(file);
+    if (stat && (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile()) ||
+        process.platform !== 'win32' && (stat.uid !== process.getuid() || stat.mode & 0o022))) throw new SetupFailure('unsafe-path');
+    return stat;
 }
-function tree(root, links = false) {
+function jsonFile(file, fallback = null) {
+    const stat = checkedPath(file);
+    if (!stat) return fallback;
+    if (stat.size > 2 * 1024 * 1024) throw new SetupFailure('metadata-limit');
+    const text = fs.readFileSync(file, 'utf8');
+    const data = JSON.parse(text);
+    if (!object(data)) throw new SetupFailure('invalid-metadata');
+    // Duplicate keys can conceal a source or endpoint from a different JSON reader.
+    const tokens = text.match(/"(?:[^"\\]|\\.)*"|[{}\[\]:,]/g) || [];
+    const stack = [];
+    for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        if (token === '{' || token === '[') stack.push(token === '{' ? new Set() : null);
+        else if (token === '}' || token === ']') stack.pop();
+        else if (token.startsWith('"') && tokens[i + 1] === ':') {
+            const key = JSON.parse(token), keys = stack[stack.length - 1];
+            if (!keys || keys.has(key)) throw new SetupFailure('duplicate-key');
+            keys.add(key);
+        }
+    }
+    return data;
+}
+function childDirectory(parent, name) {
+    if (!checkedPath(parent, true)) return null;
+    const file = path.join(parent, name);
+    return checkedPath(file, true) ? file : null;
+}
+function tree(root) {
     const entries = [];
     let bytes = 0;
-    function visit(relative) {
-        const file = path.join(root, relative);
-        const stat = fs.lstatSync(file);
+    function visit(file, relative) {
+        const stat = info(file);
+        if (!stat || stat.isSymbolicLink() || !(stat.isDirectory() || stat.isFile()) ||
+            process.platform !== 'win32' && stat.uid !== process.getuid()) throw new SetupFailure('unsafe-settings');
         if (entries.length >= 20000 || (bytes += stat.size) > 256 * 1024 * 1024) throw new SetupFailure('backup-limit');
-        if (stat.isSymbolicLink()) {
-            const target = fs.readlinkSync(file);
-            if (!links || path.isAbsolute(target) || !fs.realpathSync(file).startsWith(fs.realpathSync(root) + path.sep)) throw new SetupFailure('unsafe-link');
-            entries.push([relative, 'link', target]);
-        } else if (stat.isDirectory()) {
-            entries.push([relative, 'directory']);
-            for (const name of fs.readdirSync(file).sort()) visit(path.join(relative, name));
-        } else if (stat.isFile()) {
-            entries.push([relative, 'file', createHash('sha256').update(fs.readFileSync(file)).digest('hex'), Boolean(stat.mode & 0o111)]);
-        } else throw new SetupFailure('unsafe-file');
+        entries.push([relative, stat.isDirectory() ? null : createHash('sha256').update(fs.readFileSync(file)).digest('hex')]);
+        if (stat.isDirectory()) for (const name of fs.readdirSync(file).sort()) visit(path.join(file, name), path.join(relative, name));
     }
-    if (info(root)) visit('');
+    visit(root, '');
     return entries;
 }
-function copyTree(source, destination, links = false) {
-    const before = tree(source, links);
-    for (const [relative, kind, value, executable] of before) {
-        const target = path.join(destination, relative);
-        if (kind === 'directory') {
-            if (relative === '') privateRecoveryDirectory(target);
-            else fs.mkdirSync(target, {mode: 0o700});
-        }
-        else if (kind === 'link') fs.symlinkSync(value, target);
-        else {
-            fs.copyFileSync(path.join(source, relative), target, fs.constants.COPYFILE_EXCL);
-            fs.chmodSync(target, executable ? 0o700 : 0o600);
-            const fd = fs.openSync(target, 'r+');
-            try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-        }
-    }
-    if (process.platform !== 'win32') {
-        for (const [relative, kind] of [...before].reverse()) {
-            if (kind !== 'directory') continue;
-            const fd = fs.openSync(path.join(destination, relative), 'r');
-            try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-        }
-    }
-    if (!isDeepStrictEqual(before, tree(source, links)) || !isDeepStrictEqual(before, tree(destination, links))) throw new SetupFailure('backup-changed');
-    return before;
-}
-function privateRecoveryDirectory(directory) {
+function privateDirectory(directory) {
     fs.mkdirSync(directory, {mode: 0o700});
     if (process.platform !== 'win32') return;
     const script = `$ErrorActionPreference = 'Stop'
@@ -1926,196 +1900,183 @@ Set-Acl -LiteralPath $env:PASEO_PLAIN_RECOVERY_DIRECTORY -AclObject $acl`;
         });
     if (result.error || result.status !== 0) throw new SetupFailure('private-backup-unavailable');
 }
-function migrationJournal(phase) {
-    migrationPhase = phase;
-    operation = `release migration ${phase}`;
-    const pending = path.join(recovery, 'state.next');
-    const fd = fs.openSync(pending, 'wx', 0o600);
-    try { fs.writeFileSync(fd, JSON.stringify({version: 1, from: 'release', to: 'main', phase}) + '\n'); fs.fsyncSync(fd); }
-    finally { fs.closeSync(fd); }
-    fs.renameSync(pending, path.join(recovery, 'state.json'));
-    if (process.platform !== 'win32') {
-        const directory = fs.openSync(recovery, 'r');
-        try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
-    }
-}
-function migrateRelease({home, existing, config, args, run, directory}) {
-    operation = 'release migration validation';
-    const sourcesFile = path.join(home, 'plugins/sources.json');
-    const native = path.join(home, 'plugin-settings', id);
-    for (const file of [home, sourcesFile, native, directory]) regularPath(home, file);
-    const record = JSON.parse(fs.readFileSync(sourcesFile, 'utf8'))[id];
-    const source = config.plugins?.[id];
-    const root = path.join(home, 'plugins', id);
-    if (existing.enabled !== true || existing.status !== 'running' || source?.enabled === false ||
-        record?.remote !== remote || record.requestedRef !== 'release' || record.trackingBranch !== 'release' ||
-        record.pluginPath !== '.' || !/^[0-9a-f]{40,64}$/.test(record.commit) || record.commit !== existing.commit ||
-        typeof record.checkoutRoot !== 'string' || path.dirname(path.dirname(record.checkoutRoot)) !== root ||
-        path.basename(record.checkoutRoot) !== 'checkout' || source?.source !== 'directory' ||
-        source.path !== existing.path || source.path !== record.checkoutRoot) throw new SetupFailure('unverified-release-source');
-    regularPath(home, record.checkoutRoot);
-    if (!info(record.checkoutRoot)?.isDirectory() || (info(native) && !info(native).isDirectory())) throw new SetupFailure('invalid-migration-directory');
+function backupSettings(home, native) {
+    if (!native) return;
+    operation = 'settings backup';
+    const snapshot = tree(native);
     const parent = path.join(home, 'setup-recovery');
-    regularPath(home, parent);
-    if (!info(parent)) fs.mkdirSync(parent, {mode: 0o700});
-    recovery = path.join(parent, 'paseo-plain-release-to-main');
-    privateRecoveryDirectory(recovery);
-    migrationJournal('preparing');
-    fs.writeFileSync(path.join(recovery, 'RECOVERY.md'),
-        '# Paseo Plain migration recovery\n\nDo not rerun setup or remove another installation until any timed-out Paseo operation has finished.\n' +
-        'Inspect the local plugin catalog using the same explicit --host target. Keep these recovery files private.\n' +
-        'If the plugin is absent, the checkout directory is a local recovery source for paseo plugin install with --id paseo-plain.\n' +
-        'A recovered directory installation will not receive automatic Git updates. Never replace an occupied ID blindly.\n' +
-        'plugin-settings contains the removed Paseo-owned settings. Restore it only to an absent destination before activation.\n' +
-        'plugin-data is a safety copy, not an instruction to overwrite newer live preferences or cached rewrites.\n' +
-        'registration.json and source.json describe only the former plugin. Do not overwrite daemon config.json or sources.json.\n' +
-        'Never move this recovery directory while it is the installed directory source.\n' +
-        'If the installed path is outside this directory, no operation is pending, and source/state/settings are verified, move this recovery directory aside before retrying setup.\n' +
-        'See https://github.com/scowalt/machine-setup-scripts#paseo-plain-migration-recovery for the recovery procedure.\n', {flag: 'wx', mode: 0o600});
-    fs.writeFileSync(path.join(recovery, 'source.json'), JSON.stringify(record), {flag: 'wx', mode: 0o600});
-    fs.writeFileSync(path.join(recovery, 'registration.json'), JSON.stringify(source), {flag: 'wx', mode: 0o600});
-    const checkoutSnapshot = copyTree(record.checkoutRoot, path.join(recovery, 'checkout'), true);
-    const dataSnapshot = copyTree(directory, path.join(recovery, 'plugin-data'));
-    const nativeSnapshot = copyTree(native, path.join(recovery, 'plugin-settings'));
-    const currentConfig = () => JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8'));
-    const otherConfig = value => { const copy = {...value, plugins: {...value.plugins}}; delete copy.plugins[id]; return copy; };
-    if (!isDeepStrictEqual(config, currentConfig()) ||
-        !isDeepStrictEqual(record, JSON.parse(fs.readFileSync(sourcesFile, 'utf8'))[id]) ||
-        !isDeepStrictEqual(checkoutSnapshot, tree(record.checkoutRoot, true)) ||
-        !isDeepStrictEqual(dataSnapshot, tree(directory)) || !isDeepStrictEqual(nativeSnapshot, tree(native))) throw new SetupFailure('migration-state-changed');
-    migrationJournal('removing');
-    run([...args, 'remove', id, '--json'], 180000);
-    const remaining = run([...args, 'ls', '--json']);
-    if (!Array.isArray(remaining) || remaining.some(item => item.id === id) || currentConfig().plugins?.[id] ||
-        !isDeepStrictEqual(otherConfig(config), otherConfig(currentConfig())) ||
-        !isDeepStrictEqual(dataSnapshot, tree(directory))) throw new SetupFailure('removal-not-confirmed');
-    migrationJournal('restoring');
-    regularPath(home, native);
-    if (info(native)) throw new SetupFailure('native-settings-reappeared');
-    if (nativeSnapshot.length) {
-        if (!info(path.dirname(native))) fs.mkdirSync(path.dirname(native), {mode: 0o700});
-        copyTree(path.join(recovery, 'plugin-settings'), native);
+    if (!checkedPath(parent, true)) privateDirectory(parent);
+    // Exclusive creation: an interrupted or previous retirement is never overwritten.
+    const backup = path.join(parent, 'paseo-plain-retirement');
+    if (checkedPath(backup, true)) throw new SetupFailure('retirement-backup-needs-review');
+    privateDirectory(backup);
+    const destination = path.join(backup, 'plugin-settings');
+    for (const [relative, hash] of snapshot) {
+        const target = path.join(destination, relative);
+        if (hash === null) fs.mkdirSync(target, {mode: 0o700});
+        else {
+            const fd = fs.openSync(target, 'wx', 0o600);
+            try { fs.writeFileSync(fd, fs.readFileSync(path.join(native, relative))); fs.fsyncSync(fd); }
+            finally { fs.closeSync(fd); }
+        }
     }
-    migrationJournal('adding');
-    run([...args, 'add', remote, '--ref', 'main', '--id', id, '--json'], 180000);
-    migrationJournal('verifying');
-    const after = run([...args, 'ls', '--json']);
-    if (!Array.isArray(after) || !after.some(item => item.id === id && item.source === 'git' && item.remote === remote &&
-        item.ref === 'main' && item.enabled === true && item.status === 'running') ||
-        !isDeepStrictEqual(otherConfig(config), otherConfig(currentConfig())) ||
-        !isDeepStrictEqual(dataSnapshot, tree(directory)) || !isDeepStrictEqual(nativeSnapshot, tree(native))) throw new SetupFailure('migration-not-verified');
-    migrationJournal('complete');
-    console.log('Paseo Plain migrated from release to main; preferences and cache preserved. Private recovery files were retained.');
+    if (!isDeepStrictEqual(snapshot, tree(native)) || !isDeepStrictEqual(snapshot, tree(destination))) throw new SetupFailure('settings-changed');
+    if (process.platform !== 'win32') {
+        // Persist directory entries as well as file contents before native removal.
+        const directories = snapshot.filter(([, hash]) => hash === null).map(([relative]) => path.join(destination, relative)).reverse();
+        for (const directory of [...directories, backup, parent, home]) {
+            const fd = fs.openSync(directory, 'r');
+            try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        }
+    }
+    return snapshot;
+}
+function withoutPlain(data) {
+    const result = {...data};
+    delete result[id];
+    return result;
+}
+function otherConfig(config) {
+    return {...config, plugins: withoutPlain(config.plugins || {})};
+}
+function sourcesAt(home) {
+    const directory = childDirectory(home, 'plugins');
+    const sources = directory ? jsonFile(path.join(directory, 'sources.json'), {}) : {};
+    for (const record of Object.values(sources)) {
+        if (!object(record) || typeof record.remote !== 'string' || !record.remote ||
+            !(record.requestedRef === null || typeof record.requestedRef === 'string' && record.requestedRef) ||
+            !(record.trackingBranch === null || typeof record.trackingBranch === 'string' && record.trackingBranch) ||
+            !/^[0-9a-f]{40,64}$/.test(record.commit) || typeof record.pluginPath !== 'string' ||
+            typeof record.checkoutRoot !== 'string' || !path.isAbsolute(record.checkoutRoot) ||
+            Object.keys(record).some(key => !['remote', 'requestedRef', 'trackingBranch', 'commit', 'pluginPath', 'checkoutRoot'].includes(key))) {
+            throw new SetupFailure('invalid-source-metadata');
+        }
+    }
+    return sources;
+}
+function catalog(value) {
+    if (!Array.isArray(value) || value.some(item => !object(item) || typeof item.id !== 'string') ||
+        new Set(value.map(item => item.id)).size !== value.length) throw new SetupFailure('invalid-catalog');
+    return value;
 }
 function main() {
     const [major, minor] = process.versions.node.split('.').map(Number);
-    if (major < 22 || (major === 22 && minor < 19)) return deferred('Node.js >=22.19 is required.');
-    const paseo = selectPaseoCli(process.argv[2] || '');
-    if (!paseo || !executable('pi', '@earendil-works/pi-coding-agent')) return deferred('install Paseo and Pi with a verified compatible Paseo 0.8.x CLI, then rerun setup.');
-    const home = path.resolve(process.env.PASEO_HOME || path.join(os.homedir(), '.paseo'));
-    const configFile = path.join(home, 'config.json');
-    if (!fs.existsSync(configFile)) return deferred('start and configure the local Paseo daemon, then rerun setup.');
-    const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-    if (config.pluginsEnabled !== true) return deferred('enable trusted plugins in Paseo Settings > Plugins, then rerun setup.');
-    const localTarget = value => typeof value === 'string' && /^(127\.0\.0\.1|localhost|\[::1\]):[1-9][0-9]{0,4}$/.test(value) && Number(value.split(':').pop()) <= 65535;
-    if (config.daemon?.listen !== undefined && !localTarget(config.daemon.listen)) return deferred('a loopback TCP daemon endpoint is required; no remote host was changed.');
-    // Paseo status prefers the saved PID endpoint over daemon.listen and probes it.
-    const pidFile = path.join(home, 'paseo.pid');
-    if (fs.existsSync(pidFile)) {
-        const pidInfo = JSON.parse(fs.readFileSync(pidFile, 'utf8'));
-        const target = pidInfo?.listen ?? pidInfo?.sockPath;
-        if (target !== undefined && !localTarget(target)) return deferred('the saved daemon endpoint is not loopback TCP; inspect local Paseo configuration.');
+    if (major < 22 || (major === 22 && minor < 19)) return deferred('node-version');
+    const account = os.homedir();
+    const override = process.env.PASEO_HOME;
+    if (override !== undefined && (!override || !path.isAbsolute(override))) throw new SetupFailure('invalid-home');
+    const home = path.resolve(override === undefined ? path.join(account, '.paseo') : override);
+    const relative = path.relative(account, home);
+    if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new SetupFailure('outside-home');
+    if (!cliDirectory(account)) throw new SetupFailure('unsafe-home');
+    // Missing parents mean no installation; never create a daemon home for retirement.
+    let current = account;
+    for (const part of relative.split(path.sep)) {
+        current = path.join(current, part);
+        if (!checkedPath(current, true)) { console.log('Paseo Plain already absent.'); return; }
     }
+    const configFile = path.join(home, 'config.json');
+    const config = jsonFile(configFile);
+    if (config?.plugins !== undefined && !object(config.plugins)) throw new SetupFailure('invalid-plugins');
+    const sources = sourcesAt(home);
+    if (!config || !owns(config.plugins || {}, id)) {
+        if (owns(sources, id)) throw new SetupFailure('orphan-source-needs-review');
+        console.log('Paseo Plain already absent.');
+        return;
+    }
+    if (!object(config.plugins[id]) || config.plugins[id].source !== 'directory' ||
+        typeof config.plugins[id].path !== 'string' || !path.isAbsolute(config.plugins[id].path)) throw new SetupFailure('invalid-registration');
+    const managed = path.join(home, 'plugins', id);
+    const nativeParent = childDirectory(home, 'plugin-settings');
+    const native = nativeParent ? childDirectory(nativeParent, id) : null;
+    if (owns(sources, id)) checkedPath(managed, true);
+    const within = (parent, file) => file === parent || file.startsWith(parent + path.sep);
+    const canonical = file => fs.existsSync(file) ? fs.realpathSync(file) : path.resolve(file);
+    const deleted = file => owns(sources, id) && within(path.join(fs.realpathSync(home), 'plugins', id), canonical(file)) ||
+        native && within(fs.realpathSync(native), canonical(file));
+    // Native removal deletes the managed ID directory and settings, not external sources.
+    // Refuse registrations/source records that share either deletion tree, including aliases.
+    for (const [key, source] of Object.entries(config.plugins)) {
+        if (!object(source) || typeof source.path !== 'string' || !path.isAbsolute(source.path)) throw new SetupFailure('invalid-registration');
+        if (key !== id && deleted(source.path) || key === id && native && within(fs.realpathSync(native), canonical(source.path))) {
+            throw new SetupFailure('shared-source-needs-review');
+        }
+    }
+    for (const [key, source] of Object.entries(sources)) {
+        if (key !== id && deleted(source.checkoutRoot)) throw new SetupFailure('shared-source-needs-review');
+    }
+    for (const preserved of ['plugin-data', 'setup-recovery']) {
+        if (deleted(path.join(home, preserved))) throw new SetupFailure('shared-source-needs-review');
+    }
+    const recoveryParent = childDirectory(home, 'setup-recovery');
+    const migration = recoveryParent ? childDirectory(recoveryParent, 'paseo-plain-release-to-main') : null;
+    if (migration && jsonFile(path.join(migration, 'state.json'))?.phase !== 'complete') throw new SetupFailure('migration-needs-review');
+    const localTarget = value => typeof value === 'string' && /^(127\.0\.0\.1|localhost|\[::1\]):[1-9][0-9]{0,4}$/.test(value) && Number(value.split(':').pop()) <= 65535;
+    if (config.daemon !== undefined && !object(config.daemon)) throw new SetupFailure('invalid-daemon');
+    if (config.daemon?.listen !== undefined && !localTarget(config.daemon.listen)) return deferred('nonlocal-endpoint');
+    const pid = jsonFile(path.join(home, 'paseo.pid'));
+    if (pid && [pid.listen, pid.sockPath].some(value => value !== undefined && !localTarget(value))) return deferred('nonlocal-pid-endpoint');
+    const paseo = selectPaseoCli(process.argv[2] || '');
+    if (!paseo) return deferred('compatible-cli-unavailable');
     const run = (args, timeout = 20000) => {
         operation = args[0] === 'daemon' ? 'daemon status' : `plugin ${args[3]}`;
-        // --home is not a global Paseo option. Scope every command via its environment.
+        const env = {...process.env, PASEO_HOME: home};
+        delete env.PASEO_HOST;
         const result = spawnSync(paseo[0], [...paseo.slice(1), ...args], {
-            env: {...process.env, PASEO_HOME: home},
-            cwd: os.homedir(), encoding: 'utf8', timeout, maxBuffer: 2 * 1024 * 1024,
+            env, cwd: account, encoding: 'utf8', timeout, maxBuffer: 2 * 1024 * 1024,
             stdio: ['ignore', 'pipe', 'pipe'], shell: false,
         });
         if (result.error) throw new SetupFailure(result.error.code === 'ETIMEDOUT' ? 'timeout' : 'spawn-failed');
         if (result.status !== 0) throw new SetupFailure(Number.isInteger(result.status) ? `exit-${result.status}` : 'terminated');
-        try { return JSON.parse(result.stdout); }
-        catch { throw new SetupFailure('invalid-response-json'); }
+        try { return JSON.parse(result.stdout); } catch { throw new SetupFailure('invalid-response-json'); }
     };
     const status = run(['daemon', 'status', '--json']);
-    if (status.localDaemon !== 'running' || status.connectedDaemon !== 'reachable' ||
-        typeof status.home !== 'string' || fs.realpathSync(status.home) !== fs.realpathSync(home) || !localTarget(status.listen)) {
-        return deferred('the configured local daemon is not reachable; start it and rerun setup.');
-    }
-    if (![status.cliVersion, status.daemonVersion].every(v => typeof v === 'string' && /^0\.8\.\d+(?:[-+][\w.-]+)?$/.test(v))) {
-        return deferred('Paseo CLI and daemon 0.8.x are required; setup does not change release channels.');
-    }
+    if (!object(status) || status.localDaemon !== 'running' || status.connectedDaemon !== 'reachable' ||
+        typeof status.home !== 'string' || fs.realpathSync(status.home) !== fs.realpathSync(home) || !localTarget(status.listen)) return deferred('local-daemon-unavailable');
+    if (![status.cliVersion, status.daemonVersion].every(v => typeof v === 'string' && /^0\.8\.\d+(?:[-+][\w.-]+)?$/.test(v))) return deferred('incompatible-daemon');
     const args = ['--host', status.listen, 'plugin'];
-    const catalog = run([...args, 'ls', '--json']);
-    if (!Array.isArray(catalog)) throw new SetupFailure('invalid-catalog');
-    const matches = catalog.filter(item => item.id === id);
-    if (matches.length > 1) throw new SetupFailure('duplicate-id');
-    const existing = matches[0];
-    if (existing?.enabled === false || config.plugins?.[id]?.enabled === false) return deferred('the saved disabled state was preserved.');
-    if (existing && (existing.source !== 'git' || existing.remote !== remote || !['main', 'release'].includes(existing.ref))) {
-        const reason = existing.source === 'directory' ? 'directory-source' : existing.source !== 'git' ? 'non-git-source' :
-            existing.remote !== remote ? 'repository-mismatch' : 'custom-or-pinned-ref';
-        return deferred(`${reason}. Setup manages only the canonical Git repository on main or its release migration. ` +
-            'The existing installation was left unchanged. Review the paseo-plain source in Paseo Settings > Plugins before planning a migration.');
-    }
-    if (!existing && config.plugins?.[id]) return deferred('the configured plugin is absent from the catalog; inspect Paseo before retrying.');
-    const recoveryPath = path.join(home, 'setup-recovery/paseo-plain-release-to-main');
-    regularPath(home, recoveryPath);
-    if (info(recoveryPath)) {
-        recovery = recoveryPath;
-        migrationPhase = 'previous attempt';
-        regularPath(home, path.join(recovery, 'state.json'));
-        const saved = JSON.parse(fs.readFileSync(path.join(recovery, 'state.json'), 'utf8'));
-        if (saved.version !== 1 || saved.from !== 'release' || saved.to !== 'main' || saved.phase !== 'complete' || existing?.ref === 'release') {
-            throw new SetupFailure('migration-needs-review');
-        }
-        recovery = null;
-    }
-    const directory = path.join(home, 'plugin-data', id);
-    for (const folder of [path.join(home, 'plugin-data'), directory]) {
-        if (fs.existsSync(folder) && (fs.lstatSync(folder).isSymbolicLink() || !fs.statSync(folder).isDirectory())) {
-            return deferred('plugin storage must use regular directories.');
-        }
-    }
-    const settings = path.join(directory, 'configuration.json');
-    if (fs.existsSync(settings)) {
-        if (!fs.lstatSync(settings).isFile() || fs.lstatSync(settings).isSymbolicLink()) return deferred('settings must be a regular file.');
-        const saved = JSON.parse(fs.readFileSync(settings, 'utf8'));
-        if (!saved.values || typeof saved.values !== 'object' || !Number.isInteger(saved.revision)) throw new SetupFailure('invalid-settings');
-    } else if (!existing) {
-        fs.mkdirSync(directory, {recursive: true, mode: 0o700});
-        // Defaults are filled by the plugin schema. Never overwrite an existing preference file.
-        fs.writeFileSync(settings, JSON.stringify({values: {enabled: true}, revision: 0, error: null}), {flag: 'wx', mode: 0o600});
-    }
-    if (existing?.ref === 'release') return migrateRelease({home, existing, config, args, run, directory});
-    run(existing ? [...args, 'update', id, '--json'] : [...args, 'add', remote, '--ref', 'main', '--id', id, '--json'], 180000);
-    const after = run([...args, 'ls', '--json']);
-    if (!Array.isArray(after) || !after.some(item => item.id === id && item.status === 'running' && item.enabled === true && item.source === 'git' && item.remote === remote && item.ref === 'main')) {
-        throw new SetupFailure('plugin-not-running');
-    }
-    console.log(`Paseo Plain ${existing ? 'checked for updates' : 'installed'}; saved preferences preserved. Rewrites require an explicit request and an existing Pi login.`);
+    const before = catalog(run([...args, 'ls', '--json']));
+    if (!before.some(item => item.id === id)) throw new SetupFailure('registration-catalog-mismatch');
+    const snapshot = backupSettings(home, native);
+    operation = 'removal preflight';
+    if (!isDeepStrictEqual(config, jsonFile(configFile)) || !isDeepStrictEqual(sources, sourcesAt(home)) ||
+        native && !isDeepStrictEqual(snapshot, tree(native))) throw new SetupFailure('state-changed');
+    if (owns(sources, id)) checkedPath(managed, true);
+    if (native) checkedPath(native, true);
+    run([...args, 'remove', id, '--json'], 180000);
+    const after = catalog(run([...args, 'ls', '--json']));
+    operation = 'removal verification';
+    const afterConfig = jsonFile(configFile);
+    const afterSources = sourcesAt(home);
+    if (!afterConfig || owns(afterConfig.plugins || {}, id) || owns(afterSources, id) || after.some(item => item.id === id) ||
+        !isDeepStrictEqual(otherConfig(config), otherConfig(afterConfig)) ||
+        !isDeepStrictEqual(withoutPlain(sources), afterSources) ||
+        !isDeepStrictEqual(before.filter(item => item.id !== id).map(item => item.id).sort(), after.map(item => item.id).sort()) ||
+        owns(sources, id) && info(managed) || native && info(native)) throw new SetupFailure('removal-not-confirmed');
+    console.log('Paseo Plain removed; saved plugin-data, external sources, and recovery backups preserved. Native settings, when present, were backed up under setup-recovery/paseo-plain-retirement.');
 }
 try { main(); } catch (error) {
-    // Only controlled labels/codes are logged, never stderr, JSON values, or paths from exceptions.
     const reason = error instanceof SetupFailure ? error.message : error instanceof SyntaxError ? 'invalid-json' :
         ['EACCES', 'EPERM', 'ENOENT', 'EEXIST', 'ENOSPC', 'EROFS'].includes(error?.code) ? error.code : 'unexpected-error';
-    console.log(`Paseo Plain failure: ${operation}: ${reason}.`);
-    if (recovery) console.log(`Paseo Plain migration stopped (${migrationPhase}). Do not retry until reviewed. Private recovery location: ${JSON.stringify(recovery)}. See RECOVERY.md and the setup README.`);
-    console.log('Paseo Plain setup could not finish. Inspect local plugin status before retrying. Setup did not reset rewrite preferences.');
+    console.log(`Paseo Plain removal failure: ${operation}: ${reason}.`);
+    console.log('Removal is not confirmed. Inspect the intended local daemon in Settings > Plugins and review setup-recovery before retrying. Keep backups; do not reinstall the retired plugin.');
     process.exitCode = 1;
 }
-// END PASEO PLAIN INSTALLER
-PASEO_PLAIN_SETUP_JS
+// END PASEO PLAIN RETIREMENT
+PASEO_PLAIN_RETIREMENT_JS
     ) || status=$?
     if [[ "${status}" -ne 0 ]]; then
-        print_warning "${result}"
+        if [[ "${result}" == "Paseo Plain removal failure:"* || "${result}" == "Paseo Plain removal deferred:"* ]]; then
+            print_warning "${result}"
+        else
+            print_warning "Paseo Plain removal not confirmed: helper failed. Inspect the local daemon's Settings > Plugins before retrying."
+        fi
         return 1
-    elif [[ "${result}" == "Paseo Plain deferred:"* ]]; then
-        print_warning "${result}"
-    else
+    elif [[ "${result}" == "Paseo Plain removed;"* || "${result}" == "Paseo Plain already absent." ]]; then
         print_success "${result}"
+    else
+        print_warning "Paseo Plain removal not confirmed: unexpected helper response."
+        return 1
     fi
 }
 
@@ -6900,7 +6861,7 @@ run_setup_tasks() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 199 | Last changed: Fix skill-link preflight and Paseo permission recovery${NC}"
+    echo -e "${GRAY}Version 200 | Last changed: Retire Paseo Plain on future setup runs${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -7080,7 +7041,7 @@ run_setup_tasks() {
 
     remove_compound_engineering_resources
 
-    if ! install_paseo_plain; then
+    if ! remove_paseo_plain; then
         _setup_had_errors=1
     fi
 
