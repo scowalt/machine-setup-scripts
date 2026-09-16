@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-16 03:08'
-updated_date: '2026-09-16 03:34'
+updated_date: '2026-09-16 03:45'
 labels: []
 dependencies: []
 references:
@@ -55,6 +55,10 @@ User approved the plan. Native Paseo 0.8 removal deletes the managed checkout an
 Implemented identical retirement helpers in all six scripts, renamed call sites, and changed Bazzite retirement failure handling to continue unrelated work. Native settings receive exclusive private, verified backups; linked/malformed/shared deletion targets and incomplete migrations fail closed. Saved plugin-data/external sources/recovery backups remain intact.
 Validation passed: 33 retirement tests with PowerShell wrappers; native Paseo 0.8 Git/disabled/directory removal and idempotency; poisoned-Git fixture isolation; ShellCheck; Markdownlint; CLI cleanup, Muse, release-channel (including explicit PowerShell suite), Pi package maintenance, headless, profile-permissions, Go, Go wiring, and shared-Node contracts (959 PowerShell assertions). Optional unrelated registry/dotfiles/native-lock probes and native Windows tests were skipped when unavailable. Native Windows ACL behavior remains unverified.
 Self-review completed. Attempted read-only Claude second review was unavailable due to its expired OAuth token; no code was delegated or changed by that tool. No live setup, daemon, plugin, or fleet changes were performed.
+
+Publishing follow-up: commit 1056f8a passed pre-commit checks. Full pre-push suite found stale exact version/banner expectations in the historical managed-skill contract; the push was blocked without changing remote main. Updated that contract to the six retirement versions and retained all skill behavior assertions.
+
+The updated managed-skill version/banner contract and remaining Telegram/Windows-log contracts pass, including available PowerShell fixtures. All contracts preceding the stale-banner assertion passed in the full pre-push run. Publishing retains the original tests and hooks; no checks were bypassed.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
@@ -65,4 +69,6 @@ Retire Paseo Plain on future setup runs across macOS, Ubuntu, WSL, Raspberry Pi,
 Preserve unrelated plugins/configuration, external sources, plugin-data and existing backups. Back up native settings privately before native deletion. Reject unsafe or ambiguous metadata and clearly report blocked removal while continuing unrelated setup. Update README/agent guidance, increment all six versions, replace installation fixtures with retirement coverage, and adapt dependent extraction tests.
 
 Verified with 33 isolated retirement tests, Bash/PowerShell wrappers, real Paseo 0.8 source/config managers with inert workers, Git-isolation checks, affected regression suites, ShellCheck, and Markdownlint. Native Windows ACL validation remains a platform follow-up; no live machines were changed.
+
+Publishing follow-up: refreshed the managed-skill contract exact version/banner expectations to match the six retirement versions; its behavioral assertions remain unchanged.
 <!-- SECTION:FINAL_SUMMARY:END -->

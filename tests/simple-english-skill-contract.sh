@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract version 17: verify skill-link and Paseo permission recovery banners.
+# Contract version 18: verify Paseo Plain retirement version banners.
 # Historical filename retained for existing test runners.
 set -euo pipefail
 
@@ -9,18 +9,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=235
-    [ubuntu.sh]=257
-    [wsl.sh]=199
-    [pi.sh]=216
-    [bazzite.sh]=116
+    [mac.sh]=236
+    [ubuntu.sh]=258
+    [wsl.sh]=200
+    [pi.sh]=217
+    [bazzite.sh]=117
 )
 declare -A expected_banners=(
-    [mac.sh]='Fix skill-link preflight and Paseo permission recovery'
-    [ubuntu.sh]='Fix skill-link preflight and Paseo permission recovery'
-    [wsl.sh]='Fix skill-link preflight and Paseo permission recovery'
-    [pi.sh]='Fix skill-link preflight and Paseo permission recovery'
-    [bazzite.sh]='Fix skill-link preflight and Paseo permission recovery'
+    [mac.sh]='Retire Paseo Plain on future setup runs'
+    [ubuntu.sh]='Retire Paseo Plain on future setup runs'
+    [wsl.sh]='Retire Paseo Plain on future setup runs'
+    [pi.sh]='Retire Paseo Plain on future setup runs'
+    [bazzite.sh]='Retire Paseo Plain on future setup runs'
 )
 
 fail() {
@@ -190,7 +190,7 @@ assert_powershell_function_contains win.ps1 Remove-ShowMeSkill 'Invoke-MattPococ
 assert_powershell_function_contains win.ps1 Set-PiSkillOwnership 'Invoke-MattPocockSkillPolicy -Mode ownership' 'shared ownership policy'
 assert_contains win.ps1 'Required Simple English skill removal failed' 'PowerShell fatal Simple English failure propagation'
 assert_contains win.ps1 'Required show-me skill removal failed' 'PowerShell fatal show-me failure propagation'
-assert_contains win.ps1 'Version 152 \| Last changed: Fix skill-link preflight and Paseo permission recovery' 'PowerShell version banner'
+assert_contains win.ps1 'Version 153 \| Last changed: Retire Paseo Plain on future setup runs' 'PowerShell version banner'
 assert_powershell_function_contains win.ps1 Remove-PrLensSkill 'Invoke-MattPocockSkillPolicy -Mode remove-pr-lens' 'PR Lens retirement'
 assert_contains win.ps1 'Required PR Lens skill removal failed' 'PowerShell fatal PR Lens failure propagation'
 assert_order win.ps1 '^[[:space:]]+elseif \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Remove-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'
