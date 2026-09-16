@@ -1,4 +1,4 @@
-# Version 1 | Last changed: Preserve runtime isolation with guarded Pi package setup
+# Version 2 | Last changed: Isolate the AskClaude policy from shared-runtime fixtures
 # Offline only: AST-extracted setup functions, temporary homes, mocked tools and
 # persisted environment storage. Child probes run with -NoProfile and fixture
 # activation, never a user's profile. No real Pi, mise installs, or registry writes.
@@ -436,6 +436,7 @@ try {
     foreach ($name in @('Set-PiDefaults', 'Remove-PiSyntheticModels', 'Seed-PiZaiModels', 'Remove-PiSubagents', 'Remove-PiRpivPackages', 'Setup-PiMcpAdapter', 'Setup-PiClaudeBridge', 'Setup-PiCompanionPackages', 'Setup-PiGoalAutoresearch')) {
         Set-Item -Path "function:$name" -Value ([scriptblock]::Create("`$script:Mutations.Add('$name'); return `$true"))
     }
+    function Disable-PiAskClaude { return $true }
     function Remove-PiProse { return $true }
     function Prepare-PiMcpAdapter { return $true }
     function Test-EnvLocalFlag { return $true }

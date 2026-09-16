@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract v3: retain adapter and Claude Bridge registration after dotfiles updates."""
+"""Contract v4: preserve package registration and block mutations on AskClaude policy failure."""
 import json
 import os
 from pathlib import Path
@@ -128,7 +128,7 @@ print_error() { printf 'ERROR: %s\\n' "$*"; }
         # Execute each real orchestration tail and entry point. All unrelated
         # provisioning is replaced at function boundaries; no setup script is sourced.
         for script in (*BASH, *(['win.ps1'] if PWSH else [])):
-            for failure in ('adapter', 'bridge', 'companions', 'goal', 'subagents', 'rpiv', 'prose', 'prepare', 'permissions', 'none'):
+            for failure in ('adapter', 'bridge', 'companions', 'goal', 'subagents', 'rpiv', 'prose', 'prepare', 'permissions', 'askclaude-policy', 'none'):
                 with self.subTest(script=script, failure=failure):
                     text = (ROOT / script).read_text()
                     windows = script.endswith('.ps1')
@@ -140,6 +140,7 @@ print_error() { printf 'ERROR: %s\\n' "$*"; }
                         code += '\nfunction Prepare-PiMcpAdapter { return $' + ('false' if failure == 'prepare' else 'true') + ' }'
                         code += '\nfunction Prepare-PiProfilePermissions { return $' + ('false' if failure == 'permissions' else 'true') + ' }'
                         code += '\nfunction Remove-PiProse { return $' + ('false' if failure == 'prose' else 'true') + ' }'
+                        code += '\nfunction Disable-PiAskClaude { return $' + ('false' if failure == 'askclaude-policy' else 'true') + ' }'
                         code += '''
 function Test-EnvLocalFlag { return $false }
 function Remove-PaseoPlain { Write-Host 'UNRELATED-CONTINUED'; return $true }
@@ -158,6 +159,7 @@ function Complete-SetupLog { Write-Host 'LOG-FINALIZED' }
                         code += '\nprepare_pi_mcp_adapter() { return ' + ('1' if failure == 'prepare' else '0') + '; }'
                         code += '\nprepare_pi_profile_permissions() { return ' + ('1' if failure == 'permissions' else '0') + '; }'
                         code += '\nremove_pi_prose() { return ' + ('1' if failure == 'prose' else '0') + '; }'
+                        code += '\ndisable_pi_askclaude() { return ' + ('1' if failure == 'askclaude-policy' else '0') + '; }'
                         code += '''
 print_warning() { printf '%s\\n' "$*"; }
 remove_paseo_plain() { printf 'UNRELATED-CONTINUED\\n'; }
@@ -174,7 +176,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                     self.assertIn('UNRELATED-CONTINUED', result.stdout)
                     self.assertIn('LOG-FINALIZED', result.stdout)
                     if failure != 'none': self.assertNotIn('Setup complete!', result.stdout)
-                    if failure in ('prose', 'prepare', 'permissions'):
+                    if failure in ('prose', 'prepare', 'permissions', 'askclaude-policy'):
                         self.assertNotIn('PACKAGE-STEP:', result.stdout)
                     else:
                         self.assertIn('PACKAGE-STEP:goal', result.stdout)

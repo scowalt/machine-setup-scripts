@@ -1,4 +1,4 @@
-"""Exercise only the setup entry-point's Pi/Go/profile block with inert functions."""
+"""Contract v2: inert Pi/Go/profile orchestration, including the AskClaude policy gate."""
 import json
 import os
 from pathlib import Path
@@ -41,6 +41,7 @@ class WiringTests(unittest.TestCase):
         code += "\n".join(f"{fn}() {{ record {fn}; }}" for fn in inert)
         code += r'''
 prepare_pi_profile_permissions() { record permissions; [[ "${SCENARIO}" != permissions-failure ]]; }
+disable_pi_askclaude() { record askclaude; [[ "${SCENARIO}" != askclaude-failure ]]; }
 remove_pi_prose() { record retirement; [[ "${SCENARIO}" != retirement-failure ]]; }
 install_pi_cli() { record pi-install; [[ "${SCENARIO}" != pi-failure ]]; }
 prepare_pi_mcp_adapter() { record packages; [[ "${SCENARIO}" != package-failure ]]; }
@@ -73,7 +74,8 @@ exercise() {
             with self.subTest(script=name):
                 calls = self.run_bash(name, "success")
                 self.assertEqual(calls[-1], "result:0:1")
-                self.assertLess(calls.index("permissions"), calls.index("retirement"))
+                self.assertLess(calls.index("permissions"), calls.index("askclaude"))
+                self.assertLess(calls.index("askclaude"), calls.index("retirement"))
                 self.assertLess(calls.index("pi-install"), calls.index("go"))
                 self.assertLess(calls.index("packages"), calls.index("muse"))
                 if name != "wsl.sh":
@@ -83,19 +85,19 @@ exercise() {
 
     def test_failures_are_aggregated_and_deferred_updates_do_not_restart(self):
         for name in BASH:
-            for scenario in ("permissions-failure", "retirement-failure", "pi-failure", "go-failure",
+            for scenario in ("permissions-failure", "askclaude-failure", "retirement-failure", "pi-failure", "go-failure",
                              "package-failure", "profile-failure", "deferred"):
                 with self.subTest(script=name, scenario=scenario):
                     calls = self.run_bash(name, scenario)
                     failed = 0 if scenario == "deferred" else 1
-                    ready = 0 if scenario in ("permissions-failure", "retirement-failure", "pi-failure", "go-failure") else 1
+                    ready = 0 if scenario in ("permissions-failure", "askclaude-failure", "retirement-failure", "pi-failure", "go-failure") else 1
                     self.assertEqual(calls[-1], f"result:{failed}:{ready}")
                     self.assertEqual("muse" in calls, bool(ready))
                     if not ready or scenario in ("deferred", "profile-failure"):
                         self.assertNotIn("daemon", calls)
-                    if scenario in ("permissions-failure", "retirement-failure", "pi-failure"):
+                    if scenario in ("permissions-failure", "askclaude-failure", "retirement-failure", "pi-failure"):
                         self.assertNotIn("go", calls)
-                    if scenario == "permissions-failure":
+                    if scenario in ("permissions-failure", "askclaude-failure"):
                         self.assertNotIn("retirement", calls)
                         self.assertNotIn("pi-install", calls)
                         self.assertIn("setup_matt_pocock_skills", calls)
@@ -116,6 +118,7 @@ exercise() {
         code += "\n".join(f"function {fn} {{ $script:calls += '{fn}'; $true }}" for fn in inert)
         code += r'''
 function Prepare-PiProfilePermissions { $script:calls += 'permissions'; $env:SCENARIO -ne 'permissions-failure' }
+function Disable-PiAskClaude { $script:calls += 'askclaude'; $env:SCENARIO -ne 'askclaude-failure' }
 function Remove-PiProse { $script:calls += 'retirement'; $env:SCENARIO -ne 'retirement-failure' }
 function Install-PiCli { $script:calls += 'pi-install'; $env:SCENARIO -ne 'pi-failure' }
 function Prepare-PiMcpAdapter { $script:calls += 'packages'; $env:SCENARIO -ne 'package-failure' }
@@ -127,7 +130,7 @@ function Set-PaseoMuseProfile { $script:calls += 'muse'; $env:SCENARIO -ne 'prof
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp) / "wiring.ps1"
             fixture.write_text(code)
-            for scenario in ("success", "permissions-failure", "retirement-failure", "pi-failure", "go-failure",
+            for scenario in ("success", "permissions-failure", "askclaude-failure", "retirement-failure", "pi-failure", "go-failure",
                              "package-failure", "profile-failure"):
                 with self.subTest(scenario=scenario):
                     result = subprocess.run(
@@ -142,11 +145,13 @@ function Set-PaseoMuseProfile { $script:calls += 'muse'; $env:SCENARIO -ne 'prof
                     self.assertEqual(state["ready"], ready)
                     self.assertEqual("muse" in state["calls"], ready)
                     self.assertEqual("packages" in state["calls"], ready)
-                    if scenario == "permissions-failure":
+                    if scenario in ("permissions-failure", "askclaude-failure"):
                         self.assertNotIn("retirement", state["calls"])
                         self.assertNotIn("pi-install", state["calls"])
                         self.assertIn("Setup-MattPocockSkills", state["calls"])
                     if scenario == "success":
+                        self.assertLess(state["calls"].index("permissions"), state["calls"].index("askclaude"))
+                        self.assertLess(state["calls"].index("askclaude"), state["calls"].index("retirement"))
                         self.assertLess(state["calls"].index("pi-install"), state["calls"].index("go"))
                         self.assertLess(state["calls"].index("packages"), state["calls"].index("muse"))
 

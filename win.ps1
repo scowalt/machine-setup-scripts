@@ -5026,6 +5026,150 @@ try {
     }
 }
 
+# Disable only the delegation tool; retain the Claude Bridge provider and settings.
+function Disable-PiAskClaude {
+    if (-not $env:USERPROFILE -or -not (Get-Command node -ErrorAction SilentlyContinue)) {
+        Write-Warning 'AskClaude policy failed: home-or-node-unavailable.'
+        return $false
+    }
+    $activeDir = if ($null -ne $env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { Join-Path $env:USERPROFILE '.pi/agent' }
+    $code = @'
+// BEGIN PI_ASKCLAUDE_POLICY
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+class PolicyError extends Error {}
+const fail = code => { throw new PolicyError(code); };
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const same = (a, b) => a && b && a.dev === b.dev && a.ino === b.ino && a.mode === b.mode && a.nlink === b.nlink;
+const key = file => process.platform === 'win32' ? file.toLowerCase() : file;
+function info(file) {
+    try { return fs.lstatSync(file); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
+function absolute(value) {
+    if (!value || !path.isAbsolute(value) || value.split(/[\\/]/).some(p => p === '.' || p === '..')) fail('unsafe-path');
+    return path.resolve(value);
+}
+function read(file) {
+    const stat = info(file);
+    if (!stat) return { file, stat: null, text: '', value: {} };
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 1024 * 1024 ||
+        (process.getuid && stat.uid !== process.getuid())) fail('unsafe-file');
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
+    let text;
+    try {
+        if (!same(stat, fs.fstatSync(fd))) fail('changed-file');
+        // Bounded descriptor read also rejects a file that grows after lstat.
+        const buffer = Buffer.alloc(1024 * 1024 + 1);
+        let size = 0, count;
+        while (size < buffer.length && (count = fs.readSync(fd, buffer, size, buffer.length - size, null))) size += count;
+        if (size > 1024 * 1024 || size !== stat.size) fail('changed-file');
+        text = buffer.subarray(0, size).toString('utf8');
+    } finally { fs.closeSync(fd); }
+    let value;
+    try { value = JSON.parse(text.replace(/^\uFEFF/, '')); }
+    catch { fail('invalid-json'); }
+    if (!object(value) || (own(value, 'askClaude') && (!object(value.askClaude) ||
+        (own(value.askClaude, 'enabled') && typeof value.askClaude.enabled !== 'boolean')))) fail('invalid-config');
+    return { file, stat, text, value };
+}
+try {
+    // Profile creation/permissions belong to the preceding permission helper.
+    // Resolve only the trusted account HOME boundary, never linked profiles.
+    const logicalHome = absolute(process.argv[2]);
+    const home = fs.realpathSync(logicalHome);
+    const within = (file, base) => key(file).startsWith(key(base + path.sep));
+    const normalize = value => {
+        const file = absolute(value);
+        return within(file, logicalHome) ? path.join(home, path.relative(logicalHome, file)) : file;
+    };
+    const profiles = [...new Map([path.join(home, '.pi', 'agent'), normalize(process.argv[3])].map(p => [key(p), p])).values()];
+    const directories = new Map();
+    for (const profile of profiles) {
+        if (!within(profile, home)) fail('unsafe-path');
+        for (let current = profile; ; current = path.dirname(current)) {
+            const stat = info(current);
+            if (!stat || !stat.isDirectory() || stat.isSymbolicLink() ||
+                (process.getuid && stat.uid !== process.getuid())) fail('unsafe-directory');
+            directories.set(current, stat);
+            if (key(current) === key(home)) break;
+        }
+    }
+    const checkDirectories = () => {
+        for (const [dir, stat] of directories) if (!same(stat, info(dir))) fail('changed-directory');
+    };
+    // Preflight both profiles before either is changed, including already-disabled files.
+    const records = profiles.map(profile => read(path.join(profile, 'claude-bridge.json')));
+    let changed = false;
+    for (const record of records) {
+        checkDirectories();
+        const current = read(record.file);
+        if (current.text !== record.text || (record.stat ? !same(current.stat, record.stat) : current.stat)) fail('changed-file');
+        // The bridge uses JSON.parse without stripping a BOM; write plain UTF-8.
+        if (record.value.askClaude?.enabled === false && !record.text.startsWith('\uFEFF')) continue;
+        record.value.askClaude = { ...record.value.askClaude, enabled: false };
+        const text = JSON.stringify(record.value, null, 2) + '\n';
+        const temporary = record.file + '.setup-' + crypto.randomBytes(12).toString('hex');
+        let fd, created = false;
+        try {
+            fd = fs.openSync(temporary, 'wx', record.stat ? record.stat.mode & 0o777 : 0o600);
+            created = true;
+            fs.writeFileSync(fd, text);
+            fs.closeSync(fd);
+            fd = undefined;
+            checkDirectories();
+            const latest = read(record.file);
+            if (latest.text !== record.text || (record.stat ? !same(latest.stat, record.stat) : latest.stat)) fail('changed-file');
+            if (record.stat) fs.renameSync(temporary, record.file);
+            else fs.linkSync(temporary, record.file); // Do not clobber a concurrently created config.
+        } finally {
+            if (fd !== undefined) fs.closeSync(fd);
+            if (created && info(temporary)) fs.unlinkSync(temporary);
+        }
+        checkDirectories();
+        if (read(record.file).text !== text) fail('verification-failed');
+        changed = true;
+    }
+    console.log(changed ? 'disabled' : 'unchanged');
+} catch (error) {
+    console.log('askclaude:' + (error instanceof PolicyError ? error.message : 'filesystem-failed'));
+    process.exitCode = 1;
+}
+// END PI_ASKCLAUDE_POLICY
+'@
+    $oldOptions = $env:NODE_OPTIONS
+    $oldPath = $env:NODE_PATH
+    $oldEncoding = $OutputEncoding
+    try {
+        $env:NODE_OPTIONS = $null
+        $env:NODE_PATH = $null
+        $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        $result = $code | & node --input-type=commonjs - $env:USERPROFILE $activeDir 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning 'AskClaude policy failed; review global claude-bridge.json paths, JSON, and permissions.'
+            return $false
+        }
+        switch (($result -join "`n").Trim()) {
+            'disabled' { Write-Success 'AskClaude disabled in global Pi profiles; Claude Bridge access preserved.'; return $true }
+            'unchanged' { Write-Debug 'AskClaude is already disabled in global Pi profiles.'; return $true }
+            default { Write-Warning 'AskClaude policy failed: unrecognized-result.'; return $false }
+        }
+    }
+    catch {
+        Write-Warning 'AskClaude policy failed; review global claude-bridge.json paths, JSON, and permissions.'
+        return $false
+    }
+    finally {
+        $env:NODE_OPTIONS = $oldOptions
+        $env:NODE_PATH = $oldPath
+        $OutputEncoding = $oldEncoding
+    }
+}
+# End Pi AskClaude policy.
+
 function Remove-PiProse {
     if (-not $env:USERPROFILE) {
         Write-Warning "USERPROFILE is required to retire pi-prose."
@@ -6929,7 +7073,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 154 | Last changed: Handle legacy PID permissions during Plain retirement"
+    Write-Host "Version 155 | Last changed: Disable AskClaude while preserving Claude Bridge access"
 
     Assert-HeadlessPaseoUnsupported
     $null = Get-PaseoReleaseChannel
@@ -6978,6 +7122,11 @@ function Invoke-WindowsSetupTasks {
     }
     if ($script:PiProfileMutationsBlocked) {
         Write-Warning 'Skipping Pi setup because profile permission preparation failed.'
+    }
+    elseif (-not (Disable-PiAskClaude)) {
+        $script:PiProfileMutationsBlocked = $true
+        Write-Warning 'Skipping Pi package setup because the AskClaude policy failed.'
+        $piSetupFailed = $true
     }
     elseif (-not (Remove-PiProse)) {
         $script:PiProfileMutationsBlocked = $true

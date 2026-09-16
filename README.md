@@ -140,6 +140,18 @@ Set `PI_ADAPTER_DOTFILES_SOURCE=/absolute/path/to/dotfiles` when running the con
 
 All six setup scripts already run `pi install npm:pi-claude-bridge`. The dotfiles Pi package list must also include `npm:pi-claude-bridge`, or a later chezmoi apply can remove its registration. Installed files alone do not enable the `claude-bridge` provider. If Pi reports `Unknown provider "claude-bridge"`, run `pi install npm:pi-claude-bridge`, then restart Pi or run `/reload`.
 
+### AskClaude is disabled; Claude Bridge remains available
+
+`AskClaude` is the bridge's delegation tool, not a separate package. Every setup run sets `askClaude.enabled=false` in `claude-bridge.json` in both the default global Pi profile (`~/.pi/agent`) and the profile selected by `PI_CODING_AGENT_DIR`. This applies to personal and work machines. Setup keeps installing/registering `pi-claude-bridge`, so Claude/Fable model access, Claude Code itself, authentication, provider options, and other configuration remain available. Only the delegation tool is disabled, including when it has a customized tool name.
+
+The helper runs after dotfiles and Pi profile permission preparation, before Pi package operations. It preflights both profiles and merges only that setting. Linked paths, hardlinked/non-regular files, oversized files, or malformed JSON are rejected rather than overwritten. Failure blocks subsequent Pi package/profile operations, continues unrelated work, and records a failed setup result. Fix the unsafe path or invalid configuration and rerun setup; do not delete credentials or uninstall the bridge.
+
+Dotfiles manage the same setting in the default global profile through a preserving template, so subsequent chezmoi applies retain provider/custom options and keep AskClaude disabled. Setup handles the explicitly selected custom profile. The rollout takes effect on each machine's next setup run; restart Pi or run `/reload` afterward to remove the tool from an existing session. No fleet-wide live cleanup is required.
+
+This is a managed **global setting**, not a security boundary: project-local `.pi/claude-bridge.json` can override it. Setup and dotfiles do not modify project configuration or arbitrary unselected profiles.
+
+Run `bash tests/pi-askclaude-contract.sh`. Set `PWSH_BIN` for extracted PowerShell wrapper fixtures and `PI_ADAPTER_DOTFILES_SOURCE=/absolute/path/to/dotfiles` for repeated dotfiles/setup coverage. Tests use temporary homes without loading live extensions or making model requests. Linux-hosted PowerShell coverage does not replace native Windows ACL verification.
+
 ## Shared Node runtime for Pi
 
 Pi uses the same mise-managed Node as your shell and project tools. Current Pi needs Node >=22.19 and `fs.globSync`. The managed skills CLI needs >=22.20, so setup selects a shared runtime that satisfies both.

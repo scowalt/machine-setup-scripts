@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract version 19: verify legacy PID retirement version banners.
+# Contract version 20: verify AskClaude policy version banners.
 # Historical filename retained for existing test runners.
 set -euo pipefail
 
@@ -9,18 +9,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=237
-    [ubuntu.sh]=259
-    [wsl.sh]=201
-    [pi.sh]=218
-    [bazzite.sh]=118
+    [mac.sh]=238
+    [ubuntu.sh]=260
+    [wsl.sh]=202
+    [pi.sh]=219
+    [bazzite.sh]=119
 )
 declare -A expected_banners=(
-    [mac.sh]='Handle legacy PID permissions during Plain retirement'
-    [ubuntu.sh]='Handle legacy PID permissions during Plain retirement'
-    [wsl.sh]='Handle legacy PID permissions during Plain retirement'
-    [pi.sh]='Handle legacy PID permissions during Plain retirement'
-    [bazzite.sh]='Handle legacy PID permissions during Plain retirement'
+    [mac.sh]='Disable AskClaude while preserving Claude Bridge access'
+    [ubuntu.sh]='Disable AskClaude while preserving Claude Bridge access'
+    [wsl.sh]='Disable AskClaude while preserving Claude Bridge access'
+    [pi.sh]='Disable AskClaude while preserving Claude Bridge access'
+    [bazzite.sh]='Disable AskClaude while preserving Claude Bridge access'
 )
 
 fail() {
@@ -190,7 +190,7 @@ assert_powershell_function_contains win.ps1 Remove-ShowMeSkill 'Invoke-MattPococ
 assert_powershell_function_contains win.ps1 Set-PiSkillOwnership 'Invoke-MattPocockSkillPolicy -Mode ownership' 'shared ownership policy'
 assert_contains win.ps1 'Required Simple English skill removal failed' 'PowerShell fatal Simple English failure propagation'
 assert_contains win.ps1 'Required show-me skill removal failed' 'PowerShell fatal show-me failure propagation'
-assert_contains win.ps1 'Version 154 \| Last changed: Handle legacy PID permissions during Plain retirement' 'PowerShell version banner'
+assert_contains win.ps1 'Version 155 \| Last changed: Disable AskClaude while preserving Claude Bridge access' 'PowerShell version banner'
 assert_powershell_function_contains win.ps1 Remove-PrLensSkill 'Invoke-MattPocockSkillPolicy -Mode remove-pr-lens' 'PR Lens retirement'
 assert_contains win.ps1 'Required PR Lens skill removal failed' 'PowerShell fatal PR Lens failure propagation'
 assert_order win.ps1 '^[[:space:]]+elseif \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Remove-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'

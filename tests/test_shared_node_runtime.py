@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract v1: offline shared-Node fixtures; never source a complete setup script."""
+"""Contract v2: isolate AskClaude policy in offline shared-Node orchestration fixtures."""
 
 import json
 import os
@@ -213,7 +213,8 @@ class SharedNodeTests(unittest.TestCase):
             for healthy in (False, True):
                 with self.subTest(script=script, healthy=healthy):
                     f = self.fixture(version='24.20.0' if healthy else None, install_failure=not healthy)
-                    command = ('PI_PROFILE_MUTATIONS_BLOCKED=0; remove_pi_prose() { return 0; }; prepare_pi_mcp_adapter() { return 0; }; '
+                    command = ('PI_PROFILE_MUTATIONS_BLOCKED=0; disable_pi_askclaude() { return 0; }; '
+                               'remove_pi_prose() { return 0; }; prepare_pi_mcp_adapter() { return 0; }; '
                                'remove_pi_subagents() { touch "$HOME/cleanup-ran"; }; '
                                'remove_pi_rpiv_packages() { touch "$HOME/cleanup-ran"; };\n' + block)
                     f.run(script, command)
