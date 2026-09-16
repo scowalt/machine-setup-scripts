@@ -248,6 +248,10 @@ The helper selects `PASEO_HOME`, or `~/.paseo` when unset. Explicit overrides mu
 
 Removal requires Node.js >=22.19 and a reachable local Paseo 0.8.x daemon with a metadata-verified compatible CLI. The explicitly validated CLI or existing Bun global CLI takes precedence over PATH. An incompatible verified managed release does not fall back to an older PATH installation. Pi and enabled plugins are **not** prerequisites. The helper uses an explicit loopback `--host`, ignores inherited `PASEO_HOST`, and does not enable plugins, start/restart a daemon, change release channels, or make model requests.
 
+Legacy POSIX daemons can have an account-owned `paseo.pid` with mode `0664`, created under an older launch umask. Retirement may **read** that exact mode only when the PID is a regular, single-link file inside a private account-owned Paseo home, with trusted non-writable ancestors (root-owned sticky temporary directories are permitted). It leaves all permissions unchanged. Other metadata still rejects group/world write access. PID links, foreign ownership, other writable modes, nonlocal endpoints, or changed PID/home identity remain blocked. Bounded, nonblocking, no-follow reads and rechecks before CLI commands protect this exception; native heartbeat timestamps are allowed to change.
+
+This read-only PID rule is independent of managed-daemon permission recovery. Retirement can therefore proceed when that separate step defers for process inspection or service drop-ins, without taking over the service or hiding the earlier setup error. A blocked PID check reports a controlled `pid preflight` operation and reason for private review, not a request for blanket `chmod` or a daemon restart.
+
 If removal is blocked, setup reports a failed result while continuing unrelated work. Start the intended compatible local daemon and rerun setup, or remove `paseo-plain` from that daemon's **Settings > Plugins**. Do not enable plugins just for removal. Existing headless/platform restrictions remain unchanged; WSL does not manage the Windows host's daemon. Run the appropriate setup separately on each machine/account and selected Paseo home.
 
 Diagnostics contain controlled operation/reason labels, such as `Paseo Plain removal failure: plugin remove: exit-1.`, not raw command output, exception text, credentials, or preferences. A timeout does not prove that the daemon stopped working: inspect plugin status before retrying. Do not edit plugin settings concurrently with removal.
@@ -269,7 +273,7 @@ PASEO_TEST_PLUGIN_SERVICE_MODULE=/absolute/path/to/server/plugins/index.js \
   node tests/paseo-plain-native-retirement.mjs
 ```
 
-It verifies native removal, disabled plugins/global switch, preserved external sources/data, native-settings backups, and idempotent reruns. Plugin execution and CLI transport are simulated: no listener, authentication, or model request is used. Git is file-only with isolated configuration/hooks. The contract wrapper also verifies that poisoned Git variables cannot mutate the caller's repository.
+It uses Paseo's real PID writer under a legacy `002` umask and verifies removal without changing the resulting `0664` PID. Coverage includes an active directory plugin with no managed store or native settings, disabled plugins/global switch, preserved external sources/data, native-settings backups, and idempotent reruns. Plugin execution and CLI transport are simulated: no listener, authentication, or model request is used. Git is file-only with isolated configuration/hooks. The contract wrapper also verifies that poisoned Git variables cannot mutate the caller's repository.
 
 ## Headless Paseo daemon
 

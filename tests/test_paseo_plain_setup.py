@@ -1,4 +1,4 @@
-"""Contract v4: retire Plain using extracted helpers and inert local CLIs only."""
+"""Contract v5: retire Plain with legacy native PID modes, without daemon/permission changes."""
 import json
 import os
 from pathlib import Path
@@ -37,6 +37,19 @@ const at = args.indexOf('plugin');
 const action = at < 0 ? 'status' : args[at + 1];
 if (state.fail === action) { console.error('private-error-must-not-escape'); process.exit(23); }
 if (state.invalid === action) { console.log('private-error-must-not-escape'); process.exit(0); }
+if (state.pidAction && action === (state.pidActionAt || 'status')) {
+  const pidFile = path.join(home, 'paseo.pid');
+  if (state.pidAction === 'remote') {
+    const pid = JSON.parse(fs.readFileSync(pidFile)); pid.listen = 'remote.example:19991';
+    fs.writeFileSync(pidFile, JSON.stringify(pid));
+  } else if (state.pidAction === 'inode') {
+    const text = fs.readFileSync(pidFile); fs.renameSync(pidFile, pidFile + '.old');
+    fs.writeFileSync(pidFile, text, {mode:0o664}); fs.chmodSync(pidFile, 0o664);
+  } else if (state.pidAction === 'mode') fs.chmodSync(pidFile, 0o666);
+  else if (state.pidAction === 'home-mode') fs.chmodSync(home, 0o755);
+  else if (state.pidAction === 'heartbeat') fs.utimesSync(pidFile, new Date(), new Date());
+  else throw new Error('invalid fixture mutation');
+}
 if (action === 'status') {
   assert.deepEqual(args, ['daemon', 'status', '--json']);
   console.log(JSON.stringify({localDaemon:'running', connectedDaemon:'reachable', home,
@@ -135,6 +148,185 @@ class RetirementTest(unittest.TestCase):
             file.write_text(text)
         self.save_config()
         return source
+
+    def seed_legacy_pid_directory(self):
+        # Match the deployed failure: a directory plugin, no managed store/settings,
+        # and the PID mode native open('wx') produces under a legacy umask of 002.
+        source = self.home / 'source'
+        source.mkdir()
+        (source / 'index.server.ts').write_text('inert source; never execute')
+        self.config['plugins']['paseo-plain'] = {'source': 'directory', 'path': str(source), 'enabled': True}
+        self.state['plugins'].append({'id': 'paseo-plain', 'enabled': True, 'status': 'running'})
+        self.save_config()
+        pid = self.paseo / 'paseo.pid'
+        pid.write_text(json.dumps({'pid': 12345, 'uid': os.getuid(), 'hostname': 'fixture',
+                                   'startedAt': '2026-09-16T09:00:00Z', 'listen': '127.0.0.1:19991'}))
+        pid.chmod(0o664)
+        return pid, source
+
+    def test_legacy_native_pid_in_private_home_does_not_block_retirement(self):
+        pid, source = self.seed_legacy_pid_directory()
+        before = (pid.read_bytes(), pid.stat().st_mode, pid.stat().st_ino)
+        self.assertEqual(self.paseo.stat().st_mode & 0o777, 0o700)
+        self.assertFalse((self.paseo / 'plugins').exists())
+        self.assertFalse((self.paseo / 'plugin-settings').exists())
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('paseo-plain', json.loads((self.paseo / 'config.json').read_text())['plugins'])
+        self.assertEqual((pid.read_bytes(), pid.stat().st_mode, pid.stat().st_ino), before)
+        self.assertTrue(source.is_dir())
+        self.assertEqual(len(self.removals()), 1)
+        self.assertEqual(self.run_helper().returncode, 0)
+        self.assertEqual(len(self.removals()), 1)
+
+    def test_legacy_pid_all_wrappers_preserve_service_and_storage(self):
+        scripts = SCRIPTS if PWSH else SCRIPTS[:-1]
+        for script in scripts:
+            with self.subTest(script=script):
+                child = RetirementTest()
+                child.setUp()
+                try:
+                    pid, source = child.seed_legacy_pid_directory()
+                    protected = []
+                    for relative in ('.config/systemd/user/paseo.service.d/fixture.conf',
+                                     '.local/bin/paseo-daemon-start', '.paseo/plugin-data/paseo-plain/cache.json'):
+                        file = child.home / relative
+                        file.parent.mkdir(parents=True, exist_ok=True)
+                        file.write_text('preserve this unrelated fixture data')
+                        protected.append(file)
+                    for directory in (child.home / '.config', child.home / '.config/systemd', child.home / '.config/systemd/user'):
+                        directory.chmod(0o775)
+                    protected += [pid, child.paseo, child.home / '.config/systemd/user', source]
+                    def snapshot():
+                        return [(p.stat().st_mode, p.stat().st_ino, p.read_bytes() if p.is_file() else None) for p in protected]
+                    before = snapshot()
+                    result = child.run_helper(script, wrapped=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(snapshot(), before)
+                    self.assertEqual(len(child.removals()), 1)
+                    self.assertEqual(child.run_helper(script, wrapped=True).returncode, 0)
+                    self.assertEqual(len(child.removals()), 1)
+                finally:
+                    child.doCleanups()
+
+    def test_legacy_pid_requires_private_home_and_nonwritable_ancestors(self):
+        pid, _ = self.seed_legacy_pid_directory()
+        before = pid.read_bytes()
+        for mode in (0o750, 0o755):
+            self.paseo.chmod(mode)
+            self.assert_failed(self.run_helper(), 'pid preflight: legacy-pid-requires-private-home')
+            self.assertEqual(self.paseo.stat().st_mode & 0o777, mode)
+        self.paseo.chmod(0o700)
+        self.home.chmod(0o775)
+        self.assert_failed(self.run_helper(), 'pid preflight: legacy-pid-unsafe-ancestor')
+        self.assertEqual(self.home.stat().st_mode & 0o777, 0o775)
+        self.assertEqual(pid.stat().st_mode & 0o777, 0o664)
+        self.assertEqual(pid.read_bytes(), before)
+        self.assertEqual(self.calls(), [])
+
+    def test_legacy_pid_does_not_allow_other_writable_modes_or_hardlinks(self):
+        pid, _ = self.seed_legacy_pid_directory()
+        for mode in (0o660, 0o666, 0o777, 0o2664):
+            pid.chmod(mode)
+            self.assert_failed(self.run_helper(), 'pid preflight: unsafe-pid-permissions')
+            self.assertEqual(pid.stat().st_mode & 0o7777, mode)
+        pid.chmod(0o664)
+        linked = self.home / 'other-pid-link'
+        os.link(pid, linked)
+        self.assert_failed(self.run_helper(), 'pid preflight: linked-pid-file')
+        self.assertEqual(pid.read_bytes(), linked.read_bytes())
+        self.assertEqual(self.calls(), [])
+
+    def test_legacy_pid_does_not_allow_foreign_owner(self):
+        self.seed_legacy_pid_directory()
+        poison = """
+const fixtureFs = require('node:fs'), fixtureLstat = fixtureFs.lstatSync;
+fixtureFs.lstatSync = function(file, ...args) {
+  const result = fixtureLstat.call(this, file, ...args);
+  if (String(file).endsWith('/paseo.pid')) result.uid = process.getuid() + 1;
+  return result;
+};
+"""
+        self.assert_failed(self.run_helper(code=poison + retirement()), 'pid preflight: foreign-pid-owner')
+        self.assertEqual(self.calls(), [])
+
+    def test_legacy_pid_keeps_json_and_endpoint_guards(self):
+        pid, _ = self.seed_legacy_pid_directory()
+        for text, reason in (('{bad', 'pid preflight: invalid-json'),
+                             ('{"listen":"127.0.0.1:19991","listen":"remote.example:19991"}', 'pid preflight: duplicate-key'),
+                             ('{"listen":"remote.example:19991"}', 'nonlocal-pid-endpoint')):
+            pid.write_text(text)
+            self.assert_failed(self.run_helper(), reason)
+        self.assertEqual(self.calls(), [])
+
+    def test_legacy_pid_does_not_relax_config_or_source_registry_permissions(self):
+        self.seed_legacy_pid_directory()
+        config = self.paseo / 'config.json'
+        config.chmod(0o664)
+        self.assert_failed(self.run_helper(), 'preflight: unsafe-path')
+        config.chmod(0o600)
+        store = self.paseo / 'plugins'
+        store.mkdir()
+        registry = store / 'sources.json'
+        registry.write_text('{}')
+        registry.chmod(0o664)
+        self.assert_failed(self.run_helper(), 'preflight: unsafe-path')
+        self.assertEqual(self.calls(), [])
+
+    def test_pid_changes_between_commands_block_before_mutation(self):
+        for action in ('inode', 'mode', 'home-mode', 'remote'):
+            for when in ('status', 'ls'):
+                with self.subTest(action=action, when=when):
+                    child = RetirementTest()
+                    child.setUp()
+                    try:
+                        child.seed_legacy_pid_directory()
+                        child.state.update(pidAction=action, pidActionAt=when)
+                        child.assert_failed(child.run_helper(), 'pid preflight:')
+                        self.assertEqual(child.removals(), [])
+                        self.assertIn('paseo-plain', json.loads((child.paseo / 'config.json').read_text())['plugins'])
+                    finally:
+                        child.doCleanups()
+
+    def test_native_pid_heartbeat_does_not_block_removal(self):
+        self.seed_legacy_pid_directory()
+        self.state['pidAction'] = 'heartbeat'
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(self.removals()), 1)
+
+    def test_pid_leaf_swaps_do_not_follow_links_or_block_on_fifo(self):
+        for kind in ('link', 'fifo'):
+            with self.subTest(kind=kind):
+                child = RetirementTest()
+                child.setUp()
+                try:
+                    pid, _ = child.seed_legacy_pid_directory()
+                    replacement = child.home / 'replacement'
+                    if kind == 'fifo':
+                        os.mkfifo(replacement)
+                    else:
+                        target = child.home / 'untouched'
+                        target.write_text('not JSON; must not be read')
+                        replacement.symlink_to(target)
+                    poison = """
+const fixtureFs = require('node:fs'), fixturePath = require('node:path'), fixtureOpen = fixtureFs.openSync;
+let fixtureSwapped = false;
+fixtureFs.openSync = function(file, ...args) {
+  if (!fixtureSwapped && String(file).endsWith('/paseo.pid')) {
+    fixtureSwapped = true;
+    fixtureFs.renameSync(file, file + '.saved');
+    fixtureFs.renameSync(fixturePath.join(process.env.HOME, 'replacement'), file);
+  }
+  return fixtureOpen.call(this, file, ...args);
+};
+"""
+                    child.assert_failed(child.run_helper(code=poison + retirement()), 'pid preflight:')
+                    self.assertEqual(child.calls(), [])
+                    if kind == 'link':
+                        self.assertEqual(target.read_text(), 'not JSON; must not be read')
+                finally:
+                    child.doCleanups()
 
     def run_helper(self, script='ubuntu.sh', code=None, wrapped=False):
         (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
@@ -493,8 +685,9 @@ class RetirementTest(unittest.TestCase):
         self.assertEqual(self.run_helper('win.ps1', wrapped=True).returncode, 0)
         self.assertIn('already absent', self.run_helper('win.ps1', wrapped=True).stdout)
 
-    def test_go_failure_still_reaches_retirement_and_failure_continues_setup(self):
-        self.seed()
+    def test_go_or_muse_failure_still_reaches_legacy_pid_retirement(self):
+        pid, _ = self.seed_legacy_pid_directory()
+        pid_before = (pid.read_bytes(), pid.stat().st_mode)
         text = (ROOT / 'ubuntu.sh').read_text()
         main = text.split('run_setup_tasks() {', 1)[1]
         block = main[main.index('    if ! prepare_pi_profile_permissions; then'):main.index('    print_section "Final Updates"')]
@@ -502,22 +695,30 @@ class RetirementTest(unittest.TestCase):
                  'setup_matt_pocock_skills', 'remove_pi_prose', 'install_pi_cli', 'configure_pi_defaults',
                  'remove_pi_synthetic_models', 'seed_pi_zai_models', 'remove_simple_english_skill',
                  'remove_show_me_skill', 'remove_pr_lens_skill', 'configure_pi_skill_ownership',
-                 'remove_impeccable_resources', 'remove_compound_engineering_resources')
+                 'remove_impeccable_resources', 'remove_compound_engineering_resources',
+                 'prepare_pi_mcp_adapter', 'setup_pi_mcp_adapter', 'remove_pi_subagents',
+                 'remove_pi_rpiv_packages', 'setup_pi_claude_bridge', 'setup_pi_companion_packages',
+                 'setup_pi_goal_autoresearch')
         code = 'set -eu\n_setup_had_errors=0\n_pi_go_ready=0\nPI_PROFILE_MUTATIONS_BLOCKED=0\n'
         code += '\n'.join(f'{fn}() {{ :; }}' for fn in inert) + '\n'
         code += 'print_warning() { printf "%s\\n" "$1"; }; print_success() { printf "%s\\n" "$1"; };\n'
-        code += 'configure_pi_opencode_go() { return 1; }\n'
+        code += 'configure_pi_opencode_go() { return "${GO_RESULT}"; }\n'
+        code += 'configure_paseo_muse_profile() { PASEO_MUSE_DEFER_DAEMON_SETUP=1; print_warning "Paseo Muse deferred: process-inventory-unverified."; return 1; }\n'
         code += 'setup_headless_paseo_daemon() { printf unexpected-daemon > "$HOME/daemon-called"; return 1; }\n'
         code += wrapper('ubuntu.sh') + '\nexercise() {\n' + block + '\n}\nexercise\nprintf "continued:%s\\n" "${_setup_had_errors}"\n'
-        for fail in (True, False):
-            self.state['fail'] = 'status' if fail else None
-            (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
-            result = subprocess.run([shutil.which('bash')], input=code, env=self.env,
-                                    text=True, capture_output=True, timeout=20)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn('continued:1', result.stdout)
-            self.assertIn('removal failure' if fail else 'Paseo Plain removed;', result.stdout)
-            self.assertFalse((self.home / 'daemon-called').exists())
+        for go_result in ('1', '0'):
+            for fail in (True, False):
+                self.save_config()
+                self.state['fail'] = 'status' if fail else None
+                (self.paseo / 'fake-state.json').write_text(json.dumps(self.state))
+                result = subprocess.run([shutil.which('bash')], input=code,
+                                        env={**self.env, 'GO_RESULT': go_result},
+                                        text=True, capture_output=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('continued:1', result.stdout)
+                self.assertIn('removal failure' if fail else 'Paseo Plain removed;', result.stdout)
+                self.assertFalse((self.home / 'daemon-called').exists())
+                self.assertEqual((pid.read_bytes(), pid.stat().st_mode), pid_before)
 
     def test_shared_helpers_wiring_and_no_reinstallation(self):
         baseline = retirement()
@@ -533,6 +734,30 @@ class RetirementTest(unittest.TestCase):
                 self.assertIn('    if ! remove_paseo_plain; then\n        _setup_had_errors=1\n    fi', text)
             else:
                 self.assertGreater(text.rindex('    if (-not (Remove-PaseoPlain))'), text.rindex('    elseif (Install-PiCli)'))
+
+    def test_legacy_pid_boundary_preserves_only_trusted_system_home_alias(self):
+        if os.name == 'nt':
+            self.skipTest('POSIX alias fixture')
+        code = retirement()
+        alias = code[code.index('function cliHomeAlias'):code.index('function cliDirectory')]
+        boundary = code[code.index('function legacyPidBoundary'):code.index('function readPidState')]
+        fixture = """
+const path = require('node:path'), assert = require('node:assert/strict');
+let target = '/var/home';
+const fs = {readlinkSync: () => target};
+const directory = mode => ({uid:0, mode, isDirectory:()=>true, isSymbolicLink:()=>false});
+const aliasStat = {uid:0, mode:0o120777, isDirectory:()=>false, isSymbolicLink:()=>true};
+const cliInfo = file => file === '/home' ? aliasStat : directory(0o755), info = cliInfo;
+const checkedPath = () => directory(0o700);
+class SetupFailure extends Error {}
+""" + alias + boundary + """
+if (process.platform === 'linux') legacyPidBoundary('/home/fixture/.paseo');
+else assert.throws(() => legacyPidBoundary('/home/fixture/.paseo'));
+target = '/untrusted';
+assert.throws(() => legacyPidBoundary('/home/fixture/.paseo'), /legacy-pid-unsafe-ancestor/);
+"""
+        result = subprocess.run([NODE, '-'], input=fixture, text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_linux_system_home_alias_identity_is_unchanged(self):
         code = retirement()

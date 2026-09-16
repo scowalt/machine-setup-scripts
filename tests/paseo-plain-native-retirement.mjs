@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Contract version 3: real source/config removal, inert runtime, isolated Git, temporary homes.
+// Contract version 4: real native 0664 PID and source/config removal; no daemon or plugin execution.
 // Requires an explicitly supplied Paseo 0.8 plugins/index.js. Never starts a daemon.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -80,6 +80,7 @@ async function smoke() {
   assert.ok(path.isAbsolute(git));
   const source = fs.readFileSync(new URL('../ubuntu.sh', import.meta.url), 'utf8');
   const helper = source.split('// BEGIN PASEO PLAIN RETIREMENT\n')[1].split('// END PASEO PLAIN RETIREMENT')[0];
+  const {acquirePidLock} = await import(new URL('../pid-lock.js', pathToFileURL(modulePath)));
   try {
     for (const variant of ['git', 'disabled-git', 'directory']) {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paseo-native-retirement-'));
@@ -130,20 +131,38 @@ async function smoke() {
         }
         const config = JSON.parse(fs.readFileSync(configFile));
         config.pluginsEnabled = variant !== 'disabled-git';
-        config.plugins['paseo-plain'] = {source:'directory', path:checkout, enabled:variant === 'git'};
+        config.plugins['paseo-plain'] = {source:'directory', path:checkout, enabled:variant !== 'disabled-git'};
         fs.writeFileSync(configFile, JSON.stringify(config));
+        // Native lock creation only, owned by this fixture process; no daemon is started.
+        const mask = process.umask(0o002);
+        try { await acquirePidLock(home, '127.0.0.1:19991'); } finally { process.umask(mask); }
+        const pidFile = path.join(home, 'paseo.pid');
+        const pidBefore = fs.readFileSync(pidFile, 'utf8');
+        const pidStat = fs.statSync(pidFile);
+        assert.equal(pidStat.mode & 0o777, 0o664, 'Exercise the real legacy native PID mode.');
         const data = path.join(home, 'plugin-data/paseo-plain');
         const native = path.join(home, 'plugin-settings/paseo-plain');
-        fs.mkdirSync(data, {recursive:true}); fs.mkdirSync(native, {recursive:true});
+        fs.mkdirSync(data, {recursive:true});
         fs.writeFileSync(path.join(data, 'configuration.json'), 'preferences');
         fs.writeFileSync(path.join(data, 'cache.json'), 'cached text');
-        fs.writeFileSync(path.join(native, 'voice.json'), 'native settings');
+        if (variant !== 'directory') {
+          fs.mkdirSync(native, {recursive:true});
+          fs.writeFileSync(path.join(native, 'voice.json'), 'native settings');
+        } else {
+          assert.equal(fs.existsSync(path.join(home, 'plugins')), false);
+          assert.equal(fs.existsSync(native), false);
+        }
         assert.match(run(process.execPath, ['-'], {input:helper}), /Paseo Plain removed;/);
         assert.equal(fs.readFileSync(path.join(data, 'configuration.json'), 'utf8'), 'preferences');
         assert.equal(fs.readFileSync(path.join(data, 'cache.json'), 'utf8'), 'cached text');
         assert.equal(fs.existsSync(native), false, 'Native removal really deletes plugin-settings.');
         assert.equal(fs.existsSync(checkout), variant === 'directory', 'External sources survive; managed checkout is deleted.');
-        assert.equal(fs.readFileSync(path.join(home, 'setup-recovery/paseo-plain-retirement/plugin-settings/voice.json'), 'utf8'), 'native settings');
+        if (variant !== 'directory') {
+          assert.equal(fs.readFileSync(path.join(home, 'setup-recovery/paseo-plain-retirement/plugin-settings/voice.json'), 'utf8'), 'native settings');
+        }
+        assert.equal(fs.readFileSync(pidFile, 'utf8'), pidBefore);
+        assert.equal(fs.statSync(pidFile).ino, pidStat.ino);
+        assert.equal(fs.statSync(pidFile).mode, pidStat.mode, 'Retirement must not chmod the native PID.');
         assert.match(run(process.execPath, ['-'], {input:helper}), /already absent/);
         const after = JSON.parse(fs.readFileSync(configFile));
         assert.equal(after.pluginsEnabled, config.pluginsEnabled);
@@ -151,7 +170,7 @@ async function smoke() {
         const calls = fs.readFileSync(path.join(home, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
         assert.equal(calls.filter(args => args.includes('remove')).length, 1);
         assert.equal(calls.filter(args => args.includes('add')).length, variant === 'directory' ? 0 : 1);
-        console.log(`PASS: real Paseo removal, ${variant}, saved data and settings backup, idempotent rerun.`);
+        console.log(`PASS: real Paseo removal, ${variant}, unchanged native 0664 PID, saved data/settings, idempotent rerun.`);
       } finally { fs.rmSync(root, {recursive:true, force:true}); }
     }
   } finally { process.umask(previousUmask); }

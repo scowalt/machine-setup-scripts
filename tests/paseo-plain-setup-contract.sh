@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract version 3: isolated retirement and native removal under poisoned Git hook variables.
+# Contract version 4: legacy-PID retirement and native removal under poisoned Git hook variables.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)

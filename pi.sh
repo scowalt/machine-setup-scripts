@@ -2793,7 +2793,9 @@ function jsonFile(file, fallback = null) {
     const stat = checkedPath(file);
     if (!stat) return fallback;
     if (stat.size > 2 * 1024 * 1024) throw new SetupFailure('metadata-limit');
-    const text = fs.readFileSync(file, 'utf8');
+    return jsonDocument(fs.readFileSync(file, 'utf8'));
+}
+function jsonDocument(text) {
     const data = JSON.parse(text);
     if (!object(data)) throw new SetupFailure('invalid-metadata');
     // Duplicate keys can conceal a source or endpoint from a different JSON reader.
@@ -2810,6 +2812,66 @@ function jsonFile(file, fallback = null) {
         }
     }
     return data;
+}
+function legacyPidBoundary(home) {
+    // A private home prevents group access to its native 0664 PID. This is a
+    // read-only exception, not permission repair or authority to manage a service.
+    const directory = checkedPath(home, true);
+    if (!directory || directory.mode & 0o077) throw new SetupFailure('legacy-pid-requires-private-home');
+    for (let current = path.dirname(home); ; current = path.dirname(current)) {
+        const stat = info(current);
+        if (stat?.isSymbolicLink() && cliHomeAlias(current, stat)) continue;
+        const trustedStickyRoot = stat?.uid === 0 && Boolean(stat.mode & 0o1000);
+        if (!stat?.isDirectory() || ![0, process.getuid()].includes(stat.uid) ||
+            stat.mode & 0o022 && !trustedStickyRoot) throw new SetupFailure('legacy-pid-unsafe-ancestor');
+        if (current === path.dirname(current)) break;
+    }
+}
+function readPidState(home) {
+    operation = 'pid preflight';
+    const identity = stat => stat && ({dev: stat.dev, ino: stat.ino, uid: stat.uid, mode: stat.mode});
+    const directory = checkedPath(home, true);
+    if (!directory) throw new SetupFailure('pid-home-changed');
+    const file = path.join(home, 'paseo.pid');
+    const initial = info(file);
+    if (!initial) return {home: identity(directory), pid: null, data: null};
+    const validate = stat => {
+        if (!stat || stat.isSymbolicLink() || !stat.isFile()) throw new SetupFailure('unsafe-path');
+        if (stat.nlink !== 1) throw new SetupFailure('linked-pid-file');
+        if (process.platform !== 'win32') {
+            if (stat.uid !== process.getuid()) throw new SetupFailure('foreign-pid-owner');
+            if (stat.mode & 0o022) {
+                if ((stat.mode & 0o7777) !== 0o664) throw new SetupFailure('unsafe-pid-permissions');
+                legacyPidBoundary(home);
+            }
+        }
+        if (stat.size > 2 * 1024 * 1024) throw new SetupFailure('metadata-limit');
+    };
+    validate(initial);
+    let fd;
+    try {
+        // Reject leaf swaps without following links or blocking on a substituted FIFO.
+        const flags = fs.constants.O_RDONLY | (process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+        try { fd = fs.openSync(file, flags); }
+        catch (error) { if (error.code === 'ELOOP') throw new SetupFailure('pid-state-changed'); throw error; }
+        const opened = fs.fstatSync(fd);
+        validate(opened);
+        if (!isDeepStrictEqual(identity(initial), identity(opened)) || opened.size !== initial.size) throw new SetupFailure('pid-state-changed');
+        const buffer = Buffer.alloc(initial.size + 1);
+        let length = 0;
+        while (length < buffer.length) {
+            const count = fs.readSync(fd, buffer, length, buffer.length - length, length);
+            if (!count) break;
+            length += count;
+        }
+        const after = fs.fstatSync(fd), current = info(file);
+        validate(after);
+        validate(current);
+        if (!isDeepStrictEqual(identity(initial), identity(after)) || !isDeepStrictEqual(identity(initial), identity(current)) ||
+            after.size !== initial.size || current.size !== initial.size || length !== initial.size ||
+            !isDeepStrictEqual(identity(directory), identity(checkedPath(home, true)))) throw new SetupFailure('pid-state-changed');
+        return {home: identity(directory), pid: {...identity(after), size: after.size}, data: jsonDocument(buffer.subarray(0, length).toString('utf8'))};
+    } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 function childDirectory(parent, name) {
     if (!checkedPath(parent, true)) return null;
@@ -2964,11 +3026,15 @@ function main() {
     const localTarget = value => typeof value === 'string' && /^(127\.0\.0\.1|localhost|\[::1\]):[1-9][0-9]{0,4}$/.test(value) && Number(value.split(':').pop()) <= 65535;
     if (config.daemon !== undefined && !object(config.daemon)) throw new SetupFailure('invalid-daemon');
     if (config.daemon?.listen !== undefined && !localTarget(config.daemon.listen)) return deferred('nonlocal-endpoint');
-    const pid = jsonFile(path.join(home, 'paseo.pid'));
+    const pidState = readPidState(home);
+    const pid = pidState.data;
     if (pid && [pid.listen, pid.sockPath].some(value => value !== undefined && !localTarget(value))) return deferred('nonlocal-pid-endpoint');
     const paseo = selectPaseoCli(process.argv[2] || '');
     if (!paseo) return deferred('compatible-cli-unavailable');
     const run = (args, timeout = 20000) => {
+        // Native heartbeats change timestamps, not identity, permissions or contents.
+        // Recheck before status can probe an endpoint and before every plugin command.
+        if (!isDeepStrictEqual(pidState, readPidState(home))) throw new SetupFailure('pid-state-changed');
         operation = args[0] === 'daemon' ? 'daemon status' : `plugin ${args[3]}`;
         const env = {...process.env, PASEO_HOME: home};
         delete env.PASEO_HOST;
@@ -9099,7 +9165,7 @@ run_setup_tasks() {
     local PASEO_MUSE_DEFER_DAEMON_SETUP=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 217 | Last changed: Retire Paseo Plain on future setup runs"
+    echo -e "${GRAY}Version 218 | Last changed: Handle legacy PID permissions during Plain retirement"
 
     if ! acquire_setup_lock; then
         return 1
