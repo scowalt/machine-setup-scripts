@@ -2934,7 +2934,7 @@ function Remove-RtkResources {
 # Pi's package minimum is lower than the shared skills CLI minimum.
 function Test-PiNodeRuntimeReady {
     try {
-        & node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major > 22 || (major === 22 && minor >= 19)) && typeof require("node:fs").globSync === "function" ? 0 : 1)' *> $null
+        & node -e 'const [major, minor] = process.versions.node.split(''.'').map(Number); process.exit((major > 22 || (major === 22 && minor >= 19)) && typeof require(''node:fs'').globSync === ''function'' ? 0 : 1)' *> $null
         return ($LASTEXITCODE -eq 0)
     }
     catch { return $false }
@@ -2943,7 +2943,7 @@ function Test-PiNodeRuntimeReady {
 function Test-SharedNodeRuntimeReady {
     param([string]$Node = 'node')
     try {
-        & $Node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major > 22 || (major === 22 && minor >= 20)) && typeof require("node:fs").globSync === "function" ? 0 : 1)' *> $null
+        & $Node -e 'const [major, minor] = process.versions.node.split(''.'').map(Number); process.exit((major > 22 || (major === 22 && minor >= 20)) && typeof require(''node:fs'').globSync === ''function'' ? 0 : 1)' *> $null
         return ($LASTEXITCODE -eq 0)
     }
     catch { return $false }
@@ -3020,10 +3020,20 @@ function Test-SharedNodeShell {
         $probe = @'
 $ErrorActionPreference = 'Stop'
 try {
+    if ((Get-Variable __SetupSharedNodeActivation -Scope Global -ValueOnly -ErrorAction SilentlyContinue) -ne 1) { exit 1 }
     if (-not (Get-Command mise -ErrorAction SilentlyContinue)) { exit 1 }
+    $pathPolicy = (& mise settings get activate_aggressive 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $pathPolicy -ne 'true') { exit 1 }
     $expectedNode = (& mise which -C $env:USERPROFILE node 2>$null | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $expectedNode) { exit 1 }
-    & node -e 'const fs = require("node:fs"); const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major > 22 || (major === 22 && minor >= 20)) && typeof fs.globSync === "function" && fs.realpathSync(process.execPath) === fs.realpathSync(process.argv[1]) ? 0 : 1)' $expectedNode *> $null
+    & node -e 'const fs = require(''node:fs''); const [major, minor] = process.versions.node.split(''.'').map(Number); process.exit((major > 22 || (major === 22 && minor >= 20)) && typeof fs.globSync === ''function'' && fs.realpathSync(process.execPath) === fs.realpathSync(process.argv[1]) ? 0 : 1)' $expectedNode *> $null
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+    $nodePinTools = (& mise settings get idiomatic_version_file_enable_tools 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+    # Base64 data and single-quoted JS literals survive PowerShell 5.1's native
+    # argument transport, which strips embedded double quotes from raw JSON.
+    $encodedPinTools = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($nodePinTools))
+    & node -e 'const tools = JSON.parse(Buffer.from(process.argv[1], ''base64'').toString()); process.exit(Array.isArray(tools) && tools.includes(''node'') ? 0 : 1)' $encodedPinTools *> $null
     if ($LASTEXITCODE -ne 0) { exit 1 }
     & npm --version *> $null
     if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -3067,6 +3077,12 @@ function Enable-SharedNodeRuntime {
         # so inventory at the drive root, but activate and verify at HOME below.
         $inventoryRoot = [System.IO.Path]::GetPathRoot($env:USERPROFILE)
         if (-not $inventoryRoot) { throw 'USERPROFILE must be an absolute path.' }
+        # Preserve legacy fnm pins using mise's additive global setting; leave
+        # other enabled tools and unrelated configuration intact.
+        & mise settings add -C $inventoryRoot idiomatic_version_file_enable_tools node *> $null
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot enable mise support for .node-version/.nvmrc pins.' }
+        & mise settings set -C $inventoryRoot activate_aggressive true *> $null
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot configure mise PATH precedence.' }
         for ($attempt = 1; $attempt -le 2; $attempt++) {
             $inventoryText = (& mise ls -C $inventoryRoot --global --json node 2>$null | Out-String).Trim()
             if ($LASTEXITCODE -ne 0 -or -not $inventoryText) { throw 'Cannot read global mise Node inventory.' }
@@ -3117,7 +3133,27 @@ function Enable-SharedNodeRuntime {
         & npm --version *> $null
         if ($LASTEXITCODE -ne 0) { throw 'npm is unavailable under the shared Node runtime.' }
         if (-not (Test-SharedNodeShell)) {
-            throw 'A fresh PowerShell cannot use the shared mise Node/npm runtime. Apply the chezmoi mise activation and review HOME overrides.'
+            # Apply only the known-folder-aware managed profile updater. Never
+            # write shell configuration here or run unrelated chezmoi scripts.
+            Write-Message 'Refreshing chezmoi-managed PowerShell activation for the shared Node runtime...'
+            $shellRepaired = $false
+            try {
+                if (Get-Command chezmoi -ErrorAction SilentlyContinue) {
+                    $source = (& chezmoi source-path 2>$null | Out-String).Trim()
+                    if ($LASTEXITCODE -eq 0 -and [IO.Path]::IsPathRooted($source)) {
+                        $updater = Join-Path $source '.chezmoiscripts/run_before_powershell-mise.cmd.tmpl'
+                        & chezmoi apply --force --include=scripts --source-path $updater *> $null
+                        $shellRepaired = $LASTEXITCODE -eq 0
+                    }
+                }
+            }
+            catch { $shellRepaired = $false }
+            if (-not $shellRepaired) {
+                throw 'Shared Node shell repair failed: chezmoi could not apply the managed PowerShell profiles. Check dotfiles access and update the source.'
+            }
+            if (-not (Test-SharedNodeShell)) {
+                throw 'Shared Node shell repair failed verification. Update the dotfiles source and review HOME overrides or custom profile hooks.'
+            }
         }
         Write-Debug 'Shared Node is ready in setup and a fresh PowerShell.'
         return $true
@@ -7073,7 +7109,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 155 | Last changed: Disable AskClaude while preserving Claude Bridge access"
+    Write-Host "Version 156 | Last changed: Enforce durable shared Node activation across setup platforms"
 
     Assert-HeadlessPaseoUnsupported
     $null = Get-PaseoReleaseChannel

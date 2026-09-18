@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract version 20: verify AskClaude policy version banners.
+# Contract version 21: verify shared Node convergence version banners.
 # Historical filename retained for existing test runners.
 set -euo pipefail
 
@@ -9,18 +9,18 @@ cd "${repo_root}"
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 source_without_main='s/^main "\$@"$/:/'
 declare -A expected_versions=(
-    [mac.sh]=238
-    [ubuntu.sh]=260
-    [wsl.sh]=202
-    [pi.sh]=219
-    [bazzite.sh]=119
+    [mac.sh]=239
+    [ubuntu.sh]=261
+    [wsl.sh]=203
+    [pi.sh]=220
+    [bazzite.sh]=120
 )
 declare -A expected_banners=(
-    [mac.sh]='Disable AskClaude while preserving Claude Bridge access'
-    [ubuntu.sh]='Disable AskClaude while preserving Claude Bridge access'
-    [wsl.sh]='Disable AskClaude while preserving Claude Bridge access'
-    [pi.sh]='Disable AskClaude while preserving Claude Bridge access'
-    [bazzite.sh]='Disable AskClaude while preserving Claude Bridge access'
+    [mac.sh]='Enforce durable shared Node activation across setup platforms'
+    [ubuntu.sh]='Enforce durable shared Node activation across setup platforms'
+    [wsl.sh]='Enforce durable shared Node activation across setup platforms'
+    [pi.sh]='Enforce durable shared Node activation across setup platforms'
+    [bazzite.sh]='Enforce durable shared Node activation across setup platforms'
 )
 
 fail() {
@@ -190,7 +190,7 @@ assert_powershell_function_contains win.ps1 Remove-ShowMeSkill 'Invoke-MattPococ
 assert_powershell_function_contains win.ps1 Set-PiSkillOwnership 'Invoke-MattPocockSkillPolicy -Mode ownership' 'shared ownership policy'
 assert_contains win.ps1 'Required Simple English skill removal failed' 'PowerShell fatal Simple English failure propagation'
 assert_contains win.ps1 'Required show-me skill removal failed' 'PowerShell fatal show-me failure propagation'
-assert_contains win.ps1 'Version 155 \| Last changed: Disable AskClaude while preserving Claude Bridge access' 'PowerShell version banner'
+assert_contains win.ps1 'Version 156 \| Last changed: Enforce durable shared Node activation across setup platforms' 'PowerShell version banner'
 assert_powershell_function_contains win.ps1 Remove-PrLensSkill 'Invoke-MattPocockSkillPolicy -Mode remove-pr-lens' 'PR Lens retirement'
 assert_contains win.ps1 'Required PR Lens skill removal failed' 'PowerShell fatal PR Lens failure propagation'
 assert_order win.ps1 '^[[:space:]]+elseif \(Install-PiCli\) \{$' '^[[:space:]]+if \(-not \(Remove-SimpleEnglishSkill\)\) \{$' 'PowerShell install after agent provisioning'

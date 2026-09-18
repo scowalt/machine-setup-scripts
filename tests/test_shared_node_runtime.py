@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract v2: isolate AskClaude policy in offline shared-Node orchestration fixtures."""
+"""Contract v3: bounded managed-shell repair in offline shared-Node fixtures."""
 
 import json
 import os
@@ -91,7 +91,17 @@ state = json.loads(state_path.read_text())
 args = sys.argv[1:]
 with (home / 'calls.jsonl').open('a') as f:
     f.write(json.dumps(['mise', *args]) + '\n')
-if args[0] == 'ls':
+if args[0] == 'settings':
+    assert args in (['settings', 'add', '-C', '/', 'idiomatic_version_file_enable_tools', 'node'],
+                    ['settings', 'set', '-C', '/', 'activate_aggressive', 'true'],
+                    ['settings', 'get', 'activate_aggressive'],
+                    ['settings', 'get', 'idiomatic_version_file_enable_tools']), args
+    if state.get('settings_failure'): sys.exit(1)
+    if args[1:] == ['get', 'activate_aggressive']:
+        print('false' if os.environ.get('MISE_ACTIVATE_AGGRESSIVE') == 'false' else 'true')
+    if args[1:] == ['get', 'idiomatic_version_file_enable_tools']:
+        print(json.dumps(os.environ.get('MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS', 'node').split(',')))
+elif args[0] == 'ls':
     assert '--global' in args and '--json' in args and args[-1] == 'node', args
     if state.get('inventory_failure'): sys.exit(1)
     version = state.get('global')
@@ -142,7 +152,8 @@ print(state.get('arch', 'x86_64') if sys.argv[1:] == ['-m'] else 'Linux')
         config = self.home / ".config/fish/config.fish"
         config.parent.mkdir(parents=True)
         config.write_text('set -gx PATH "$HOME/.local/bin" $PATH\n'
-                          'if type -q mise\n    mise activate fish | source\nend\n')
+                          'if type -q mise\n    mise activate fish | source\n'
+                          '    set -g __setup_shared_node_activation 1\nend\n')
 
     def run(self, script="ubuntu.sh", command="ensure_pi_node_runtime"):
         prelude = "\n".join(f'{name}() {{ printf "%s\\n" "$*"; }}' for name in
@@ -175,6 +186,42 @@ class SharedNodeTests(unittest.TestCase):
                 result = f.run(script)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(f.selected(), "24.20.0")
+
+    def test_setup_repairs_managed_shell_activation_and_preserves_the_runtime(self):
+        for script in SCRIPTS:
+            with self.subTest(script=script):
+                f = self.fixture(version='24.20.0', no_activation=True)
+                executable(f.home / '.local/bin/chezmoi', f'#!{sys.executable}\n' + r'''
+import json, os, pathlib, sys
+home = pathlib.Path(os.environ['FIXTURE_HOME'])
+assert sys.argv[1:] == ['apply', '--force', '--include=files', str(home / '.config/fish/config.fish')]
+with (home / 'calls.jsonl').open('a') as log:
+    log.write(json.dumps(['chezmoi', *sys.argv[1:]]) + '\n')
+state = home / 'state.json'
+data = json.loads(state.read_text())
+data['no_activation'] = False
+state.write_text(json.dumps(data))
+''')
+                for _ in range(2):
+                    result = f.run(script)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(f.selected(), '24.20.0')
+                self.assertIn(['mise', 'settings', 'add', '-C', '/', 'idiomatic_version_file_enable_tools', 'node'], f.calls())
+                self.assertEqual(sum(c[0] == 'chezmoi' for c in f.calls()), 1)
+                self.assertFalse(any(c[:2] in (['mise', 'use'], ['mise', 'install']) for c in f.calls()))
+
+    def test_failed_or_ineffective_shell_repair_stays_blocked_without_leaking_output(self):
+        for status in (0, 1):
+            f = self.fixture(version='24.20.0', no_activation=True)
+            executable(f.home / '.local/bin/chezmoi',
+                       '#!/bin/sh\necho PRIVATE-SENTINEL\necho PRIVATE-SENTINEL >&2\n'
+                       'printf "apply\\n" >> "$HOME/repair-calls"\n' + f'exit {status}\n')
+            result = f.run('mac.sh')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn('PRIVATE-SENTINEL', result.stdout + result.stderr)
+            self.assertIn('repair failed', result.stdout)
+            self.assertEqual((f.home / 'repair-calls').read_text(), 'apply\n')
+            self.assertFalse(any(c[:2] in (['mise', 'use'], ['mise', 'install']) for c in f.calls()))
 
     def test_supported_global_is_preserved_and_reruns_do_not_install(self):
         for version in ("22.23.2", "26.0.0"):
@@ -283,7 +330,7 @@ class SharedNodeTests(unittest.TestCase):
             {"install_failure": True}, {"version": "24.20.0", "env_failure": True},
             {"version": "24.20.0", "npm_failure": True},
             {"version": "24.20.0", "no_activation": True}, {"arch": "armv6l"},
-            {"inventory_failure": True},
+            {"inventory_failure": True}, {"settings_failure": True},
         )
         for options in cases:
             with self.subTest(options=options):
@@ -319,7 +366,8 @@ class SharedNodeTests(unittest.TestCase):
             (local_bin / "mise").symlink_to(MISE)
             fish_config = home / ".config/fish/config.fish"
             fish_config.parent.mkdir(parents=True)
-            fish_config.write_text('set -gx PATH "$HOME/.local/bin" $PATH\nmise activate fish | source\n')
+            fish_config.write_text('set -gx PATH "$HOME/.local/bin" $PATH\nmise activate fish | source\n'
+                                   'mise env --shell fish | source\nset -g __setup_shared_node_activation 1\n')
             env = {
                 "HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"),
                 "MISE_DATA_DIR": str(data), "MISE_CACHE_DIR": str(home / "mise-cache"),
@@ -335,7 +383,8 @@ class SharedNodeTests(unittest.TestCase):
                                      '\nensure_pi_node_runtime'], cwd=home, env=env,
                                     capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual(config.read_text(), f'[tools]\nnode = "{version}"\n')
+            self.assertIn(f'[tools]\nnode = "{version}"\n', config.read_text())
+            self.assertIn('idiomatic_version_file_enable_tools = ["node"]', config.read_text())
             # The parent PATH still has no managed Node. A separate fish must activate it.
             fresh = subprocess.run([FISH, "-l", "-c", 'node -p process.execPath'], cwd=home, env=env,
                                    capture_output=True, text=True, timeout=20)
@@ -367,7 +416,7 @@ class SharedNodeTests(unittest.TestCase):
                                       '\nensure_pi_node_runtime'], cwd=home, env=env,
                                      capture_output=True, text=True, timeout=20)
             self.assertNotEqual(conflict.returncode, 0)
-            self.assertEqual(config.read_text(), f'[tools]\nnode = "{version}"\n')
+            self.assertIn(f'[tools]\nnode = "{version}"\n', config.read_text())
             self.assertEqual((home / '.mise.toml').read_text(), '[tools]\nnode = "18.19.1"\n')
 
     def test_global_22_19_is_upgraded_for_skills_requirement(self):

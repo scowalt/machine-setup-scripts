@@ -3452,13 +3452,17 @@ verify_shared_node_shell() {
                 *) ;;
             esac
         done
-        unset NODE_PATH NODE_OPTIONS BASH_ENV
+        unset NODE_PATH NODE_OPTIONS BASH_ENV __setup_shared_node_activation
         # Fish, not Bash, expands $argv in this probe.
         # shellcheck disable=SC2016
         env PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" MISE_AUTO_INSTALL=false "${_fish}" -l -c '
+            test "$__setup_shared_node_activation" = 1; or exit 1
             type -q mise; or exit 1
+            test (mise settings get activate_aggressive) = true; or exit 1
             set -l expected_node (mise which -C "$HOME" node); or exit 1
             node -e '\''const fs = require("node:fs"); const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major > 22 || (major === 22 && minor >= 20)) && typeof fs.globSync === "function" && fs.realpathSync(process.execPath) === fs.realpathSync(process.argv[1]) ? 0 : 1)'\'' "$expected_node"; or exit 1
+            set -l node_pin_tools (mise settings get idiomatic_version_file_enable_tools); or exit 1
+            node -e '\''const tools = JSON.parse(process.argv[1]); process.exit(Array.isArray(tools) && tools.includes("node") ? 0 : 1)'\'' "$node_pin_tools"; or exit 1
             npm --version >/dev/null; or exit 1
             if test (count $argv) -gt 0
                 test (command -s pi) = "$argv[1]"; or exit 1
@@ -3474,6 +3478,14 @@ ensure_shared_node_runtime() {
     export PATH="${HOME}/.local/bin:${HOME}/.mise/bin:${PATH}"
     if ! command -v mise &> /dev/null || ! command -v jq &> /dev/null; then
         print_warning "mise and jq are required to verify the shared Node runtime."
+        return 1
+    fi
+
+    # Preserve legacy fnm project pins when mise becomes the sole selector.
+    # Native additive settings preserve other enabled tools and unrelated config.
+    if ! MISE_AUTO_INSTALL=false mise settings add -C / idiomatic_version_file_enable_tools node < /dev/null >/dev/null 2>&1 ||
+        ! MISE_AUTO_INSTALL=false mise settings set -C / activate_aggressive true < /dev/null >/dev/null 2>&1; then
+        print_warning "Cannot configure mise PATH precedence and legacy Node pins; leaving dependent setup blocked."
         return 1
     fi
 
@@ -3532,8 +3544,18 @@ ensure_shared_node_runtime() {
         return 1
     fi
     if ! verify_shared_node_shell; then
-        print_warning "A fresh fish shell cannot use the shared Node/npm runtime. Apply the chezmoi mise activation and review HOME overrides before rerunning setup."
-        return 1
+        # Repair the managed profile, not this probe's PATH. Limit apply to the
+        # fish file: unrelated dotfiles and run_ scripts must not run here.
+        print_message "Refreshing chezmoi-managed fish activation for the shared Node runtime..."
+        if ! command -v chezmoi >/dev/null 2>&1 ||
+            ! chezmoi apply --force --include=files "${HOME}/.config/fish/config.fish" < /dev/null >/dev/null 2>&1; then
+            print_warning "Shared Node shell repair failed: chezmoi could not apply the managed fish profile. Check dotfiles access and update the source; leaving dependent setup blocked."
+            return 1
+        fi
+        if ! verify_shared_node_shell; then
+            print_warning "Shared Node shell repair failed verification. Update the dotfiles source and review HOME overrides or custom shell hooks; leaving dependent setup blocked."
+            return 1
+        fi
     fi
     print_debug "Shared Node.js $(node --version || true) is ready in setup and a fresh fish shell."
 }
@@ -8741,7 +8763,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     local PASEO_MUSE_DEFER_DAEMON_SETUP=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 119 | Last changed: Disable AskClaude while preserving Claude Bridge access"
+    echo -e "${GRAY}Version 120 | Last changed: Enforce durable shared Node activation across setup platforms"
 
     if ! acquire_setup_lock; then
         return 1

@@ -1,7 +1,9 @@
-# Version 2 | Last changed: Isolate the AskClaude policy from shared-runtime fixtures
+# Version 3 | Last changed: Cover shared-shell convergence and legacy native arguments
 # Offline only: AST-extracted setup functions, temporary homes, mocked tools and
 # persisted environment storage. Child probes run with -NoProfile and fixture
 # activation, never a user's profile. No real Pi, mise installs, or registry writes.
+param([switch]$LegacyNativeArguments)
+if ($LegacyNativeArguments) { $PSNativeCommandArgumentPassing = 'Legacy' }
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $tokens = $null
@@ -82,7 +84,7 @@ const vm = require('node:vm');
 const [code, version, glob, executable, expected] = process.argv.slice(1);
 let status = 99;
 const fs = { globSync: glob === 'true' ? () => [] : undefined, realpathSync: p => p };
-vm.runInNewContext(code, { process: { versions: { node: version }, execPath: executable, argv: ['node', expected], exit: c => { status = c; } }, require: () => fs });
+vm.runInNewContext(code, { Buffer, process: { versions: { node: version }, execPath: executable, argv: ['node', expected], exit: c => { status = c; } }, require: () => fs });
 process.exit(status);
 '@
     $savedOptions = $env:NODE_OPTIONS
@@ -134,9 +136,11 @@ function Reset-Fixture {
         EffectiveVersion = '24.20.0'; EffectiveGlob = $true
         FreshVersion = '24.20.0'; FreshGlob = $true; FreshIdentity = 'mise-node'
         MiseMissing = $false; FreshMiseMissing = $false; WhichFail = $false
-        ProvisionFail = $false; EnvFail = $false; EnvThrow = $false
+        ProvisionFail = $false; EnvFail = $false; EnvThrow = $false; SettingsFail = $false
         NpmFail = $false; FreshNpmFail = $false; NpmInstallFail = $false; RepairFail = $false
         FreshPiFail = $false; FreshPiShadow = $false; EmptyPiVersion = $false
+        ShellRepair = 'unavailable'; FreshActivationMissing = $false; FreshPolicyDisabled = $false; FreshPinsDisabled = $false
+        LegacyArguments = [bool]$LegacyNativeArguments
     }
     $script:PiRuntimePreflightPassed = $false
 }
@@ -152,6 +156,7 @@ function Get-Command {
     param([string]$Name, [switch]$All, $ErrorAction)
     if ($Name -eq 'mise') { if (-not $script:State.MiseMissing) { return [pscustomobject]@{ Source = 'fixture-mise' } }; return }
     if ($Name -eq 'npm') { return [pscustomobject]@{ Source = 'fixture-npm' } }
+    if ($Name -eq 'chezmoi') { if ($script:State.ShellRepair -ne 'unavailable') { return 'fixture-chezmoi' }; return }
     if ($Name -eq 'pi') { return [pscustomobject]@{ Source = (Join-Path $env:USERPROFILE '.local/pi.ps1') } }
     throw "Unexpected command discovery: $Name"
 }
@@ -182,6 +187,11 @@ function mise {
     Assert ($env:MISE_NODE_COMPILE -eq 'false' -and $env:MISE_AUTO_INSTALL -eq 'false') 'mise was allowed compilation or automatic installation.'
     $global:LASTEXITCODE = 0
     switch ($args[0]) {
+        'settings' {
+            Assert (($args -join '|') -in @("settings|add|-C|$([IO.Path]::GetPathRoot($env:USERPROFILE))|idiomatic_version_file_enable_tools|node",
+                "settings|set|-C|$([IO.Path]::GetPathRoot($env:USERPROFILE))|activate_aggressive|true")) 'Managed runtime settings did not use the expected native global operation.'
+            if ($script:State.SettingsFail) { $global:LASTEXITCODE = 1 }
+        }
         'ls' {
             Assert (($args -join '|') -eq "ls|-C|$([IO.Path]::GetPathRoot($env:USERPROFILE))|--global|--json|node") 'Inventory was not isolated from HOME/project overrides.'
             $script:State.InventoryReads++
@@ -208,6 +218,20 @@ function mise {
         }
         default { throw "Unexpected mise invocation: $args" }
     }
+}
+function chezmoi {
+    $script:Calls.Add("chezmoi $($args -join ' ')")
+    $global:LASTEXITCODE = 0
+    $source = Join-Path $testRoot 'dotfiles source'
+    if (($args -join '|') -eq 'source-path') {
+        if ($script:State.ShellRepair -eq 'failed-source') { $global:LASTEXITCODE = 1; return }
+        return $source
+    }
+    $target = Join-Path $source '.chezmoiscripts/run_before_powershell-mise.cmd.tmpl'
+    Assert (($args -join '|') -eq "apply|--force|--include=scripts|--source-path|$target") 'Shell repair applied unrelated dotfiles/scripts.'
+    if ($script:State.ShellRepair -eq 'success') { $script:State.FreshIdentity = 'mise-node'; $script:State.FreshActivationMissing = $false }
+    if ($script:State.ShellRepair -eq 'failed-apply') { $global:LASTEXITCODE = 1 }
+    return 'PRIVATE-SENTINEL arbitrary chezmoi output'
 }
 function npm {
     $script:Calls.Add("npm $($args -join ' ')")
@@ -256,8 +280,20 @@ function Invoke-SharedNodeShellProcess {
     $node64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script:RealNode))
     $bootstrap = @'
 $script:State = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__STATE__')) | ConvertFrom-Json
+if ($script:State.LegacyArguments) { $PSNativeCommandArgumentPassing = 'Legacy' }
 $script:RealNode = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__NODE__'))
+if (-not $script:State.FreshActivationMissing) { $global:__SetupSharedNodeActivation = 1 }
 function mise {
+    if (($args -join '|') -eq 'settings|get|activate_aggressive') {
+        $global:LASTEXITCODE = 0
+        if ($script:State.FreshPolicyDisabled) { return 'false' }
+        return 'true'
+    }
+    if (($args -join '|') -eq 'settings|get|idiomatic_version_file_enable_tools') {
+        $global:LASTEXITCODE = 0
+        if ($script:State.FreshPinsDisabled) { return '["python"]' }
+        return '["node"]'
+    }
     if (($args -join '|') -ne "which|-C|$env:USERPROFILE|node") { throw 'Wrong child mise query' }
     $global:LASTEXITCODE = if ($script:State.WhichFail) { 1 } else { 0 }
     'mise-node'
@@ -319,6 +355,21 @@ try {
         Assert-NoProvision
         Assert-Restored
     }
+    foreach ($repair in @('success', 'failed-apply', 'failed-source', 'ineffective')) {
+        Reset-Fixture
+        Set-Inventory
+        $script:State.FreshIdentity = 'legacy-fnm-node'
+        $script:State.ShellRepair = $repair
+        Assert-Boolean (Enable-SharedNodeRuntime) ($repair -eq 'success') "Targeted shell repair: $repair"
+        if ($repair -eq 'success') {
+            Assert-Boolean (Enable-SkillsCliNodeRuntime) $true 'Repaired shell did not remain healthy on rerun'
+        }
+        $applies = @($script:Calls | Where-Object { $_ -match '^chezmoi apply ' }).Count
+        Assert ($applies -eq [int]($repair -ne 'failed-source')) 'Shell repair was not bounded to one targeted apply.'
+        Assert (($script:Messages -join ' ') -notmatch 'PRIVATE-SENTINEL') 'Shell repair exposed arbitrary output.'
+        Assert-NoProvision
+        Assert-Restored
+    }
     foreach ($version in @('22.20.0', '22.21.1', '24.0.0', '26.1.0')) {
         Reset-Fixture
         Set-Inventory -Version $version
@@ -359,7 +410,7 @@ try {
 
     # Every preflight failure reaches the real Install-PiCli call site, with old
     # Pi shims and preferences as sentinels. Mutators and registry storage are spies.
-    $failures = @('inventory-error', 'reread-error', 'multiple', 'old-multiple', 'malformed', 'scalar', 'old-invalid', 'bad-row', 'null-row', 'empty-row', 'mise-missing', 'unsupported', 'download', 'not-installed', 'env-error', 'env-throw', 'home-conflict', 'effective-glob', 'npm', 'fresh-old', 'fresh-glob', 'fresh-system', 'fresh-mise', 'fresh-which', 'fresh-npm')
+    $failures = @('settings-error', 'inventory-error', 'reread-error', 'multiple', 'old-multiple', 'malformed', 'scalar', 'old-invalid', 'bad-row', 'null-row', 'empty-row', 'mise-missing', 'unsupported', 'download', 'not-installed', 'env-error', 'env-throw', 'home-conflict', 'effective-glob', 'npm', 'fresh-old', 'fresh-glob', 'fresh-system', 'fresh-contract', 'fresh-policy', 'fresh-pins', 'fresh-mise', 'fresh-which', 'fresh-npm')
     foreach ($failure in $failures) {
         Reset-Fixture
         Set-Inventory
@@ -372,6 +423,7 @@ try {
         $homePin = Join-Path $env:USERPROFILE '.mise.toml'
         [IO.File]::WriteAllText($homePin, '[tools] node = "18"')
         switch ($failure) {
+            'settings-error' { $script:State.SettingsFail = $true }
             'inventory-error' { $script:State.InventoryFailAt = 1 }
             'reread-error' { $script:State.Inventory = '[]'; $script:State.InventoryFailAt = 2 }
             'multiple' { $script:State.Inventory = '[{"version":"24.0.0"},{"version":"22.20.0"}]' }
@@ -394,6 +446,9 @@ try {
             'fresh-old' { $script:State.FreshVersion = '18.19.1' }
             'fresh-glob' { $script:State.FreshGlob = $false }
             'fresh-system' { $script:State.FreshIdentity = 'modern-system-node' }
+            'fresh-contract' { $script:State.FreshActivationMissing = $true }
+            'fresh-policy' { $script:State.FreshPolicyDisabled = $true }
+            'fresh-pins' { $script:State.FreshPinsDisabled = $true }
             'fresh-mise' { $script:State.FreshMiseMissing = $true }
             'fresh-which' { $script:State.WhichFail = $true }
             'fresh-npm' { $script:State.FreshNpmFail = $true }
