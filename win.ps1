@@ -4655,6 +4655,808 @@ function Remove-PiSubagents {
     return $true
 }
 
+# Native Windows file transaction. No metadata snapshots are written to disk.
+function Invoke-BacklogMcpWindowsRetirement {
+    param([string]$Program, [string[]]$Profiles)
+    $ErrorActionPreference = 'Stop'
+    $phase = 'preflight'
+    $pins = @{}
+    $records = @()
+    try {
+        # Import only inbox modules; do not load user profiles or custom modules.
+        $PSModuleAutoLoadingPreference = 'None'
+        Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
+        if (-not ('BacklogNativeFiles' -as [type])) {
+            Add-Type -TypeDefinition @'
+// BEGIN BACKLOG_WINDOWS_NATIVE
+using System;
+using System.IO;
+using System.Text;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Threading.Tasks;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using Microsoft.Win32.SafeHandles;
+public static class BacklogNativeFiles {
+    const int Limit = 2 * 1024 * 1024;
+    [StructLayout(LayoutKind.Sequential)]
+    struct Info {
+        public uint Attributes, CreatedLow, CreatedHigh, AccessLow, AccessHigh,
+            WriteLow, WriteHigh, Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+    }
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool GetFileInformationByHandle(SafeFileHandle file, out Info info);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern uint GetFileType(SafeFileHandle file);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern uint GetFinalPathNameByHandle(SafeFileHandle file, StringBuilder name, uint length, uint flags);
+    [DllImport("advapi32.dll", SetLastError=true)]
+    static extern bool GetKernelObjectSecurity(SafeFileHandle file, uint information, byte[] descriptor, uint length, out uint needed);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool SetFilePointerEx(SafeFileHandle file, long distance, out long position, uint method);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool ReadFile(SafeFileHandle file, byte[] data, uint length, out uint read, IntPtr overlapped);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool WriteFile(SafeFileHandle file, byte[] data, uint length, out uint written, IntPtr overlapped);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool SetEndOfFile(SafeFileHandle file);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool FlushFileBuffers(SafeFileHandle file);
+    static Exception Refuse() { return new InvalidOperationException("native-preflight"); }
+    public static string Canonical(string name) {
+        if (String.IsNullOrEmpty(name) || name.Length < 3 || !Char.IsLetter(name[0]) || name[1] != ':' || name[2] != '\\' || name.Contains("/")) throw Refuse();
+        foreach (string part in name.Substring(3).Split('\\')) {
+            if (part == "." || part == ".." || part.EndsWith(".") || part.EndsWith(" ") || part.IndexOfAny(new char[]{':','*','?','"','<','>','|'}) >= 0) throw Refuse();
+            string stem = part.Split('.')[0].ToUpperInvariant();
+            if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL" || stem == "CONIN$" || stem == "CONOUT$" ||
+                (stem.Length == 4 && (stem.StartsWith("COM") || stem.StartsWith("LPT")) && Char.IsDigit(stem[3]))) throw Refuse();
+        }
+        string full = Path.GetFullPath(name);
+        if (!String.Equals(full.TrimEnd('\\'), name.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) throw Refuse();
+        return full.Length == 3 ? full : full.TrimEnd('\\');
+    }
+    public static bool Below(string name, string home) {
+        return name.StartsWith(home.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase);
+    }
+    public static string ResolveRuntime(string name) {
+        // Only the trusted tool's executable alias may be resolved. Metadata
+        // paths always use OPEN_REPARSE_POINT and reject every reparse entry.
+        Canonical(name);
+        using (var file=CreateFile(name,0x80020000u,1,IntPtr.Zero,3,0,IntPtr.Zero)) {
+            if (file.IsInvalid || GetFileType(file) != 1) throw Refuse();
+            return FinalPath(file);
+        }
+    }
+    static string FinalPath(SafeFileHandle file) {
+        var text=new StringBuilder(32768);
+        uint count=GetFinalPathNameByHandle(file,text,(uint)text.Capacity,0);
+        if (count == 0 || count >= text.Capacity) throw Refuse();
+        string full=text.ToString();
+        if (!full.StartsWith("\\\\?\\",StringComparison.Ordinal)) throw Refuse();
+        return Canonical(full.Substring(4));
+    }
+    static bool BytesEqual(byte[] a, byte[] b) {
+        if (a.Length != b.Length) return false;
+        for (int i=0; i<a.Length; i++) if (a[i] != b[i]) return false;
+        return true;
+    }
+    static bool SameIdentity(Info a, Info b) {
+        return a.Volume == b.Volume && a.IndexHigh == b.IndexHigh && a.IndexLow == b.IndexLow && a.CreatedHigh == b.CreatedHigh && a.CreatedLow == b.CreatedLow;
+    }
+    static bool SameFile(Info a, Info b) {
+        return SameIdentity(a,b) && a.Attributes == b.Attributes && a.Links == b.Links && a.SizeHigh == b.SizeHigh && a.SizeLow == b.SizeLow && a.WriteHigh == b.WriteHigh && a.WriteLow == b.WriteLow;
+    }
+    public sealed class Pin : IDisposable {
+        readonly SafeFileHandle handle;
+        readonly bool directory, executable;
+        Info before;
+        readonly byte[] security;
+        byte[] snapshot;
+        public readonly string Name;
+        internal Pin(string name, SafeFileHandle file, bool isDirectory, bool isExecutable) {
+            Name=name; handle=file; directory=isDirectory; executable=isExecutable;
+            try { before=Inspect(); security=Descriptor(); if (!directory && !executable) snapshot=ReadBytes(); }
+            catch { handle.Dispose(); throw; }
+        }
+        Info Inspect() {
+            Info value;
+            if (handle.IsInvalid || GetFileType(handle) != 1 || !GetFileInformationByHandle(handle,out value)) throw Refuse();
+            if ((value.Attributes & 0x400) != 0 || ((value.Attributes & 0x10) != 0) != directory ||
+                !String.Equals(Name,FinalPath(handle),StringComparison.OrdinalIgnoreCase)) throw Refuse();
+            if (!directory && !executable && (value.Links != 1 || value.SizeHigh != 0 || value.SizeLow > Limit)) throw Refuse();
+            return value;
+        }
+        byte[] Descriptor() {
+            uint needed;
+            GetKernelObjectSecurity(handle,7,null,0,out needed);
+            if (needed == 0 || needed > 65536) throw Refuse();
+            var bytes=new byte[needed];
+            if (!GetKernelObjectSecurity(handle,7,bytes,needed,out needed)) throw Refuse();
+            return bytes;
+        }
+        public void CheckAcl(string owner, string home, bool mutate) {
+            var acl=new RawSecurityDescriptor(Descriptor(),0);
+            string sid=acl.Owner == null ? "" : acl.Owner.Value;
+            var allowed=new HashSet<string>(StringComparer.OrdinalIgnoreCase) {owner,"S-1-5-18","S-1-5-32-544"};
+            const string installer="S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+            bool inside=String.Equals(Name,home,StringComparison.OrdinalIgnoreCase) || Below(Name,home);
+            if ((mutate && !directory && !executable || String.Equals(Name,home,StringComparison.OrdinalIgnoreCase)) ? sid != owner : !allowed.Contains(sid) && sid != installer) throw Refuse();
+            if (!mutate) return;
+            // NULL DACL grants everyone full access. Unknown/object/callback ACEs are not guessed at.
+            if (acl.DiscretionaryAcl == null) throw Refuse();
+            int forbidden=0x10000 | 0x40000 | 0x80000 | 0x40; // delete, DACL/owner, delete-child
+            if (inside || !directory) forbidden |= 0x2 | 0x4 | 0x10 | 0x100; // data, append, EA, attributes
+            foreach (GenericAce ace in acl.DiscretionaryAcl) {
+                var rule=ace as CommonAce;
+                if (rule == null || rule.IsCallback) throw Refuse();
+                if ((rule.AceFlags & AceFlags.InheritOnly) != 0 || rule.AceQualifier != AceQualifier.AccessAllowed) continue;
+                if (!allowed.Contains(rule.SecurityIdentifier.Value) && rule.SecurityIdentifier.Value != installer && (rule.AccessMask & (forbidden | unchecked((int)0x50000000))) != 0) throw Refuse();
+            }
+        }
+        byte[] ReadBytes() {
+            Info value=Inspect();
+            if (directory || executable || value.SizeHigh != 0 || value.SizeLow > Limit) throw Refuse();
+            long position;
+            if (!SetFilePointerEx(handle,0,out position,0)) throw Refuse();
+            byte[] bytes=new byte[value.SizeLow]; int offset=0;
+            while (offset<bytes.Length) {
+                byte[] part=new byte[Math.Min(65536,bytes.Length-offset)]; uint count;
+                if (!ReadFile(handle,part,(uint)part.Length,out count,IntPtr.Zero) || count == 0 || count > part.Length) throw Refuse();
+                Buffer.BlockCopy(part,0,bytes,offset,(int)count); offset+=(int)count;
+            }
+            if (!SameFile(value,Inspect())) throw Refuse();
+            return bytes;
+        }
+        public string Snapshot() { Verify(); return Convert.ToBase64String(snapshot); }
+        public void Verify() {
+            Info now=Inspect();
+            if (!(directory ? SameIdentity(before,now) && before.Attributes == now.Attributes : SameFile(before,now)) || !BytesEqual(security,Descriptor())) throw Refuse();
+            if (!directory && !executable && !BytesEqual(snapshot,ReadBytes())) throw Refuse();
+        }
+        public void Write(string encoded) {
+            Verify(); byte[] bytes=Convert.FromBase64String(encoded);
+            if (bytes.Length > Limit) throw Refuse();
+            long position;
+            if (!SetFilePointerEx(handle,0,out position,0)) throw Refuse();
+            int offset=0;
+            while (offset<bytes.Length) {
+                byte[] part=new byte[Math.Min(65536,bytes.Length-offset)]; Buffer.BlockCopy(bytes,offset,part,0,part.Length); uint count;
+                if (!WriteFile(handle,part,(uint)part.Length,out count,IntPtr.Zero) || count == 0 || count > part.Length) throw Refuse();
+                offset+=(int)count;
+            }
+            if (!SetEndOfFile(handle) || !FlushFileBuffers(handle)) throw Refuse();
+            Info now=Inspect();
+            if (!SameIdentity(before,now) || !BytesEqual(security,Descriptor()) || !BytesEqual(bytes,ReadBytes())) throw Refuse();
+            before=now; snapshot=bytes;
+        }
+        public void Dispose() { handle.Dispose(); }
+    }
+    public static Pin Open(string name, bool directory, bool executable, bool missing) {
+        Canonical(name);
+        // Ancestors remain pinned; never follow a reparse leaf. Deny write/delete sharing.
+        uint access=directory ? 0x20021u : executable ? 0x80020000u : 0xC0020000u;
+        var handle=CreateFile(name,access,1,IntPtr.Zero,3,0x00200000u | (directory ? 0x02000000u : 0u),IntPtr.Zero);
+        if (handle.IsInvalid) {
+            int error=Marshal.GetLastWin32Error(); handle.Dispose();
+            if (missing && (error == 2 || error == 3)) return null;
+            throw Refuse();
+        }
+        return new Pin(name,handle,directory,executable);
+    }
+    static string Drain(TextReader reader, int limit) {
+        var text=new StringBuilder(); char[] buffer=new char[8192]; int count;
+        while ((count=reader.Read(buffer,0,buffer.Length)) > 0) {
+            if (text.Length+count>limit) throw Refuse(); text.Append(buffer,0,count);
+        }
+        return text.ToString();
+    }
+    public static string Plan(string bun, string request, string systemRoot) {
+        const string launcher="const q=JSON.parse(require('node:fs').readFileSync(0,'utf8'));const records=q.records;eval(q.program);";
+        var start=new ProcessStartInfo(bun,"--no-env-file --no-install --config=NUL --eval \""+launcher+"\"");
+        start.UseShellExecute=false; start.CreateNoWindow=true; start.RedirectStandardInput=true; start.RedirectStandardOutput=true; start.RedirectStandardError=true;
+        start.StandardOutputEncoding=new UTF8Encoding(false,true); start.StandardErrorEncoding=new UTF8Encoding(false,true);
+        start.WorkingDirectory=Path.Combine(systemRoot,"System32"); start.EnvironmentVariables.Clear();
+        foreach (string key in new string[]{"HOME","USERPROFILE","APPDATA","LOCALAPPDATA","XDG_CONFIG_HOME"}) start.EnvironmentVariables[key]=start.WorkingDirectory;
+        start.EnvironmentVariables["SystemRoot"]=systemRoot; start.EnvironmentVariables["WINDIR"]=systemRoot;
+        start.EnvironmentVariables["BUN_RUNTIME_TRANSPILER_CACHE_PATH"]="0";
+        // No inherited PATH, NODE_OPTIONS, BUN_OPTIONS, preload, profile, dotenv, or npm controls.
+        using (var process=new Process()) {
+            process.StartInfo=start; if (!process.Start()) throw Refuse();
+            var output=Task.Run(()=>Drain(process.StandardOutput,64*1024*1024));
+            var errors=Task.Run(()=>Drain(process.StandardError,4096));
+            var input=Task.Run(()=>{byte[] bytes=new UTF8Encoding(false,true).GetBytes(request); process.StandardInput.BaseStream.Write(bytes,0,bytes.Length); process.StandardInput.Close();});
+            try {
+                if (!process.WaitForExit(30000)) throw Refuse();
+                if (!Task.WaitAll(new Task[]{input,output,errors},5000) || process.ExitCode != 0 || errors.Result.Length != 0) throw Refuse();
+                return output.Result;
+            } finally { if (!process.HasExited) { process.Kill(); process.WaitForExit(); } }
+        }
+    }
+}
+// END BACKLOG_WINDOWS_NATIVE
+'@ -ErrorAction Stop
+        }
+        $homePath = [BacklogNativeFiles]::Canonical($Profiles[0])
+        if ($homePath.Length -le 3) { throw 'home' }
+        $owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        $systemRoot = [BacklogNativeFiles]::Canonical([Environment]::GetFolderPath([Environment+SpecialFolder]::Windows))
+        function Select-BacklogProfile([string]$value, [string]$fallback) {
+            if (-not $value) { $value = [IO.Path]::Combine($homePath, $fallback) }
+            $value = [BacklogNativeFiles]::Canonical($value)
+            if (-not [BacklogNativeFiles]::Below($value, $homePath)) { throw 'profile' }
+            return $value
+        }
+        $pi = Select-BacklogProfile $Profiles[1] '.pi\agent'
+        $claude = Select-BacklogProfile $Profiles[2] '.claude'
+        $codex = Select-BacklogProfile $Profiles[3] '.codex'
+        $gemini = Select-BacklogProfile $Profiles[4] '.gemini'
+        $targets = @{}
+        foreach ($relative in @('.config\mcp\mcp.json', '.agents\mcp.json', '.agents\mcp\mcp.json', '.claude.json', '.claude\mcp.json', '.claude\claude_desktop_config.json', '.cursor\mcp.json', '.windsurf\mcp.json', '.codex\config.json', '.gemini\settings.json', '.pi\agent\mcp.json')) {
+            $targets[[IO.Path]::Combine($homePath, $relative)] = 'json'
+        }
+        foreach ($pair in @(@($pi,'mcp.json'), @($claude,'.claude.json'), @($claude,'mcp.json'), @($claude,'claude_desktop_config.json'), @($codex,'config.json'), @($gemini,'settings.json'))) {
+            $targets[[IO.Path]::Combine($pair[0],$pair[1])] = 'json'
+        }
+        $targets[[IO.Path]::Combine($homePath,'.codex\config.json')] = 'codex-json'
+        $targets[[IO.Path]::Combine($codex,'config.json')] = 'codex-json'
+        $targets[[IO.Path]::Combine($homePath,'.cursor\mcp.json')] = 'editor-json'
+        $targets[[IO.Path]::Combine($homePath,'.windsurf\mcp.json')] = 'editor-json'
+        # Windows Claude Desktop uses Roaming AppData, not the macOS Library path.
+        $appData = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
+        if ($appData -and [BacklogNativeFiles]::Below($appData,$homePath)) {
+            $targets[[IO.Path]::Combine($appData,'Claude\claude_desktop_config.json')] = 'json'
+        }
+        $targets[[IO.Path]::Combine($homePath,'.codex\config.toml')] = 'toml'
+        $targets[[IO.Path]::Combine($codex,'config.toml')] = 'toml'
+        function Pin-BacklogDirectory([string]$directory, [bool]$missing) {
+            if ($pins.ContainsKey($directory)) { return $true }
+            $parent = [IO.Path]::GetDirectoryName($directory)
+            if ($parent -and -not (Pin-BacklogDirectory $parent $missing)) { return $false }
+            $pin = [BacklogNativeFiles]::Open($directory,$true,$false,$missing)
+            if ($null -eq $pin) { return $false }
+            $pins[$directory] = $pin
+            $pin.CheckAcl($owner,$homePath,$false)
+            return $true
+        }
+        if (-not (Pin-BacklogDirectory $homePath $false)) { throw 'home' }
+        $total = 0
+        foreach ($file in @($targets.Keys | Sort-Object)) {
+            $file = [BacklogNativeFiles]::Canonical($file)
+            if (-not [BacklogNativeFiles]::Below($file,$homePath)) { throw 'profile' }
+            if (-not (Pin-BacklogDirectory ([IO.Path]::GetDirectoryName($file)) $true)) { continue }
+            $pin = [BacklogNativeFiles]::Open($file,$false,$false,$true)
+            if ($null -eq $pin) { continue }
+            $pins[$file] = $pin
+            $pin.CheckAcl($owner,$homePath,$false)
+            $snapshot = $pin.Snapshot()
+            $total += $snapshot.Length
+            if ($total -gt 32MB) { throw 'size' }
+            $records += [pscustomobject]@{ format=$targets[$file]; input=$snapshot; pin=$pin; file=$file }
+        }
+        if ($records.Count -eq 0) { return [pscustomobject]@{ Status='absent'; Code=0 } }
+        $workingDirectory = [IO.Path]::Combine($systemRoot,'System32')
+        if (-not (Pin-BacklogDirectory $workingDirectory $false)) { throw 'runtime' }
+        $directory = $workingDirectory
+        while ($directory) { $pins[$directory].CheckAcl($owner,$systemRoot,$true); $directory=[IO.Path]::GetDirectoryName($directory) }
+        # Prefer fixed WinGet/native Bun locations, never a project or PATH shim.
+        # Resolve only the runtime executable alias; all metadata links are rejected.
+        $runtimeHome = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+        $runtimeRoots = @(
+            [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData),'Microsoft\WinGet'),
+            [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles),'WinGet'),
+            [IO.Path]::Combine($runtimeHome,'.bun'))
+        $bun = $null
+        foreach ($candidate in @([IO.Path]::Combine($runtimeRoots[0],'Links\bun.exe'), [IO.Path]::Combine($runtimeRoots[1],'Links\bun.exe'), [IO.Path]::Combine($runtimeRoots[2],'bin\bun.exe'))) {
+            if ([IO.File]::Exists($candidate)) { $bun = [BacklogNativeFiles]::ResolveRuntime($candidate); break }
+        }
+        if (-not $bun -or [IO.Path]::GetFileName($bun) -ine 'bun.exe') { throw 'parser' }
+        $trustedRuntime = $false
+        foreach ($root in $runtimeRoots) { if ([BacklogNativeFiles]::Below($bun,$root)) { $trustedRuntime=$true } }
+        if (-not $trustedRuntime) { throw 'parser' }
+        if (-not (Pin-BacklogDirectory ([IO.Path]::GetDirectoryName($bun)) $false)) { throw 'parser' }
+        $binary = [BacklogNativeFiles]::Open($bun,$false,$true,$false); $pins[$bun] = $binary
+        $binary.CheckAcl($owner,$runtimeHome,$true)
+        $directory = [IO.Path]::GetDirectoryName($bun)
+        while ($directory) { $pins[$directory].CheckAcl($owner,$runtimeHome,$true); $directory=[IO.Path]::GetDirectoryName($directory) }
+        $marker = '// END BACKLOG_PURE_PLANNER'
+        $end = $Program.IndexOf($marker,[StringComparison]::Ordinal)
+        if ($end -lt 0) { throw 'planner' }
+        $planner = $Program.Substring(0,$end) + "`ntry { process.stdout.write(JSON.stringify(planRetirement(records))); } catch { process.exitCode=1; }"
+        $snapshots = @($records | ForEach-Object { [pscustomobject]@{format=$_.format; input=$_.input} })
+        $request = ConvertTo-Json -InputObject @{program=$planner; records=$snapshots} -Depth 5 -Compress
+        $response = [BacklogNativeFiles]::Plan($bun,$request,$systemRoot)
+        $plan = @(ConvertFrom-Json -InputObject $response -ErrorAction Stop)
+        if ($plan.Count -ne $records.Count) { throw 'planner' }
+        $writes = @()
+        for ($i=0; $i -lt $records.Count; $i++) {
+            if ($null -ne $plan[$i]) {
+                if ($plan[$i] -isnot [string]) { throw 'planner' }
+                $data = [Convert]::FromBase64String($plan[$i])
+                if ($data.Length -gt 2MB) { throw 'size' }
+                $writes += [pscustomobject]@{ record=$records[$i]; output=$plan[$i] }
+            }
+        }
+        # Preflight ALL mutation ACLs before the first write. Ordinary native
+        # permissive files without a Backlog registration remain an absent no-op.
+        foreach ($write in $writes) {
+            $write.record.pin.CheckAcl($owner,$homePath,$true)
+            $directory = [IO.Path]::GetDirectoryName($write.record.file)
+            while ($directory) { $pins[$directory].CheckAcl($owner,$homePath,$true); $directory=[IO.Path]::GetDirectoryName($directory) }
+        }
+        foreach ($pin in $pins.Values) { $pin.Verify() }
+        $phase = 'write'
+        foreach ($write in $writes) {
+            foreach ($pin in $pins.Values) { $pin.Verify() }
+            $write.record.pin.Write($write.output)
+        }
+        foreach ($pin in $pins.Values) { $pin.Verify() }
+        $status = if ($writes.Count) { 'removed' } else { 'absent' }
+        return [pscustomobject]@{ Status=$status; Code=0 }
+    } catch {
+        $status = if ($phase -eq 'write') { 'write-failed' } else { 'native-preflight-failed' }
+        return [pscustomobject]@{ Status=$status; Code=1 }
+    } finally {
+        foreach ($pin in $pins.Values) { if ($null -ne $pin) { $pin.Dispose() } }
+    }
+}
+
+# Retire Backlog MCP from global agent configuration. The embedded program matches all five Bash scripts.
+function Remove-GlobalBacklogMcp {
+    if (-not (Enable-SharedNodeRuntime)) { Write-Error "Node.js is required to retire global Backlog MCP registrations."; return $false }
+    $program = @'
+// BEGIN BACKLOG_MCP_RETIREMENT
+const fs = require('node:fs');
+const path = require('node:path');
+const {spawnSync} = require('node:child_process');
+class RetirementError extends Error {}
+let phase = 'preflight';
+const fail = message => { throw new RetirementError(message); };
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const same = (a, b) => a && b && a.dev === b.dev && a.ino === b.ino && a.mode === b.mode && a.uid === b.uid && a.gid === b.gid &&
+    a.nlink === b.nlink && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+function info(file) { try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } }
+function absolute(value) {
+    if (!value || !path.isAbsolute(value) || value.split(/[\\/]/).some(part => part === '..' || part === '.')) fail('unsafe-path');
+    return path.resolve(value);
+}
+function trustedHomeAlias(file, stat) {
+    return process.platform === 'linux' && file === '/home' && stat.uid === 0 &&
+        ['var/home', '/var/home'].includes(fs.readlinkSync(file)) && ['/', '/var', '/var/home'].every(dir => {
+            const s = info(dir); return s?.isDirectory() && !s.isSymbolicLink() && s.uid === 0 && !(s.mode & 0o022);
+        });
+}
+function safeBoundary(file, mutate = false) {
+    const entries = [];
+    for (let current = file; ; current = path.dirname(current)) {
+        const stat = info(current);
+        if (!stat) fail('unsafe-path');
+        if (stat.isSymbolicLink()) {
+            if (!trustedHomeAlias(current, stat)) fail('unsafe-path');
+        } else if (!stat.isDirectory()) fail('unsafe-path');
+        else if (process.platform !== 'win32') {
+            const stickyRoot = stat.uid === 0 && (stat.mode & 0o1000);
+            if (![0, process.getuid()].includes(stat.uid) || mutate && (stat.mode & 0o022) && !stickyRoot) fail('unsafe-boundary');
+        }
+        entries.push({file: current, stat});
+        if (current === path.dirname(current)) break;
+    }
+    return entries;
+}
+function rawRead(fd, stat) {
+    if (stat.size > 2 * 1024 * 1024) fail('unsafe-metadata');
+    const buffer = Buffer.alloc(stat.size); let used = 0;
+    while (used < buffer.length) {
+        const count = fs.readSync(fd, buffer, used, buffer.length - used, used);
+        if (!count) fail('metadata-changed');
+        used += count;
+    }
+    return buffer;
+}
+function jsonDocument(text) {
+    let data;
+    try { data = JSON.parse(text.replace(/^\uFEFF/, '')); } catch { fail('malformed-metadata'); }
+    if (!object(data)) fail('malformed-metadata');
+    const tokens = text.match(/"(?:[^"\\]|\\.)*"|[{}\[\]:,]/g) || [], stack = [];
+    for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        if (token === '{' || token === '[') stack.push(token === '{' ? new Set() : null);
+        else if (token === '}' || token === ']') stack.pop();
+        else if (token.startsWith('"') && tokens[i + 1] === ':') {
+            const name = JSON.parse(token), keys = stack[stack.length - 1];
+            if (!keys || keys.has(name)) fail('duplicate-key'); keys.add(name);
+        }
+    }
+    return data;
+}
+function transformJson(text, serverKey = 'mcpServers') {
+    const data = jsonDocument(text);
+    if (!own(data, serverKey)) return null;
+    if (!object(data[serverKey])) fail('malformed-metadata');
+    const selected = new Set(Object.entries(data[serverKey]).filter(([name, value]) => backlog(name, value)).map(([name]) => name));
+    if (!selected.size) return null;
+    // Parse only source spans after validating JSON. Do not serialize unrelated
+    // values: JS numbers cannot represent every number permitted by JSON.
+    const tokens = [...text.matchAll(/"(?:[^"\\]|\\.)*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null|[{}\[\]:,]/g)];
+    let cursor = 0;
+    const take = expected => { const token = tokens[cursor++]; if (!token || expected && token[0] !== expected) fail('malformed-metadata'); return token; };
+    const parse = () => {
+        const token = take(), node = {start: token.index, end: token.index + token[0].length, members: []};
+        if (token[0] === '{' || token[0] === '[') {
+            const end = token[0] === '{' ? '}' : ']';
+            while (tokens[cursor]?.[0] !== end) {
+                let key;
+                if (token[0] === '{') { key = take(); take(':'); }
+                const value = parse();
+                if (key) node.members.push({name: JSON.parse(key[0]), start: key.index, end: value.end, value});
+                if (tokens[cursor]?.[0] === end) break;
+                take(',');
+            }
+            node.end = take(end).index + 1;
+        }
+        return node;
+    };
+    const root = parse();
+    if (cursor !== tokens.length) fail('malformed-metadata');
+    const servers = root.members.find(member => member.name === serverKey).value;
+    const kept = servers.members.filter(member => !selected.has(member.name));
+    const output = text.slice(0, servers.start + 1) + kept.map(member => text.slice(member.start, member.end)).join(',') + text.slice(servers.end - 1);
+    jsonDocument(output);
+    return output;
+}
+function backlog(name, definition) {
+    if (name.toLowerCase() === 'backlog') return true;
+    if (!object(definition) || typeof definition.command !== 'string') return false;
+    const command = definition.command.replace(/\\/g, '/').split('/').pop().toLowerCase().replace(/\.(cmd|exe)$/i, '');
+    return command === 'backlog' && Array.isArray(definition.args) && definition.args[0] === 'mcp' && definition.args[1] === 'start';
+}
+const tomlProgram = String.raw`
+import json, os, sys, tomllib
+text=sys.stdin.buffer.read().decode('utf-8')
+try: data=tomllib.loads(text)
+except Exception: print(json.dumps({'error':'malformed-toml'})); raise SystemExit
+servers=data.get('mcp_servers')
+if servers is None: print(json.dumps({'status':'absent'})); raise SystemExit
+if not isinstance(servers,dict): print(json.dumps({'error':'unsupported-toml'})); raise SystemExit
+def is_backlog(name, value):
+    if name.lower()=='backlog': return True
+    if not isinstance(value,dict) or not isinstance(value.get('command'),str): return False
+    command=value['command'].replace('\\','/').rsplit('/',1)[-1].lower()
+    if command.endswith(('.cmd','.exe')): command=command.rsplit('.',1)[0]
+    args=value.get('args')
+    return command=='backlog' and isinstance(args,list) and args[:2]==['mcp','start']
+candidates={name for name,value in servers.items() if is_backlog(name,value)}
+if not candidates: print(json.dumps({'status':'absent'})); raise SystemExit
+# Mask multiline strings before recognizing table-header lines. The complete
+# document has already passed tomllib, so this scanner only locates source spans.
+masked=list(text); i=0; quote=None
+while i < len(text):
+    if quote:
+        if text.startswith(quote,i):
+            for j in range(i,i+3): masked[j]=' '
+            i+=3; quote=None; continue
+        masked[i]='\n' if text[i]=='\n' else ' '
+        if quote=='\"\"\"' and text[i]=='\\' and i+1<len(text):
+            i+=1; masked[i]='\n' if text[i]=='\n' else ' '
+        i+=1; continue
+    if text.startswith('\"\"\"',i) or text.startswith("'''",i):
+        quote=text[i:i+3]
+        for j in range(i,i+3): masked[j]=' '
+        i+=3; continue
+    if text[i] in ('\"',"'"):
+        q=text[i]; masked[i]=' '; i+=1
+        while i<len(text) and text[i]!='\n':
+            c=text[i]; masked[i]=' '
+            if q=='\"' and c=='\\' and i+1<len(text): i+=1; masked[i]=' '
+            elif c==q: i+=1; break
+            i+=1
+        continue
+    if text[i]=='#':
+        while i<len(text) and text[i]!='\n': masked[i]=' '; i+=1
+        continue
+    i+=1
+masked=''.join(masked)
+headers=[]; offset=0
+for line, raw in zip(masked.splitlines(True), text.splitlines(True)):
+    stripped=line.strip()
+    if stripped.startswith('['):
+        header=raw.strip()
+        # Use tomllib itself to interpret quoted/dotted and array table keys.
+        try: probe=tomllib.loads(header+'\n__setup_marker__=true\n')
+        except Exception: print(json.dumps({'error':'unsupported-toml'})); raise SystemExit
+        paths=[]
+        def find(value,prefix=()):
+            if isinstance(value,dict):
+                if value.get('__setup_marker__') is True: paths.append(prefix)
+                for key,item in value.items():
+                    if key!='__setup_marker__': find(item,prefix+(key,))
+            elif isinstance(value,list):
+                for item in value: find(item,prefix)
+        find(probe)
+        if len(paths)!=1: print(json.dumps({'error':'unsupported-toml'})); raise SystemExit
+        headers.append((offset,paths[0]))
+    offset+=len(raw)
+spans=[]; represented=set()
+for index,(start,parts) in enumerate(headers):
+    end=headers[index+1][0] if index+1<len(headers) else len(text)
+    if len(parts)>=2 and parts[0]=='mcp_servers' and parts[1] in candidates:
+        represented.add(parts[1]); spans.append((start,end))
+if represented != candidates:
+    print(json.dumps({'error':'unsupported-toml'})); raise SystemExit
+output=text
+for start,end in reversed(spans): output=output[:start]+output[end:]
+try: candidate=tomllib.loads(output)
+except Exception: print(json.dumps({'error':'unsafe-toml-edit'})); raise SystemExit
+expected=dict(data); expected_servers=dict(servers)
+for name in candidates: expected_servers.pop(name,None)
+if expected_servers: expected['mcp_servers']=expected_servers
+else: expected.pop('mcp_servers',None)
+if candidate != expected:
+    print(json.dumps({'error':'unsafe-toml-edit'})); raise SystemExit
+print(json.dumps({'status':'removed','output':output}))
+`;
+function transformTomlNative(text) {
+    // Windows uses the built-in parser in Bun, already provisioned by WinGet.
+    const parse = value => { try { return Bun.TOML.parse(value); } catch { fail('malformed-toml'); } };
+    const data = parse(text), servers = data.mcp_servers;
+    if (servers === undefined) return {status: 'absent'};
+    if (!object(servers)) fail('unsupported-toml');
+    const selected = new Set(Object.entries(servers).filter(([name, value]) => backlog(name, value)).map(([name]) => name));
+    if (!selected.size) return {status: 'absent'};
+    // Mask strings/comments without changing offsets. Interpret header keys
+    // using the real TOML parser; validate the complete edited semantic tree.
+    const masked = text.split('');
+    let i = 0;
+    while (i < text.length) {
+        if (text[i] === '#') {
+            while (i < text.length && text[i] !== '\n') masked[i++] = ' ';
+        } else if (text[i] === '"' || text[i] === "'") {
+            const quote = text[i], triple = text.slice(i, i + 3) === quote.repeat(3);
+            const delimiter = triple ? quote.repeat(3) : quote;
+            for (let j = 0; j < delimiter.length; j++) masked[i++] = ' ';
+            while (i < text.length) {
+                if (text.startsWith(delimiter, i)) {
+                    for (let j = 0; j < delimiter.length; j++) masked[i++] = ' ';
+                    break;
+                }
+                const escaped = text[i] === '\\' && quote === '"';
+                if (text[i] !== '\n') masked[i] = ' ';
+                i++;
+                if (escaped && i < text.length) { if (text[i] !== '\n') masked[i] = ' '; i++; }
+            }
+        } else i++;
+    }
+    const headers = []; let offset = 0;
+    for (const line of masked.join('').split(/(?<=\n)/)) {
+        if (line.trimStart().startsWith('[')) {
+            const raw = text.slice(offset, offset + line.length).trim();
+            const probe = parse(raw + '\n__setup_marker__=true\n'), paths = [];
+            const find = (value, parts) => {
+                if (Array.isArray(value)) { for (const item of value) find(item, parts); }
+                else if (object(value)) {
+                    if (value.__setup_marker__ === true) paths.push(parts);
+                    for (const [name, item] of Object.entries(value)) if (name !== '__setup_marker__') find(item, [...parts, name]);
+                }
+            };
+            find(probe, []);
+            if (paths.length !== 1) fail('unsupported-toml');
+            headers.push({offset, parts: paths[0]});
+        }
+        offset += line.length;
+    }
+    const ranges = [], represented = new Set();
+    for (let h = 0; h < headers.length; h++) {
+        const {offset: start, parts} = headers[h];
+        if (parts.length >= 2 && parts[0] === 'mcp_servers' && selected.has(parts[1])) {
+            represented.add(parts[1]); ranges.push([start, headers[h + 1]?.offset ?? text.length]);
+        }
+    }
+    if (represented.size !== selected.size) fail('unsupported-toml');
+    let output = text;
+    for (const [start, end] of ranges.reverse()) output = output.slice(0, start) + output.slice(end);
+    const expected = {...data, mcp_servers: {...servers}};
+    for (const name of selected) delete expected.mcp_servers[name];
+    if (!Object.keys(expected.mcp_servers).length) delete expected.mcp_servers;
+    if (!require('node:util').isDeepStrictEqual(parse(output), expected)) fail('unsafe-toml-edit');
+    return {status: 'removed', output};
+}
+let tomlInterpreter;
+function pythonForToml() {
+    if (tomlInterpreter) return tomlInterpreter;
+    if (process.platform === 'win32') fail('toml-parser-unavailable');
+    const home = absolute(process.argv[2]);
+    function* candidates() {
+        yield* ['/usr/bin/python3', '/opt/homebrew/bin/python3', '/usr/local/bin/python3'];
+        // Inspect inventories only if system/Homebrew Python is incompatible.
+        // Never execute PATH shims or consult project version files.
+        for (const root of [path.join(home, '.pyenv/versions'), path.join(home, '.local/share/mise/installs/python')]) {
+            if (!info(root)) continue;
+            safeBoundary(root, true);
+            const versions = fs.readdirSync(root);
+            if (versions.length > 256) fail('toml-parser-unavailable');
+            for (const version of versions.filter(name => /^3\.\d+\.\d+t?$/.test(name)).sort().reverse()) yield path.join(root, version, 'bin/python3');
+        }
+    }
+    for (const candidate of candidates()) {
+        if (!info(candidate)) continue;
+        safeBoundary(path.dirname(candidate), true);
+        const resolved = fs.realpathSync(candidate), target = info(resolved);
+        if (!target?.isFile() || ![0, process.getuid()].includes(target.uid) || target.mode & 0o022) fail('toml-parser-unavailable');
+        safeBoundary(path.dirname(resolved), true);
+        // Non-root executables must stay within an expected managed prefix.
+        const allowed = ['/opt/homebrew/', '/usr/local/', path.join(home, '.pyenv/versions') + '/', path.join(home, '.local/share/mise/installs/python') + '/'];
+        if (target.uid !== 0 && !allowed.some(prefix => resolved.startsWith(prefix))) fail('toml-parser-unavailable');
+        const probe = spawnSync(resolved, ['-I', '-S', '-B', '-c', 'import tomllib; print("ready")'], {
+            encoding: 'utf8', maxBuffer: 4096, timeout: 5000, cwd: '/', env: {PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C'}
+        });
+        if (!probe.error && probe.status === 0 && probe.stdout.trim() === 'ready' && !probe.stderr) { tomlInterpreter = resolved; return resolved; }
+    }
+    fail('toml-parser-unavailable');
+}
+function transformToml(text) {
+    if (typeof Bun !== 'undefined') return transformTomlNative(text);
+    const command = pythonForToml();
+    const result = spawnSync(command, ['-I', '-S', '-B', '-c', tomlProgram], {
+        input: text, encoding: 'utf8', maxBuffer: 3 * 1024 * 1024, timeout: 10000, windowsHide: true,
+        cwd: '/', env: {PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', PYTHONHASHSEED: '0'}
+    });
+    if (result.error || result.status !== 0 || result.stderr || !result.stdout) fail('toml-parser-failed');
+    let report; try { report = JSON.parse(result.stdout); } catch { fail('toml-parser-failed'); }
+    if (report.error) fail(report.error);
+    if (!['absent','removed'].includes(report.status) || report.status === 'removed' && typeof report.output !== 'string') fail('toml-parser-failed');
+    return report;
+}
+function planRetirement(records) {
+    if (!Array.isArray(records) || records.length > 64) fail('malformed-metadata');
+    return records.map(record => {
+        if (!object(record) || !['json', 'codex-json', 'editor-json', 'toml'].includes(record.format) || typeof record.input !== 'string' || record.input.length > 3 * 1024 * 1024) fail('malformed-metadata');
+        const bytes = Buffer.from(record.input, 'base64');
+        if (bytes.length > 2 * 1024 * 1024 || bytes.toString('base64') !== record.input) fail('malformed-metadata');
+        const text = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(bytes);
+        let output = null;
+        if (record.format === 'toml') {
+            const report = transformToml(text);
+            if (report.status === 'removed') output = report.output;
+        } else {
+            output = transformJson(text);
+            const extraKey = record.format === 'codex-json' ? 'mcp_servers' : record.format === 'editor-json' ? 'mcp-servers' : null;
+            if (extraKey) output = transformJson(output ?? text, extraKey) ?? output;
+        }
+        return output === null ? null : Buffer.from(output).toString('base64');
+    });
+}
+// END BACKLOG_PURE_PLANNER
+try {
+    const logicalHome = absolute(process.argv[2]);
+    const logicalBoundary = safeBoundary(logicalHome);
+    const homeStat = info(logicalHome);
+    if (!homeStat?.isDirectory() || homeStat.isSymbolicLink()) fail('unsafe-home');
+    const home = fs.realpathSync(logicalHome);
+    const trustedAlias = process.platform === 'linux' && logicalHome.startsWith('/home/') && home.startsWith('/var/home/') &&
+        logicalBoundary.some(entry => entry.file === '/home' && entry.stat.isSymbolicLink() && trustedHomeAlias('/home', entry.stat));
+    if (home !== logicalHome && !trustedAlias) fail('unsafe-home');
+    const resolvedBoundary = safeBoundary(home);
+    const key = value => process.platform === 'win32' ? value.toLowerCase() : value;
+    const within = (file, base) => key(file) === key(base) || key(file).startsWith(key(base + path.sep));
+    const profile = (value, fallback) => {
+        const logical = absolute(value || path.join(logicalHome, fallback));
+        if (!within(logical, logicalHome)) fail('unsafe-profile');
+        return path.join(home, path.relative(logicalHome, logical));
+    };
+    const pi = profile(process.argv[3], '.pi/agent');
+    const claude = profile(process.argv[4], '.claude');
+    const codex = profile(process.argv[5], '.codex');
+    const gemini = profile(process.argv[6], '.gemini');
+    const files = [...new Set([
+        path.join(home, '.config/mcp/mcp.json'), path.join(home, '.agents/mcp.json'), path.join(home, '.agents/mcp/mcp.json'),
+        path.join(home, '.claude.json'), path.join(claude, '.claude.json'),
+        path.join(home, '.claude/mcp.json'), path.join(home, '.claude/claude_desktop_config.json'),
+        path.join(claude, 'mcp.json'), path.join(claude, 'claude_desktop_config.json'),
+        path.join(home, 'Library/Application Support/Claude/claude_desktop_config.json'),
+        path.join(home, '.cursor/mcp.json'), path.join(home, '.windsurf/mcp.json'),
+        path.join(home, '.codex/config.json'), path.join(codex, 'config.json'),
+        path.join(home, '.gemini/settings.json'), path.join(gemini, 'settings.json'),
+        path.join(home, '.pi/agent/mcp.json'), path.join(pi, 'mcp.json')
+    ])];
+    const tomlFiles = [...new Set([path.join(home, '.codex/config.toml'), path.join(codex, 'config.toml')])];
+    const records = [], boundaryMap = new Map([...logicalBoundary, ...resolvedBoundary].map(entry => [entry.file, entry.stat]));
+    function read(file) {
+        if (!within(file, home)) fail('unsafe-path');
+        const stat = info(file); if (!stat) return null;
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1 || stat.size > 2 * 1024 * 1024) fail('unsafe-metadata');
+        const boundaries = safeBoundary(path.dirname(file));
+        for (const entry of boundaries) boundaryMap.set(entry.file, entry.stat);
+        if (process.platform === 'win32') fail('native-wrapper-required');
+        const fd = fs.openSync(file, fs.constants.O_RDWR | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+        const opened = fs.fstatSync(fd);
+        if (!same(stat, opened) || !opened.isFile()) { fs.closeSync(fd); fail('metadata-changed'); }
+        const buffer = rawRead(fd, opened);
+        if (!same(opened, fs.fstatSync(fd)) || !same(opened, info(file))) { fs.closeSync(fd); fail('metadata-changed'); }
+        const record = {file, stat: opened, fd, raw: buffer, text: new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(buffer), output: null, boundaries}; records.push(record); return record;
+    }
+    for (const file of files) {
+        const record = read(file); if (!record) continue;
+        record.output = transformJson(record.text);
+        const extraKey = [path.join(home, '.codex/config.json'), path.join(codex, 'config.json')].includes(file) ? 'mcp_servers' :
+            [path.join(home, '.cursor/mcp.json'), path.join(home, '.windsurf/mcp.json')].includes(file) ? 'mcp-servers' : null;
+        if (extraKey) record.output = transformJson(record.output ?? record.text, extraKey) ?? record.output;
+    }
+    for (const file of tomlFiles) {
+        const record = records.find(item => item.file === file) || read(file); if (!record) continue;
+        const report = transformToml(record.text); if (report.status === 'removed') record.output = report.output;
+    }
+    const writes = records.filter(record => record.output !== null);
+    function verifyAll() {
+        for (const [file, stat] of boundaryMap) if (!same(stat, info(file))) fail('boundary-changed');
+        for (const record of records) {
+            const current = fs.fstatSync(record.fd);
+            if (!same(record.stat, current) || !same(record.stat, info(record.file)) || !rawRead(record.fd, current).equals(record.raw) || !same(record.stat, fs.fstatSync(record.fd))) fail('metadata-changed');
+        }
+        for (const record of writes) {
+            if (record.stat.uid !== process.getuid() || record.stat.mode & 0o022) fail('unsafe-metadata');
+            safeBoundary(path.dirname(record.file), true);
+        }
+    }
+    verifyAll();
+    phase = 'write';
+    for (const record of writes) {
+        verifyAll();
+        const data = Buffer.from(record.output); let offset = 0;
+        while (offset < data.length) {
+            const count = fs.writeSync(record.fd, data, offset, data.length - offset, offset);
+            if (!count) fail('short-write');
+            offset += count;
+        }
+        fs.ftruncateSync(record.fd, data.length); fs.fsyncSync(record.fd);
+        record.stat = fs.fstatSync(record.fd); record.raw = data;
+        if (!same(record.stat, info(record.file))) fail('metadata-changed');
+    }
+    for (const record of records) fs.closeSync(record.fd);
+    console.log(writes.length ? 'removed' : 'absent');
+} catch (error) {
+    const reason = error instanceof RetirementError ? error.message : 'filesystem-error';
+    console.log(phase === 'write' ? 'write-failed' : reason);
+    process.exitCode = 1;
+}
+// END BACKLOG_MCP_RETIREMENT
+'@
+    $arguments = @('--input-type=commonjs', '-', $HOME, [string]$env:PI_CODING_AGENT_DIR, [string]$env:CLAUDE_CONFIG_DIR, [string]$env:CODEX_HOME, [string]$env:GEMINI_CLI_HOME)
+    $oldNodeOptions = $env:NODE_OPTIONS; $oldNodePath = $env:NODE_PATH
+    try {
+        Remove-Item Env:NODE_OPTIONS -ErrorAction SilentlyContinue; Remove-Item Env:NODE_PATH -ErrorAction SilentlyContinue
+        if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+            $native = Invoke-BacklogMcpWindowsRetirement -Program $program -Profiles @(
+                $HOME, [string]$env:PI_CODING_AGENT_DIR, [string]$env:CLAUDE_CONFIG_DIR,
+                [string]$env:CODEX_HOME, [string]$env:GEMINI_CLI_HOME)
+            $result = $native.Status
+            $retirementExitCode = $native.Code
+        } else {
+            $result = $program | & node @arguments 2>$null
+            $retirementExitCode = $LASTEXITCODE
+        }
+    } finally {
+        if ($null -eq $oldNodeOptions) { Remove-Item Env:NODE_OPTIONS -ErrorAction SilentlyContinue } else { $env:NODE_OPTIONS = $oldNodeOptions }
+        if ($null -eq $oldNodePath) { Remove-Item Env:NODE_PATH -ErrorAction SilentlyContinue } else { $env:NODE_PATH = $oldNodePath }
+    }
+    $retirementResult = ($result | Out-String).Trim()
+    if ($retirementExitCode -ne 0) {
+        if ($retirementResult -eq 'write-failed') { Write-Error "Global Backlog MCP retirement failed during a write; review the affected global metadata before retrying." }
+        elseif ($retirementResult -in @('unsafe-path','unsafe-home','unsafe-profile','unsafe-boundary','unsafe-metadata','malformed-metadata','duplicate-key','unsupported-json-number','malformed-toml','unsupported-toml','toml-parser-failed','toml-parser-unavailable','unsafe-toml-edit','metadata-changed','boundary-changed','native-wrapper-required','native-preflight-failed','filesystem-error')) { Write-Error "Global Backlog MCP retirement preflight failed; no changes were made." }
+        else { Write-Error "Global Backlog MCP retirement failed for an unknown controlled reason; review global metadata before retrying." }
+        return $false
+    }
+    switch ($retirementResult) {
+        'removed' { Write-Success "Retired global Backlog MCP registrations; repository-local configuration and task data were preserved."; return $true }
+        'absent' { Write-Debug "Global Backlog MCP registrations are absent."; return $true }
+        default { Write-Error "Global Backlog MCP retirement returned an invalid result."; return $false }
+    }
+}
+# End global Backlog MCP retirement.
+
 # Pi prose retirement. The embedded program matches all five Bash scripts.
 # Secure only managed Pi directory boundaries; metadata remains with its validators.
 function Prepare-PiProfilePermissions {
@@ -7109,7 +7911,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 156 | Last changed: Enforce durable shared Node activation across setup platforms"
+    Write-Host "Version 157 | Last changed: Retire global Backlog MCP registrations"
 
     Assert-HeadlessPaseoUnsupported
     $null = Get-PaseoReleaseChannel
@@ -7133,6 +7935,8 @@ function Invoke-WindowsSetupTasks {
         Install-Chezmoi
         Update-Chezmoi
     }
+
+    if (-not (Remove-GlobalBacklogMcp)) { $piSetupFailed = $true }
 
     Write-Section "Terminal Configuration"
     Set-StarshipInit
