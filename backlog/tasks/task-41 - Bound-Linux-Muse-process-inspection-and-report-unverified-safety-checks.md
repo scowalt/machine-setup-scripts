@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-21 15:59'
-updated_date: '2026-09-21 16:46'
+updated_date: '2026-09-21 16:58'
 labels: []
 dependencies: []
 documentation:
@@ -48,6 +48,10 @@ Reproduced and fixed foreign cmdline EACCES, foreign service-owner exclusion, un
 Regression verification passed: headless daemon, CLI cleanup, release channel (including explicit PowerShell fixtures), Pi profile permissions, Go with the installed native proper-lockfile module, Go wiring, Plain retirement, shared Node runtime, setup reliability, pending reboot, Windows log upload, model defaults, Telegram alerts, AI agents and weekly log-audit suites. Explicit PowerShell reliability/model/Telegram suites also pass.
 
 ShellCheck and Bash syntax checks pass. Markdownlint uses an existing cached CLI without installation and respects the repository exclusion of vendored CLAUDE.md. Optional fixtures requiring extra modules/platforms remain skipped where unavailable; native Windows ACL and native macOS execution are not claimed. Self-review confirmed six identical embedded helpers and preserved platform, lock, custom-home and restoration gates.
+
+Remote-main publication was blocked by the full pre-push suite: tests/backlog-mcp-retirement-contract.sh incorrectly freezes every setup script header to the previous feature description. Reproduced with the isolated contract (exit 1); its native/simulated retirement fixtures pass before the obsolete grep assertion. Adjusting only that header assertion while retaining all retirement behavior checks.
+
+The Backlog retirement contract now checks version-header structure instead of freezing the prior feature description. Its Bash, planner and PowerShell fixtures pass with PWSH_BIN; ShellCheck passes. Full pre-push hooks remain enabled for publication.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
@@ -74,4 +78,6 @@ Controlled diagnostics survive Bash/PowerShell wrappers and recovery; unknown ou
 
 **Door:** two-way.
 **Blast Radius:** future setup runs on all six platforms; Linux inventory changes and cross-platform safety-result reporting. Conservative checks can still block uncertain processes. No live setup, daemon restart, fleet change or model request was made. Native Windows ACLs/macOS execution need platform verification; audited host failures are not all proven to share one cause.
+
+Publication follow-up: fixed the pre-existing Backlog contract assertion that froze Last changed text to the previous feature. Header structure is still verified, and all retirement behavior fixtures remain enabled.
 <!-- SECTION:FINAL_SUMMARY:END -->

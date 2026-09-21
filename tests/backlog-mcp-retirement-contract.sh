@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 2 | Last changed: Verify native Windows Backlog retirement and isolated planner IPC
+# Version 3 | Last changed: Allow version headers to describe later setup changes
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -45,12 +45,14 @@ POWERSHELL_STUBS
     "${PWSH_BIN}" -NoProfile -File tests/backlog-mcp-windows.ps1
 fi
 
+# Headers must remain versioned, but later features legitimately replace their
+# change descriptions. Retirement behavior is checked by the fixtures above.
 for script in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh; do
     grep -Fq 'retire_global_backlog_mcp' "${script}"
-    grep -Fq 'Last changed: Retire global Backlog MCP registrations' "${script}"
+    grep -Eq 'Version [0-9]+ \| Last changed: .+' "${script}"
 done
 grep -Fq 'Remove-GlobalBacklogMcp' win.ps1
-grep -Fq 'Last changed: Retire global Backlog MCP registrations' win.ps1
+grep -Eq 'Version [0-9]+ \| Last changed: .+' win.ps1
 
 if [[ -n "${BACKLOG_DOTFILES_SOURCE:-}" ]]; then
     [[ ! -e "${BACKLOG_DOTFILES_SOURCE}/.mcp.json" ]]
