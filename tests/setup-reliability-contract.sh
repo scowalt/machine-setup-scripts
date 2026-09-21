@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 1 | Last changed: Respect explicit Codex installer destinations in fixtures
+# Version 2 | Last changed: Assert incomplete macOS Homebrew setup results
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -404,6 +404,9 @@ for file in "${linux_apt_scripts[@]}"; do
     assert_contains "${file}" 'libncurses-dev' 'canonical ncurses development package'
 done
 
+# Extracted helper + caller coverage also checks final status and log finalization.
+python3 tests/test_homebrew_results.py
+
 # A failed brew phase must not produce success, and tmux must always be unpinned.
 brew_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
     source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
@@ -418,11 +421,14 @@ brew_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_w
     }
     BREW_CALL_LOG=$(mktemp)
     export BREW_CALL_LOG
-    update_brew
+    status=0
+    update_brew || status=$?
+    printf "status=%s\n" "${status}"
     printf "%s\n" "--- calls ---"
     cat "${BREW_CALL_LOG}"
     rm -f "${BREW_CALL_LOG}"
 ')
+grep -q '^status=1$' <<< "${brew_output}" || fail 'mac.sh: Brew failure returned success'
 grep -q 'Homebrew update/upgrade incomplete' <<< "${brew_output}" || fail 'mac.sh: brew failure lacks a concise warning'
 grep -q 'brew reinstall --cask --force bartender' <<< "${brew_output}" || fail 'mac.sh: brew failure lacks cask remediation'
 if grep -q 'Homebrew updated\.' <<< "${brew_output}"; then
@@ -444,8 +450,11 @@ residual_brew_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="$
         esac
         return 0
     }
-    update_brew
+    status=0
+    update_brew || status=$?
+    printf "status=%s\n" "${status}"
 ')
+grep -q '^status=1$' <<< "${residual_brew_output}" || fail 'mac.sh: incomplete postcheck returned success'
 grep -q 'Homebrew packages remain outdated after upgrade: docker-desktop' <<< "${residual_brew_output}" || fail 'mac.sh: residual Homebrew package lacked an actionable warning'
 if grep -q 'Homebrew updated\.' <<< "${residual_brew_output}"; then
     fail 'mac.sh: residual outdated Homebrew package was reported as successful'
@@ -464,8 +473,11 @@ untrusted_brew_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="
         fi
         return 0
     }
-    update_brew
+    status=0
+    update_brew || status=$?
+    printf "status=%s\n" "${status}"
 ')
+grep -q '^status=1$' <<< "${untrusted_brew_output}" || fail 'mac.sh: trust-skipped work returned success'
 grep -q 'Unmanaged Homebrew formula example/unmanaged/tool remains untrusted' <<< "${untrusted_brew_output}" || fail 'mac.sh: unmanaged tap item warning missing'
 grep -q 'Unmanaged Homebrew formula tursodatabase/tap/extra-tool remains untrusted' <<< "${untrusted_brew_output}" || fail 'mac.sh: partially trusted managed tap warning missing'
 if grep -q 'Homebrew updated\.' <<< "${untrusted_brew_output}"; then

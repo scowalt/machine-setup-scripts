@@ -11,6 +11,7 @@ module in temporary Node contenders; it never executes a daemon or worker.
 """
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import shlex
@@ -54,6 +55,7 @@ os.userInfo = () => ({homedir:state.accountHome || logicalHome, uid, username:'f
 os.hostname = () => 'fixture-machine';
 os.release = () => state.wsl ? 'microsoft-standard-WSL2' : 'fixture';
 state.calls = [];
+state.procReads = {};
 state.nodeOptions = process.env.NODE_OPTIONS ?? null;
 state.nodePath = process.env.NODE_PATH ?? null;
 state.mode = process.argv[2] ?? null;
@@ -72,16 +74,29 @@ function procRows() {
   }
   if (state.otherWriter || state.leftover) rows.push({pid:4300,parent:1,command:state.otherWriter || 'renamed-worker',
     env:{HOME:home,...(state.hiddenWriter ? {} : {PASEO_HOME:paseo})},cgroup:state.leftover ? '0:'+group() : '0::/other.scope'});
-  return rows;
+  if (state.foreignProcess) rows.push({pid:4400,parent:1,uid:uid+1,command:'unrelated service',env:{PRIVATE:'fixture-private-text-never-print'},cgroup:'0::/system.slice/other.service'});
+  rows.push(...(state.extraProcesses || []));
+  return rows.filter(row => !(state.disappearedPids || []).includes(row.pid)).map(row => ({...row, ...state.rowOverrides?.[row.pid]}));
 }
 function group() { return `:/user.slice/user-${uid}.slice/user@${uid}.service/app.slice/paseo.service`; }
 function procFile(file) {
-  const m = String(file).match(/^\/proc\/(\d+)\/(stat|cmdline|environ|cgroup)$/);
+  const m = String(file).match(/^\/proc\/(\d+)\/(stat|status|cmdline|environ|cgroup)$/);
   if (!m) return null;
   if (state.inventoryDenied) error('EACCES');
   const row = procRows().find(p=>p.pid===Number(m[1]));
   if (!row) error('ENOENT');
-  if(m[2]==='stat') return `${row.pid} (fixture) S ${row.parent} 0 0 0`;
+  const key = `${row.pid}/${m[2]}`;
+  state.procReads ||= {}; state.procReads[key] = (state.procReads[key] || 0) + 1;
+  const response = state.procResponses?.[key];
+  if (response !== undefined) {
+    const value = Array.isArray(response) ? response[Math.min(state.procReads[key]-1,response.length-1)] : response;
+    if (typeof value === 'string') return value;
+    if (value?.gone) (state.disappearedPids ||= []).push(row.pid);
+    if (value?.code) error(value.code);
+  }
+  if(m[2]==='stat') return `${row.pid} (fixture) ${row.state || 'S'} ${row.parent} ${Array(17).fill('0').join(' ')} ${row.start || '12345'}`;
+  if(m[2]==='status') return `Pid:\t${row.pid}\nPPid:\t${row.parent}\nUid:\t${(row.uids || Array(4).fill(row.uid ?? uid)).join('\t')}\n`;
+  if(row.pid===4400 && ['cmdline','environ'].includes(m[2])) { state.forbiddenRead=true; error('EACCES'); }
   if(m[2]==='cmdline') return row.command.replaceAll(' ','\0');
   if(m[2]==='environ') return Object.entries(row.env).map(([k,v])=>`${k}=${v}`).join('\0');
   return row.cgroup;
@@ -104,7 +119,7 @@ fs.realpathSync = function(file,...args) {
   return original.realpathSync(file,...args);
 };
 fs.readFileSync = function(file,...args) { const p=procFile(file); if(p!==null) return p; return original.readFileSync(mapped(file),...args); };
-fs.statSync = function(file,...args) { if(/^\/proc\/\d+$/.test(String(file))) return {uid:procRows().find(p=>p.pid===Number(String(file).split('/').pop()))?.uid ?? uid}; return original.statSync(mapped(file),...args); };
+fs.statSync = function(file,...args) { if(/^\/proc\/\d+$/.test(String(file))) return {uid:procRows().find(p=>p.pid===Number(String(file).split('/').pop()))?.procUid ?? procRows().find(p=>p.pid===Number(String(file).split('/').pop()))?.uid ?? uid}; return original.statSync(mapped(file),...args); };
 fs.lstatSync = function(file,...args) {
   if((state.alias || state.aliasHome) && ['/home','/var','/var/home'].includes(file)) {
     return {uid:state.aliasBadOwner ? 99 : 0,mode:state.aliasWritable ? 0o777 : 0o755,
@@ -208,6 +223,7 @@ function stop() {
   }
   if(state.interruptAfterStop) process.emit('SIGTERM');
   if(state.newWriterAfterStop) state.otherWriter='new-nonstandard-writer';
+  if(state.inventoryFailureAfterStop) state.procResponses = {'4100/environ': {code:'EACCES'}};
   if(Object.hasOwn(state,'managerEnvAfterStop')) state.managerEnv=state.managerEnvAfterStop;
   if(Object.hasOwn(state,'macManagerEnvAfterStop')) state.macManagerEnv=state.macManagerEnvAfterStop;
   saved();
@@ -310,6 +326,192 @@ class MuseProfileTests(unittest.TestCase):
         self.assertEqual(result.stderr, '', result.stderr)
         return result
 
+    def test_unrelated_foreign_process_needs_no_sensitive_reads(self):
+        self.state['foreignProcess'] = True
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertFalse(self.state['forbiddenRead'])
+        self.assertEqual(self.managed()['model'], CORE['model'])
+
+    def test_dumpability_and_mixed_uids_do_not_hide_relevant_processes(self):
+        for uids in ([os.getuid()] * 4, [os.getuid()+1, os.getuid()+1, os.getuid(), os.getuid()+1]):
+            with self.subTest(uids=uids):
+                self.state = {'rowOverrides': {'4100': {'procUid': 0, 'uids': uids}},
+                              'procResponses': {'4100/environ': {'code': 'EACCES'}}}
+                result = self.run_helper()
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn('process-inventory-unverified', result.stdout)
+                self.assertFalse(self.config.exists())
+                self.assertFalse(self.mutations())
+
+    def test_inventory_denials_have_controlled_operation_diagnostics(self):
+        for name in ('stat', 'status', 'cmdline', 'environ', 'cgroup'):
+            with self.subTest(name=name):
+                self.state = {'procResponses': {f'4100/{name}': {'code': 'EACCES'}}}
+                result = self.run_helper()
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(f'Paseo Muse diagnostic: inventory-{name}: EACCES.', result.stdout)
+                self.assertFalse(self.mutations())
+
+    def test_unverified_owner_is_incomplete_in_both_modes(self):
+        self.seed_service()
+        self.state['rowOverrides'] = {'4202': {'uid': os.getuid()+1}}
+        for mode in (None, 'verify-owner'):
+            with self.subTest(mode=mode):
+                result = self.run_helper(mode=mode)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn('owner-unverified', result.stdout)
+                self.assertFalse(self.mutations())
+
+    def test_foreign_service_participants_are_not_excluded(self):
+        self.seed_service()
+        self.state['rowOverrides'] = {'4200': {'uid': os.getuid()+1}}
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('owner-unverified', result.stdout)
+        self.assertFalse(self.mutations())
+
+    def test_bash_wrapper_rejects_unrecognized_or_incomplete_output(self):
+        text = (ROOT / 'ubuntu.sh').read_text()
+        function = 'configure_paseo_muse_profile() {' + text.split('configure_paseo_muse_profile() {', 1)[1].split('\nremove_paseo_plain() {', 1)[0]
+        bin_dir = self.root / 'bin'
+        bin_dir.mkdir()
+        node = bin_dir / 'node'
+        node.write_text('#!/bin/bash\nprintf "%s\\n" "${MOCK_OUTPUT}"\nprintf "%s\\n" "fixture-private-text-never-print" >&2\n')
+        node.chmod(0o700)
+        script = 'print_warning() { printf "%s\\n" "$*"; }; print_debug() { :; }; print_success() { :; }\n' + function
+        script += '\nstatus=0; configure_paseo_muse_profile || status=$?\n[[ "${status}" == 1 && "${PASEO_MUSE_DEFER_DAEMON_SETUP}" == 1 ]]\n'
+        for output in ('', 'PASEO_MUSE_UPDATED', 'PASEO_MUSE_RESULT=success', f'Paseo Muse {SECRET}', f'Quit Paseo Desktop {SECRET}',
+                       'PASEO_MUSE_UPDATED\nPaseo Muse diagnostic: inventory-environ: EACCES.\nPASEO_MUSE_RESULT=success',
+                       'PASEO_MUSE_UPDATED\nPASEO_MUSE_RESULT=success\nPASEO_MUSE_RESULT=success'):
+            with self.subTest(output=output):
+                result = subprocess.run(['bash', '-c', script], env={**self.env, 'PATH': f'{bin_dir}:/usr/bin:/bin', 'MOCK_OUTPUT': output},
+                                        text=True, capture_output=True, timeout=15)
+                self.assertNotIn(SECRET, result.stdout + result.stderr)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_dead_service_member_does_not_block_but_live_descendant_does(self):
+        self.seed_service()
+        self.state.update(leftover=True, rowOverrides={'4300': {'state': 'Z'}})
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(self.managed()['model'], CORE['model'])
+        self.env['PASEO_MUSE_GO_CHANGED'] = '1'
+        self.state['extraProcesses'] = [{'pid': 4401, 'parent': 4300, 'command': 'renamed-worker',
+            'env': {'HOME': str(self.home), 'PASEO_HOME': str(self.paseo)}, 'cgroup': '0::/other.scope'}]
+        self.assert_deferred('unknown-writer')
+
+    def test_invalid_identity_is_not_evidence_of_foreign_ownership(self):
+        valid = f'Pid:\t4100\nPPid:\t1\nUid:\t{os.getuid()}\t{os.getuid()}\t{os.getuid()}\t{os.getuid()}\n'
+        for status in ('Pid:\t4100\nPPid:\t1\n', valid + 'Uid:\t0 0 0 0\n',
+                       valid.replace('Uid:\t', 'Uid:\t-1 '), valid.replace('Pid:\t4100', 'Pid:\t123'),
+                       valid.replace('PPid:\t1', 'PPid:\tNaN'), 'Pid:\t4100\nPPid:\t1\nUid:\t4294967296 4294967296 4294967296 4294967296\n'):
+            with self.subTest(status=status):
+                self.state = {'procResponses': {'4100/status': status}}
+                result = self.run_helper()
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn('process-inventory-unverified', result.stdout)
+                self.assertFalse(self.mutations())
+                self.assertFalse(self.config.exists())
+
+    def test_pid_reuse_and_changed_credentials_fail_closed(self):
+        stat = '4100 (fixture with ) brackets) S 1 ' + '0 ' * 17
+        statuses = [f'Pid:\t4100\nPPid:\t1\nUid:\t{u} {u} {u} {u}\n' for u in (os.getuid(), os.getuid()+1)]
+        for responses in ({'4100/stat': [stat + '123', stat + '456']}, {'4100/status': statuses}):
+            with self.subTest(responses=responses):
+                self.state = {'procResponses': responses}
+                result = self.run_helper()
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn('inventory-identity: changed.', result.stdout)
+                self.assertFalse(self.mutations())
+
+    def test_missing_field_and_unknown_native_error_do_not_look_like_exit(self):
+        for code in ('ENOENT', 'ESRCH', SECRET):
+            with self.subTest(code=code):
+                self.state = {'procResponses': {'4100/status': {'code': code}}}
+                result = self.run_helper()
+                self.assertEqual(result.returncode, 1, result.stdout)
+                expected = 'unknown' if code == SECRET else code
+                self.assertIn(f'inventory-status: {expected}.', result.stdout)
+                self.assertFalse(self.mutations())
+
+    def test_disappearance_requires_no_live_instance_and_retains_required_ancestry(self):
+        self.state = {'foreignProcess': True, 'procResponses': {'4400/status': {'gone': True, 'code': 'ENOENT'}}}
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.config.unlink()
+        self.state = {'procResponses': {'4100/status': {'gone': True, 'code': 'ENOENT'}}}
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('ancestry-unverified', result.stdout)
+        self.assertFalse(self.config.exists())
+        self.assertFalse(self.mutations())
+
+    def test_inventory_diagnostic_survives_failed_restoration(self):
+        self.seed_service()
+        self.state['inventoryFailureAfterStop'] = True
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('inventory-environ: EACCES.', result.stdout)
+        self.assertIn('service-restore-failed', result.stdout)
+        self.assertFalse(self.config.exists())
+        self.assertEqual(self.mutations(), [['systemctl', '--user', 'stop', 'paseo.service']])
+
+    def test_foreign_ancestor_keeps_ancestry_without_sensitive_reads(self):
+        self.state = {'rowOverrides': {'4100': {'uid': os.getuid()+1}}, 'procResponses': {
+            '4100/cmdline': {'code': 'EACCES'}, '4100/environ': {'code': 'EACCES'}}}
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn('4100/cmdline', self.state['procReads'])
+        self.assertNotIn('4100/environ', self.state['procReads'])
+        self.assertEqual(self.managed()['model'], CORE['model'])
+
+    def test_inventory_failure_reaches_actual_bash_callers_and_final_logs(self):
+        # Reuse only the inert orchestration slice builder, not live setup.
+        from test_opencode_go_wiring import WiringTests
+        env, poison = self.prepare_poisoned_wrapper()
+        self.state['procResponses'] = {'4100/environ': {'code': 'EACCES'}}
+        inert = ('prepare_pi_profile_permissions', 'disable_pi_askclaude', 'remove_pi_prose',
+            'install_pi_cli', 'prepare_pi_mcp_adapter', 'configure_pi_opencode_go',
+            'remove_rtk_resources', 'remove_attention_span_resources', 'setup_matt_pocock_skills',
+            'configure_pi_defaults', 'remove_pi_synthetic_models', 'seed_pi_zai_models',
+            'setup_pi_mcp_adapter', 'remove_pi_subagents', 'remove_pi_rpiv_packages',
+            'setup_pi_claude_bridge', 'setup_pi_companion_packages', 'setup_pi_goal_autoresearch')
+        for name in SCRIPTS[:-1]:
+            with self.subTest(script=name):
+                text = (ROOT / name).read_text()
+                helper = 'configure_paseo_muse_profile() {' + text.split('configure_paseo_muse_profile() {', 1)[1].split('\nremove_paseo_plain() {', 1)[0]
+                main = re.search(r'^main\(\) \{\n.*?^\}', text, re.M | re.S)[0]
+                tail = text.split('    if [[ "${_setup_had_errors}" -eq 0 ]]; then', 1)[1].split('\n}\n', 1)[0]
+                code = 'set -eu\nGREEN= BOLD= NC=\nPI_RUNTIME_PREFLIGHT_PASSED=0\nPI_PROFILE_MUTATIONS_BLOCKED=0\n'
+                code += 'print_warning() { printf "%s\\n" "$*"; }; print_debug() { :; }; print_success() { :; }; print_section() { :; }\n'
+                code += '\n'.join(f'{fn}() {{ :; }}' for fn in inert)
+                code += '\nsetup_headless_paseo_daemon() { echo forbidden-daemon; }\n'
+                code += 'start_setup_log() { :; }; finish_setup_log() { printf "log-finalized:%s\\n" "$1"; return "$1"; }\n'
+                code += helper + '\nrun_setup_tasks() {\nlocal _setup_had_errors=0 _pi_go_ready=0\n'
+                code += WiringTests().bash_block(name)
+                code += '\nprintf "unrelated-work-finished\\n"\n    if [[ "${_setup_had_errors}" -eq 0 ]]; then' + tail + '\n}\n' + main + '\nmain\n'
+                (self.root / 'state.json').write_text(json.dumps(self.state))
+                result = subprocess.run(['bash', '-c', code], env=env, capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn('inventory-environ: EACCES.', result.stdout)
+                self.assertIn('unrelated-work-finished', result.stdout)
+                self.assertIn('log-finalized:1', result.stdout)
+                self.assertIn('Setup completed with errors', result.stdout)
+                self.assertNotIn('✨ Setup complete!', result.stdout)
+                self.assertNotIn('forbidden-daemon', result.stdout)
+                self.assertNotIn(SECRET, result.stdout + result.stderr)
+                self.assertFalse(poison.exists())
+
+    def test_foreign_service_group_without_pid_metadata_still_blocks_merge(self):
+        self.state = {'extraProcesses': [{'pid': 4450, 'parent': 1, 'uid': os.getuid()+1,
+            'command': 'unrelated-looking-process', 'env': {},
+            'cgroup': f'0::/user.slice/user-{os.getuid()}.slice/user@{os.getuid()}.service/app.slice/paseo.service'}]}
+        self.assert_deferred('unknown-writer')
+        self.assertFalse(self.config.exists())
+        self.assertNotIn('4450/cmdline', self.state['procReads'])
+        self.assertNotIn('4450/environ', self.state['procReads'])
+
     def select_home(self, directory):
         directory.mkdir(parents=True, mode=0o700, exist_ok=True)
         self.paseo = directory
@@ -350,6 +552,8 @@ class MuseProfileTests(unittest.TestCase):
         self.assertIn(reason, result.stdout)
         self.assertIn('PASEO_MUSE_DEFER_DAEMON_SETUP=1', result.stdout)
         self.assertIn('outside Paseo', result.stdout)
+        expected = reason in ('desktop-owned', 'self-hosted-setup', 'headless-control-not-authorized', 'unsupported-platform')
+        self.assertEqual(result.returncode, 0 if expected else 1, result.stdout)
         self.assertEqual(self.config.read_bytes() if self.config.exists() else None, before)
         self.assertEqual(self.mutations(), [])
         return result
@@ -357,6 +561,19 @@ class MuseProfileTests(unittest.TestCase):
     def test_embedded_code_identical(self):
         for script in SCRIPTS:
             self.assertEqual(embedded(script), embedded('ubuntu.sh'), script)
+
+    def test_bash_wrappers_and_cross_platform_diagnostic_policies_match(self):
+        start, end = 'configure_paseo_muse_profile() {', '\nremove_paseo_plain() {'
+        source = (ROOT / 'ubuntu.sh').read_text()
+        expected = source.split(start, 1)[1].split(end, 1)[0]
+        for name in SCRIPTS[:-1]:
+            self.assertEqual((ROOT / name).read_text().split(start, 1)[1].split(end, 1)[0], expected, name)
+        windows = (ROOT / 'win.ps1').read_text()
+        for bash_name, ps_name in [('failure_pattern', 'failurePattern'), ('defer_pattern', 'deferPattern'),
+                                   ('recovery_pattern', 'recoveryPattern'), ('diagnostic_pattern', 'diagnosticPattern')]:
+            bash_pattern = re.search(rf"local {bash_name}='([^']+)'", source)[1]
+            ps_pattern = re.search(rf"\${ps_name} = '([^']+)'", windows)[1]
+            self.assertEqual(bash_pattern, ps_pattern)
 
     def test_fresh_seed_all_platforms_without_key_or_paseo(self):
         for platform in ('linux', 'darwin', 'win32'):
@@ -623,7 +840,7 @@ class MuseProfileTests(unittest.TestCase):
         for value in ('', '.paseo', 'profiles/muse', '~/.paseo'):
             with self.subTest(value=value):
                 self.env['PASEO_HOME'] = value
-                self.assertEqual(self.assert_deferred('invalid-home-override').returncode, 0)
+                self.assertEqual(self.assert_deferred('invalid-home-override').returncode, 1)
 
     def test_safe_offline_custom_home_changes_only_selected_profile(self):
         self.save({'defaultUnchanged': True})
@@ -1424,7 +1641,7 @@ class MuseProfileTests(unittest.TestCase):
         function = 'configure_paseo_muse_profile() {' + text.split('configure_paseo_muse_profile() {', 1)[1].split('\nremove_paseo_plain() {', 1)[0]
         script = self.root / 'wrapper.sh'
         script.write_text('set -eu\nprint_warning() { printf "%s\\n" "$1"; }; print_success() { :; }; print_debug() { :; }\n' + function +
-            '\nconfigure_paseo_muse_profile\n[[ "${PASEO_MUSE_DEFER_DAEMON_SETUP}" == 1 ]]\n')
+            '\nstatus=0; configure_paseo_muse_profile || status=$?\n[[ "${status}" == 1 && "${PASEO_MUSE_DEFER_DAEMON_SETUP}" == 1 ]]\n')
         (self.root / 'state.json').write_text(json.dumps(self.state))
         result = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1527,7 +1744,7 @@ console.log('Native 0.8.0 PID-lock exclusion verified.');
         bin_dir = self.root / 'bin'
         bin_dir.mkdir()
         node = bin_dir / 'node'
-        node.write_text('#!/bin/bash\n[[ "${PASEO_MUSE_GO_CHANGED}" == 1 ]] || exit 99\nprintf "%s\\n" PASEO_MUSE_DEFER_DAEMON_SETUP=1 "Paseo Muse deferred: fixture."\n')
+        node.write_text('#!/bin/bash\n[[ "${PASEO_MUSE_GO_CHANGED}" == 1 ]] || exit 99\nprintf "%s\\n" PASEO_MUSE_DEFER_DAEMON_SETUP=1 "Paseo Muse deferred: desktop-owned." PASEO_MUSE_RESULT=deferred\n')
         node.chmod(0o700)
         script = self.root / 'wrapper.sh'
         script.write_text('set -eu\nprint_warning() { :; }; print_success() { :; }; print_debug() { :; }\n' + function + '\nPI_OPENCODE_GO_CHANGED=1\nconfigure_paseo_muse_profile\n[[ "${PASEO_MUSE_DEFER_DAEMON_SETUP}" == 1 ]]\n')

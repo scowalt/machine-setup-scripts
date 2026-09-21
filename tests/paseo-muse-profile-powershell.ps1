@@ -1,3 +1,4 @@
+# Version 1 | Last changed: Verify Muse safety outcomes and controlled wrapper output
 # Offline wrapper fixtures. Parse win.ps1; execute only the extracted function.
 param([string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot))
 $ErrorActionPreference = 'Stop'
@@ -14,10 +15,12 @@ if ($null -eq $definition) { throw 'Set-PaseoMuseProfile missing' }
 . ([scriptblock]::Create($definition.Extent.Text))
 function Write-Success { param([string]$Message) }
 function Write-Debug { param([string]$Message) }
+$script:Warnings = @()
+function Write-Warning { param([string]$Message) $script:Warnings += $Message }
 function Assert-Fixture { param([bool]$Condition, [string]$Label)
     if (-not $Condition) { throw "Muse PowerShell fixture failed: $Label" }
 }
-$script:MockOutput = 'PASEO_MUSE_UPDATED'
+$script:MockOutput = @('PASEO_MUSE_UPDATED', 'PASEO_MUSE_RESULT=success')
 $script:MockStatus = 0
 $script:CapturedChanged = ''
 $script:CapturedCode = ''
@@ -54,26 +57,43 @@ try {
     Assert-Fixture ($script:CapturedCode.Contains('setup:pi:opencode-go:muse-spark-1.3-contributor')) 'stable ID present'
 
     $script:PiOpenCodeGoChanged = $false
-    $script:MockOutput = 'PASEO_MUSE_UNCHANGED'
+    $script:MockOutput = @('PASEO_MUSE_UNCHANGED', 'PASEO_MUSE_RESULT=success')
     $value = Set-PaseoMuseProfile
     Assert-Fixture ($value -is [bool] -and $value) 'unchanged success'
     Assert-Fixture ($script:CapturedChanged -eq '0') 'unchanged input forwarded'
 
-    $script:MockOutput = @('PASEO_MUSE_DEFER_DAEMON_SETUP=1', 'Paseo Muse deferred: desktop-owned.', 'Quit Paseo Desktop and rerun outside Paseo.')
+    $script:MockOutput = @('PASEO_MUSE_DEFER_DAEMON_SETUP=1', 'Paseo Muse deferred: desktop-owned.', 'PASEO_MUSE_RESULT=deferred')
     $value = Set-PaseoMuseProfile
-    Assert-Fixture ($value -is [bool] -and $value) 'unsafe owner is warning not failure'
+    Assert-Fixture ($value -is [bool] -and $value) 'established Desktop ownership is an expected deferral'
 
     $script:MockStatus = 1
-    $script:MockOutput = @('PASEO_MUSE_DEFER_DAEMON_SETUP=1', 'Paseo Muse failed: invalid-json.')
+    $script:MockOutput = @('PASEO_MUSE_DEFER_DAEMON_SETUP=1', 'Paseo Muse failed: invalid-json.', 'PASEO_MUSE_RESULT=failed')
     $value = Set-PaseoMuseProfile
     Assert-Fixture ($value -is [bool] -and -not $value) 'failure bool only'
     Assert-Fixture ($env:PASEO_MUSE_GO_CHANGED -eq 'previous-fixture-value') 'failure restores environment'
     Assert-Fixture ($null -eq $script:CapturedNodeOptions -and $null -eq $script:CapturedNodePath) 'failure clears Node loader environment'
     Assert-Fixture ($env:NODE_OPTIONS -ceq '--require=poison-fixture' -and $env:NODE_PATH -ceq 'poison-fixture-directory') 'failure restores Node loader environment'
 
+    $script:MockOutput = @('PASEO_MUSE_DEFER_DAEMON_SETUP=1', 'Paseo Muse failed: process-inventory-unverified.',
+        'Paseo Muse diagnostic: inventory-environ: EACCES.', 'Paseo Muse recovery failed: service-restore-failed.', 'PASEO_MUSE_RESULT=failed')
+    $script:Warnings = @()
+    $value = Set-PaseoMuseProfile
+    Assert-Fixture ($value -is [bool] -and -not $value) 'inventory safety failure propagates'
+    Assert-Fixture ($script:Warnings -ccontains 'Paseo Muse diagnostic: inventory-environ: EACCES.') 'controlled operation survives wrapper'
+    Assert-Fixture ($script:Warnings -ccontains 'Paseo Muse recovery failed: service-restore-failed.') 'secondary recovery failure survives wrapper'
+
+    $script:MockStatus = 0
+    foreach ($output in @('', 'PASEO_MUSE_UPDATED', 'PASEO_MUSE_RESULT=success', 'Paseo Muse fixture-secret', 'Quit Paseo Desktop fixture-secret')) {
+        $script:Warnings = @()
+        $script:MockOutput = $output
+        $value = Set-PaseoMuseProfile
+        Assert-Fixture ($value -is [bool] -and -not $value) 'unverified helper output fails closed'
+        Assert-Fixture (-not ($script:Warnings -join "`n").Contains('fixture-secret')) 'unknown output not echoed'
+    }
+
     function Get-Command { param([string]$Name, [object]$ErrorAction) return $null }
     $value = Set-PaseoMuseProfile
-    Assert-Fixture ($value -is [bool] -and $value) 'missing Node defers'
+    Assert-Fixture ($value -is [bool] -and -not $value) 'missing Node cannot verify required work'
     Remove-Item Function:Get-Command
     Write-Host 'Paseo Muse PowerShell wrapper fixtures passed.'
 } finally {

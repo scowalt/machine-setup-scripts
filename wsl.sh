@@ -881,17 +881,21 @@ install_ntn_cli() {
 # Install Portless CLI (Tailscale HTTPS tunnel helper)
 # Standalone installer shared verbatim with the other setup entry points.
 # Managed Muse profile: offline merge with an identified local-owner barrier.
-# 0 = saved/unchanged or warned defer; 1 = failed validation/write/restoration.
+# 0 = saved/unchanged or expected defer; 1 = unverified safety or failed work.
 # The caller MUST skip later headless lifecycle when the defer flag is 1.
 # shellcheck disable=SC2034 # Output flag is consumed by the caller, not on WSL.
 configure_paseo_muse_profile() {
     PASEO_MUSE_DEFER_DAEMON_SETUP=0
     if ! command -v node &> /dev/null; then
         PASEO_MUSE_DEFER_DAEMON_SETUP=1
-        print_warning "Paseo Muse deferred: Node.js is unavailable. Rerun setup outside Paseo after installing Node.js."
-        return 0
+        print_warning "Paseo Muse failed: Node.js is unavailable. Rerun setup outside Paseo after installing Node.js."
+        return 1
     fi
-    local result status=0 line verified=0
+    local result status=0 line verified=0 receipt="" invalid=0 completed=0 reported_failure=0 reported_defer=0
+    local failure_pattern='^Paseo Muse failed: (account-home-mismatch|ancestry-unverified|command-unverified|concurrent-config-change|custom-home-permissions-unverified|custom-home-unverified|desktop-owned|duplicate-json-key|file-changed|headless-control-not-authorized|interrupted|invalid-config|invalid-home-override|invalid-json|invalid-mode|invalid-profiles|invalid-service-state|launchd-state-unverified|linked-path|metadata-too-large|operation-failed|owner-still-present|owner-unverified|ownership-changed|permission-handles-unavailable|permission-path-changed|permission-recovery-owner-unverified|permission-recovery-private-home-required|permission-repair-unverified|pid-lock-changed|pid-lock-present|pid-metadata-unverified|pid-release-failed|pid-unverified|pid-write-failed|process-inventory-unverified|restart-pid-not-ready|restart-pid-pending|restore-owner-conflict|restore-unverified|self-hosted-setup|service-changed-before-restore|service-environment-unverified|service-home-mismatch|service-home-unverified|service-owner-unresolved|service-pid-mismatch|service-pid-unverified|service-restore-failed|service-state-unverified|stale-pid-lock|stopped-state-unverified|temporary-cleanup-failed|temporary-file-changed|unknown-owner|unknown-writer|unmanaged-service|unmanaged-wrapper|unsafe-file-type|unsafe-json-number|unsafe-owner-or-mode|unsupported-platform|windows-acl-unverified|writer-still-present)\.$'
+    local recovery_pattern='^Paseo Muse recovery failed: (temporary-cleanup-failed|pid-release-failed|service-restore-failed)\.$'
+    local defer_pattern='^Paseo Muse deferred: (desktop-owned|self-hosted-setup|headless-control-not-authorized|unsupported-platform)\.$'
+    local diagnostic_pattern='^Paseo Muse diagnostic: inventory-(scan|stat|status|cmdline|environ|cgroup|identity|disappearance): (EACCES|EPERM|ENOENT|ESRCH|EIO|EINVAL|ENOTDIR|ELOOP|EMFILE|ENFILE|invalid|changed|missing|unknown)\.$'
     local _mode="${1:-sync}"
     result=$(HEADLESS="${HEADLESS:-}" PASEO_MACOS_HEADLESS_CANARY="${PASEO_MACOS_HEADLESS_CANARY:-}" \
         PASEO_MUSE_GO_CHANGED="${PI_OPENCODE_GO_CHANGED:-0}" env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${_mode}" 2>/dev/null <<'PASEO_MUSE_PROFILE_JS'
@@ -916,7 +920,8 @@ const refresh = process.env.PASEO_MUSE_GO_CHANGED === '1';
 const mode = process.argv[2] || 'sync';
 const verifyOnly = mode === 'verify-owner';
 const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
-class Refusal extends Error { constructor(code, failed = false) { super(code); this.code = code; this.failed = failed; } }
+const expectedDeferrals = new Set(['desktop-owned', 'self-hosted-setup', 'headless-control-not-authorized', 'unsupported-platform']);
+class Refusal extends Error { constructor(code, failed = !expectedDeferrals.has(code)) { super(code); this.code = code; this.failed = failed; } }
 const refuse = code => { throw new Refusal(code); };
 const fail = code => { throw new Refusal(code, true); };
 const maxSnapshotBytes = 4 * 1024 * 1024;
@@ -1201,22 +1206,78 @@ function pidInfo() {
         ('desktopManaged' in info && typeof info.desktopManaged !== 'boolean')) refuse('pid-metadata-unverified');
     return {snap, info};
 }
+// Procfs directory ownership can change with dumpability; it is not a UID oracle.
+// Recheck start identity and credentials around reads, and never turn a denied
+// read into an empty environment or evidence that a possible writer is absent.
+function inventoryFailure(operation, detail = 'invalid') {
+    const error = new Refusal('process-inventory-unverified', true);
+    error.operation = operation;
+    error.detail = ['EACCES', 'EPERM', 'ENOENT', 'ESRCH', 'EIO', 'EINVAL', 'ENOTDIR', 'ELOOP', 'EMFILE', 'ENFILE',
+        'invalid', 'changed', 'missing'].includes(detail) ? detail : 'unknown';
+    throw error;
+}
+function linuxProcess(pid) {
+    const dir = `/proc/${pid}`;
+    let operation = 'inventory-stat';
+    const read = name => { operation = `inventory-${name}`; return fs.readFileSync(`${dir}/${name}`, 'utf8'); };
+    const identity = () => {
+        const raw = read('stat');
+        const end = raw.lastIndexOf(')');
+        const fields = raw.slice(end + 2).trim().split(/\s+/);
+        if (!raw.startsWith(`${pid} (`) || end < 0 || raw[end + 1] !== ' ' || fields.length < 20 ||
+            !/^[RSDZTWtXxKWPIN]$/.test(fields[0]) || !/^\d+$/.test(fields[1]) || !/^\d+$/.test(fields[19])) inventoryFailure(operation);
+        const parent = Number(fields[1]);
+        if (!Number.isSafeInteger(parent) || parent < 0) inventoryFailure(operation);
+        const status = read('status');
+        const value = (name, count) => {
+            const lines = status.split('\n').filter(line => line.startsWith(name + ':'));
+            if (lines.length !== 1) inventoryFailure(operation);
+            const values = lines[0].slice(name.length + 1).trim().split(/\s+/);
+            if (values.length !== count || values.some(v => !/^\d+$/.test(v) || !Number.isSafeInteger(Number(v)))) inventoryFailure(operation);
+            return values.map(Number);
+        };
+        const uids = value('Uid', 4);
+        if (uids.some(value => value >= 0xffffffff)) inventoryFailure(operation);
+        if (value('Pid', 1)[0] !== pid || value('PPid', 1)[0] !== parent) inventoryFailure('inventory-identity', 'changed');
+        return {parent, start: fields[19], uids, dead: ['Z', 'X', 'x'].includes(fields[0])};
+    };
+    try {
+        const before = identity();
+        const owned = before.uids.includes(uid);
+        // Keep service-group evidence even for foreign processes. Owner checks
+        // must reject foreign participants rather than silently excluding them.
+        const cgroup = read('cgroup');
+        const command = owned && !before.dead ? read('cmdline').replace(/\0/g, ' ') : '';
+        const env = owned && !before.dead ? Object.fromEntries(read('environ').split('\0').filter(v => v.includes('='))
+            .map(v => [v.slice(0, v.indexOf('=')), v.slice(v.indexOf('=') + 1)])) : {};
+        const after = identity();
+        if (JSON.stringify(before) !== JSON.stringify(after)) inventoryFailure('inventory-identity', 'changed');
+        return {pid, ...before, command, env, cgroup, owned};
+    } catch (error) {
+        if (error instanceof Refusal) throw error;
+        if (error.code === 'ENOENT' || error.code === 'ESRCH') {
+            // hidepid or a missing field is not proof of exit. A reused/live PID
+            // remains a refusal; only ESRCH positively establishes disappearance.
+            try { process.kill(pid, 0); }
+            catch (probe) {
+                if (probe.code === 'ESRCH') return null;
+                inventoryFailure('inventory-disappearance', probe.code);
+            }
+        }
+        inventoryFailure(operation, error.code);
+    }
+}
 function inventory() {
     const processes = [];
     if (platform === 'linux') {
-        for (const entry of fs.readdirSync('/proc')) {
+        let entries;
+        try { entries = fs.readdirSync('/proc'); } catch (error) { inventoryFailure('inventory-scan', error.code); }
+        for (const entry of entries) {
             if (!/^\d+$/.test(entry)) continue;
-            const dir = `/proc/${entry}`;
-            try {
-                const processUid = fs.statSync(dir).uid;
-                const raw = fs.readFileSync(`${dir}/stat`, 'utf8');
-                const fields = raw.slice(raw.lastIndexOf(')') + 2).split(' ');
-                const command = fs.readFileSync(`${dir}/cmdline`, 'utf8').replace(/\0/g, ' ');
-                const owned = processUid === uid;
-                const env = owned ? Object.fromEntries(fs.readFileSync(`${dir}/environ`, 'utf8').split('\0').filter(v => v.includes('=')).map(v => [v.slice(0, v.indexOf('=')), v.slice(v.indexOf('=') + 1)])) : {};
-                const cgroup = owned ? fs.readFileSync(`${dir}/cgroup`, 'utf8') : '';
-                processes.push({pid: Number(entry), parent: Number(fields[1]), command, env, cgroup, owned});
-            } catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ESRCH') refuse('process-inventory-unverified'); }
+            const pid = Number(entry);
+            if (!Number.isSafeInteger(pid) || pid <= 0) inventoryFailure('inventory-identity');
+            const row = linuxProcess(pid);
+            if (row) processes.push(row);
         }
     } else if (platform === 'darwin') {
         const text = run('ps', ['-axww', '-o', 'pid=,ppid=,uid=,command=']);
@@ -1238,6 +1299,7 @@ function inventory() {
         }
     } else refuse('unsupported-platform');
     if (!processes.some(p => p.pid === process.pid)) refuse('process-inventory-unverified');
+    verifySetupAncestry(processes);
     return processes;
 }
 function descends(pid, parent, rows) {
@@ -1268,15 +1330,23 @@ function inGroup(p, group) {
         return value === group || value.startsWith(group + '/');
     });
 }
+function serviceMember(p) {
+    // Even without a native PID file, a process in this account's Paseo service
+    // cannot be excluded as unrelated solely because its credentials changed.
+    return (p.cgroup || '').split('\n').some(line => {
+        const value = line.slice(line.indexOf(':', line.indexOf(':') + 1) + 1);
+        return value.startsWith(`/user.slice/user-${uid}.slice/`) && value.split('/').includes(service);
+    });
+}
 function candidates(rows) {
-    return rows.filter(p => p.pid !== process.pid && p.owned !== false && (
+    return rows.filter(p => !p.dead && p.pid !== process.pid && (serviceMember(p) || p.owned !== false && (
         /(?:@getpaseo[\\/]|paseo(?:\.exe|\.app|[\\/\s]|$)|supervisor-entrypoint|daemon-worker|node-entrypoint-runner)/i.test(p.command) ||
         p.env?.PASEO_DESKTOP_MANAGED === '1' ||
-        (p.env?.PASEO_HOME && samePaseoHome(p.env.PASEO_HOME) && !descends(process.pid, p.pid, rows))));
+        (p.env?.PASEO_HOME && samePaseoHome(p.env.PASEO_HOME) && !descends(process.pid, p.pid, rows)))));
 }
 function ensureNoWriters(owner = null) {
     const rows = inventory();
-    if (candidates(rows).length || (owner && rows.some(p => inGroup(p, owner.group) || descends(p.pid, owner.pid, rows)))) refuse('writer-still-present');
+    if (candidates(rows).length || (owner && rows.some(p => !p.dead && (inGroup(p, owner.group) || descends(p.pid, owner.pid, rows))))) refuse('writer-still-present');
     if (owner && live(owner.pid)) refuse('owner-still-present');
     return rows;
 }
@@ -1350,7 +1420,8 @@ function verifyOwnerProcess(info, mainPid, group, rows) {
         rows.some(p => p.pid === process.pid && inGroup(p, group))) refuse('self-hosted-setup');
     if (candidates(rows).some(p => !descends(p.pid, mainPid, rows))) refuse('unknown-writer');
     const owner = rows.find(p => p.pid === info.pid);
-    if (!owner || owner.owned === false) refuse('owner-unverified');
+    if (!owner || owner.owned === false || owner.dead || rows.some(p => !p.dead && p.owned === false &&
+        (descends(p.pid, mainPid, rows) || inGroup(p, group)))) refuse('owner-unverified');
     if (platform === 'linux') {
         if (!inGroup(owner, group) || !sameHome(owner.env?.HOME) ||
             !daemonHomeMatches(owner.env?.PASEO_HOME)) refuse('service-home-mismatch');
@@ -1562,7 +1633,6 @@ async function main() {
     if (process.env.PASEO_AGENT_ID) refuse('self-hosted-setup');
     const existing = pidInfo();
     const rows = inventory();
-    verifySetupAncestry(rows);
     let owner = null;
     if (existing.info) {
         if (!live(existing.info.pid)) refuse('stale-pid-lock');
@@ -1650,11 +1720,17 @@ async function main() {
 }
 (async () => {
     let failure = null;
+    const recoveryFailures = [];
+    const recoveryFailed = (code, cause) => {
+        // Preserve the original operation and safe diagnostic through cleanup.
+        if (!failure) failure = cause instanceof Refusal ? cause : new Refusal(code, true);
+        recoveryFailures.push(code);
+    };
     try { await main(); } catch (error) { failure = error; }
     finally {
         permissionInspection = null;
-        try { if (temporary) fs.unlinkSync(temporary); } catch { failure = new Refusal('temporary-cleanup-failed', true); }
-        try { releasePid(); } catch { failure = new Refusal('pid-release-failed', true); }
+        try { if (temporary) fs.unlinkSync(temporary); } catch (error) { recoveryFailed('temporary-cleanup-failed', error); }
+        try { releasePid(); } catch (error) { recoveryFailed('pid-release-failed', error); }
         if (restore) {
             try {
                 if (!same(restore.unit.s, snapshot(restore.file).s) || !same(restore.wrapper.snap.s, snapshot(restore.wrapper.file).s)) fail('service-changed-before-restore');
@@ -1667,40 +1743,66 @@ async function main() {
             }
             catch (error) {
                 if (error instanceof Refusal && error.code === 'restart-pid-not-ready') console.log('Paseo Muse recovery: the restarted service did not provide a verified native PID within the retry limit. Inspect that service privately before rerunning setup.');
-                failure = new Refusal('service-restore-failed', true);
+                recoveryFailed('service-restore-failed', error);
             }
         }
     }
     if (failure) {
         const controlled = failure instanceof Refusal;
-        const failed = !controlled || failure.failed;
+        const failed = recoveryFailures.length > 0 || !controlled || failure.failed;
         console.log(`PASEO_MUSE_DEFER_DAEMON_SETUP=1`);
         console.log(`Paseo Muse ${failed ? 'failed' : 'deferred'}: ${controlled ? failure.code : 'operation-failed'}.`);
+        if (controlled && failure.operation) console.log(`Paseo Muse diagnostic: ${failure.operation}: ${failure.detail}.`);
+        for (const code of recoveryFailures) console.log(`Paseo Muse recovery failed: ${code}.`);
         if (controlled && failure.code === 'stale-pid-lock') console.log('Paseo Muse recovery: inspect the stale paseo.pid privately; remove it manually only after every local owner is confirmed stopped.');
         if (controlled && (failure.code === 'unsafe-owner-or-mode' || failure.code.startsWith('permission-'))) console.log('Paseo Muse permissions: inspect ownership and write permissions on the selected home, PID and service paths. Automatic repair requires a verified default-home Linux setup-managed owner. Do not use recursive chmod or chown.');
         if (controlled && ['custom-home-unverified', 'custom-home-permissions-unverified', 'invalid-home-override'].includes(failure.code)) console.log('Paseo Muse home: PASEO_HOME must be unset or an absolute directory below the account HOME, not HOME itself. Custom directories must already exist, be private and account-owned, and contain no linked paths.');
         console.log('Quit Paseo Desktop or stop the owning local daemon, then rerun setup from a terminal outside Paseo. Keep Desktop closed during setup. If Go authentication changed, restart that owner to refresh its model catalog.');
-        // Deferred lifecycle cases are warnings, not a claim that a profile was saved.
+        // Only established ownership/platform deferrals are warning-only.
         process.exitCode = failed ? 1 : 0;
-    }
+        console.log(`PASEO_MUSE_RESULT=${failed ? 'failed' : 'deferred'}`);
+    } else console.log('PASEO_MUSE_RESULT=success');
 })();
 // END PASEO MUSE PROFILE
 PASEO_MUSE_PROFILE_JS
     ) || status=$?
     while IFS= read -r line; do
+        if [[ -n "${receipt}" ]]; then invalid=1; continue; fi
         case "${line}" in
+            PASEO_MUSE_RESULT=success|PASEO_MUSE_RESULT=deferred|PASEO_MUSE_RESULT=failed) receipt=${line#*=} ;;
             PASEO_MUSE_DEFER_DAEMON_SETUP=1) PASEO_MUSE_DEFER_DAEMON_SETUP=1 ;;
-            PASEO_MUSE_OWNER_VERIFIED) verified=1; print_debug "Paseo managed-daemon ownership preflight passed." ;;
-            PASEO_MUSE_UPDATED) print_success "Paseo Muse managed profile synchronized." ;;
-            PASEO_MUSE_UNCHANGED) print_debug "Paseo Muse managed profile is unchanged." ;;
+            PASEO_MUSE_OWNER_VERIFIED) verified=1; completed=1; print_debug "Paseo managed-daemon ownership preflight passed." ;;
+            PASEO_MUSE_UPDATED) completed=1; print_success "Paseo Muse managed profile synchronized." ;;
+            PASEO_MUSE_UNCHANGED) completed=1; print_debug "Paseo Muse managed profile is unchanged." ;;
             PASEO_MUSE_PERMISSIONS_REPAIRED) print_debug "Paseo Muse repaired verified managed-path permissions." ;;
             PASEO_MUSE_RESTARTING) print_warning "Restarting the setup-managed local Paseo daemon to refresh Muse. Active agents may be interrupted." ;;
             PASEO_MUSE_RESTORED) print_debug "Paseo Muse restored the local managed service." ;;
-            'Paseo Muse '*|'Quit Paseo Desktop '*) print_warning "${line}" ;;
-            *) ;;
+            "Paseo Muse custom home: later managed-daemon setup is skipped. Keep this owner's launch environment and update that owner separately.") completed=1; print_warning "${line}" ;;
+            'Paseo Muse recovery: the restarted service did not provide a verified native PID within the retry limit. Inspect that service privately before rerunning setup.'|\
+            'Paseo Muse recovery: inspect the stale paseo.pid privately; remove it manually only after every local owner is confirmed stopped.'|\
+            'Paseo Muse permissions: inspect ownership and write permissions on the selected home, PID and service paths. Automatic repair requires a verified default-home Linux setup-managed owner. Do not use recursive chmod or chown.'|\
+            'Paseo Muse home: PASEO_HOME must be unset or an absolute directory below the account HOME, not HOME itself. Custom directories must already exist, be private and account-owned, and contain no linked paths.'|\
+            'Quit Paseo Desktop or stop the owning local daemon, then rerun setup from a terminal outside Paseo. Keep Desktop closed during setup. If Go authentication changed, restart that owner to refresh its model catalog.') print_warning "${line}" ;;
+            *)
+                if [[ "${line}" =~ ${failure_pattern} || "${line}" =~ ${recovery_pattern} ]]; then
+                    reported_failure=1; print_warning "${line}"
+                elif [[ "${line}" =~ ${defer_pattern} ]]; then
+                    reported_defer=1; print_warning "${line}"
+                elif [[ "${line}" =~ ${diagnostic_pattern} ]]; then
+                    reported_failure=1; print_warning "${line}"
+                else
+                    invalid=1
+                fi
+                ;;
         esac
     done <<< "${result}"
-    if [[ "${status}" != "0" ]]; then
+    if [[ "${invalid}" == 1 || -z "${receipt}" ]] ||
+        [[ "${receipt}" == success && ( "${completed}" != 1 || "${reported_failure}" == 1 || "${reported_defer}" == 1 ) ]] ||
+        [[ "${receipt}" == deferred && ( "${reported_defer}" != 1 || "${reported_failure}" == 1 || "${PASEO_MUSE_DEFER_DAEMON_SETUP}" != 1 ) ]]; then
+        status=1
+        print_warning "Paseo Muse profile setup failed: unverified-result. Helper output was not accepted."
+    fi
+    if [[ "${status}" != "0" || "${receipt}" == failed ]]; then
         PASEO_MUSE_DEFER_DAEMON_SETUP=1
         print_warning "Paseo Muse profile setup failed; later daemon setup must be skipped. Inspect the local service privately and rerun outside Paseo."
         return 1
@@ -7517,7 +7619,7 @@ run_setup_tasks() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 204 | Last changed: Retire global Backlog MCP registrations${NC}"
+    echo -e "${GRAY}Version 205 | Last changed: Verify Paseo process identity and report incomplete safety checks${NC}"
 
     if ! acquire_setup_lock; then
         return 1

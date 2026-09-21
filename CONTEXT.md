@@ -8,6 +8,10 @@ The machine setup context defines the desired development environment on each su
 The set of tools and artifacts that must be present or absent after a setup run.
 _Avoid_: Target configuration, final setup
 
+**Incomplete setup run**:
+A setup run with a failed required operation or an unverified required result. Intentional user exclusions and expected Paseo deferrals do not by themselves make the run incomplete.
+_Avoid_: Successful setup with errors, warning-only failure
+
 **Work machine**:
 A supported machine classified for employer-related development. Work-only managed tools are part of its desired machine state; on other machines, those tools remain unmanaged.
 _Avoid_: Corporate machine, office machine
@@ -27,6 +31,14 @@ _Avoid_: System Node, Pi-only runtime
 **Managed Paseo profile**:
 A named Paseo agent launch choice included in the desired machine state. Its managed core consists of the agent provider, model, and reasoning level.
 _Avoid_: Agent instance, Desktop preference
+
+**Expected Paseo deferral**:
+A managed Paseo operation deliberately postponed because Desktop owns the local daemon or setup is running inside it. The reason is established, rather than an unresolved safety check.
+_Avoid_: Ownership verification failure, completed profile update
+
+**Unverified Paseo safety check**:
+A check that lacks trustworthy evidence to determine whether a managed profile or daemon change would conflict with a running owner or writer. It is distinct from an expected Paseo deferral.
+_Avoid_: Expected deferral, proof that no daemon is running
 
 **Surplus Paseo CLI installation**:
 A verified redundant global Paseo CLI installation in a known package-manager location, separate from the retained CLI. Age or version alone does not establish this status.
