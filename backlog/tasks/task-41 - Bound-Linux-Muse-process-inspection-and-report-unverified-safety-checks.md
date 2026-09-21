@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-21 15:59'
-updated_date: '2026-09-21 16:58'
+updated_date: '2026-09-21 17:07'
 labels: []
 dependencies: []
 documentation:
@@ -52,6 +52,10 @@ ShellCheck and Bash syntax checks pass. Markdownlint uses an existing cached CLI
 Remote-main publication was blocked by the full pre-push suite: tests/backlog-mcp-retirement-contract.sh incorrectly freezes every setup script header to the previous feature description. Reproduced with the isolated contract (exit 1); its native/simulated retirement fixtures pass before the obsolete grep assertion. Adjusting only that header assertion while retaining all retirement behavior checks.
 
 The Backlog retirement contract now checks version-header structure instead of freezing the prior feature description. Its Bash, planner and PowerShell fixtures pass with PWSH_BIN; ShellCheck passes. Full pre-push hooks remain enabled for publication.
+
+The next full pre-push run passed the preceding contracts and found the same obsolete header snapshot in simple-english-skill-contract.sh. Reproduced independently. Replacing its duplicated fixed version/description map with the version-header format contract already used by the Gitea suite; managed-skill runtime, ownership, retirement and artifact checks remain unchanged.
+
+The managed-skills contract now passes after removing only the frozen release snapshot. Its functional checks and ShellCheck pass. Repository-wide inspection found no other remaining exact setup version/Last changed assertions. Pre-push hooks remain mandatory.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
@@ -80,4 +84,6 @@ Controlled diagnostics survive Bash/PowerShell wrappers and recovery; unknown ou
 **Blast Radius:** future setup runs on all six platforms; Linux inventory changes and cross-platform safety-result reporting. Conservative checks can still block uncertain processes. No live setup, daemon restart, fleet change or model request was made. Native Windows ACLs/macOS execution need platform verification; audited host failures are not all proven to share one cause.
 
 Publication follow-up: fixed the pre-existing Backlog contract assertion that froze Last changed text to the previous feature. Header structure is still verified, and all retirement behavior fixtures remain enabled.
+
+The same header-format correction also applies to the managed-skills contract; its runtime and safety assertions remain unchanged.
 <!-- SECTION:FINAL_SUMMARY:END -->
