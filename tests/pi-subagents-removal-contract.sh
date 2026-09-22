@@ -56,12 +56,14 @@ for file in "${bash_setup_scripts[@]}"; do
     # Removal must run unconditionally in both main() branches.
     assert_contains "${file}" '^remove_pi_subagents\(\)' 'Pi subagents removal function'
     assert_contains "${file}" 'pi remove' 'pi remove uninstall path'
-    assert_min_count "${file}" '^[[:space:]]+remove_pi_subagents \|\| _setup_had_errors=1$' 2 'remove_pi_subagents call sites'
+    assert_min_count "${file}" '^[[:space:]]+remove_pi_subagents \|\| _setup_had_errors=1$' 1 'fallback remove_pi_subagents call site'
+    assert_contains "${file}" 'remove_pi_subagents \|\| \{ _setup_had_errors=1; _pi_package_maintenance_ok=0; \}' 'refresh-blocking remove_pi_subagents call site'
 done
 
 assert_contains win.ps1 '^function Remove-PiSubagents' 'PowerShell Pi subagents removal function'
 assert_contains win.ps1 'pi remove' 'PowerShell pi remove uninstall path'
-assert_min_count win.ps1 '^\s+if \(-not \(Remove-PiSubagents\)\) \{ [$]piSetupFailed = [$]true \}$' 2 'Remove-PiSubagents call sites'
+assert_min_count win.ps1 '^\s+if \(-not \(Remove-PiSubagents\)\) \{ [$]piSetupFailed = [$]true \}$' 1 'fallback Remove-PiSubagents call site'
+assert_contains win.ps1 'Remove-PiSubagents.*[$]piPackageMaintenanceOk = [$]false' 'refresh-blocking Remove-PiSubagents call site'
 assert_not_contains win.ps1 'pi install npm:@tintinweb/pi-subagents' 'install of npm:@tintinweb/pi-subagents'
 assert_not_contains win.ps1 'pi install npm:pi-subagents' 'install of npm:pi-subagents'
 assert_not_contains win.ps1 'BAN_PI_SUBAGENTS' 'legacy opt-out flag'

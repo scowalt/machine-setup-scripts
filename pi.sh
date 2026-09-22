@@ -8413,6 +8413,136 @@ remove_pi_rpiv_packages() {
     return 0
 }
 
+# Refresh packages registered in the active global Pi profile after a read-only safety preflight.
+refresh_pi_packages() {
+    local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
+    local _result=""
+    local _output=""
+
+    if ! command -v node &> /dev/null || ! command -v git &> /dev/null || ! command -v pi &> /dev/null; then
+        print_warning "Pi package refresh prerequisites are unavailable. Required refresh is incomplete."
+        return 1
+    fi
+    case "${PI_OFFLINE:-}" in
+        1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss])
+            print_warning "Pi offline mode is enabled. Required package refresh is incomplete."
+            return 1
+            ;;
+        *) ;;
+    esac
+
+    if ! _result=$(node - "${_agent_dir}" <<'PI_PACKAGE_REFRESH_JS'
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const agentDir = path.resolve(process.argv[2]);
+const fail = () => { console.log('unsafe'); process.exitCode = 1; };
+const lstat = file => { try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
+function parseGit(source) {
+    const trimmed = source.trim();
+    const prefixed = trimmed.startsWith('git:');
+    let value = prefixed ? trimmed.slice(4).trim() : trimmed;
+    if (!prefixed && !/^(https?|ssh|git):\/\//i.test(value)) return null;
+    // Native Pi accepts many hosted-git aliases. Only derive a checkout path for a
+    // deliberately narrow canonical subset; ambiguous valid aliases fail closed.
+    if (!value || /[%#?\\]/.test(value) || value.endsWith('/') || /\/(?:tree|blob|commit|releases?)\//i.test(value)) return false;
+    let host = '', repoPath = '';
+    const scp = value.match(/^git@([a-z0-9.-]+):([^@:]+\/[^/@:]+)(?:@([^/]+))?$/);
+    if (scp) {
+        host = scp[1]; repoPath = scp[2];
+    } else if (/^(?:https?|ssh|git):\/\//i.test(value)) {
+        let url; try { url = new URL(value); } catch { return false; }
+        if ((url.username && url.username !== 'git') || url.password || url.search || url.hash || url.port) return false;
+        host = url.hostname;
+        const pathWithRef = url.pathname.replace(/^\/+/, '');
+        const match = pathWithRef.match(/^([^/@]+\/[^/@]+?)(?:@([^/]+))?$/);
+        if (!match) return false;
+        repoPath = match[1];
+    } else {
+        const match = value.match(/^([a-z0-9.-]+)\/([^/@]+\/[^/@]+?)(?:@([^/]+))?$/);
+        if (!match || (!match[1].includes('.') && match[1] !== 'localhost')) return false;
+        host = match[1]; repoPath = match[2];
+    }
+    if (host.startsWith('www.') || repoPath.endsWith('.git.git')) return false;
+    repoPath = repoPath.replace(/\.git$/, '');
+    if (repoPath.endsWith('.git')) return false;
+    const decoded = item => { try { return decodeURIComponent(item); } catch { return null; } };
+    const unsafe = (item, slash) => {
+        const decodedItem = decoded(item);
+        return decodedItem === null || decodedItem !== item || [item, decodedItem].some(candidate => candidate.includes('\0') || candidate.startsWith('/') || (!slash && candidate.includes('/')) || candidate.split('/').includes('..'));
+    };
+    if (!host || host !== host.toLowerCase() || repoPath.split('/').length !== 2 || unsafe(host, false) || unsafe(repoPath, true)) return false;
+    return { host, repoPath };
+    }
+try {
+    for (const directory of [agentDir, path.join(agentDir, 'git')]) {
+        const info = lstat(directory);
+        if (info && (!info.isDirectory() || info.isSymbolicLink())) throw new Error('unsafe directory');
+    }
+    const settingsFile = path.join(agentDir, 'settings.json');
+    const info = lstat(settingsFile);
+    if (!info) { console.log('ready'); process.exit(0); }
+    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > 10 * 1024 * 1024) throw new Error('unsafe settings');
+    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8').replace(/^\uFEFF/, ''));
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings) || ('packages' in settings && !Array.isArray(settings.packages))) throw new Error('invalid settings');
+    for (const entry of settings.packages || []) {
+        const source = typeof entry === 'string' ? entry : entry && typeof entry === 'object' && !Array.isArray(entry) ? entry.source : null;
+        if (typeof source !== 'string' || !source.trim()) throw new Error('invalid package');
+        const parsed = parseGit(source);
+        if (parsed === false) throw new Error('invalid git source');
+        if (!parsed) continue;
+        for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES']) {
+            if (process.env[name]) throw new Error('redirected git state');
+        }
+        const gitRoot = path.resolve(agentDir, 'git');
+        const components = [parsed.host, ...parsed.repoPath.split('/')];
+        let cursor = gitRoot;
+        let checkoutMissing = false;
+        for (const component of components) {
+            cursor = path.join(cursor, component);
+            const part = lstat(cursor);
+            if (!part) { checkoutMissing = true; break; }
+            if (!part.isDirectory() || part.isSymbolicLink()) throw new Error('unsafe checkout path');
+        }
+        const checkout = path.resolve(gitRoot, ...components);
+        if (!checkout.startsWith(gitRoot + path.sep)) throw new Error('unsafe checkout');
+        if (checkoutMissing) continue;
+        const dotGit = path.join(checkout, '.git');
+        const dotGitInfo = lstat(dotGit);
+        if (!dotGitInfo || !dotGitInfo.isDirectory() || dotGitInfo.isSymbolicLink()) throw new Error('unsafe git metadata');
+        const gitEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' };
+        const inspect = args => spawnSync('git', ['-c', 'core.fsmonitor=false', ...args], {
+            cwd: checkout, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000, env: gitEnv,
+        });
+        const identity = inspect(['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir']);
+        if (identity.error || identity.status !== 0 || identity.signal || identity.stdout.length > 4096) throw new Error('unverified repository');
+        const identityLines = identity.stdout.trim().split(/\r?\n/);
+        if (identityLines.length !== 3 || path.resolve(identityLines[0]) !== checkout ||
+            path.resolve(identityLines[1]) !== dotGit || path.resolve(checkout, identityLines[2]) !== dotGit) throw new Error('unexpected repository identity');
+        const status = inspect(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching']);
+        if (status.error || status.status !== 0 || status.signal || status.stdout.length > 1024 * 1024 || status.stdout.length > 0) throw new Error('unverified or modified checkout');
+    }
+    console.log('ready');
+    } catch { fail(); }
+PI_PACKAGE_REFRESH_JS
+    ); then
+        print_warning "Pi package refresh safety preflight failed. Registered Git checkouts and active-profile metadata were left unchanged."
+        return 1
+    fi
+    if [[ "${_result}" != "ready" ]]; then
+        print_warning "Pi package refresh safety preflight returned an invalid result."
+        return 1
+    fi
+
+    print_message "Refreshing packages in the active global Pi profile..."
+    if _output=$(pi update --extensions --no-approve 2>&1); then
+        print_success "Pi packages refreshed in the active global profile."
+        return 0
+    fi
+    print_warning "Pi package refresh failed. Required refresh is incomplete."
+    return 1
+}
+
 # Repair only the active profile's managed adapter metadata; npm owns lockfiles.
 prepare_pi_mcp_adapter() {
     local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
@@ -9857,7 +9987,7 @@ run_setup_tasks() {
     local PASEO_MUSE_DEFER_DAEMON_SETUP=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 222 | Last changed: Verify Paseo process identity and report incomplete safety checks"
+    echo -e "${GRAY}Version 223 | Last changed: Safely refresh active global Pi packages"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9999,12 +10129,18 @@ run_setup_tasks() {
         fi
         # Re-pin the adapter before any operation resolves the shared npm tree.
         if [[ "${_pi_go_ready}" -eq 1 ]] && prepare_pi_mcp_adapter; then
-            setup_pi_mcp_adapter || _setup_had_errors=1
-            remove_pi_subagents || _setup_had_errors=1
-            remove_pi_rpiv_packages || _setup_had_errors=1
-            setup_pi_claude_bridge || _setup_had_errors=1
-            setup_pi_companion_packages || _setup_had_errors=1
-            setup_pi_goal_autoresearch || _setup_had_errors=1
+            local _pi_package_maintenance_ok=1
+            setup_pi_mcp_adapter || { _setup_had_errors=1; _pi_package_maintenance_ok=0; }
+            remove_pi_subagents || { _setup_had_errors=1; _pi_package_maintenance_ok=0; }
+            remove_pi_rpiv_packages || { _setup_had_errors=1; _pi_package_maintenance_ok=0; }
+            setup_pi_claude_bridge || { _setup_had_errors=1; _pi_package_maintenance_ok=0; }
+            setup_pi_companion_packages || { _setup_had_errors=1; _pi_package_maintenance_ok=0; }
+            setup_pi_goal_autoresearch || { _setup_had_errors=1; _pi_package_maintenance_ok=0; }
+            if [[ "${_pi_package_maintenance_ok}" -eq 1 ]]; then
+                refresh_pi_packages || _setup_had_errors=1
+            else
+                print_warning "Skipping Pi package refresh because prerequisite package maintenance failed."
+            fi
         else
             _setup_had_errors=1
         fi

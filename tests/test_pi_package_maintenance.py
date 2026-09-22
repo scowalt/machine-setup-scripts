@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract v4: preserve package registration and block mutations on AskClaude policy failure."""
+"""Contract v5: safely refresh active-global Pi packages after managed maintenance."""
 import json
 import os
 from pathlib import Path
@@ -22,6 +22,7 @@ FUNCTIONS = {
     'goal': ('setup_pi_goal_autoresearch', 'Setup-PiGoalAutoresearch'),
     'subagents': ('remove_pi_subagents', 'Remove-PiSubagents'),
     'rpiv': ('remove_pi_rpiv_packages', 'Remove-PiRpivPackages'),
+    'refresh': ('refresh_pi_packages', 'Update-PiPackages'),
 }
 
 FAKE_PI = r'''#!/usr/bin/python3
@@ -35,6 +36,9 @@ if state.get('fail') in (action, package):
 if action=='list':
     if state.get('bad_list'): sys.exit(0)
     print('\n'.join(state.get('packages',[]))); sys.exit(0)
+if action=='update':
+    if state.get('fail') == 'update': sys.exit(1)
+    sys.exit(0)
 if action=='remove':
     filtered=[p for p in state.get('packages',[]) if identity(p)!=identity(package)]
     if filtered==state.get('packages',[]): print('No matching package found'); sys.exit(1)
@@ -128,7 +132,7 @@ print_error() { printf 'ERROR: %s\\n' "$*"; }
         # Execute each real orchestration tail and entry point. All unrelated
         # provisioning is replaced at function boundaries; no setup script is sourced.
         for script in (*BASH, *(['win.ps1'] if PWSH else [])):
-            for failure in ('adapter', 'bridge', 'companions', 'goal', 'subagents', 'rpiv', 'prose', 'prepare', 'permissions', 'askclaude-policy', 'none'):
+            for failure in ('adapter', 'bridge', 'companions', 'goal', 'subagents', 'rpiv', 'refresh', 'prose', 'prepare', 'permissions', 'askclaude-policy', 'none'):
                 with self.subTest(script=script, failure=failure):
                     text = (ROOT / script).read_text()
                     windows = script.endswith('.ps1')
@@ -141,6 +145,7 @@ print_error() { printf 'ERROR: %s\\n' "$*"; }
                         code += '\nfunction Prepare-PiProfilePermissions { return $' + ('false' if failure == 'permissions' else 'true') + ' }'
                         code += '\nfunction Remove-PiProse { return $' + ('false' if failure == 'prose' else 'true') + ' }'
                         code += '\nfunction Disable-PiAskClaude { return $' + ('false' if failure == 'askclaude-policy' else 'true') + ' }'
+                        code += '\nfunction Update-PiPackages { Write-Host "PACKAGE-STEP:refresh"; return $' + ('false' if failure == 'refresh' else 'true') + ' }'
                         code += '''
 function Test-EnvLocalFlag { return $false }
 function Remove-PaseoPlain { Write-Host 'UNRELATED-CONTINUED'; return $true }
@@ -160,6 +165,7 @@ function Complete-SetupLog { Write-Host 'LOG-FINALIZED' }
                         code += '\nprepare_pi_profile_permissions() { return ' + ('1' if failure == 'permissions' else '0') + '; }'
                         code += '\nremove_pi_prose() { return ' + ('1' if failure == 'prose' else '0') + '; }'
                         code += '\ndisable_pi_askclaude() { return ' + ('1' if failure == 'askclaude-policy' else '0') + '; }'
+                        code += '\nrefresh_pi_packages() { echo "PACKAGE-STEP:refresh"; return ' + ('1' if failure == 'refresh' else '0') + '; }'
                         code += '''
 print_warning() { printf '%s\\n' "$*"; }
 remove_paseo_plain() { printf 'UNRELATED-CONTINUED\\n'; }
@@ -181,6 +187,10 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                     else:
                         self.assertIn('PACKAGE-STEP:goal', result.stdout)
                         self.assertLess(result.stdout.index('PACKAGE-STEP:adapter'), result.stdout.index('PACKAGE-STEP:subagents'))
+                    if failure in FUNCTIONS and failure != 'refresh':
+                        self.assertNotIn('PACKAGE-STEP:refresh', result.stdout)
+                    elif failure not in ('prose', 'prepare', 'permissions', 'askclaude-policy'):
+                        self.assertIn('PACKAGE-STEP:refresh', result.stdout)
 
     def seed_affected_store(self):
         store = self.agent / 'npm'; store.mkdir(exist_ok=True)
@@ -405,6 +415,207 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                                 self.assertEqual(json.loads(target.read_text()), settings)
                         self.assertEqual(envfile.read_bytes(), before)
+
+    def run_git(self, *args, cwd=None):
+        env = dict(self.env)
+        for key in list(env):
+            if key.startswith('GIT_'):
+                del env[key]
+        return subprocess.run(['git', *args], cwd=cwd or self.root, env=env, text=True,
+                              capture_output=True, check=True)
+
+    def seed_git_checkout(self, source='git:github.com/example/fixture@v1'):
+        checkout = self.agent / 'git/github.com/example/fixture'
+        checkout.mkdir(parents=True)
+        self.run_git('init', '-q', cwd=checkout)
+        (checkout / 'tracked.txt').write_text('clean\n')
+        self.run_git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                     'add', 'tracked.txt', cwd=checkout)
+        self.run_git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                     'commit', '-qm', 'fixture', cwd=checkout)
+        (self.agent / 'settings.json').write_text(json.dumps({'packages': [source]}))
+        return checkout
+
+    def test_refresh_targets_only_active_global_profile_and_preserves_declarations(self):
+        self.env.pop('PI_OFFLINE')
+        project = self.root / '.pi'; project.mkdir()
+        project_settings = project / 'settings.json'
+        project_settings.write_text(json.dumps({'packages': ['npm:project-only']}))
+        other = self.home / '.pi/other'; other.mkdir()
+        other_settings = other / 'settings.json'; other_settings.write_text('{"packages":["npm:other"]}')
+        settings = {'npmCommand': ['fixture-npm', '--safe'], 'packages': [
+            'npm:exact@1.2.3', 'npm:range@^2.0.0', '/local/package',
+            {'source': 'npm:disabled', 'extensions': [], 'skills': ['!legacy/**']},
+        ], 'sentinel': 'preserved'}
+        target = self.agent / 'settings.json'; target.write_text(json.dumps(settings))
+        for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+            with self.subTest(script=script):
+                if self.statefile.with_suffix('.calls').exists(): self.statefile.with_suffix('.calls').unlink()
+                result = self.run_helper(script, 'refresh')
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                calls = [json.loads(line) for line in self.statefile.with_suffix('.calls').read_text().splitlines()]
+                self.assertEqual(calls, [['update', '--extensions', '--no-approve']])
+                self.assertEqual(json.loads(target.read_text()), settings)
+                self.assertEqual(project_settings.read_text(), '{"packages": ["npm:project-only"]}')
+                self.assertEqual(other_settings.read_text(), '{"packages":["npm:other"]}')
+
+    def test_refresh_offline_malformed_or_linked_settings_and_command_failure_are_incomplete(self):
+        cases = ('offline', 'malformed', 'linked', 'command')
+        for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+            for case in cases:
+                with self.subTest(script=script, case=case):
+                    self.env.pop('PI_OFFLINE', None); self.state.pop('fail', None)
+                    target = self.agent / 'settings.json'
+                    if target.exists() or target.is_symlink(): target.unlink()
+                    outside = self.root / ('outside-' + script + '-' + case)
+                    if case == 'offline': self.env['PI_OFFLINE'] = 'yes'; target.write_text('{}')
+                    elif case == 'malformed': target.write_text('{invalid')
+                    elif case == 'linked': outside.write_text('{}'); target.symlink_to(outside)
+                    else: target.write_text('{}'); self.state['fail'] = 'update'
+                    calls = self.statefile.with_suffix('.calls')
+                    if calls.exists(): calls.unlink()
+                    result = self.run_helper(script, 'refresh')
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertNotIn('SUCCESS:', result.stdout)
+                    if case != 'command': self.assertFalse(calls.exists())
+                    else: self.assertEqual(json.loads(calls.read_text().strip()), ['update', '--extensions', '--no-approve'])
+                    if target.is_symlink(): target.unlink()
+
+    def test_refresh_noncanonical_git_aliases_fail_closed_before_update(self):
+        self.env.pop('PI_OFFLINE')
+        sources = (
+            'https://github.com/example/fixture/tree/v1',
+            'git:github.com/example/fixture#v1',
+            'https://github.com/example/fixture/',
+            'https://github.com/example/fixture.git/',
+            'https://github.com/example/%66ixture@v1',
+            'git:github:example/fixture@v1',
+            'git:github:example/fixture#v1',
+            'https://www.github.com/example/fixture',
+            'https://www.gitlab.com/example/fixture',
+            'https://www.bitbucket.org/example/fixture',
+            'https://www.gist.github.com/example/fixture',
+            'https://github.com/example/fixture.git.git',
+            'https://gitlab.com/example/fixture.git.git@v1',
+        )
+        for source in sources:
+            for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+                with self.subTest(script=script, source=source):
+                    git_root = self.agent / 'git'
+                    if git_root.exists(): shutil.rmtree(git_root)
+                    checkout = self.seed_git_checkout(source)
+                    (checkout / 'tracked.txt').write_text('edited\n')
+                    calls = self.statefile.with_suffix('.calls')
+                    if calls.exists(): calls.unlink()
+                    result = self.run_helper(script, 'refresh')
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertFalse(calls.exists())
+
+    def test_refresh_git_preflight_blocks_tracked_untracked_ignored_and_unverified_checkouts(self):
+        self.env.pop('PI_OFFLINE')
+        for condition in ('tracked', 'untracked', 'ignored', 'not-repository', 'linked-metadata', 'parent-repository'):
+            for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+                with self.subTest(script=script, condition=condition):
+                    git_root = self.agent / 'git'
+                    if git_root.exists(): shutil.rmtree(git_root)
+                    checkout = self.seed_git_checkout()
+                    if condition == 'tracked': (checkout / 'tracked.txt').write_text('edited\n')
+                    elif condition == 'untracked': (checkout / 'new.txt').write_text('new\n')
+                    elif condition == 'ignored':
+                        (checkout / '.gitignore').write_text('ignored.txt\n')
+                        self.run_git('add', '.gitignore', cwd=checkout)
+                        self.run_git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'ignore', cwd=checkout)
+                        (checkout / 'ignored.txt').write_text('ignored\n')
+                    elif condition == 'not-repository': shutil.rmtree(checkout / '.git')
+                    elif condition == 'linked-metadata':
+                        metadata = self.root / ('git-metadata-' + script)
+                        if metadata.exists(): shutil.rmtree(metadata)
+                        (checkout / '.git').rename(metadata)
+                        (checkout / '.git').symlink_to(metadata, target_is_directory=True)
+                    elif condition == 'parent-repository':
+                        shutil.rmtree(checkout / '.git')
+                        self.run_git('init', '-q', cwd=git_root)
+                    calls = self.statefile.with_suffix('.calls')
+                    if calls.exists(): calls.unlink()
+                    result = self.run_helper(script, 'refresh')
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertFalse(calls.exists())
+
+    def test_missing_checkout_rejects_linked_or_dangling_ancestors(self):
+        self.env.pop('PI_OFFLINE')
+        for condition in ('linked-host', 'linked-owner', 'dangling-host', 'dangling-owner'):
+            for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+                with self.subTest(script=script, condition=condition):
+                    git_root = self.agent / 'git'
+                    if git_root.exists(): shutil.rmtree(git_root)
+                    git_root.mkdir()
+                    outside = self.root / ('outside-' + script + '-' + condition)
+                    if outside.exists(): shutil.rmtree(outside)
+                    target = self.root / ('missing-' + script + '-' + condition)
+                    if target.exists(): shutil.rmtree(target)
+                    host = git_root / 'github.com'
+                    if condition == 'linked-host':
+                        outside.mkdir(); host.symlink_to(outside, target_is_directory=True)
+                    elif condition == 'dangling-host': host.symlink_to(target, target_is_directory=True)
+                    else:
+                        host.mkdir()
+                        owner = host / 'example'
+                        if condition == 'linked-owner': outside.mkdir(); owner.symlink_to(outside, target_is_directory=True)
+                        else: owner.symlink_to(target, target_is_directory=True)
+                    (self.agent / 'settings.json').write_text(json.dumps({'packages': ['git:github.com/example/fixture']}))
+                    calls = self.statefile.with_suffix('.calls')
+                    if calls.exists(): calls.unlink()
+                    result = self.run_helper(script, 'refresh')
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertFalse(calls.exists())
+
+    def test_refresh_rejects_inherited_git_repository_redirection(self):
+        self.env.pop('PI_OFFLINE')
+        for variable in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR',
+                         'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES'):
+            for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+                with self.subTest(script=script, variable=variable):
+                    git_root = self.agent / 'git'
+                    if git_root.exists(): shutil.rmtree(git_root)
+                    git_root.mkdir()
+                    (self.agent / 'settings.json').write_text(json.dumps({'packages': ['git:github.com/example/fixture']}))
+                    self.env[variable] = str(self.root / 'redirected')
+                    calls = self.statefile.with_suffix('.calls')
+                    if calls.exists(): calls.unlink()
+                    try:
+                        result = self.run_helper(script, 'refresh')
+                    finally:
+                        self.env.pop(variable, None)
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertFalse(calls.exists())
+
+    def test_clean_canonical_git_checkouts_refresh_without_modification(self):
+        self.env.pop('PI_OFFLINE')
+        sources = ('git:github.com/example/fixture@v1',
+                   'git:git@github.com:example/fixture@v1',
+                   'https://github.com/example/fixture.git@v1',
+                   'ssh://git@github.com/example/fixture@v1')
+        for source in sources:
+            for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+                with self.subTest(script=script, source=source):
+                    git_root = self.agent / 'git'
+                    if git_root.exists(): shutil.rmtree(git_root)
+                    checkout = self.seed_git_checkout(source)
+                    before = (checkout / 'tracked.txt').read_bytes()
+                    result = self.run_helper(script, 'refresh')
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual((checkout / 'tracked.txt').read_bytes(), before)
+
+    def test_embedded_refresh_policy_is_identical(self):
+        policies = []
+        for script in (*BASH, 'win.ps1'):
+            body = extract(script, 'Update-PiPackages' if script.endswith('.ps1') else 'refresh_pi_packages')
+            if script.endswith('.ps1'):
+                policy = body.split("$code = @'\n", 1)[1].split("\n'@", 1)[0]
+            else:
+                policy = body.split("<<'PI_PACKAGE_REFRESH_JS'\n", 1)[1].split('\nPI_PACKAGE_REFRESH_JS', 1)[0]
+            policies.append(policy)
+        self.assertTrue(all(policy == policies[0] for policy in policies))
 
     def test_embedded_recovery_policy_is_identical(self):
         policies = []

@@ -61,14 +61,16 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" 'npm:@juicesharp/rpiv-ask-user-question' 'RPIV ask-user-question removal source'
     assert_contains "${file}" 'npm:@juicesharp/rpiv-todo' 'RPIV todo removal source'
     assert_contains "${file}" 'pi remove' 'pi remove uninstall path'
-    assert_min_count "${file}" '^[[:space:]]+remove_pi_rpiv_packages \|\| _setup_had_errors=1$' 2 'remove_pi_rpiv_packages call sites'
+    assert_min_count "${file}" '^[[:space:]]+remove_pi_rpiv_packages \|\| _setup_had_errors=1$' 1 'fallback remove_pi_rpiv_packages call site'
+    assert_contains "${file}" 'remove_pi_rpiv_packages \|\| \{ _setup_had_errors=1; _pi_package_maintenance_ok=0; \}' 'refresh-blocking remove_pi_rpiv_packages call site'
 done
 
 assert_contains win.ps1 '^function Remove-PiRpivPackages' 'PowerShell Pi RPIV packages removal function'
 assert_contains win.ps1 'npm:@juicesharp/rpiv-ask-user-question' 'PowerShell RPIV ask-user-question removal source'
 assert_contains win.ps1 'npm:@juicesharp/rpiv-todo' 'PowerShell RPIV todo removal source'
 assert_contains win.ps1 'pi remove' 'PowerShell pi remove uninstall path'
-assert_min_count win.ps1 '^\s+if \(-not \(Remove-PiRpivPackages\)\) \{ [$]piSetupFailed = [$]true \}$' 2 'Remove-PiRpivPackages call sites'
+assert_min_count win.ps1 '^\s+if \(-not \(Remove-PiRpivPackages\)\) \{ [$]piSetupFailed = [$]true \}$' 1 'fallback Remove-PiRpivPackages call site'
+assert_contains win.ps1 'Remove-PiRpivPackages.*[$]piPackageMaintenanceOk = [$]false' 'refresh-blocking Remove-PiRpivPackages call site'
 assert_not_contains win.ps1 'pi install npm:@juicesharp/rpiv-ask-user-question' 'install of npm:@juicesharp/rpiv-ask-user-question'
 assert_not_contains win.ps1 'pi install npm:@juicesharp/rpiv-todo' 'install of npm:@juicesharp/rpiv-todo'
 

@@ -6406,6 +6406,125 @@ function Remove-PiRpivPackages {
 }
 
 # Repair only the active profile's managed adapter metadata; npm owns lockfiles.
+function Update-PiPackages {
+    $agentDir = if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { Join-Path $HOME '.pi\agent' }
+    if (-not (Get-Command node -ErrorAction SilentlyContinue) -or -not (Get-Command git -ErrorAction SilentlyContinue) -or -not (Get-Command pi -ErrorAction SilentlyContinue)) {
+        Write-Warning 'Pi package refresh prerequisites are unavailable. Required refresh is incomplete.'
+        return $false
+    }
+    if ($env:PI_OFFLINE -and $env:PI_OFFLINE.ToLowerInvariant() -in @('1', 'true', 'yes')) {
+        Write-Warning 'Pi offline mode is enabled. Required package refresh is incomplete.'
+        return $false
+    }
+    $code = @'
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const agentDir = path.resolve(process.argv[2]);
+const fail = () => { console.log('unsafe'); process.exitCode = 1; };
+const lstat = file => { try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
+function parseGit(source) {
+    const trimmed = source.trim();
+    const prefixed = trimmed.startsWith('git:');
+    let value = prefixed ? trimmed.slice(4).trim() : trimmed;
+    if (!prefixed && !/^(https?|ssh|git):\/\//i.test(value)) return null;
+    // Native Pi accepts many hosted-git aliases. Only derive a checkout path for a
+    // deliberately narrow canonical subset; ambiguous valid aliases fail closed.
+    if (!value || /[%#?\\]/.test(value) || value.endsWith('/') || /\/(?:tree|blob|commit|releases?)\//i.test(value)) return false;
+    let host = '', repoPath = '';
+    const scp = value.match(/^git@([a-z0-9.-]+):([^@:]+\/[^/@:]+)(?:@([^/]+))?$/);
+    if (scp) {
+        host = scp[1]; repoPath = scp[2];
+    } else if (/^(?:https?|ssh|git):\/\//i.test(value)) {
+        let url; try { url = new URL(value); } catch { return false; }
+        if ((url.username && url.username !== 'git') || url.password || url.search || url.hash || url.port) return false;
+        host = url.hostname;
+        const pathWithRef = url.pathname.replace(/^\/+/, '');
+        const match = pathWithRef.match(/^([^/@]+\/[^/@]+?)(?:@([^/]+))?$/);
+        if (!match) return false;
+        repoPath = match[1];
+    } else {
+        const match = value.match(/^([a-z0-9.-]+)\/([^/@]+\/[^/@]+?)(?:@([^/]+))?$/);
+        if (!match || (!match[1].includes('.') && match[1] !== 'localhost')) return false;
+        host = match[1]; repoPath = match[2];
+    }
+    if (host.startsWith('www.') || repoPath.endsWith('.git.git')) return false;
+    repoPath = repoPath.replace(/\.git$/, '');
+    if (repoPath.endsWith('.git')) return false;
+    const decoded = item => { try { return decodeURIComponent(item); } catch { return null; } };
+    const unsafe = (item, slash) => {
+        const decodedItem = decoded(item);
+        return decodedItem === null || decodedItem !== item || [item, decodedItem].some(candidate => candidate.includes('\0') || candidate.startsWith('/') || (!slash && candidate.includes('/')) || candidate.split('/').includes('..'));
+    };
+    if (!host || host !== host.toLowerCase() || repoPath.split('/').length !== 2 || unsafe(host, false) || unsafe(repoPath, true)) return false;
+    return { host, repoPath };
+    }
+try {
+    for (const directory of [agentDir, path.join(agentDir, 'git')]) {
+        const info = lstat(directory);
+        if (info && (!info.isDirectory() || info.isSymbolicLink())) throw new Error('unsafe directory');
+    }
+    const settingsFile = path.join(agentDir, 'settings.json');
+    const info = lstat(settingsFile);
+    if (!info) { console.log('ready'); process.exit(0); }
+    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > 10 * 1024 * 1024) throw new Error('unsafe settings');
+    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8').replace(/^\uFEFF/, ''));
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings) || ('packages' in settings && !Array.isArray(settings.packages))) throw new Error('invalid settings');
+    for (const entry of settings.packages || []) {
+        const source = typeof entry === 'string' ? entry : entry && typeof entry === 'object' && !Array.isArray(entry) ? entry.source : null;
+        if (typeof source !== 'string' || !source.trim()) throw new Error('invalid package');
+        const parsed = parseGit(source);
+        if (parsed === false) throw new Error('invalid git source');
+        if (!parsed) continue;
+        for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES']) {
+            if (process.env[name]) throw new Error('redirected git state');
+        }
+        const gitRoot = path.resolve(agentDir, 'git');
+        const components = [parsed.host, ...parsed.repoPath.split('/')];
+        let cursor = gitRoot;
+        let checkoutMissing = false;
+        for (const component of components) {
+            cursor = path.join(cursor, component);
+            const part = lstat(cursor);
+            if (!part) { checkoutMissing = true; break; }
+            if (!part.isDirectory() || part.isSymbolicLink()) throw new Error('unsafe checkout path');
+        }
+        const checkout = path.resolve(gitRoot, ...components);
+        if (!checkout.startsWith(gitRoot + path.sep)) throw new Error('unsafe checkout');
+        if (checkoutMissing) continue;
+        const dotGit = path.join(checkout, '.git');
+        const dotGitInfo = lstat(dotGit);
+        if (!dotGitInfo || !dotGitInfo.isDirectory() || dotGitInfo.isSymbolicLink()) throw new Error('unsafe git metadata');
+        const gitEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' };
+        const inspect = args => spawnSync('git', ['-c', 'core.fsmonitor=false', ...args], {
+            cwd: checkout, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000, env: gitEnv,
+        });
+        const identity = inspect(['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir']);
+        if (identity.error || identity.status !== 0 || identity.signal || identity.stdout.length > 4096) throw new Error('unverified repository');
+        const identityLines = identity.stdout.trim().split(/\r?\n/);
+        if (identityLines.length !== 3 || path.resolve(identityLines[0]) !== checkout ||
+            path.resolve(identityLines[1]) !== dotGit || path.resolve(checkout, identityLines[2]) !== dotGit) throw new Error('unexpected repository identity');
+        const status = inspect(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignored=matching']);
+        if (status.error || status.status !== 0 || status.signal || status.stdout.length > 1024 * 1024 || status.stdout.length > 0) throw new Error('unverified or modified checkout');
+    }
+    console.log('ready');
+    } catch { fail(); }
+'@
+    $result = $code | & node - $agentDir 2>$null
+    if ($LASTEXITCODE -ne 0 -or ($result -join "`n").Trim() -ne 'ready') {
+        Write-Warning 'Pi package refresh safety preflight failed. Registered Git checkouts and active-profile metadata were left unchanged.'
+        return $false
+    }
+    Write-Message 'Refreshing packages in the active global Pi profile...'
+    $null = & pi update --extensions --no-approve 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success 'Pi packages refreshed in the active global profile.'
+        return $true
+    }
+    Write-Warning 'Pi package refresh failed. Required refresh is incomplete.'
+    return $false
+}
+
 function Prepare-PiMcpAdapter {
     param([ValidateSet('prepare', 'verify')][string]$Mode = 'prepare')
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
@@ -8022,7 +8141,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 158 | Last changed: Verify Paseo process identity and report incomplete safety checks"
+    Write-Host "Version 159 | Last changed: Safely refresh active global Pi packages"
 
     Assert-HeadlessPaseoUnsupported
     $null = Get-PaseoReleaseChannel
@@ -8092,12 +8211,17 @@ function Invoke-WindowsSetupTasks {
         else { $script:PiProfileMutationsBlocked = $true; $piSetupFailed = $true }
         # Re-pin the adapter before any operation resolves the shared npm tree.
         if ($piOpenCodeGoReady -and (Prepare-PiMcpAdapter)) {
-            if (-not (Setup-PiMcpAdapter)) { $piSetupFailed = $true }
-            if (-not (Remove-PiSubagents)) { $piSetupFailed = $true }
-            if (-not (Remove-PiRpivPackages)) { $piSetupFailed = $true }
-            if (-not (Setup-PiClaudeBridge)) { $piSetupFailed = $true }
-            if (-not (Setup-PiCompanionPackages)) { $piSetupFailed = $true }
-            if (-not (Setup-PiGoalAutoresearch)) { $piSetupFailed = $true }
+            $piPackageMaintenanceOk = $true
+            if (-not (Setup-PiMcpAdapter)) { $piSetupFailed = $true; $piPackageMaintenanceOk = $false }
+            if (-not (Remove-PiSubagents)) { $piSetupFailed = $true; $piPackageMaintenanceOk = $false }
+            if (-not (Remove-PiRpivPackages)) { $piSetupFailed = $true; $piPackageMaintenanceOk = $false }
+            if (-not (Setup-PiClaudeBridge)) { $piSetupFailed = $true; $piPackageMaintenanceOk = $false }
+            if (-not (Setup-PiCompanionPackages)) { $piSetupFailed = $true; $piPackageMaintenanceOk = $false }
+            if (-not (Setup-PiGoalAutoresearch)) { $piSetupFailed = $true; $piPackageMaintenanceOk = $false }
+            if ($piPackageMaintenanceOk) {
+                if (-not (Update-PiPackages)) { $piSetupFailed = $true }
+            }
+            else { Write-Warning 'Skipping Pi package refresh because prerequisite package maintenance failed.' }
         }
         else { $piSetupFailed = $true }
     }

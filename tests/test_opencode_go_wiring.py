@@ -33,6 +33,7 @@ class WiringTests(unittest.TestCase):
             "configure_pi_defaults", "remove_pi_synthetic_models", "seed_pi_zai_models",
             "setup_pi_mcp_adapter", "remove_pi_subagents", "remove_pi_rpiv_packages",
             "setup_pi_claude_bridge", "setup_pi_companion_packages", "setup_pi_goal_autoresearch",
+            "refresh_pi_packages",
         )
         code = "set -eu\n_setup_had_errors=0\n_pi_go_ready=0\nPI_RUNTIME_PREFLIGHT_PASSED=0\n"
         code += "PI_PROFILE_MUTATIONS_BLOCKED=0\n"
@@ -111,7 +112,7 @@ exercise() {
         inert = ("Remove-RtkResources", "Remove-AttentionSpanResources", "Setup-MattPocockSkills",
                  "Set-PiDefaults", "Remove-PiSyntheticModels", "Seed-PiZaiModels",
                  "Setup-PiMcpAdapter", "Remove-PiSubagents", "Remove-PiRpivPackages",
-                 "Setup-PiClaudeBridge", "Setup-PiCompanionPackages", "Setup-PiGoalAutoresearch")
+                 "Setup-PiClaudeBridge", "Setup-PiCompanionPackages", "Setup-PiGoalAutoresearch", "Update-PiPackages")
         code = "$ErrorActionPreference = 'Stop'\n$script:calls = @()\n"
         code += "$piSetupFailed = $false\n$piOpenCodeGoReady = $false\n$script:PiRuntimePreflightPassed = $false\n"
         code += "function Write-Warning { param($Message) }\nfunction Test-EnvLocalFlag { $false }\n"

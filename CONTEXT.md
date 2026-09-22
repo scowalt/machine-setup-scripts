@@ -52,6 +52,26 @@ _Avoid_: OpenCode installation, Zen subscription
 The Muse model offering available through OpenCode Go. Its terms permit retention of prompts and responses and their use for model training.
 _Avoid_: Muse 1.3 paid, Muse Zen
 
+**Pi package**:
+A registered bundle of Pi extensions, skills, prompts, or themes. Packages may be setup-managed or user-added.
+_Avoid_: Extension file, Pi installation
+
+**Active global Pi profile**:
+The single user-level Pi configuration selected for a setup run. It is distinct from project-scoped configuration and other global profiles.
+_Avoid_: All Pi profiles, project profile
+
+**Pi package refresh**:
+An update of registered packages in the active global Pi profile, including setup-managed and user-added packages. It is distinct from updating Pi itself.
+_Avoid_: Pi self-update, extension reload
+
+**Disabled Pi resource**:
+An extension, skill, prompt, or theme excluded from activation while its containing package remains registered. A disabled resource is distinct from an excluded package.
+_Avoid_: Removed package, package opt-out
+
+**Pi package exclusion**:
+An intentional setup policy requiring a package to be absent, such as a supported user opt-out or managed retirement. It is distinct from disabling resources within an installed package.
+_Avoid_: Disabled extension, resource filter
+
 **Pi output style**:
 A named preference for how Pi writes responses. A user default starts new sessions unless a session, command-line, or project choice overrides it.
 _Avoid_: Prose mode, writing preset
