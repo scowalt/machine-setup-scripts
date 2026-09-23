@@ -14,7 +14,7 @@ def function(name):
 
 
 class HomebrewResults(unittest.TestCase):
-    def run_setup(self, phase='', earlier=0, outdated='', pinned='', trust=0):
+    def run_setup(self, phase='', earlier=0, outdated='', pinned='', trust=0, infisical_failed=0):
         tail = function('run_setup_tasks').split(
             '    if is_main_user; then\n        print_section "Final Updates"', 1)[1]
         script = r'''
@@ -44,15 +44,17 @@ brew() {
 '''
         script += '\n' + function('list_unresolved_brew_outdated_items')
         script += '\n' + function('update_brew')
-        script += '\nrun_setup_tasks() {\nlocal _setup_had_errors=${EARLIER}\n'
+        script += '\nrun_setup_tasks() {\nlocal _setup_had_errors=${EARLIER}\nlocal _infisical_retirement_failed=${INFISICAL_FAILED}\n'
         script += 'if is_main_user; then\n print_section "Final Updates"' + tail
         script += '\n' + function('main') + '\nmain\n'
         with tempfile.TemporaryDirectory() as home:
             result = subprocess.run(['bash', '-c', script], text=True, capture_output=True,
                                     env={'PATH': '/usr/bin:/bin', 'HOME': home,
                                          'FAIL_PHASE': phase, 'EARLIER': str(earlier),
-                                         'OUTDATED': outdated, 'PINNED': pinned, 'TRUST': str(trust)})
-            calls = (Path(home) / 'brew-calls').read_text().splitlines()
+                                         'OUTDATED': outdated, 'PINNED': pinned, 'TRUST': str(trust),
+                                         'INFISICAL_FAILED': str(infisical_failed)})
+            calls_file = Path(home) / 'brew-calls'
+            calls = calls_file.read_text().splitlines() if calls_file.exists() else []
         self.assertEqual(result.stderr, '')
         self.assertIn('reboot-checked', result.stdout)
         return result, calls
@@ -106,6 +108,12 @@ brew() {
         self.assertNotIn('pin tmux', calls)
         self.assertNotIn('unpin tmux', calls)
         self.assertNotIn('cleanup-armed', result.stdout)
+
+    def test_failed_retirement_skips_brew_upgrade_but_finalizes_log(self):
+        result, calls = self.run_setup(earlier=1, infisical_failed=1)
+        self.assert_incomplete(result)
+        self.assertEqual(calls, [])
+        self.assertIn('Skipping Homebrew upgrades', result.stdout)
 
     def test_success_does_not_erase_an_earlier_failure(self):
         result, _ = self.run_setup(earlier=1)

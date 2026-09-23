@@ -605,7 +605,7 @@ report_unmanaged_untrusted_brew_items() {
         _item=${_item#  }
 
         case "${_item}" in
-            libsql/sqld/sqld|tursodatabase/tap/turso|infisical/get-cli/infisical|dopplerhq/cli/doppler|soren-starck/tap/sessionwatcher)
+            libsql/sqld/sqld|tursodatabase/tap/turso|dopplerhq/cli/doppler|soren-starck/tap/sessionwatcher)
                 continue
                 ;;
             *) ;;
@@ -760,24 +760,30 @@ setup_tailscale() {
     fi
 }
 
-# Install the appropriate secrets manager based on machine type
+# Retire only the formula with the exact managed Homebrew identity.
+retire_infisical_brew() {
+    local installed=""
+    installed=$(brew list --formula --full-name) || { print_error "Infisical Homebrew inventory unavailable."; return 1; }
+    if grep -Fxq 'infisical/get-cli/infisical' <<< "${installed}"; then
+        if ! brew uninstall --formula infisical/get-cli/infisical; then
+            print_error "Infisical Homebrew removal failed."
+            return 1
+        fi
+        installed=$(brew list --formula --full-name) || { print_error "Infisical Homebrew postcheck unavailable."; return 1; }
+        if grep -Fxq 'infisical/get-cli/infisical' <<< "${installed}"; then
+            print_error "Infisical Homebrew removal could not be verified."
+            return 1
+        fi
+    fi
+    # The tap may be user-added or have other consumers; preserve it.
+    if command -v infisical >/dev/null 2>&1; then
+        print_warning "An Infisical executable remains; check custom installations manually."
+    fi
+}
+
+# Personal machines retain Doppler; work machines have no replacement.
 install_secrets_manager() {
-    if [[ "${WORK_MACHINE:-}" == "1" ]]; then
-        if ! ensure_brew_item_trusted formula "infisical/get-cli/infisical" "infisical/get-cli"; then
-            print_warning "Infisical formula is not trusted; skipping Infisical CLI."
-            return
-        fi
-        if command -v infisical &>/dev/null; then
-            print_debug "Infisical CLI already installed."
-            return
-        fi
-        print_message "Installing Infisical CLI..."
-        if brew install infisical/get-cli/infisical; then
-            print_success "Infisical CLI installed."
-        else
-            print_error "Failed to install Infisical CLI."
-        fi
-    else
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
         if ! ensure_brew_item_trusted formula "dopplerhq/cli/doppler" "dopplerhq/cli"; then
             print_warning "Doppler formula is not trusted; skipping Doppler CLI."
             return
@@ -9715,6 +9721,7 @@ check_pending_reboot() {
 
 run_setup_tasks() {
     local _setup_had_errors=0
+    local _infisical_retirement_failed=0
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     local PASEO_MUSE_DEFER_DAEMON_SETUP=0
@@ -9722,7 +9729,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 242 | Last changed: Safely refresh active global Pi packages${NC}"
+    echo -e "${GRAY}Version 243 | Last changed: Retire Infisical before package updates${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9749,11 +9756,24 @@ run_setup_tasks() {
     print_section "Xcode Command Line Tools"
     install_xcode_cli_tools
 
+    if ! is_main_user; then
+        if command -v brew >/dev/null 2>&1; then
+            retire_infisical_brew || { _infisical_retirement_failed=1; _setup_had_errors=1; }
+        elif command -v infisical >/dev/null 2>&1; then
+            print_warning "An Infisical executable remains but Homebrew inventory is unavailable; check manually."
+            _infisical_retirement_failed=1
+            _setup_had_errors=1
+        fi
+    fi
     if is_main_user; then
         echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
 
         print_section "Package Manager Setup"
         install_homebrew
+        if ! retire_infisical_brew; then
+            _infisical_retirement_failed=1
+            _setup_had_errors=1
+        fi
 
         print_section "Core Packages"
         install_core_packages
@@ -10005,8 +10025,10 @@ HELPER_EOF
 
     if is_main_user; then
         print_section "Final Updates"
-        if ! update_brew; then
-            _setup_had_errors=1
+        if [[ "${_infisical_retirement_failed}" -eq 0 ]]; then
+            update_brew || _setup_had_errors=1
+        else
+            print_warning "Skipping Homebrew upgrades until Infisical retirement is verified."
         fi
     fi
 

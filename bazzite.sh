@@ -417,24 +417,30 @@ install_core_packages() {
     fi
 }
 
-# Install the appropriate secrets manager based on machine type
-install_secrets_manager() {
-    if [[ "${WORK_MACHINE:-}" == "1" ]]; then
-        if command -v infisical &>/dev/null; then
-            print_debug "Infisical CLI already installed."
-            return
-        fi
-        print_message "Installing Infisical CLI..."
-        if ! { brew tap || true; } | grep -q "^infisical/get-cli$"; then
-            brew tap infisical/get-cli 2>/dev/null || true
-        fi
-        if brew install infisical/get-cli/infisical; then
-            print_success "Infisical CLI installed."
-        else
-            print_error "Failed to install Infisical CLI."
+# Retire only the formula with the exact managed Homebrew identity.
+retire_infisical_brew() {
+    local installed=""
+    installed=$(brew list --formula --full-name) || { print_error "Infisical Homebrew inventory unavailable."; return 1; }
+    if grep -Fxq 'infisical/get-cli/infisical' <<< "${installed}"; then
+        if ! brew uninstall --formula infisical/get-cli/infisical; then
+            print_error "Infisical Homebrew removal failed."
             return 1
         fi
-    else
+        installed=$(brew list --formula --full-name) || { print_error "Infisical Homebrew postcheck unavailable."; return 1; }
+        if grep -Fxq 'infisical/get-cli/infisical' <<< "${installed}"; then
+            print_error "Infisical Homebrew removal could not be verified."
+            return 1
+        fi
+    fi
+    # The tap may be user-added or have other consumers; preserve it.
+    if command -v infisical >/dev/null 2>&1; then
+        print_warning "An Infisical executable remains; check custom installations manually."
+    fi
+}
+
+# Personal machines retain Doppler; work machines have no replacement.
+install_secrets_manager() {
+    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
         if ! ensure_brew_formula_trusted "dopplerhq/doppler/doppler" "dopplerhq/doppler"; then
             print_error "Doppler CLI formula is not trusted."
             return 1
@@ -9432,11 +9438,12 @@ for deployment in data.get("deployments", []):
 
 run_setup_tasks() {
     local _setup_had_errors=0
+    local _infisical_retirement_failed=0
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     local PASEO_MUSE_DEFER_DAEMON_SETUP=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 123 | Last changed: Safely refresh active global Pi packages"
+    echo -e "${GRAY}Version 124 | Last changed: Retire Infisical before package updates"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9473,8 +9480,12 @@ run_setup_tasks() {
 
     print_section "Package Manager"
     ensure_brew_available || return 1
+    if ! retire_infisical_brew; then
+        _infisical_retirement_failed=1
+        _setup_had_errors=1
+    fi
     install_core_packages || return 1
-    install_secrets_manager || return 1
+    install_secrets_manager || _setup_had_errors=1
     install_gcloud_cli
     install_brew_packages || return 1
     setup_tailscale_ssh || return 1
@@ -9662,7 +9673,11 @@ HELPER_EOF
     fi
 
     print_section "Final Updates"
-    update_brew || return 1
+    if [[ "${_infisical_retirement_failed}" -eq 0 ]]; then
+        update_brew || _setup_had_errors=1
+    else
+        print_warning "Skipping Homebrew upgrades until Infisical retirement is verified."
+    fi
 
     check_pending_reboot
 
