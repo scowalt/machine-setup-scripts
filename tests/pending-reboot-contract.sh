@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Version 1 | Last changed: Check Windows update ordering independently of comments
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -87,7 +88,7 @@ assert_contains win.ps1 '^[[:space:]]+Test-PendingReboot$' 'pending-reboot call 
 assert_contains win.ps1 'Component Based Servicing\\RebootPending' 'CBS pending key'
 assert_contains win.ps1 'Auto Update\\RebootRequired' 'Windows Update required key'
 assert_contains win.ps1 'PendingFileRenameOperations' 'pending file rename check'
-assert_order win.ps1 'Install-WindowsUpdates # this should always be LAST' '^[[:space:]]+Test-PendingReboot$' 'pending-reboot check after Windows updates'
+assert_order win.ps1 '^[[:space:]]+Install-WindowsUpdates([[:space:]]+#.*)?$' '^[[:space:]]+Test-PendingReboot$' 'pending-reboot check after Windows updates'
 assert_not_contains win.ps1 'Test-PendingReboot.*throw' 'fatal pending-reboot wiring'
 
 # The check documents a known machine state in the shared vocabulary.

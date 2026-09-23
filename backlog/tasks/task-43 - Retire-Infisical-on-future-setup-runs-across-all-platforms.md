@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-23 13:28'
-updated_date: '2026-09-23 22:12'
+updated_date: '2026-09-23 22:15'
 labels: []
 dependencies: []
 references:
@@ -89,6 +89,8 @@ User approved the recommendation to include infisical.infisical alongside Infisi
 Final orchestrator review independently passed 37 Python retirement/caller/Homebrew tests, setup reliability with /tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh, extracted PowerShell fixtures, ShellCheck all five Bash scripts, Bash syntax and diff checks. Checked native Microsoft source to confirm compact single-line source-export JSON and portable REG_SZ fields/uninstall-string format. One packaging follow-up: existing pre-push discovers only tests/*.sh, so add a shell contract entry point for the new Python/PowerShell fixtures. Update the approved plan status, which still says In Progress. No new behavioral scope or live mutation is needed.
 
 - Packaging follow-up: added tests/infisical-retirement-contract.sh (Version 1) so lefthook pre-push tests/*.sh executes all three extracted Python retirement modules and, when available, inert PowerShell registry/WinGet caller fixtures. Explicit skip without PowerShell and failure for an invalid supplied PWSH_BIN. README recommends entry point; approved plan status now says implemented with native Windows verification limitation. PWSH_BIN=/tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh bash tests/infisical-retirement-contract.sh passed (29 Python tests and PowerShell fixture); PATH=/usr/bin:/bin PWSH_BIN= bash tests/infisical-retirement-contract.sh passed with explicit PowerShell skip; shellcheck and bash -n on runner and git diff --check passed. No live setup or package mutation.
+
+Publication checks found the pending-reboot contract matched the former literal Windows update comment rather than the update call. Reproduced its failure independently and changed only the ordering assertion to match the actual call with optional trailing comment; pending-reboot semantics remain unchanged. The contract and ShellCheck now pass. Pre-push remains enabled; remote main has not yet changed.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
