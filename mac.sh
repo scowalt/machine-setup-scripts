@@ -1125,60 +1125,108 @@ setup_ssh_key() {
 # xcode-select --install opens a GUI prompt that hangs on headless machines.
 # Instead, we create the /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress
 # sentinel file and use softwareupdate to find and install the CLT package directly.
+# Bootstrap only when no developer directory exists. Never replace an existing
+# toolchain: Homebrew's targeted diagnostics below decide compatibility.
 install_xcode_cli_tools() {
-    if xcode-select -p &>/dev/null; then
-        # CLT is installed — check if it needs updating
-        local updates
-        updates=$(softwareupdate --list 2>&1)
-        if echo "${updates}" | grep -qi "Command Line Tools"; then
-            print_message "Xcode Command Line Tools update available. Installing..."
-            sudo rm -rf /Library/Developer/CommandLineTools 2>/dev/null
-            _install_clt_via_softwareupdate
-            print_success "Xcode Command Line Tools updated."
-        else
-            print_debug "Xcode Command Line Tools are already installed and up to date."
+    local selected updates
+    if selected=$(xcode-select -p 2>/dev/null) && [[ -n "${selected}" ]]; then
+        if ! updates=$(softwareupdate --list 2>&1); then
+            print_error "Could not query Command Line Tools updates; check Software Update manually."
+            return 1
         fi
+        if [[ "${updates}" == *"Command Line Tools"* ]]; then
+            print_warning "A Command Line Tools update is offered. Apply it through Apple Software Update if compatibility checks fail."
+        fi
+        print_debug "Developer tools selected; Homebrew compatibility checks pending."
         return 0
     fi
-
+    if [[ -e /Library/Developer/CommandLineTools || -e /Applications/Xcode.app ]]; then
+        print_error "Developer tools exist but no directory is selected. Select a trusted installation manually with xcode-select."
+        return 1
+    fi
     print_message "Installing Xcode Command Line Tools..."
-    _install_clt_via_softwareupdate
-    print_success "Xcode Command Line Tools installed."
+    if ! _install_clt_via_softwareupdate; then
+        print_error "Command Line Tools installation failed; check Apple Software Update manually."
+        return 1
+    fi
+    if ! selected=$(xcode-select -p 2>/dev/null) || [[ -z "${selected}" ]] || ! xcrun --find clang >/dev/null 2>&1; then
+        print_error "Command Line Tools installation did not produce a usable selected compiler."
+        return 1
+    fi
+    print_message "Command Line Tools installed; Homebrew compatibility checks pending."
+}
+
+# Homebrew's documented public doctor CLI owns the OS/SDK version rules.
+verify_developer_tools_for_homebrew() {
+    local checks check selected
+    local required=(check_for_installed_developer_tools check_xcode_license_approved
+        check_xcode_minimum_version check_clt_minimum_version
+        check_if_xcode_needs_clt_installed check_if_supported_sdk_available
+        check_xcode_select_path check_xcode_prefix_exists)
+    if ! selected=$(xcode-select -p 2>/dev/null) || [[ -z "${selected}" ]] ||
+        ! xcrun --find clang >/dev/null 2>&1; then
+        print_error "Selected developer tools or compiler unavailable; inspect xcode-select and Apple Software Update manually."
+        return 1
+    fi
+    if ! command -v brew >/dev/null 2>&1; then
+        print_error "Homebrew unavailable; cannot verify developer tools compatibility."
+        return 1
+    fi
+    if ! checks=$(brew doctor --list-checks 2>/dev/null); then
+        print_error "Homebrew diagnostic discovery failed; developer tools compatibility unverified."
+        return 1
+    fi
+    for check in "${required[@]}"; do
+        if ! grep -Fxq "${check}" <<< "${checks}"; then
+            print_error "Required Homebrew developer tools diagnostic unavailable: ${check}. Compatibility unverified."
+            return 1
+        fi
+    done
+    if ! brew doctor "${required[@]}"; then
+        print_error "Developer tools failed Homebrew's selected compatibility checks. Update CLT or Xcode via Apple Software Update or Apple Developer downloads; preserve your existing tools until reviewed."
+        return 1
+    fi
+    print_success "Selected developer tools passed Homebrew's targeted compatibility checks."
 }
 
 # Helper: install CLT non-interactively using softwareupdate
 _install_clt_via_softwareupdate() {
-    # This sentinel file makes softwareupdate list the CLT package
     local placeholder="/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress"
-    sudo touch "${placeholder}"
-
-    # Find the latest Command Line Tools package label
-    local clt_label
-    clt_label=$(softwareupdate --list 2>&1 \
-        | grep -o 'Label: Command Line Tools.*' \
-        | sed 's/^Label: //' \
-        | sort -V \
-        | tail -n1 || true)
-
-    if [[ -z "${clt_label}" ]]; then
-        # Fallback: try the '*' wildcard format (older macOS)
-        clt_label=$(softwareupdate --list 2>&1 \
-            | grep '\* .*Command Line Tools' \
-            | sed 's/^[[:space:]]*\* //' \
-            | sort -V \
-            | tail -n1 || true)
-    fi
-
-    if [[ -z "${clt_label}" ]]; then
-        sudo rm -f "${placeholder}"
-        print_error "Could not find Command Line Tools package in softwareupdate."
+    local listing clt_label result=0 sentinel_identity
+    # O_EXCL prevents overwriting an existing (including linked) installer sentinel.
+    # The cleanup compares identity and unlinks only our own inode.
+    if ! sentinel_identity=$(sudo /usr/bin/perl -MFcntl=O_WRONLY,O_CREAT,O_EXCL,O_NOFOLLOW -e '
+        my $p = shift; sysopen(my $f, $p, O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0600) or exit 1;
+        my @s = stat($f); print "$s[0]:$s[1]";
+    ' "${placeholder}"); then
+        print_error "Could not create Command Line Tools install sentinel."
         return 1
     fi
-
-    print_message "Installing '${clt_label}' via softwareupdate..."
-    sudo softwareupdate --install "${clt_label}" --verbose
-
-    sudo rm -f "${placeholder}"
+    if ! listing=$(softwareupdate --list 2>&1); then
+        print_error "Could not query Command Line Tools installer."
+        result=1
+    else
+        clt_label=$(printf '%s\n' "${listing}" | sed -n -E 's/^[[:space:]]*(\* )?(Label: )?(Command Line Tools[^[:cntrl:]]*)$/\3/p' | sort -V | tail -n1 || true)
+        if [[ -z "${clt_label}" ]]; then
+            print_error "Could not find Command Line Tools package in softwareupdate."
+            result=1
+        else
+            print_message "Installing '${clt_label}' via softwareupdate..."
+            if ! sudo softwareupdate --install "${clt_label}" --verbose; then
+                print_error "Command Line Tools softwareupdate installation failed."
+                result=1
+            fi
+        fi
+    fi
+    if ! sudo /usr/bin/perl -e '
+        my ($p, $identity) = @ARGV;
+        my @s = lstat($p); exit 1 unless @s && -f _ && "$s[0]:$s[1]" eq $identity;
+        unlink($p) or exit 1;
+    ' "${placeholder}" "${sentinel_identity}"; then
+        print_error "Could not remove Command Line Tools install sentinel; remove it manually after checking ownership."
+        result=1
+    fi
+    return "${result}"
 }
 
 # Install Homebrew if not installed
@@ -9729,7 +9777,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 243 | Last changed: Retire Infisical before package updates${NC}"
+    echo -e "${GRAY}Version 244 | Last changed: Verify macOS developer tools with targeted Homebrew checks${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9754,7 +9802,7 @@ run_setup_tasks() {
     _paseo_setup_channel=$(paseo_release_channel) || return 1
 
     print_section "Xcode Command Line Tools"
-    install_xcode_cli_tools
+    install_xcode_cli_tools || _setup_had_errors=1
 
     if ! is_main_user; then
         if command -v brew >/dev/null 2>&1; then
@@ -9770,6 +9818,7 @@ run_setup_tasks() {
 
         print_section "Package Manager Setup"
         install_homebrew
+        verify_developer_tools_for_homebrew || _setup_had_errors=1
         if ! retire_infisical_brew; then
             _infisical_retirement_failed=1
             _setup_had_errors=1
@@ -9819,6 +9868,7 @@ run_setup_tasks() {
         local brew_env
         brew_env=$(/opt/homebrew/bin/brew shellenv) || true
         eval "${brew_env}"
+        verify_developer_tools_for_homebrew || _setup_had_errors=1
 
         # Fix zsh permissions early (before any tool might invoke zsh)
         fix_zsh_compaudit
