@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 2 | Last changed: Assert incomplete macOS Homebrew setup results
+# Version 3 | Last changed: Exercise macOS CLT compatibility and failure contracts
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -33,6 +33,8 @@ assert_not_contains() {
 }
 
 source_without_main='s/^main "\$@"$/:/'
+
+python3 tests/test_macos_clt.py || fail 'macOS CLT readiness fixtures failed'
 
 # GitHub key downloads must retry transient/empty responses without confusing
 # transport failures with a successfully fetched list that lacks the local key.
