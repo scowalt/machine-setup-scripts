@@ -9,6 +9,7 @@ This repository contains idempotent machine setup scripts for automating the con
 ## Key Scripts
 
 - **mac.sh** - macOS setup using Homebrew
+- **Ubuntu bb server** - `BB_SERVER=1` opts native Ubuntu into a stable independent bb main server; no hostname allowlist. Unset/0 leaves existing deployments alone. Preserve provider credentials, npm policy, bb data and unrelated routes. Keep stopped updates, native config locks, and readiness-gated foreground Serve at the saved endpoint. Run `bash tests/bb-server-contract.sh` after changes with inert lifecycle fixtures; real boot, remote tailnet browser/WebSocket and local execution checks belong to rollout. See README's bb server section for prerequisites and service behavior.
 - **ubuntu.sh** - Ubuntu Linux setup with user management
 - **win.ps1** - Windows setup using WinGet and PowerShell
 - **wsl.sh** - Windows Subsystem for Linux setup

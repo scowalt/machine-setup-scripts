@@ -24,6 +24,10 @@ _Avoid_: Gitea CLI, Gitea server command
 A development tool whose installation, configuration, update, and removal are controlled by the setup scripts.
 _Avoid_: Provisioned tool, setup tool
 
+**bb server**:
+An independent main application server for the bb agentic IDE published by get-bb/bb, with its own projects and sessions. It is distinct from BBEdit and from an execution machine enrolled with another bb server.
+_Avoid_: BBEdit server, bb execution machine
+
 **Shared Node runtime**:
 The user-level Node runtime used by managed tools and projects without a runtime override. A project-specific selection takes precedence.
 _Avoid_: System Node, Pi-only runtime
