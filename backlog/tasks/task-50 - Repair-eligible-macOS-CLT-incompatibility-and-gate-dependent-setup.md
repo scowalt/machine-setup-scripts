@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-28 15:44'
-updated_date: '2026-09-28 16:35'
+updated_date: '2026-09-28 17:34'
 labels:
   - macos
   - reliability
@@ -103,6 +103,8 @@ Origin independent review completed after workflow wfr_9f81904f-e0a0-45d1-92cd-8
 Independently reran: python3 tests/test_macos_clt.py (22 passed); python3 tests/test_homebrew_results.py (9 passed); setup-reliability, pending-reboot, weekly-log-audit-regressions (29 tests, 3 optional skips), ai-coding-agent, bb-machine-preparation (17 passed; optional PowerShell guidance skipped), opencode-go-wiring, and pi-package-maintenance (30 tests, 3 optional skips) contracts. Bash syntax, ShellCheck for mac.sh and tests/ai-coding-agent-contract.sh, and git diff --check passed. Review logs are under the origin BB thread storage as task50-review-*.log. Additional affected-suite results are recorded in the implementor report above.
 
 Native Apple update/authorization, macOS Bash 3.2/BSD behavior, and optional integrations remain explicitly unverified where unavailable. No live setup, Apple update, remote change, commit, or push occurred. All AC and DoD are satisfied for the approved fixture-validated implementation scope; native rollout remains a separately authorized check.
+
+Remote-main integration requested by the user. Fetched origin/main at 7f7daa6 (headed bb Desktop support), preserved both feature sets, and resolved only the CLAUDE guidance overlap and mac.sh version-header conflict. Integrated mac.sh is v249. The combined tree passed 22 CLT tests, 9 Homebrew-result tests, 64 bb Desktop tests, Bash syntax, ShellCheck, and staged/unstaged diff checks. Optional Windows desktop wrapper execution was skipped because PowerShell is unavailable; no native GUI/update operations were run. Publishing will use a normal non-force push with repository pre-push hooks enabled.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
@@ -113,6 +115,8 @@ Implemented bounded macOS CLT repair and developer-tool readiness gating in mac.
 Unresolved readiness now skips Homebrew-backed and other dependent mutations while preserving demonstrably independent work and log finalization. A recovered compatibility finding no longer poisons the result, but actual operation failures and unrelated prior errors remain failures. Existing installations, selection, first-time bootstrap safety, shared helpers, and other platform behavior are preserved. README, agent guidance, and affected real-caller fixtures document and cover the policy.
 
 Validation: 22 CLT tests and 9 Homebrew-result tests pass, plus required reliability/reboot/weekly suites and affected BB, runtime, Pi, Go/Muse, Plain, permissions, AI-agent, Infisical, headless, and Tea contracts as recorded in notes. The origin independently reran focused and key caller suites, Bash syntax, ShellCheck, and diff checks with no blocking findings. Optional integrations were skipped where unavailable. Native macOS/Apple update behavior remains unverified; no live machine updates were run. Changes are uncommitted.
+
+Remote-main integration preserves the concurrent bb Desktop feature and advances mac.sh to v249. Combined CLT/Homebrew/Desktop fixtures pass (22/9/64); publication retains normal repository hooks and no-force Git semantics.
 <!-- SECTION:FINAL_SUMMARY:END -->
 
 ## Definition of Done

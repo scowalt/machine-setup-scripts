@@ -8160,6 +8160,71 @@ setup_bb_machine() {
 }
 # End shared BB machine preparation.
 
+# BEGIN BB DESKTOP WRAPPER -- keep identical in all Bash entry points.
+install_bb_desktop() {
+    local entry="$1" platform arch kernel result status=0
+    if [[ "${HEADLESS:-}" == "1" ]]; then
+        print_debug "Skipping bb desktop: HEADLESS=1; existing applications untouched."
+        return 0
+    fi
+    case "${entry}" in
+        wsl|pi)
+            print_debug "Skipping bb desktop: ${entry} has no supported native desktop artifact."
+            return 0 ;;
+        macos|ubuntu|bazzite) ;;
+        *) print_error "bb desktop: invalid setup platform."; return 1 ;;
+    esac
+    if ! platform=$(uname -s) || ! arch=$(uname -m) || ! kernel=$(uname -r); then
+        print_error "bb desktop: platform inspection failed."
+        return 1
+    fi
+    # Rosetta reports x86_64 even on an Apple Silicon host.
+    if [[ "${entry}:${platform}:${arch}" == "macos:Darwin:x86_64" ]] &&
+        [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" == "1" ]]; then
+        arch=arm64
+    fi
+    case "${entry}:${platform}:${arch}" in
+        macos:Darwin:arm64) platform=macos ;;
+        ubuntu:Linux:x86_64|bazzite:Linux:x86_64)
+            case "${kernel}" in
+                *[Mm]icrosoft*|*WSL*) print_debug "Skipping bb desktop: WSL is unsupported."; return 0 ;;
+                *) ;;
+            esac
+            platform=linux ;;
+        *) print_debug "Skipping bb desktop: no native artifact for this platform/architecture."; return 0 ;;
+    esac
+    if [[ ! -x /usr/bin/python3 ]]; then
+        print_error "bb desktop requires native Python 3 (macOS Command Line Tools or Linux python3)."
+        return 1
+    fi
+    result=$(bb_desktop_payload "${platform}" 2>/dev/null) || status=$?
+    if [[ "${status}" -eq 0 ]]; then
+        case "${result}" in
+            installed|current|newer-preserved)
+                case "${result}" in
+                    installed) print_success "bb desktop installed and verified; not launched." ;;
+                    current) print_debug "bb desktop is already current and verified." ;;
+                    newer-preserved) print_debug "Newer verified bb desktop preserved." ;;
+                    *) return 1 ;;
+                esac
+                if [[ "${platform}" == "linux" ]]; then
+                    print_warning "bb desktop installation is verified; GUI/sandbox launch compatibility remains unverified. No launch or security-policy changes were performed."
+                fi
+                return 0 ;;
+            deferred-running) print_warning "bb desktop update deferred: verified app is running. Quit it yourself and rerun setup."; return 0 ;;
+            *) ;;
+        esac
+    fi
+    # Only controlled diagnostic tokens cross the helper boundary, never stderr.
+    if [[ "${result}" =~ ^failed:[a-z]+(-[a-z]+)*$ && "${status}" -ne 0 ]]; then
+        print_error "bb desktop ${result}. Existing app/user/server state preserved; see README recovery/prerequisites."
+    else
+        print_error "bb desktop failed: unverified helper result. See README recovery/prerequisites."
+    fi
+    return 1
+}
+# END BB DESKTOP WRAPPER
+
 run_setup_tasks() {
     local _setup_had_errors=0
     local _pi_go_ready=0
@@ -8167,7 +8232,7 @@ run_setup_tasks() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 209 | Last changed: Preserve npm policy and BB preparation compatibility${NC}"
+    echo -e "${GRAY}Version 210 | Last changed: Preserve BB preparation and explicit desktop skip${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -8280,6 +8345,7 @@ run_setup_tasks() {
     install_portless_cli
     install_ntn_cli
     setup_bb_machine wsl || { print_error 'BB machine preparation incomplete; existing BB state was preserved.'; _setup_had_errors=1; }
+    install_bb_desktop wsl || _setup_had_errors=1
     if ! prepare_pi_profile_permissions; then
         PI_PROFILE_MUTATIONS_BLOCKED=1
         _setup_had_errors=1
