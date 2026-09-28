@@ -28,6 +28,10 @@ _Avoid_: Gitea CLI, Gitea server command
 A development tool whose installation, configuration, update, and removal are controlled by the setup scripts.
 _Avoid_: Provisioned tool, setup tool
 
+**Managed dotfile**:
+A user-level configuration file or directory whose desired contents and permissions are owned by Chezmoi. Being inspected by a setup preflight does not make an otherwise unmanaged path a managed dotfile.
+_Avoid_: BB-owned configuration, Any file under HOME
+
 **bb desktop app**:
 The native graphical application for the bb agentic IDE published by get-bb/bb. It is distinct from browser access and a separately managed bb server.
 _Avoid_: BBEdit, bb browser shortcut

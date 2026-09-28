@@ -1296,19 +1296,19 @@ initialize_chezmoi() {
         print_message "Initializing chezmoi with scowalt/dotfiles…"
         case "${DOTFILES_ACCESS_METHOD}" in
             ssh)
-                if ! "${chezmoi_cmd}" init --apply --force scowalt/dotfiles --ssh; then
+                if ! with_bb_dotfiles_umask pi "${chezmoi_cmd}" init --apply --force scowalt/dotfiles --ssh; then
                     print_error "Failed to initialize chezmoi with the verified SSH key."
                     return 1
                 fi
                 ;;
             token)
-                if ! "${chezmoi_cmd}" init --apply --force "https://github.com/scowalt/dotfiles.git"; then
+                if ! with_bb_dotfiles_umask pi "${chezmoi_cmd}" init --apply --force "https://github.com/scowalt/dotfiles.git"; then
                     print_error "Failed to initialize chezmoi with the verified GitHub token."
                     return 1
                 fi
                 ;;
             deploy)
-                if ! "${chezmoi_cmd}" init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
+                if ! with_bb_dotfiles_umask pi "${chezmoi_cmd}" init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
                     print_error "Failed to initialize chezmoi with the verified deploy key."
                     return 1
                 fi
@@ -1390,7 +1390,7 @@ update_chezmoi() {
     local chez_src="${HOME}/.local/share/chezmoi"
     if [[ -d "${chez_src}" ]]; then
         print_message "Updating chezmoi dotfiles repository..."
-        if ${chezmoi_cmd} update > /dev/null; then
+        if with_bb_dotfiles_umask pi "${chezmoi_cmd}" update > /dev/null; then
             print_success "chezmoi dotfiles repository updated."
         else
             print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
@@ -1518,7 +1518,7 @@ apply_chezmoi_config() {
     fi
 
     # Run verbosely; bail if anything returns non‑zero
-    if ! ${chezmoi_cmd} apply --force --verbose; then
+    if ! with_bb_dotfiles_umask pi "${chezmoi_cmd}" apply --force --verbose; then
         print_error "chezmoi apply failed – fix the dotfiles, then rerun the script."
         return 1
     fi
@@ -10199,86 +10199,160 @@ bb_machine_existing_role() {
     return 1
 }
 
-bb_machine_package_state() {
-    node - "$1" "${HOME}" >/dev/null 2>&1 <<'BB_MACHINE_STATE'
+bb_machine_package_state_payload() {
+    node - "$1" "${HOME}" 2>/dev/null <<'BB_MACHINE_STATE'
 const fs = require('node:fs'), path = require('node:path'), {createRequire} = require('node:module');
 const [mode, home] = process.argv.slice(2), uid = process.getuid();
 const root = path.join(home, '.local/share/setup-bb-machine'), prefix = path.join(root, 'npm');
 const pkg = path.join(prefix, 'lib/node_modules/bb-app'), marker = path.join(root, 'owner.json');
 const owner = {kind: 'setup-bb-machine', schema: 1};
 const bins = {bb: 'dist/bb.js', 'bb-app': 'dist/bb-app.js', 'bb-server': 'dist/bb-server.js', 'bb-host-daemon': 'dist/bb-host-daemon.js'};
+let operation = 'home', location = 'home-boundary', observed = null;
+const failures = [], reported = new Set();
+function context(op, file, s = null) { operation = op; location = file; observed = s; }
+function safeLocation(f) {
+  if (f === home || f === 'home-boundary') return 'home-boundary';
+  if (!inside(f, home)) return 'external-boundary';
+  const rel = path.relative(home, f);
+  // Suppress control characters, long/custom names and ambiguous components.
+  return rel.length <= 120 && rel.split('/').every(n => /^[A-Za-z0-9_.@-]+$/.test(n) && !['.', '..'].includes(n)) ? '~/' + rel : 'path-suppressed';
+}
+function record(reason = 'unverified') {
+  const line = ['blocked', operation, safeLocation(location), observed ? (observed.mode & 0o7777).toString(8).padStart(4, '0') : 'unknown', reason].join(':');
+  if (failures.length < 8 && !reported.has(line)) { failures.push(line); reported.add(line); }
+}
+function inspect(fn) {
+  try { fn(); } catch (e) { record(e.reason || 'unverified'); }
+}
 function stat(f) { try { return fs.lstatSync(f); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
-function check(ok) { if (!ok) throw new Error('unsafe or incomplete preparation'); }
+function check(ok, reason = 'unverified') { if (!ok) throw Object.assign(new Error(), {reason}); }
 function inside(f, dir) { return f === dir || f.startsWith(dir + path.sep); }
 function chain(dir) {
   if (dir !== path.dirname(dir)) chain(path.dirname(dir));
+  context('directory', dir);
   const s = stat(dir); if (!s) return;
+  observed = s;
   if (process.platform === 'linux' && dir === '/home' && s.isSymbolicLink() && s.uid === 0 && ['var/home', '/var/home'].includes(fs.readlinkSync(dir))) {
     for (const p of ['/', '/var', '/var/home']) { const t = fs.lstatSync(p); check(t.isDirectory() && t.uid === 0 && !(t.mode & 0o022)); }
     return;
   }
-  check(s.isDirectory() && !s.isSymbolicLink());
-  check(s.uid === (inside(dir, home) ? uid : 0) || (!inside(dir, home) && s.uid === uid));
-  check(!(s.mode & 0o022) || (!inside(dir, home) && s.uid === 0 && (s.mode & 0o1000)));
+  check(!s.isSymbolicLink(), 'linked-path');
+  check(s.isDirectory(), 'non-directory');
+  check(s.uid === (inside(dir, home) ? uid : 0) || (!inside(dir, home) && s.uid === uid), 'unsafe-ownership');
+  check(!(s.mode & 0o022) || (!inside(dir, home) && s.uid === 0 && (s.mode & 0o1000)), 'writable-boundary');
 }
 function regular(f) {
-  const s = fs.lstatSync(f);
-  check(s.isFile() && !s.isSymbolicLink() && s.uid === uid && s.nlink === 1 && !(s.mode & 0o022) && s.size > 0);
+  context('artifact', f);
+  const s = fs.lstatSync(f); observed = s;
+  check(!s.isSymbolicLink(), 'linked-path');
+  check(s.uid === uid, 'unsafe-ownership');
+  check(!(s.mode & 0o022), 'writable-boundary');
+  check(s.isFile() && s.nlink === 1 && s.size > 0, 'unsafe-file');
   return s;
 }
-function json(f) { check(regular(f).size < 1048576); return JSON.parse(fs.readFileSync(f, 'utf8')); }
+function json(f) {
+  check(regular(f).size < 1048576, 'unsafe-file');
+  try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { check(false, 'malformed-metadata'); }
+}
+// Resolve service links one boundary at a time rather than realpath probing
+// descendants before their ancestors are checked. Trusted Homebrew opt links
+// and systemd masks remain read-only; bound cycles and never read a FIFO.
+function serviceTarget(file) {
+  let pending = file.split(path.sep).filter(Boolean), dir = path.parse(file).root, links = 0;
+  while (pending.length) {
+    chain(dir);
+    const name = pending.shift();
+    if (!name || name === '.') continue;
+    if (name === '..') { dir = path.dirname(dir); continue; }
+    const next = path.join(dir, name);
+    context('service', next);
+    const s = fs.lstatSync(next); observed = s;
+    if (s.isSymbolicLink()) {
+      check(++links <= 40, 'linked-path');
+      check(s.uid === uid || s.uid === 0, 'unsafe-ownership');
+      const target = fs.readlinkSync(next);
+      // Preserve POSIX ordering: resolve links before processing subsequent '..'.
+      pending = target.split(path.sep).concat(pending);
+      if (path.isAbsolute(target)) dir = path.parse(target).root;
+    } else dir = next;
+  }
+  return dir;
+}
 // Read-only service references are not preparation-owned artifacts. Resolve
 // ordinary linked registrations to a trusted regular target; never modify them.
 function serviceUnreferenced(file) {
-  const link = fs.lstatSync(file); check(link.uid === uid || link.uid === 0);
-  const target = link.isSymbolicLink() ? fs.realpathSync(file) : file;
-  check(!target.includes('setup-bb-machine'));
+  context('service', file);
+  const link = fs.lstatSync(file); observed = link;
+  check(link.uid === uid || link.uid === 0, 'unsafe-ownership');
+  const target = link.isSymbolicLink() ? serviceTarget(file) : file;
+  check(!target.includes('setup-bb-machine'), 'referenced-copy');
   chain(path.dirname(target));
-  const s = fs.lstatSync(target);
+  context('service', target);
+  const s = fs.lstatSync(target); observed = s;
   if (link.isSymbolicLink() && target === '/dev/null') {
     check(s.isCharacterDevice() && s.uid === 0); return; // Native systemd mask; no read.
   }
-  check(s.isFile() && !s.isSymbolicLink() && (s.uid === uid || s.uid === 0) && !(s.mode & 0o022) && s.size < 1048576);
+  check(s.uid === uid || s.uid === 0, 'unsafe-ownership');
+  check(!(s.mode & 0o022), 'writable-boundary');
+  check(s.isFile() && !s.isSymbolicLink() && s.size < 1048576, 'unsafe-file');
   // Empty units/plists cannot reference this copy. Dangling, unreadable and
   // non-regular targets remain uncertain and fail closed, including FIFOs.
-  check(!fs.readFileSync(target, 'utf8').includes('setup-bb-machine'));
+  check(!fs.readFileSync(target, 'utf8').includes('setup-bb-machine'), 'referenced-copy');
 }
 // Inspect only the dedicated preparation tree, never BB data or enrollment trees.
 function tree(dir) {
   chain(dir);
   for (const name of fs.readdirSync(dir)) {
-    const f = path.join(dir, name), s = fs.lstatSync(f);
-    check(s.uid === uid);
+    const f = path.join(dir, name);
+    context('artifact', f);
+    const s = fs.lstatSync(f); observed = s;
+    check(s.uid === uid, 'unsafe-ownership');
     if (s.isSymbolicLink()) {
       const target = path.resolve(dir, fs.readlinkSync(f));
-      check(inside(target, prefix));
+      check(inside(target, prefix), 'linked-path');
       // npm bin links may be dangling after an interrupted install. Never follow them.
-      const t = stat(target); check(!t || (t.isFile() && !t.isSymbolicLink()));
+      chain(path.dirname(target));
+      context('artifact', f, s);
+      const t = stat(target); check(!t || (t.isFile() && !t.isSymbolicLink()), 'linked-path');
     } else if (s.isDirectory()) tree(f);
-    else check(s.isFile() && s.nlink === 1 && !(s.mode & 0o022));
+    else {
+      check(!(s.mode & 0o022), 'writable-boundary');
+      check(s.isFile() && s.nlink === 1, 'unsafe-file');
+    }
   }
 }
 try {
   check(path.isAbsolute(home) && path.normalize(home) === home && home !== '/');
+  context('runtime', 'runtime');
   check(['linux', 'darwin'].includes(process.platform));
   const [major, minor] = process.versions.node.split('.').map(Number);
   check((major === 22 && minor >= 19) || major === 24 || major === 26);
   // A custom running BB may use a non-default data directory. Read-only process
   // evidence blocks preparation rather than updating a possibly in-use copy.
-  const processes = require('node:child_process').execFileSync('ps', ['-U', String(uid), '-o', 'command='], {encoding: 'utf8', maxBuffer: 8 * 1024 * 1024});
-  check(!/(?:^|[\s/])(?:bb-app|bb-server|bb-host-daemon)(?:$|[\s/.])/m.test(processes));
+  inspect(() => {
+    context('process', 'process-inventory');
+    const processes = require('node:child_process').execFileSync('ps', ['-U', String(uid), '-o', 'command='], {encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe']});
+    check(!/(?:^|[\s/])(?:bb-app|bb-server|bb-host-daemon)(?:$|[\s/.])/m.test(processes), 'referenced-copy');
+  });
   // Also preserve a stopped, manually named user service referencing this copy.
   for (const dir of [path.join(home, '.config/systemd/user'), path.join(home, 'Library/LaunchAgents')]) {
-    if (!stat(dir)) continue;
-    chain(dir);
-    for (const name of fs.readdirSync(dir).filter(n => /\.(service|plist)$/.test(n))) {
-      serviceUnreferenced(path.join(dir, name));
-    }
+    if (failures.length >= 8) break;
+    inspect(() => {
+      // Validate parents BEFORE probing a descendant, even if it is absent.
+      chain(dir);
+      if (!stat(dir)) return;
+      for (const name of fs.readdirSync(dir).filter(n => /\.(service|plist)$/.test(n))) {
+        if (failures.length >= 8) break;
+        inspect(() => serviceUnreferenced(path.join(dir, name)));
+      }
+    });
   }
-  chain(root);
-  if (stat(root)) {
+  if (failures.length < 8) inspect(() => {
+    chain(root);
+    if (!stat(root)) return;
     check(JSON.stringify(json(marker)) === JSON.stringify(owner));
     check(!(fs.lstatSync(marker).mode & 0o077));
+    context('artifact', root); observed = fs.lstatSync(root);
     check(fs.readdirSync(root).every(n => ['owner.json', 'npm'].includes(n)));
     if (stat(prefix)) {
       tree(prefix);
@@ -10286,19 +10360,25 @@ try {
         if (stat(f)) { const j = json(f); check(j && typeof j === 'object' && !Array.isArray(j)); if (f === path.join(pkg, 'package.json')) check(j.name === 'bb-app'); }
       }
       for (const [dir, allowed] of [[prefix, ['bin', 'lib']], [path.join(prefix, 'lib'), ['node_modules']]]) {
-        if (stat(dir)) check(fs.readdirSync(dir).every(n => allowed.includes(n)));
+        context('directory', dir); observed = stat(dir);
+        if (observed) check(fs.readdirSync(dir).every(n => allowed.includes(n)));
       }
       const modules = path.join(prefix, 'lib/node_modules');
-      if (stat(modules)) check(fs.readdirSync(modules).every(n => n === 'bb-app' || n === '.package-lock.json' || /^\.bb-app-[A-Za-z0-9]+$/.test(n)));
+      context('directory', modules); observed = stat(modules);
+      if (observed) check(fs.readdirSync(modules).every(n => n === 'bb-app' || n === '.package-lock.json' || /^\.bb-app-[A-Za-z0-9]+$/.test(n)));
       if (stat(path.join(prefix, 'bin'))) {
         for (const bin of fs.readdirSync(path.join(prefix, 'bin'))) {
-          check(Object.hasOwn(bins, bin));
           const f = path.join(prefix, 'bin', bin);
+          context('artifact', f); observed = fs.lstatSync(f);
+          check(Object.hasOwn(bins, bin));
           check(fs.lstatSync(f).isSymbolicLink() && path.resolve(path.dirname(f), fs.readlinkSync(f)) === path.join(pkg, bins[bin]));
         }
       }
     }
-  }
+  });
+  // No reserve/install/validation can follow a failed independent branch.
+  if (failures.length) throw new Error();
+  context('artifact', root);
   if (mode === 'reserve') {
     if (!stat(root)) {
       fs.mkdirSync(root, {recursive: true, mode: 0o700});
@@ -10312,6 +10392,7 @@ try {
     for (const [bin, entry] of Object.entries(bins)) {
       check(j.bin?.[bin] === entry); regular(path.join(pkg, entry));
       const f = path.join(prefix, 'bin', bin);
+      context('artifact', f); observed = fs.lstatSync(f);
       check(fs.lstatSync(f).isSymbolicLink() && fs.realpathSync(f) === fs.realpathSync(path.join(pkg, entry)));
       check(fs.statSync(f).mode & 0o111);
     }
@@ -10320,6 +10401,7 @@ try {
     check(fs.readdirSync(chunks).some(n => n.endsWith('.js') && regular(path.join(chunks, n))));
     const require = createRequire(path.join(pkg, 'package.json'));
     for (const name of ['better-sqlite3', 'node-pty', '@parcel/watcher', 'fs-native-extensions']) {
+      context('artifact', path.join(pkg, 'node_modules', name));
       const entry = require.resolve(name); check(inside(entry, pkg)); regular(entry);
       const loaded = require(name);
       if (name === 'better-sqlite3') { const db = new loaded(':memory:'); db.close(); }
@@ -10328,18 +10410,58 @@ try {
       if (name === 'fs-native-extensions') check(typeof loaded.tryLock === 'function' && typeof loaded.unlock === 'function');
     }
   } else check(['preflight', 'reserve'].includes(mode));
-} catch { process.exitCode = 1; }
+  process.stdout.write('ok\n');
+} catch (e) {
+  if (!failures.length) record(e.reason || 'unverified');
+  // Deliberately not an exhaustive inventory: unsafe descendants are never inspected.
+  process.stdout.write(failures.join('\n') + '\nfailed:incomplete\n');
+  process.exitCode = 1;
+}
 BB_MACHINE_STATE
 }
 
-setup_bb_machine() {
-    local _platform="$1" _kernel _release _prefix="${HOME}/.local/share/setup-bb-machine/npm" _bin _found _version _policy
-    local _npm_userconfig _npm_globalconfig
-    local -a _npm_context
-    if bb_machine_existing_role; then
-        print_message 'BB preparation deferred: existing BB state, service or data/prefix override preserved. Manage that installation manually; readiness was not checked.'
-        return 0
+bb_machine_package_state() {
+    local _mode="$1" _result _status=0 _line _op _path _observed _reason _count=0 _terminal=0 _valid=1
+    local _record='^blocked:(home|runtime|process|directory|service|artifact):([^:]+):(unknown|[0-7]{4}):(unverified|linked-path|non-directory|unsafe-ownership|writable-boundary|unsafe-file|malformed-metadata|referenced-copy)$'
+    local _relative='^~/[A-Za-z0-9_.@/-]+$'
+    case "${_mode}" in preflight|reserve|verify) ;; *) return 1 ;; esac
+    # Bound even malformed/addon output before storing it. Never forward stderr.
+    _result=$(set -o pipefail; bb_machine_package_state_payload "${_mode}" 2>/dev/null | head -c 4097 |
+        node -e 'let text=""; process.stdin.on("data", b => { text += b; if (text.length > 4096 || /[^\x20-\x7e\n]/.test(text)) process.exit(1); }); process.stdin.on("end", () => { if (!/^(?:[ -~]+\n)+$/.test(text)) process.exit(1); process.stdout.write(text); });' 2>/dev/null) || _status=$?
+    if [[ "${_status}" -eq 0 && "${_result}" == ok ]]; then return 0; fi
+    if [[ "${_status}" -ne 0 && ${#_result} -le 4096 ]]; then
+        while IFS= read -r _line; do
+            if [[ "${_line}" == failed:incomplete && "${_count}" -gt 0 && "${_terminal}" -eq 0 ]]; then
+                _terminal=1
+            elif [[ "${_terminal}" -eq 0 && "${_line}" =~ ${_record} ]]; then
+                _path="${BASH_REMATCH[2]}"
+                case "${_path}" in home-boundary|external-boundary|path-suppressed) ;;
+                    *)
+                        if [[ ! "${_path}" =~ ${_relative} || ${#_path} -gt 122 || "${_path}" == *'/../'* || "${_path}" == *'/./'* || "${_path}" == */.. || "${_path}" == */. || "${_path}" == *'//'* || "${_path}" == */ ]]; then _valid=0; break; fi ;;
+                esac
+                _count=$((_count + 1))
+                if [[ "${_count}" -gt 8 ]]; then _valid=0; break; fi
+            else
+                _valid=0; break
+            fi
+        done <<< "${_result}"
+        if [[ "${_valid}" -eq 1 && "${_terminal}" -eq 1 && "${_count}" -le 8 ]]; then
+            # Validate the ENTIRE protocol before logging any record.
+            while IFS=: read -r _line _op _path _observed _reason; do
+                [[ "${_line}" == blocked ]] || continue
+                print_error "BB preparation ${_mode}: operation=${_op} path=${_path} mode=${_observed} reason=${_reason}"
+            done <<< "${_result}"
+            print_error 'BB preparation blocker report incomplete: unsafe descendants and remaining checks were not inspected.'
+            return 1
+        fi
     fi
+    print_error "BB preparation ${_mode}: unverified helper result; diagnostic output suppressed."
+    return 1
+}
+
+# Reuse the preparation platform gate before dotfiles, without Node/npm or lifecycle work.
+bb_machine_platform_ready() {
+    local _platform="$1" _kernel _release
     _kernel=$(uname -s) || return 1
     case "${_kernel}" in Darwin|Linux) ;; *) print_error 'BB preparation supports macOS/Linux only; use WSL2 on Windows.'; return 1 ;; esac
     if [[ "${_platform}" == wsl ]]; then
@@ -10347,6 +10469,38 @@ setup_bb_machine() {
         case "${_kernel}:${_release}" in Linux:*[Mm]icrosoft*WSL2*) ;; *) print_error 'BB preparation requires WSL2.'; return 1 ;; esac
         [[ "${HEADLESS:-}" != 1 ]] || { print_error 'WSL HEADLESS=1 remains unsupported for BB preparation.'; return 1; }
     fi
+}
+
+# Chezmoi alone owns target convergence. Keep native config precedence and the
+# caller's stricter mask; known roles receive no preparation-driven restriction.
+with_bb_dotfiles_umask() {
+    (
+        local _platform="$1" _selection=1 _protect=0
+        shift
+        if [[ "${_platform}" == ubuntu ]]; then
+            bb_server_selection && _selection=0 || _selection=$?
+            [[ "${_selection}" -ne 0 ]] || _protect=1
+        fi
+        if [[ "${_selection}" -eq 1 ]] && ! bb_machine_existing_role &&
+            bb_machine_platform_ready "${_platform}" >/dev/null 2>&1; then
+            _protect=1
+        fi
+        if [[ "${_protect}" -eq 1 ]]; then
+            umask go-w || exit 1
+        fi
+        "$@"
+    )
+}
+
+setup_bb_machine() {
+    local _platform="$1" _prefix="${HOME}/.local/share/setup-bb-machine/npm" _bin _found _version _policy
+    local _npm_userconfig _npm_globalconfig
+    local -a _npm_context
+    if bb_machine_existing_role; then
+        print_message 'BB preparation deferred: existing BB state, service or data/prefix override preserved. Manage that installation manually; readiness was not checked.'
+        return 0
+    fi
+    bb_machine_platform_ready "${_platform}" || return 1
     for _bin in bb bb-app bb-server bb-host-daemon; do
         _found=$(command -v "${_bin}" 2>/dev/null || true)
         if [[ -n "${_found}" && "${_found}" != "${_prefix}/bin/${_bin}" ]]; then
@@ -10355,7 +10509,7 @@ setup_bb_machine() {
         fi
     done
     ensure_shared_node_runtime || { print_error 'BB preparation requires the shared Node/npm runtime.'; return 1; }
-    bb_machine_package_state preflight || { print_error 'BB preparation role/ownership, platform, runtime or artifact preflight failed; review existing BB processes, user services and private preparation permissions. No package changes made.'; return 1; }
+    bb_machine_package_state preflight || { print_error 'BB preparation preflight failed; no package changes made. Reconcile explicit Chezmoi permission overrides or unmanaged blockers manually; see README recovery guidance.'; return 1; }
     _version=$(npm --version 2>/dev/null) || return 1
     [[ "${_version}" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]] || return 1
     if (( BASH_REMATCH[1] < 11 || (BASH_REMATCH[1] == 11 && BASH_REMATCH[2] < 19) )); then
@@ -10471,7 +10625,7 @@ run_setup_tasks() {
     local PASEO_MUSE_DEFER_DAEMON_SETUP=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 227 | Last changed: Preserve BB preparation and explicit desktop skip"
+    echo -e "${GRAY}Version 228 | Last changed: Preserve BB preparation dotfile permissions and report blockers"
 
     if ! acquire_setup_lock; then
         return 1
