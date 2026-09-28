@@ -413,6 +413,30 @@ process.exit(fakeProcess.exitCode);
         os.mkfifo(manifest)
         self.run_helper(expected=1)  # Must fail promptly rather than open the FIFO.
 
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux private-ancestor permission proof')
+    def test_private_readonly_service_references_converge_without_chmod(self):
+        units = self.home / '.config/systemd/user'
+        units.mkdir(parents=True)
+        target = self.home / 'Code/project/deploy/systemd'
+        target.mkdir(parents=True)
+        for directory in [target.parent, target]: directory.chmod(0o775)
+        unit = target / 'unrelated.service'
+        unit.write_text('[Service]\nExecStart=/usr/bin/true\n')
+        unit.chmod(0o664)
+        (units / unit.name).symlink_to(unit)
+        for name in ['training.service', 'sync.service', 'browser.service']:
+            other = units / name
+            other.write_text('[Service]\nExecStart=/usr/bin/true\n')
+            other.chmod(0o664)
+        before = (snapshot(self.home / 'Code'), snapshot(self.home / '.config'))
+        for _ in range(2):
+            self.run_helper()
+            self.assertEqual(before, (snapshot(self.home / 'Code'), snapshot(self.home / '.config')))
+        unit.write_text('ExecStart=' + str(self.prefix / 'bin/bb-host-daemon'))
+        self.events.unlink()
+        self.run_helper(expected=1)
+        self.assertNotIn('npm ', self.log())
+
     def test_controlled_permission_diagnostics_preserve_each_blocked_location(self):
         directories = {'.config': 'home-config', '.config/systemd': 'home-systemd',
                        '.config/systemd/user': 'home-systemd-user', 'Library': 'home-library',
@@ -420,7 +444,7 @@ process.exit(fakeProcess.exitCode);
         for name in directories:
             (self.home / name).mkdir(exist_ok=True)
         for name, label in directories.items():
-            for mode in [0o775, 0o777]:
+            for mode in [0o777]:
                 with self.subTest(name=name, mode=oct(mode)):
                     p = self.home / name
                     p.chmod(mode)
@@ -435,7 +459,7 @@ process.exit(fakeProcess.exitCode);
                             ('Library/LaunchAgents/fixture-secret.plist', 'launchd-service')]:
             p = self.home / name
             p.write_text('fixture-secret: never print service contents\n')
-            p.chmod(0o664)
+            p.chmod(0o666)
             before = snapshot(self.home)
             out = self.run_helper(expected=1)
             self.assertIn(f'service-inventory:{label}:group-or-world-writable', out)

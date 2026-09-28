@@ -245,6 +245,18 @@ function show() {
 }
 cp.spawnSync = function(command,args,options) {
   state.calls.push([command,...args]); saved();
+  if(command==='/usr/bin/sudo') {
+    if(JSON.stringify(args.slice(0,6))!==JSON.stringify(['-n','--','/usr/bin/python3','-I','-S','-c']) || args.length!==7 ||
+      options.shell!==false || options.cwd!=='/' || JSON.stringify(options.env)!==JSON.stringify({PATH:'/usr/bin:/bin',LANG:'C.UTF-8'})) throw Error('UNSAFE PRIVILEGED INSPECTION');
+    if(!state.protectedInspection) return {status:1,stdout:'fixture-private-text-never-print',stderr:'fixture-private-text-never-print'};
+    const request=JSON.parse(options.input), row=procRows().find(p=>p.pid===request.pid);
+    if(!row || request.uid!==uid || !(row.uids || Array(4).fill(row.uid ?? uid)).includes(uid)) throw Error('FOREIGN PRIVILEGED INSPECTION');
+    const selected=Object.fromEntries(Object.entries(row.env).filter(([key])=>['HOME','PASEO_HOME','PASEO_DESKTOP_MANAGED'].includes(key)));
+    const receipt={schema:1,identity:request.identity,cgroup:row.cgroup,command:row.command.replaceAll(' ','\0'),env:selected};
+    if(state.protectedResponse==='changed') receipt.identity={...receipt.identity,start:'changed'};
+    if(state.protectedResponse==='extra') receipt.env.PRIVATE='fixture-private-text-never-print';
+    return {status:state.protectedStatus ?? 0,stdout:state.protectedResponse==='garbage' ? 'fixture-private-text-never-print' : JSON.stringify(receipt),stderr:'fixture-private-text-never-print'};
+  }
   if(!options || options.shell!==false || options.env.PASEO_HOME!==paseo || options.env.HOME!==logicalHome) throw new Error('UNPINNED CHILD');
   const result=(stdout='',ok=true)=>({status:ok?0:1,stdout,stderr:'fixture-private-text-never-print'});
   if(command==='powershell.exe' && !args[3].startsWith('$env:PSModulePath = "$PSHOME\\Modules"; ')) throw new Error('UNPINNED POWERSHELL MODULE PATH');
@@ -332,6 +344,77 @@ class MuseProfileTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertFalse(self.state['forbiddenRead'])
         self.assertEqual(self.managed()['model'], CORE['model'])
+
+    def test_protected_processes_use_scoped_inspection_and_converge(self):
+        self.state = {'protectedInspection': True, 'extraProcesses': [
+            {'pid': pid, 'parent': 4100, 'uids': uids, 'command': name,
+             'env': {'HOME': str(self.home), 'PRIVATE': SECRET}, 'cgroup': '0::/other.scope'}
+            for pid, name, uids in [(4500, 'systemd --user', [os.getuid()]*4),
+                                   (4501, '(sd-pam)', [os.getuid()]*4),
+                                   (4502, 'ssh-agent', [os.getuid()]*4),
+                                   (4503, 'fusermount3', [os.getuid(),0,0,0]),
+                                   (4504, 'gpg-agent', [os.getuid()]*4),
+                                   (4505, 'tailscaled', [os.getuid()]*4)]],
+            'procResponses': {f'{pid}/environ': {'code': 'EACCES'} for pid in range(4500, 4506)}}
+        self.seed_service()
+        self.state['rowOverrides'] = {'4100': {'parent': 4500}, '4200': {'parent': 4500}}
+        self.state['extraProcesses'][0]['parent'] = 1
+        for iteration in range(2):
+            result = self.run_helper()
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertEqual(self.managed(), PROFILE)
+            if iteration == 0:
+                self.assertTrue(any(c[0] == '/usr/bin/sudo' for c in self.state['calls']))
+            else:
+                self.assertFalse(self.mutations())
+        self.assertIn('PASEO_MUSE_UNCHANGED', result.stdout)
+        result = self.run_helper(mode='verify-owner')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('PASEO_MUSE_OWNER_VERIFIED', result.stdout)
+        self.assertFalse(self.mutations())
+        self.assertTrue(any(c[0] == '/usr/bin/sudo' for c in self.state['calls']))
+
+    def test_foreign_real_uid_never_authorizes_privileged_reads(self):
+        self.state = {'protectedInspection': True, 'rowOverrides': {
+            '4100': {'uids': [os.getuid()+1, os.getuid()+1, os.getuid(), os.getuid()+1]}},
+            'procResponses': {'4100/environ': {'code': 'EACCES'}}}
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('inventory-environ: EACCES.', result.stdout)
+        self.assertFalse(any(c[0] == '/usr/bin/sudo' for c in self.state['calls']))
+        self.assertFalse(self.mutations())
+
+    def test_protected_owner_keeps_home_and_service_safety(self):
+        self.seed_service()
+        self.state.update(protectedInspection=True, ownerHome='/unrelated-home',
+                          procResponses={'4202/environ': {'code': 'EACCES'}})
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('service-home-mismatch', result.stdout)
+        self.assertFalse(self.mutations())
+
+    def test_protected_writer_remains_a_writer_not_a_name_exception(self):
+        self.state = {'protectedInspection': True, 'extraProcesses': [
+            {'pid': 4500, 'parent': 1, 'command': 'systemd --user',
+             'env': {'HOME': str(self.home), 'PASEO_HOME': str(self.paseo)}, 'cgroup': '0::/other.scope'}],
+            'procResponses': {'4500/environ': {'code': 'EPERM'}}}
+        result = self.run_helper()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('unknown-writer', result.stdout)
+        self.assertFalse(self.config.exists())
+        self.assertFalse(self.mutations())
+
+    def test_protected_inspection_receipts_fail_closed(self):
+        for response, status in [('changed', 0), ('extra', 0), ('garbage', 0), ('valid', 1)]:
+            with self.subTest(response=response, status=status):
+                self.state = {'protectedInspection': True, 'protectedResponse': response, 'protectedStatus': status,
+                              'procResponses': {'4100/environ': {'code': 'EACCES'}}}
+                result = self.run_helper()
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn('inventory-environ: EACCES.', result.stdout)
+                self.assertIn('inventory-privileged:', result.stdout)
+                self.assertFalse(self.mutations())
+                self.assertFalse(self.config.exists())
 
     def test_dumpability_and_mixed_uids_do_not_hide_relevant_processes(self):
         for uids in ([os.getuid()] * 4, [os.getuid()+1, os.getuid()+1, os.getuid(), os.getuid()+1]):
@@ -551,7 +634,11 @@ class MuseProfileTests(unittest.TestCase):
         result = self.run_helper()
         self.assertIn(reason, result.stdout)
         self.assertIn('PASEO_MUSE_DEFER_DAEMON_SETUP=1', result.stdout)
-        self.assertIn('outside Paseo', result.stdout)
+        if reason == 'process-inventory-unverified':
+            self.assertIn('Paseo Muse process inspection:', result.stdout)
+            self.assertNotIn('Quit Paseo Desktop', result.stdout)
+        else:
+            self.assertIn('outside Paseo', result.stdout)
         expected = reason in ('desktop-owned', 'self-hosted-setup', 'headless-control-not-authorized', 'unsupported-platform')
         self.assertEqual(result.returncode, 0 if expected else 1, result.stdout)
         self.assertEqual(self.config.read_bytes() if self.config.exists() else None, before)

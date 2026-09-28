@@ -4,7 +4,8 @@
 # dist/src/server/pid-lock.js, for temporary native lock contenders (no daemon).
 set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-python3 "${ROOT}/tests/test_paseo_muse_profile.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "${ROOT}/tests/test_paseo_muse_profile.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "${ROOT}/tests/test_protected_process_inspection.py"
 pwsh_bin="${PWSH_BIN:-}"
 if [[ -z "${pwsh_bin}" ]]; then
     pwsh_bin=$(command -v pwsh || true)

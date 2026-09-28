@@ -5,6 +5,7 @@ No real source, lifecycle, network, user config or installed BB is executed.
 import json
 import re
 import subprocess
+import sys
 import unittest
 
 from test_bb_dotfiles_umask import CHEZMOI, CHEZMOI_FIXTURE, GIT_FIXTURE, function
@@ -115,7 +116,12 @@ umask "$1"
                 managed = case.home / '.config/systemd/user/fixture.service'
                 managed.write_text('[Service]\nExecStart=/usr/bin/true\n')
                 managed.chmod(0o664)
-                self.assertIn('preflight failed', case.run_helper(expected=1))
+                # This fixture HOME is private: unrelated group bits do not
+                # grant another account access, even before managed convergence.
+                if sys.platform == 'linux':
+                    self.assertIn('not enrolled', case.run_helper(platform))
+                else:
+                    self.assertIn('preflight failed', case.run_helper(platform, expected=1))
                 for attempt in range(2):
                     self.assertEqual(self.run_stage(case, apply, native=True).returncode, 0)
                     self.assertEqual(managed.stat().st_mode & 0o777, 0o644)
@@ -129,13 +135,19 @@ umask "$1"
                 self.assertEqual((unit.lstat().st_mode, unit.read_bytes()), unit_before)
                 before = snapshot(case.home)
                 case.events.unlink()
-                out = case.run_helper(expected=1)
-                self.assertIn('service-inventory:systemd-service:group-or-world-writable', out)
+                out = case.run_helper(platform, expected=0 if sys.platform == 'linux' else 1)
+                self.assertIn('not enrolled' if sys.platform == 'linux' else 'preflight failed', out)
                 self.assertNotIn('fixture-secret', out)
+                self.assertEqual(snapshot(case.home), before)
+                unit.chmod(0o666)
+                before = snapshot(case.home)
+                case.events.unlink()
+                out = case.run_helper(platform, expected=1)
+                self.assertIn('service-inventory:systemd-service:group-or-world-writable', out)
                 self.assertEqual(snapshot(case.home), before)
                 self.assertNotIn('npm', case.log())
 
-    def test_explicit_chezmoi_umask_is_preserved_and_fails_closed(self):
+    def test_explicit_chezmoi_umask_is_preserved_and_world_write_fails_closed(self):
         case, apply = self.fixture('ubuntu')
         config = case.root / 'chezmoi.toml'
         config.write_text('umask=0o002\n' + config.read_text())
@@ -144,6 +156,13 @@ umask "$1"
         # mkdir's extra inherited process-mask restriction on first creation.
         (case.home / '.config/systemd/user').mkdir(parents=True)
         self.run_stage(case, apply, native=True)
+        out = case.run_helper(expected=0 if sys.platform == 'linux' else 1)
+        self.assertIn('not enrolled' if sys.platform == 'linux' else 'preflight failed', out)
+        self.assertEqual(config.read_bytes(), before)
+        config.write_text(config.read_text().replace('umask=0o002', 'umask=0o000'))
+        before = config.read_bytes()
+        self.run_stage(case, apply, native=True)
+        case.events.unlink()
         out = case.run_helper(expected=1)
         self.assertIn('service-inventory:home-config:group-or-world-writable', out)
         self.assertEqual(config.read_bytes(), before)

@@ -1595,6 +1595,114 @@ function inventoryFailure(operation, detail = 'invalid') {
         'invalid', 'changed', 'missing'].includes(detail) ? detail : 'unknown';
     throw error;
 }
+// Only an already identity-checked account-associated PID is eligible. No
+// process-name exceptions, sudo policy changes, files written or signals sent.
+const linuxProtectedProcessProgram = String.raw`
+import errno, json, os, stat, sys
+class Changed(Exception): pass
+def need(ok):
+    if not ok: raise ValueError()
+def main():
+    raw = sys.stdin.buffer.read(16385); need(len(raw) <= 16384)
+    request = json.loads(raw)
+    need(set(request) == {'schema', 'uid', 'pid', 'identity', 'cgroup'} and type(request['schema']) is int and request['schema'] == 1)
+    uid, pid, expected = request['uid'], request['pid'], request['identity']
+    need(type(uid) is int and 0 <= uid < 0xffffffff and type(pid) is int and pid > 1)
+    need(os.geteuid() == 0 and os.environ.get('SUDO_UID') == str(uid))
+    need(set(expected) == {'parent', 'start', 'uids', 'dead'} and not expected['dead'])
+    need(isinstance(request['cgroup'], str))
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    proc = os.open('/proc', flags | os.O_DIRECTORY)
+    try:
+        root = os.fstat(proc)
+        need(root.st_uid == 0 and not root.st_mode & 0o022)
+        directory = os.open(str(pid), flags | os.O_DIRECTORY, dir_fd=proc)
+        try:
+            pinned = os.fstat(directory)
+            def unchanged_directory():
+                current = os.stat(str(pid), dir_fd=proc, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) != (pinned.st_dev, pinned.st_ino): raise Changed()
+            def read(name, limit):
+                fd = os.open(name, flags, dir_fd=directory)
+                try:
+                    need(stat.S_ISREG(os.fstat(fd).st_mode))
+                    parts, size = [], 0
+                    while size <= limit:
+                        part = os.read(fd, min(65536, limit + 1 - size))
+                        if not part: break
+                        parts.append(part); size += len(part)
+                    need(size <= limit)
+                    return b''.join(parts).decode('utf-8')
+                finally: os.close(fd)
+            def identity():
+                raw = read('stat', 65536)
+                end = raw.rfind(')'); fields = raw[end + 2:].split()
+                need(raw.startswith(str(pid) + ' (') and end > 0 and raw[end + 1:end + 2] == ' ' and len(fields) >= 20)
+                need(fields[0] in 'RSDZTWtXxKWPIN' and fields[1].isdigit() and fields[19].isdigit())
+                status = read('status', 131072).splitlines()
+                def values(key, count):
+                    lines = [line.split(':', 1)[1].split() for line in status if line.startswith(key + ':')]
+                    need(len(lines) == 1 and len(lines[0]) == count and all(v.isascii() and v.isdigit() for v in lines[0]))
+                    return list(map(int, lines[0]))
+                uids = values('Uid', 4); gids = values('Gid', 4)
+                need(all(v < 0xffffffff for v in uids + gids))
+                parent = int(fields[1])
+                need(values('Pid', 1) == [pid] and values('PPid', 1) == [parent])
+                return {'parent': parent, 'start': fields[19], 'uids': uids, 'dead': fields[0] in 'ZXx'}, gids
+            before, gids = identity()
+            if before != expected: raise Changed()
+            need(before['uids'][0] == uid and not before['dead'])
+            unchanged_directory()
+            group = read('cgroup', 65536)
+            if group != request['cgroup']: raise Changed()
+            command = read('cmdline', 1048576)
+            def selected_environment():
+                selected = {}
+                for item in read('environ', 4194304).split('\0'):
+                    key, separator, value = item.partition('=')
+                    if separator and key in {'HOME', 'PASEO_HOME', 'PASEO_DESKTOP_MANAGED'}:
+                        need(key not in selected and len(value) <= 16384)
+                        selected[key] = value
+                return selected
+            environment = selected_environment()
+            # These fields can change without PID reuse; never merge two images.
+            if selected_environment() != environment or read('cmdline', 1048576) != command or read('cgroup', 65536) != group: raise Changed()
+            if identity() != (before, gids): raise Changed()
+            unchanged_directory()
+            return {'schema': 1, 'identity': before, 'cgroup': group, 'command': command, 'env': environment}
+        finally: os.close(directory)
+    finally: os.close(proc)
+try:
+    print(json.dumps(main(), ensure_ascii=True, separators=(',', ':')))
+except Exception as error:
+    detail = 'changed' if isinstance(error, Changed) else errno.errorcode.get(getattr(error, 'errno', None), 'invalid')
+    if detail not in {'changed', 'invalid', 'EACCES', 'EPERM', 'ENOENT', 'ESRCH', 'EIO', 'EINVAL', 'ENOTDIR', 'ELOOP', 'EMFILE', 'ENFILE'}: detail = 'unknown'
+    print(json.dumps({'schema': 1, 'error': detail}, separators=(',', ':')))
+    sys.exit(1)
+`;
+function protectedLinuxProcess(pid, identity, cgroup) {
+    // A saved/effective/fs UID association still matters to writer safety, but
+    // does not authorize privileged reads of another account's real-UID process.
+    if (identity.uids[0] !== uid) return {detail: 'EPERM'};
+    let result;
+    try {
+        result = spawnSync('/usr/bin/sudo', ['-n', '--', '/usr/bin/python3', '-I', '-S', '-c', linuxProtectedProcessProgram], {
+            input: JSON.stringify({schema: 1, uid, pid, identity, cgroup}),
+            env: {PATH: '/usr/bin:/bin', LANG: 'C.UTF-8'}, cwd: '/', encoding: 'utf8',
+            timeout: 5000, maxBuffer: 8 * 1024 * 1024, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']});
+        if (result.error) return {detail: 'unavailable'};
+        const receipt = JSON.parse(result.stdout);
+        const keys = (value, expected) => record(value) && Object.keys(value).sort().join(',') === expected;
+        if (result.status !== 0) {
+            const allowed = ['changed', 'invalid', 'EACCES', 'EPERM', 'ENOENT', 'ESRCH', 'EIO', 'EINVAL', 'ENOTDIR', 'ELOOP', 'EMFILE', 'ENFILE', 'unknown'];
+            return {detail: keys(receipt, 'error,schema') && receipt.schema === 1 && allowed.includes(receipt.error) ? receipt.error : 'unavailable'};
+        }
+        if (!keys(receipt, 'cgroup,command,env,identity,schema') || receipt.schema !== 1 || typeof receipt.command !== 'string' ||
+            !record(receipt.env) || Object.entries(receipt.env).some(([k,v]) => !['HOME', 'PASEO_HOME', 'PASEO_DESKTOP_MANAGED'].includes(k) || typeof v !== 'string' || v.includes('\0') || v.length > 16384)) return {detail: 'invalid'};
+        if (JSON.stringify(receipt.identity) !== JSON.stringify(identity) || receipt.cgroup !== cgroup) return {detail: 'changed'};
+        return {receipt};
+    } catch { return {detail: result?.status === 0 ? 'invalid' : 'unavailable'}; }
+}
 function linuxProcess(pid) {
     const dir = `/proc/${pid}`;
     let operation = 'inventory-stat';
@@ -1626,11 +1734,29 @@ function linuxProcess(pid) {
         // Keep service-group evidence even for foreign processes. Owner checks
         // must reject foreign participants rather than silently excluding them.
         const cgroup = read('cgroup');
-        const command = owned && !before.dead ? read('cmdline').replace(/\0/g, ' ') : '';
-        const env = owned && !before.dead ? Object.fromEntries(read('environ').split('\0').filter(v => v.includes('='))
+        let protectedReceipt = null;
+        const sensitive = name => {
+            try { return read(name); } catch (error) {
+                if (!['EACCES', 'EPERM'].includes(error.code)) throw error;
+                if (!protectedReceipt) {
+                    const result = protectedLinuxProcess(pid, before, cgroup);
+                    if (!result.receipt) {
+                        if (['ENOENT', 'ESRCH'].includes(result.detail)) throw Object.assign(new Error(), {code: result.detail});
+                        try { inventoryFailure(`inventory-${name}`, error.code); }
+                        catch (failure) { failure.privileged = result.detail; throw failure; }
+                    }
+                    protectedReceipt = result.receipt;
+                }
+                return name === 'cmdline' ? protectedReceipt.command :
+                    Object.entries(protectedReceipt.env).map(([k,v]) => `${k}=${v}`).join('\0');
+            }
+        };
+        const command = owned && !before.dead ? sensitive('cmdline').replace(/\0/g, ' ') : '';
+        const env = owned && !before.dead ? Object.fromEntries(sensitive('environ').split('\0').filter(v => v.includes('='))
             .map(v => [v.slice(0, v.indexOf('=')), v.slice(v.indexOf('=') + 1)])) : {};
         const after = identity();
-        if (JSON.stringify(before) !== JSON.stringify(after)) inventoryFailure('inventory-identity', 'changed');
+        if (JSON.stringify(before) !== JSON.stringify(after) || protectedReceipt &&
+            (command !== protectedReceipt.command.replace(/\0/g, ' ') || read('cgroup') !== protectedReceipt.cgroup)) inventoryFailure('inventory-identity', 'changed');
         return {pid, ...before, command, env, cgroup, owned};
     } catch (error) {
         if (error instanceof Refusal) throw error;
@@ -2132,11 +2258,13 @@ async function main() {
         console.log(`PASEO_MUSE_DEFER_DAEMON_SETUP=1`);
         console.log(`Paseo Muse ${failed ? 'failed' : 'deferred'}: ${controlled ? failure.code : 'operation-failed'}.`);
         if (controlled && failure.operation) console.log(`Paseo Muse diagnostic: ${failure.operation}: ${failure.detail}.`);
+        if (controlled && failure.privileged) console.log(`Paseo Muse diagnostic: inventory-privileged: ${failure.privileged}.`);
         for (const code of recoveryFailures) console.log(`Paseo Muse recovery failed: ${code}.`);
         if (controlled && failure.code === 'stale-pid-lock') console.log('Paseo Muse recovery: inspect the stale paseo.pid privately; remove it manually only after every local owner is confirmed stopped.');
         if (controlled && (failure.code === 'unsafe-owner-or-mode' || failure.code.startsWith('permission-'))) console.log('Paseo Muse permissions: inspect ownership and write permissions on the selected home, PID and service paths. Automatic repair requires a verified default-home Linux setup-managed owner. Do not use recursive chmod or chown.');
         if (controlled && ['custom-home-unverified', 'custom-home-permissions-unverified', 'invalid-home-override'].includes(failure.code)) console.log('Paseo Muse home: PASEO_HOME must be unset or an absolute directory below the account HOME, not HOME itself. Custom directories must already exist, be private and account-owned, and contain no linked paths.');
-        console.log('Quit Paseo Desktop or stop the owning local daemon, then rerun setup from a terminal outside Paseo. Keep Desktop closed during setup. If Go authentication changed, restart that owner to refresh its model catalog.');
+        if (controlled && platform === 'linux' && failure.code === 'process-inventory-unverified') console.log('Paseo Muse process inspection: protected process reads require existing noninteractive sudo authorization. Do not stop system agents, change procfs permissions or weaken kernel protections.');
+        else console.log('Quit Paseo Desktop or stop the owning local daemon, then rerun setup from a terminal outside Paseo. Keep Desktop closed during setup. If Go authentication changed, restart that owner to refresh its model catalog.');
         // Only established ownership/platform deferrals are warning-only.
         process.exitCode = failed ? 1 : 0;
         console.log(`PASEO_MUSE_RESULT=${failed ? 'failed' : 'deferred'}`);
@@ -2154,12 +2282,13 @@ async function main() {
         $failurePattern = '^Paseo Muse failed: (account-home-mismatch|ancestry-unverified|command-unverified|concurrent-config-change|custom-home-permissions-unverified|custom-home-unverified|desktop-owned|duplicate-json-key|file-changed|headless-control-not-authorized|interrupted|invalid-config|invalid-home-override|invalid-json|invalid-mode|invalid-profiles|invalid-service-state|launchd-state-unverified|linked-path|metadata-too-large|operation-failed|owner-still-present|owner-unverified|ownership-changed|permission-handles-unavailable|permission-path-changed|permission-recovery-owner-unverified|permission-recovery-private-home-required|permission-repair-unverified|pid-lock-changed|pid-lock-present|pid-metadata-unverified|pid-release-failed|pid-unverified|pid-write-failed|process-inventory-unverified|restart-pid-not-ready|restart-pid-pending|restore-owner-conflict|restore-unverified|self-hosted-setup|service-changed-before-restore|service-environment-unverified|service-home-mismatch|service-home-unverified|service-owner-unresolved|service-pid-mismatch|service-pid-unverified|service-restore-failed|service-state-unverified|stale-pid-lock|stopped-state-unverified|temporary-cleanup-failed|temporary-file-changed|unknown-owner|unknown-writer|unmanaged-service|unmanaged-wrapper|unsafe-file-type|unsafe-json-number|unsafe-owner-or-mode|unsupported-platform|windows-acl-unverified|writer-still-present)\.$'
         $recoveryPattern = '^Paseo Muse recovery failed: (temporary-cleanup-failed|pid-release-failed|service-restore-failed)\.$'
         $deferPattern = '^Paseo Muse deferred: (desktop-owned|self-hosted-setup|headless-control-not-authorized|unsupported-platform)\.$'
-        $diagnosticPattern = '^Paseo Muse diagnostic: inventory-(scan|stat|status|cmdline|environ|cgroup|identity|disappearance): (EACCES|EPERM|ENOENT|ESRCH|EIO|EINVAL|ENOTDIR|ELOOP|EMFILE|ENFILE|invalid|changed|missing|unknown)\.$'
+        $diagnosticPattern = '^Paseo Muse diagnostic: inventory-(scan|stat|status|cmdline|environ|cgroup|identity|disappearance|privileged): (EACCES|EPERM|ENOENT|ESRCH|EIO|EINVAL|ENOTDIR|ELOOP|EMFILE|ENFILE|invalid|changed|missing|unknown|unavailable)\.$'
         $messages = @(
             'Paseo Muse recovery: the restarted service did not provide a verified native PID within the retry limit. Inspect that service privately before rerunning setup.',
             'Paseo Muse recovery: inspect the stale paseo.pid privately; remove it manually only after every local owner is confirmed stopped.',
             'Paseo Muse permissions: inspect ownership and write permissions on the selected home, PID and service paths. Automatic repair requires a verified default-home Linux setup-managed owner. Do not use recursive chmod or chown.',
             'Paseo Muse home: PASEO_HOME must be unset or an absolute directory below the account HOME, not HOME itself. Custom directories must already exist, be private and account-owned, and contain no linked paths.',
+            'Paseo Muse process inspection: protected process reads require existing noninteractive sudo authorization. Do not stop system agents, change procfs permissions or weaken kernel protections.',
             'Quit Paseo Desktop or stop the owning local daemon, then rerun setup from a terminal outside Paseo. Keep Desktop closed during setup. If Go authentication changed, restart that owner to refresh its model catalog.'
         )
         foreach ($line in @($result)) {
@@ -8251,7 +8380,7 @@ function Invoke-WindowsSetupTasks {
     $infisicalRetirementFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 162 | Last changed: Preserve WSL2 enrollment guidance and desktop skip"
+    Write-Host "Version 163 | Last changed: Verify protected processes and private service references"
 
     Assert-HeadlessPaseoUnsupported
     $null = Get-PaseoReleaseChannel
