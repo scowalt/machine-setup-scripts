@@ -12,6 +12,14 @@ _Avoid_: Target configuration, final setup
 A setup run with a failed required operation or an unverified required result. Intentional user exclusions and expected Paseo deferrals do not by themselves make the run incomplete.
 _Avoid_: Successful setup with errors, warning-only failure
 
+**macOS developer-tool readiness**:
+The verified compatibility of the selected developer tools with the running macOS. Installed tools, an available update, or a completed installation alone do not establish readiness.
+_Avoid_: Tools installed, tools up to date
+
+**CLT repair**:
+An in-place update of existing standalone Command Line Tools intended to restore macOS developer-tool readiness. It is distinct from first-time installation or selecting a different toolchain.
+_Avoid_: CLT replacement, Xcode switching
+
 **Work machine**:
 A supported machine classified for employer-related development. Work-only managed tools are part of its desired machine state; on other machines, those tools remain unmanaged.
 _Avoid_: Corporate machine, office machine

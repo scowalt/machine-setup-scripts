@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi-task51'
 created_date: '2026-09-28 17:32'
-updated_date: '2026-09-28 20:24'
+updated_date: '2026-09-28 20:28'
 labels:
   - bb
   - setup
@@ -89,6 +89,9 @@ Final coverage addition: native Chezmoi deferrals now run init/update/apply for 
 - Updated design completion status and moved the orchestration-only workflow source out of the repository into parent thread storage. No production edits after worker completion; only documentation/task wrap-up. No commits, pushes or live changes.
 
 User authorized merging the reviewed change into remote main. Fetched origin/main at a8ab2b5; three newer macOS CLT commits overlap mac.sh and preparation test runner fixtures. Will commit the reviewed task, integrate remote main normally, resolve overlaps preserving both features and increment macOS version, then verify and non-force push with repository hooks enabled. No live deployment is included.
+
+- Integrated origin/main a8ab2b5, preserving its macOS CLT readiness/repair and dependent-work gating. Only textual conflict was the macOS banner; resolved to v250 with both changes represented. Remote preparation runner fixtures merged cleanly.
+- Combined-tree verification passed: BB preparation (24 tests), dotfile convergence (16 tests), PowerShell guidance, macOS CLT (22 tests), Homebrew results (9 tests), ShellCheck and whitespace checks. Finishing an attributed merge commit with hooks enabled, then the full pre-push contracts before publishing.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
@@ -101,6 +104,8 @@ Preflight remains read-only and reports up to eight controlled blockers within a
 Verification: original native preparation-only apply under 0002 reproduced the failure; synthetic native Chezmoi-to-preparation fixtures now repeatedly converge directories and files across all five scripts. Parent independently reviewed the complete diff and passed preparation/server contracts, setup reliability, shared Node/PowerShell, headless, Homebrew, Bash syntax, ShellCheck, Markdown lint and whitespace checks. Worker additionally passed weekly and direct PowerShell reliability regressions.
 
 Limitations: optional real-dotfiles/skills integration cases were skipped when their inputs were unavailable. Native macOS/WSL2/ARM installation, Windows ACL behavior and live rollout remain unverified. No live setup, permission/package/service changes, enrollment, authentication, Tailscale changes, commits or pushes.
+
+Remote-main integration: preserved the newer macOS CLT readiness changes and advanced mac.sh to v250. Combined BB preparation/dotfile, CLT and Homebrew tests pass; no feature changes were discarded.
 <!-- SECTION:FINAL_SUMMARY:END -->
 
 ## Definition of Done
