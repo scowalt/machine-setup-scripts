@@ -729,7 +729,11 @@ fixtureFs.openSync = function(file, ...args) {
             self.assertNotIn('install_paseo_plain', text)
             self.assertNotIn('Install-PaseoPlain', text)
             self.assertNotIn('https://github.com/scowalt/paseo-plain.git', text)
-            if script.endswith('.sh'):
+            if script == 'mac.sh':
+                gate = '    if macos_existing_prerequisites "Paseo Plain retirement" node; then'
+                self.assertGreater(text.rindex(gate), text.rindex('    elif install_pi_cli; then'))
+                self.assertIn(gate + '\n        remove_paseo_plain || _setup_had_errors=1\n    fi', text)
+            elif script.endswith('.sh'):
                 self.assertGreater(text.rindex('    if ! remove_paseo_plain; then'), text.rindex('    elif install_pi_cli; then'))
                 self.assertIn('    if ! remove_paseo_plain; then\n        _setup_had_errors=1\n    fi', text)
             else:

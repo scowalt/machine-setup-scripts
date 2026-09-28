@@ -1,0 +1,122 @@
+---
+id: TASK-50
+title: Repair eligible macOS CLT incompatibility and gate dependent setup
+status: Done
+assignee:
+  - '@pi'
+created_date: '2026-09-28 15:44'
+updated_date: '2026-09-28 16:35'
+labels:
+  - macos
+  - reliability
+dependencies: []
+references:
+  - mac.sh
+  - tests/test_macos_clt.py
+  - tests/test_homebrew_results.py
+  - tests/setup-reliability-contract.sh
+  - tests/pending-reboot-contract.sh
+  - tests/weekly-log-audit-regressions.sh
+  - README.md
+  - CLAUDE.md
+documentation:
+  - docs/brainstorms/2026-09-28-macos-clt-repair-requirements.md
+  - CONTEXT.md
+priority: high
+---
+
+## Description
+
+<!-- SECTION:DESCRIPTION:BEGIN -->
+macOS setup now detects incompatible developer tools correctly but leaves eligible Apple-offered CLT updates manual and continues dependent work. Add the approved bounded, in-place repair path and readiness gate so a successfully repaired machine can continue while unresolved or unverified readiness produces an incomplete setup run without cascading dependent mutations.
+
+Scope is mac.sh, focused inert fixtures, and relevant documentation. Preserve existing developer installations and selection, first-time bootstrap, unrelated setup behavior, and final log handling. The approved requirements document is the scope reference; no live Mac updates or remote changes are authorized.
+<!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [x] #1 Main-user setup attempts at most one explicitly identified suitable Apple-offered update when selected standalone CLT is confirmed incompatible, then freshly verifies readiness before resuming dependent work. Healthy tools and unverified diagnostics do not trigger speculative repair.
+- [x] #2 No suitable or safely identifiable update, failed update queries, unavailable diagnostics, and ineligible toolchains receive accurate manual guidance with selected toolchain, relevant versions, failed or unavailable checks, and Apple Developer downloads. Existing-tool repair never uses the first-install discovery workaround or an unverified package download.
+- [x] #3 Existing tool installations and developer selection are preserved: no deletion, forced replacement, automatic toolchain switching, unrelated macOS updates, or automatic reboot. Secondary-user runs verify but do not repair shared tools; full Xcode and other ineligible selections remain manual remediation cases.
+- [x] #4 Eligible repair allows at most one normal sudo authentication opportunity only with an interactive terminal and HEADLESS not exactly 1. Headless or terminal-less repair uses already-available privileges or reports blocked without prompts or GUI launches; sudo policy and unrelated privilege behavior remain unchanged.
+- [x] #5 Unresolved or unverified readiness blocks dependent installations and upgrades, including affected Homebrew operations and downstream steps with missing prerequisites. Demonstrably independent work continues, logs finalize, skipped work is identified, and the final result is nonzero with a clear remediation summary.
+- [x] #6 Successful repair and verification clear the initial readiness finding and allow dependent work to resume without erasing unrelated failures. Actual failed installation, query, or cleanup operations remain reflected in the final result even if later readiness checks pass.
+- [x] #7 Existing first-time developer-tool bootstrap remains supported and separate from repair, including Homebrew-absent ordering and post-bootstrap verification; healthy primary and secondary setup flows retain their intended behavior.
+- [x] #8 Temporary extracted-helper and actual-caller fixtures cover repair eligibility, offered-update selection, privilege and terminal gates, selection preservation, successful recovery, failed or unverified outcomes, dependent-work suppression, independent-work continuation, and final-result/log preservation. All platform, privilege, Homebrew, and lifecycle mutations are inert; no live setup or fleet changes occur.
+- [x] #9 mac.sh receives a version increment and accurate change description; README and relevant agent guidance reflect the new approved policy. CLT, Homebrew-result, reliability, affected reboot/weekly contracts, Bash syntax, ShellCheck, and diff checks pass; native macOS verification limits are documented.
+<!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Establish the baseline and dependency map (AC1-7). After plan approval, run the existing inert CLT and Homebrew-result fixtures. Review public Homebrew named-diagnostic behavior and Apple update/selection semantics before choosing a repair predicate; distinguish a confirmed CLT compatibility finding from unavailable diagnostics or command failure. Audit effective developer selection, including DEVELOPER_DIR overrides, without changing it. Map every mac.sh Homebrew install/upgrade and indirect prerequisite: core packages, casks, Codex, Tea, final upgrades, dotfiles, runtimes, and downstream tool setup. Record which work can safely continue with existing verified prerequisites. Preserve the separate fresh-install/Homebrew-bootstrap ordering and native Bash 3.2/BSD-tool compatibility.
+
+2. Add failing isolated tests first (AC1-8). Extend tests/test_macos_clt.py and tests/test_homebrew_results.py using extracted real helpers and real run_setup_tasks/main callers, temporary HOME, controlled environment, and inert Apple/Homebrew/sudo/lifecycle commands. Make the current code fail on the requested behavior: an eligible repair is not attempted and dependent work still runs after failed readiness. Record exact command calls and assert forbidden operations never happen; do not substitute the caller with a shallow stub. Preserve independent-work and exactly-once log-finalization assertions.
+
+3. Separate readiness from permanent operation failures (AC1,2,6,7). Introduce an explicit orchestration result for ready, confirmed incompatible, or unverified tools, along with repair outcome and retained command failures. Keep Homebrew public targeted checks as the compatibility authority, not a hard-coded macOS/Xcode matrix. Gather bounded, relevant diagnostics for the final summary. Treat the initial compatibility finding as recoverable; aggregate unresolved readiness or actual query/install/cleanup failures only without ever resetting unrelated setup errors.
+
+4. Implement the narrow existing-CLT repair path (AC1-4,6). Require the main-user role, an eligible effective standalone CLT selection, confirmed incompatibility, a safely identified Apple-offered update, and authorized privilege before mutation. Use the exact validated offered label for at most one targeted installation; reject uncertain selection rather than guessing or installing all updates. Do not use the first-install sentinel/discovery workaround. Permit one terminal authentication opportunity only outside exact HEADLESS=1, and ensure the later privileged operation cannot unexpectedly prompt if credentials expire. No developer-tool deletion/reselection, full-Xcode replacement, package download fallback, unrelated updates, sudo-policy changes, GUI, or reboot. Recheck developer selection and compatibility afterward; installer success alone is insufficient. Preserve manual cases and failed operations truthfully.
+
+5. Wire the dependency gate through the actual setup flow (AC5-7). Apply the audited gate to primary and secondary callers, Homebrew-backed installers, final upgrades, and downstream steps whose prerequisites are unavailable. Avoid treating a deliberate readiness skip as a fatal early return that bypasses independent work. Retain existing installed tools when their use is demonstrably independent; do not alter shared embedded helpers across platforms merely to introduce the macOS gate. Resume normal work after verified recovery. Preserve Infisical retirement, intentional pins, unrelated security gates, reboot reporting, and log finalization. Emit a concise final readiness/repair summary with skipped work and concrete manual next steps.
+
+6. Complete the regression matrix (AC1-8). Cover healthy tools with an offered update, eligible success, no offer, malformed/ambiguous offers, failed discovery/query, unavailable checks, update failure, success without readiness, privilege refusal/expiry, terminal-less and HEADLESS=1 behavior, secondary users, full Xcode and overrides, changed selection, fresh bootstrap with and without Homebrew, earlier unrelated failure, and repeated healthy runs. Assert one repair attempt maximum; no dependent mutations on unresolved readiness; independent work and finalization still occur; successful recovery clears only the initial finding. Update existing caller expectations intentionally rather than weakening safety assertions.
+
+7. Document, validate, and review (AC9 and DoD). Increment mac.sh from its current version 246 to 247 unless intervening changes require the next version; use a concise matching change description. Update README manual-only statements and relevant CLAUDE.md guidance to the approved bounded-repair policy; preserve the requirements/glossary. Run python3 tests/test_macos_clt.py, python3 tests/test_homebrew_results.py, bash tests/setup-reliability-contract.sh, bash tests/pending-reboot-contract.sh, bash tests/weekly-log-audit-regressions.sh, bash -n mac.sh, ShellCheck on every modified shell script, and git diff --check. Run any additional affected caller contracts identified by the dependency audit. Review the complete diff, record actual results, and keep native macOS behavior explicitly unverified until a separately authorized Mac validation.
+
+Execution boundary: plan approval is required before code/test edits. Development uses only temporary extracted fixtures, never live setup, Apple updates, remote hosts, toolchain changes, or real daemon activity. If supported interfaces cannot safely identify an eligible repair or the dependency audit exposes a material scope change, stop with evidence and request a scope decision rather than weakening safety or silently expanding work.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Planning only, as requested. Policy decisions were approved in the requirements discussion; implementation-plan approval is still required before source or test changes. Bash, Python 3, ShellCheck, and Backlog CLI are available. Working tree currently contains only the design glossary and requirements document, plus this task.
+
+Reviewed the approved requirements, current run_setup_tasks/main callers, README policy, existing CLT/Homebrew fixtures, and reliability test wiring. Confirmed compatibility failure currently sets only the aggregate error flag; core/cask installs, Codex, Tea, and final Homebrew upgrades can still run, with some early-return call sites needing deliberate skip handling. The current can_sudo helper may prompt via /dev/tty and is shared by unrelated work, so repair authorization must be scoped rather than changing its global behavior. Recorded a seven-step plan; awaiting user approval. No source/test edits or live platform operations performed.
+
+User approved implementation on 2026-09-28: "implement this plan in a subagent". Delegating the approved seven-step plan to one BB workflow worker in the current worktree. No further approval is needed for work within the recorded scope; material scope/safety changes remain blockers. Use isolated fixtures only, preserve existing design files, and leave changes uncommitted for orchestrator review.
+
+Implementation baseline: python3 tests/test_macos_clt.py (7 tests) and python3 tests/test_homebrew_results.py (8 tests) passed before source edits. Added red assertions to the real extracted helpers/caller: eligible incompatible CLT never installs, and actual primary/secondary run_setup_tasks still invokes Codex/Tea after failed readiness. Red run fails these assertions (3 failures); captured in /tmp/task50-red.log.
+Public-interface review: Homebrew main cmd/doctor.rb documents named checks and --list-checks; --json is hidden, so do not use it. mac/diagnostic.rb emits specific CLT-too-outdated / CLT-does-not-support-macOS findings; arbitrary nonzero doctor results are not repair evidence. softwareupdate(8) documents exact --list item labels and targeted --install; xcode-select effective DEVELOPER_DIR must remain preserved. No private Ruby invocation or version matrix needed.
+Dependency audit: all core/cask helpers, Tailscale migration, Codex Bun removal/cask install, Tea migration and final upgrades require readiness. BB rebuilds native addons; Pi/skills/Bun npm installers can transitively build. Dotfiles need working git/chezmoi; runtime helpers require mise/jq and fresh fish/chezmoi. Native Bun/Claude/Notion downloads and metadata retirement can proceed only with verified existing prerequisites. Preserve Infisical uninstall, OS/SSH configuration, reboot reporting and finalization independently; do not use skip return values as fatal early exits.
+
+Implementation now separates ready/incompatible/unverified diagnostics from sticky operation failures, recognizes only two public CLT warning headlines, queries only eligible main-user standalone CLT, rejects overrides/links/ambiguous or unknown labels, authorizes repair locally, and always installs with sudo -n and closed stdin. Fresh verification and selection checks gate recovery. First bootstrap remains separate; secondary users never bootstrap/repair.
+Actual caller gates cover core/casks, Tailscale, Tea/Codex migration, final upgrades, dotfiles run scripts, tmux plugins, package/native-addon installs, Pi and downstream Muse/daemon work. Independent native downloads/metadata operations require working existing prerequisites; full dotfiles apply is not considered independent merely because git/chezmoi exist (its run scripts can install/build). Shared embedded helpers and can_sudo are untouched.
+First green: CLT 16 tests, Homebrew results 9, reliability, reboot, weekly, BB preparation, profile permissions, Infisical all passed. Caller slice fixtures initially failed at changed extraction markers; updated them to retain real macOS gates and explicitly establish ready preconditions, plus a new unverified-CLT Go/Muse suppression case. Package/Muse/Plain/wiring reruns pass. Broader headless/Tea fixtures encountered inherited mise shim configuration failures, not production mutations; rerunning with system jq/fish and pinned existing Node PATH. Native/PowerShell optional fixtures remain unavailable (no pwsh configured).
+
+Self-review found and closed an indirect bootstrap hazard: current public Homebrew/install install.sh should_install_command_line_tools checks the standalone CLT Git artifact; when absent, it creates its own discovery sentinel and can xcode-select --switch even with full Xcode selected. install_homebrew now refuses that case before authentication/download, with manual guidance, while normal fresh CLT bootstrap still precedes Homebrew. Added real extracted positive and negative Homebrew bootstrap fixtures using only an inert downloaded script in temporary HOME. Primary Infisical retirement now skips an unavailable Homebrew inventory instead of invoking a missing prerequisite. Source reviewed: <https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh> .
+Additional red evidence (retrospective replay): the new final-Homebrew gate fixture against original v246 run_setup_tasks/update_brew/main failed because it upgraded and finalized success with unverified readiness; /tmp/task50-homebrew-red-replay.log. This is distinct from the three test-first red failures recorded before production edits.
+
+Implementation/results report for independent review:
+
+- Production: mac.sh v247. Added explicit ready/incompatible/unverified state, separate sticky operation failures, bounded/sanitized diagnostic excerpts and owner remediation/version reporting. Public named Homebrew checks (no private Ruby/hidden JSON or version matrix) establish eligibility; exactly one stable numeric Apple-offered label is accepted. Standalone real CLT only, no DEVELOPER_DIR override, main user only. Healthy/unverified/ineligible selections never query/install speculatively.
+- Repair: one scoped sudo authentication opportunity only with a controlling TTY and HEADLESS != 1; actual install always sudo -n with closed stdin. Selection checked around verification and immediately before/after repair. Successful fresh verification clears only the initial finding. Query/install/discovery/bootstrap-cleanup failures remain sticky; existing _setup_had_errors is never reset. First-time bootstrap uses its existing sentinel helper separately and cannot be followed by another install in that run. Homebrew bootstrap refuses the upstream implicit CLT-reselection case.
+- Dependency gate: all core/cask installs, Tailscale migration, Tea/Codex removal+install, final Homebrew updates, full dotfiles/run scripts, tmux plugin installation, Bun package installs, BB native rebuilds, Matt Pocock installs and Pi/package/Muse/daemon setup. Native binary downloads and metadata/shared-prebuilt-runtime work only proceed with verified existing prerequisites; preserve Pi permission/retirement gates. Infisical retirement, OS/SSH setup, filesystem-only cleanup, reboot reporting and exactly-once main log finalization remain reachable on readiness skips. Actual unrelated fatal-return behavior is preserved; readiness skips are outside those calls.
+- Shared helper audit: only install_xcode_cli_tools, verify_developer_tools_for_homebrew, install_homebrew and run_setup_tasks changed among existing Bash functions. can_sudo, sentinel ownership cleanup, npm policy, cross-platform embedded helpers and all other platform scripts are unchanged. Original CONTEXT.md edits and requirements document preserved. No commit/push/branch/worktree change, live setup, sudo update, real /Library mutation, live service, remote-host operation or skill/plugin execution.
+- Focused fixtures: python3 tests/test_macos_clt.py passes 22 tests (parameterized primary/secondary, full Xcode/overrides/links/selection races, ready+offer, unknown/unavailable diagnostics, no/malformed/ambiguous offers, TTY/HEADLESS/cached/auth refusal/expiry, failed query/install/discovery/cleanup, readiness not restored, prior failures, repeated runs, fresh bootstrap and Homebrew-absent ordering, complete actual caller suppression/independent continuation/exactly-once finalization). python3 tests/test_homebrew_results.py passes 9 tests, preserving pins and all preexisting failure assertions. Initial baseline and test-first red failures are recorded above.
+- Required final commands PASS: python3 tests/test_macos_clt.py; python3 tests/test_homebrew_results.py; bash tests/setup-reliability-contract.sh; bash tests/pending-reboot-contract.sh; bash tests/weekly-log-audit-regressions.sh; bash -n mac.sh tests/ai-coding-agent-contract.sh; shellcheck mac.sh tests/ai-coding-agent-contract.sh; git diff --check.
+- Affected suites PASS: bash tests/bb-machine-preparation-contract.sh (17); bash tests/shared-node-runtime-contract.sh (18 plus optional integration); bash tests/pi-package-maintenance-contract.sh (30); bash tests/opencode-go-wiring-contract.sh (4); bash tests/paseo-muse-profile-contract.sh (93); bash tests/paseo-plain-setup-contract.sh (44); bash tests/pi-profile-permissions-contract.sh (21); bash tests/ai-coding-agent-contract.sh; bash tests/infisical-retirement-contract.sh (29); bash tests/headless-paseo-daemon-contract.sh; bash tests/gitea-client-installation-contract.sh. Caller fixtures retain real macOS readiness gates with explicit ready preconditions; added independent unverified-CLT BB and Go/Muse cases rather than stubbing gates open. Final broader suite runs used PATH=/home/scowalt/.local/share/mise/installs/node/24/bin:/usr/bin:/bin to avoid inherited untrusted mise jq shims. Logs: /tmp/task50-final-*.log.
+- Limits: Linux inert fixtures do not prove native softwareupdate output/install/authorization, Apple Silicon behavior, macOS Bash 3.2 or BSD-tool execution. Unknown future public warning/label formats intentionally fail closed. No Mac validation authorized or attempted. Optional PowerShell fixtures (no PWSH_BIN/pwsh), native Paseo manager fixture, registry probes and dotfiles-source integration remained skipped when their required inputs were absent. These are not claimed as passed native coverage.
+Self-review complete for toolchain preservation, source/function scope, direct and indirect dependencies, permanent failure preservation, finalization, and fixture isolation. All nine AC have fixture/documentation evidence; DoD self-review is complete. Leave TASK-50 In Progress for origin independent review. Final Summary and the combined finalization DoD remain intentionally for the origin.
+
+Origin independent review completed after workflow wfr_9f81904f-e0a0-45d1-92cd-8a3386482524 succeeded. Reviewed the full mac.sh diff, all changed caller fixtures, README/CLAUDE policy, and shared-runtime prerequisite paths. Confirmed scoped repair authorization, exact offered-label installation, failure preservation, no selection mutation, direct/indirect dependency gates, and no other platform setup changes. No blocking findings.
+
+Independently reran: python3 tests/test_macos_clt.py (22 passed); python3 tests/test_homebrew_results.py (9 passed); setup-reliability, pending-reboot, weekly-log-audit-regressions (29 tests, 3 optional skips), ai-coding-agent, bb-machine-preparation (17 passed; optional PowerShell guidance skipped), opencode-go-wiring, and pi-package-maintenance (30 tests, 3 optional skips) contracts. Bash syntax, ShellCheck for mac.sh and tests/ai-coding-agent-contract.sh, and git diff --check passed. Review logs are under the origin BB thread storage as task50-review-*.log. Additional affected-suite results are recorded in the implementor report above.
+
+Native Apple update/authorization, macOS Bash 3.2/BSD behavior, and optional integrations remain explicitly unverified where unavailable. No live setup, Apple update, remote change, commit, or push occurred. All AC and DoD are satisfied for the approved fixture-validated implementation scope; native rollout remains a separately authorized check.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented bounded macOS CLT repair and developer-tool readiness gating in mac.sh v247. Eligible main-user runs can apply one unambiguous Apple-offered stable CLT update and continue only after fresh compatibility/selection verification. Healthy, secondary-user, full-Xcode, overridden, ambiguous, and unverified cases do not trigger speculative repair. Scoped sudo handling prevents headless/terminal-less prompts and late authentication prompts during installation.
+
+Unresolved readiness now skips Homebrew-backed and other dependent mutations while preserving demonstrably independent work and log finalization. A recovered compatibility finding no longer poisons the result, but actual operation failures and unrelated prior errors remain failures. Existing installations, selection, first-time bootstrap safety, shared helpers, and other platform behavior are preserved. README, agent guidance, and affected real-caller fixtures document and cover the policy.
+
+Validation: 22 CLT tests and 9 Homebrew-result tests pass, plus required reliability/reboot/weekly suites and affected BB, runtime, Pi, Go/Muse, Plain, permissions, AI-agent, Infisical, headless, and Tea contracts as recorded in notes. The origin independently reran focused and key caller suites, Bash syntax, ShellCheck, and diff checks with no blocking findings. Optional integrations were skipped where unavailable. Native macOS/Apple update behavior remains unverified; no live machine updates were run. Changes are uncommitted.
+<!-- SECTION:FINAL_SUMMARY:END -->
+
+## Definition of Done
+<!-- DOD:BEGIN -->
+- [x] #1 Self-review the complete diff for scope, toolchain preservation, dependency-gate coverage, and truthful result reporting.
+- [x] #2 Record test commands/results and remaining native macOS verification limits; complete the final summary before marking Done.
+<!-- DOD:END -->

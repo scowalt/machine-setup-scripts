@@ -514,13 +514,31 @@ env_local_flag_is_one() { [[ "${!1:-0}" == 1 ]]; }
 remove_compound_engineering_resources() { echo unrelated >> "$EVENTS"; }
 print_warning() { echo "$*"; }
 '''
+                if platform == "mac":
+                    # This caller fixture begins with an inert installed brew.
+                    # Keep real readiness gates; the CLT test suite supplies the
+                    # actual verifier, while this suite controls its result.
+                    for name in ["macos_developer_tools_ready_for", "macos_existing_prerequisites"]:
+                        setup += re.search(rf"^{name}\(\) \{{\n.*?^\}}", source, re.M | re.S).group() + "\n"
+                    setup += '''
+ensure_macos_developer_tools_ready() { MACOS_DEVELOPER_TOOLS_STATE=${CLT_READY:-ready}; [[ "$MACOS_DEVELOPER_TOOLS_STATE" == ready ]]; }
+brew() { :; }
+command() {
+    if [[ "$*" == '-v brew' ]]; then printf 'brew\\n'
+    elif [[ "$1" == -v ]]; then return 1
+    else builtin command "$@"; fi
+}
+'''
                 if platform == "ubuntu":
                     for name in ["bb_server_selection", "bb_server_restore_process_override"]:
                         setup += re.search(rf"^{name}\(\) \{{\n.*?^\}}", source, re.M | re.S).group() + "\n"
                 if platform == "wsl":
                     setup += re.search(r"^fail_unsupported_headless_paseo_daemon\(\) \{\n.*?^\}", source, re.M | re.S).group() + "\n"
                 setup += 'run_setup_tasks; result=$?; echo finalized >> "$EVENTS"; exit "$result"\n'
-                for flags, expected, prep in [({}, 0, True), ({"PREP_FAIL": "1"}, 1, True), ({"PI_FAIL": "1"}, 1, True)]:
+                cases = [({}, 0, True), ({"PREP_FAIL": "1"}, 1, True), ({"PI_FAIL": "1"}, 1, True)]
+                if platform == 'mac':
+                    cases.append(({"CLT_READY": "unverified"}, 1, False))
+                for flags, expected, prep in cases:
                     self.events.write_text("")
                     out = subprocess.run(["/bin/bash", "-c", setup], env=self.env | {"WORK_MACHINE": "1"} | flags, cwd=self.home, capture_output=True, text=True, timeout=15)
                     self.assertEqual(out.returncode, expected, out.stdout + out.stderr)

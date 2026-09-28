@@ -16,9 +16,17 @@ PWSH = os.environ.get("PWSH_BIN") or shutil.which("pwsh")
 class WiringTests(unittest.TestCase):
     def bash_block(self, name):
         main = (ROOT / name).read_text().split("run_setup_tasks() {", 1)[1]
-        begin = main.index("    if ! prepare_pi_profile_permissions; then")
-        end = re.search(r"^    (?:if ! )?remove_simple_english_skill", main, re.M).start()
+        begin = re.search(r'^    if ! [^\n]*prepare_pi_profile_permissions; then', main, re.M).start()
+        end = (main.index('    if macos_existing_prerequisites "retired skills') if name == 'mac.sh'
+               else re.search(r"^    (?:if ! )?remove_simple_english_skill", main, re.M).start())
         block = main[begin:end]
+        if name == 'mac.sh':
+            # These downstream fixtures start after CLT verification. Retain the
+            # real gates and explicitly supply readiness, never stub the gate open.
+            source = (ROOT / name).read_text()
+            gates = '\n'.join(re.search(rf'^{fn}\(\) \{{\n.*?^\}}', source, re.M | re.S)[0]
+                              for fn in ('macos_developer_tools_ready_for', 'macos_existing_prerequisites'))
+            block = gates + '\nMACOS_DEVELOPER_TOOLS_STATE=${MACOS_DEVELOPER_TOOLS_STATE:-ready}\n' + block
         if name == "pi.sh":
             # Pi configures its shell between these blocks; that work is not executed.
             gate = '    if [[ "${PASEO_MUSE_DEFER_DAEMON_SETUP:-0}" != "1" ]]; then'
@@ -37,6 +45,9 @@ class WiringTests(unittest.TestCase):
         )
         code = "set -eu\n_setup_had_errors=0\n_pi_go_ready=0\nPI_RUNTIME_PREFLIGHT_PASSED=0\n"
         code += "PI_PROFILE_MUTATIONS_BLOCKED=0\n"
+        if name == 'mac.sh' and scenario == 'developer-tools-unverified':
+            code += 'MACOS_DEVELOPER_TOOLS_STATE=unverified\n_setup_had_errors=1\n'
+            code += 'command() { return 1; }\nmatt_pocock_skills_disabled() { return 1; }\n'
         code += "record() { printf '%s\\n' \"$1\"; }\n"
         code += "print_warning() { :; }; print_section() { :; }\n"
         code += "\n".join(f"{fn}() {{ record {fn}; }}" for fn in inert)
@@ -103,6 +114,10 @@ exercise() {
                         self.assertNotIn("pi-install", calls)
                         self.assertIn("setup_matt_pocock_skills", calls)
                     self.assertEqual("packages" in calls, bool(ready))
+
+    def test_macos_unverified_tools_block_packages_and_daemon(self):
+        calls = self.run_bash('mac.sh', 'developer-tools-unverified')
+        self.assertEqual(calls, ['result:1:0'])
 
     @unittest.skipUnless(PWSH, "Set PWSH_BIN for PowerShell main-block fixtures")
     def test_powershell_wiring_and_failure_aggregation(self):

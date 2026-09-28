@@ -14,7 +14,7 @@ def function(name):
 
 
 class HomebrewResults(unittest.TestCase):
-    def run_setup(self, phase='', earlier=0, outdated='', pinned='', trust=0, infisical_failed=0):
+    def run_setup(self, phase='', earlier=0, outdated='', pinned='', trust=0, infisical_failed=0, readiness='ready'):
         tail = function('run_setup_tasks').split(
             '    if is_main_user; then\n        print_section "Final Updates"', 1)[1]
         script = r'''
@@ -42,6 +42,8 @@ brew() {
     esac
 }
 '''
+        script += '\n' + function('macos_developer_tools_ready_for')
+        script += '\n' + function('macos_clt_summary')
         script += '\n' + function('list_unresolved_brew_outdated_items')
         script += '\n' + function('update_brew')
         script += '\nrun_setup_tasks() {\nlocal _setup_had_errors=${EARLIER}\nlocal _infisical_retirement_failed=${INFISICAL_FAILED}\n'
@@ -52,7 +54,8 @@ brew() {
                                     env={'PATH': '/usr/bin:/bin', 'HOME': home,
                                          'FAIL_PHASE': phase, 'EARLIER': str(earlier),
                                          'OUTDATED': outdated, 'PINNED': pinned, 'TRUST': str(trust),
-                                         'INFISICAL_FAILED': str(infisical_failed)})
+                                         'INFISICAL_FAILED': str(infisical_failed),
+                                         'MACOS_DEVELOPER_TOOLS_STATE': readiness})
             calls_file = Path(home) / 'brew-calls'
             calls = calls_file.read_text().splitlines() if calls_file.exists() else []
         self.assertEqual(result.stderr, '')
@@ -114,6 +117,14 @@ brew() {
         self.assert_incomplete(result)
         self.assertEqual(calls, [])
         self.assertIn('Skipping Homebrew upgrades', result.stdout)
+
+    def test_unready_skips_all_final_brew_mutations_and_finalizes(self):
+        for state in ('incompatible', 'unverified'):
+            result, calls = self.run_setup(readiness=state)
+            self.assert_incomplete(result)
+            self.assertEqual(calls, [])
+            self.assertIn('final Homebrew upgrades', result.stdout)
+            self.assertEqual(result.stdout.count('log-finalized=1'), 1)
 
     def test_success_does_not_erase_an_earlier_failure(self):
         result, _ = self.run_setup(earlier=1)
