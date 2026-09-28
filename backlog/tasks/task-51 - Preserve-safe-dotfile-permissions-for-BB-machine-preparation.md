@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi-task51'
 created_date: '2026-09-28 17:32'
-updated_date: '2026-09-28 20:28'
+updated_date: '2026-09-28 20:37'
 labels:
   - bb
   - setup
@@ -47,6 +47,7 @@ No live repair, setup, live package changes, service lifecycle, enrollment or ro
 - [x] #6 Retain Ubuntu server dotfile protection and apply the new restriction only to eligible non-deferred preparation, using existing effective flag precedence and role/platform gates. Known existing BB roles defer without an additional preparation-driven restriction.
 - [x] #7 Keep persistent dotfile policy, standalone/automatic Chezmoi operations, and the shared Node helper files-only repair unchanged. Document the standalone limitation and manual reconciliation for explicit overrides or unmanaged blockers.
 - [x] #8 Native synthetic-source Chezmoi-to-preparation fixtures cover repeated directory and file convergence, existing/missing targets, stricter masks, explicit overrides, deferrals and actual call sites across all five scripts. Diagnostic tests cover bounded output, unsafe ancestors, secret sentinels and unrecognized helper output.
+- [x] #9 Full enabled pre-push caller fixtures remain inert at unrelated BB Desktop setup calls; preserve their original failure/log-finalization assertions without changing production Windows behavior.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -92,6 +93,11 @@ User authorized merging the reviewed change into remote main. Fetched origin/mai
 
 - Integrated origin/main a8ab2b5, preserving its macOS CLT readiness/repair and dependent-work gating. Only textual conflict was the macOS banner; resolved to v250 with both changes represented. Remote preparation runner fixtures merged cleanly.
 - Combined-tree verification passed: BB preparation (24 tests), dotfile convergence (16 tests), PowerShell guidance, macOS CLT (22 tests), Homebrew results (9 tests), ShellCheck and whitespace checks. Finishing an attributed merge commit with hooks enabled, then the full pre-push contracts before publishing.
+
+- First authenticated push was blocked by the full pre-push suite, not remote permissions. Enabling available PowerShell exposed a pre-existing missing Install-BbDesktop stub in tests/infisical-retirement-windows.ps1 (win.ps1 is unchanged by this task). Standalone fixture reproduces the failure; providing only an inert successful Install-BbDesktop function makes all original assertions pass. Adding that fixture-only isolation shim rather than skipping PowerShell or bypassing hooks.
+- Git had no active HTTPS/gh login; verified the existing account GH_TOKEN for scowalt and used it through a command-scoped gh credential helper. No credential output, persisted login or global Git configuration changes.
+
+Fixture-only Install-BbDesktop stub added; standalone full Infisical contract now passes with PowerShell enabled, retaining failure aggregation and log-finalization assertions. No production Windows changes.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
