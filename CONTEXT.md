@@ -16,6 +16,10 @@ _Avoid_: Successful setup with errors, warning-only failure
 A supported machine classified for employer-related development. Work-only managed tools are part of its desired machine state; on other machines, those tools remain unmanaged.
 _Avoid_: Corporate machine, office machine
 
+**Headed machine**:
+A machine designated for graphical desktop use rather than headless operation. Its classification does not depend on an active graphical session during setup.
+_Avoid_: Machine with an active display, locally executed setup
+
 **Gitea client**:
 The Tea command-line client used from a workstation to interact with Gitea instances.
 _Avoid_: Gitea CLI, Gitea server command
@@ -23,6 +27,10 @@ _Avoid_: Gitea CLI, Gitea server command
 **Managed tool**:
 A development tool whose installation, configuration, update, and removal are controlled by the setup scripts.
 _Avoid_: Provisioned tool, setup tool
+
+**bb desktop app**:
+The native graphical application for the bb agentic IDE published by get-bb/bb. It is distinct from browser access and a separately managed bb server.
+_Avoid_: BBEdit, bb browser shortcut
 
 **bb server**:
 An independent main application server for the bb agentic IDE published by get-bb/bb, with its own projects and sessions. It is distinct from BBEdit and from an execution machine enrolled with another bb server.

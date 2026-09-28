@@ -9979,6 +9979,604 @@ setup_bb_machine() {
 }
 # End shared BB machine preparation.
 
+# BEGIN BB DESKTOP WRAPPER -- keep identical in all Bash entry points.
+install_bb_desktop() {
+    local entry="$1" platform arch kernel result status=0
+    if [[ "${HEADLESS:-}" == "1" ]]; then
+        print_debug "Skipping bb desktop: HEADLESS=1; existing applications untouched."
+        return 0
+    fi
+    case "${entry}" in
+        wsl|pi)
+            print_debug "Skipping bb desktop: ${entry} has no supported native desktop artifact."
+            return 0 ;;
+        macos|ubuntu|bazzite) ;;
+        *) print_error "bb desktop: invalid setup platform."; return 1 ;;
+    esac
+    if ! platform=$(uname -s) || ! arch=$(uname -m) || ! kernel=$(uname -r); then
+        print_error "bb desktop: platform inspection failed."
+        return 1
+    fi
+    # Rosetta reports x86_64 even on an Apple Silicon host.
+    if [[ "${entry}:${platform}:${arch}" == "macos:Darwin:x86_64" ]] &&
+        [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" == "1" ]]; then
+        arch=arm64
+    fi
+    case "${entry}:${platform}:${arch}" in
+        macos:Darwin:arm64) platform=macos ;;
+        ubuntu:Linux:x86_64|bazzite:Linux:x86_64)
+            case "${kernel}" in
+                *[Mm]icrosoft*|*WSL*) print_debug "Skipping bb desktop: WSL is unsupported."; return 0 ;;
+                *) ;;
+            esac
+            platform=linux ;;
+        *) print_debug "Skipping bb desktop: no native artifact for this platform/architecture."; return 0 ;;
+    esac
+    if [[ ! -x /usr/bin/python3 ]]; then
+        print_error "bb desktop requires native Python 3 (macOS Command Line Tools or Linux python3)."
+        return 1
+    fi
+    result=$(bb_desktop_payload "${platform}" 2>/dev/null) || status=$?
+    if [[ "${status}" -eq 0 ]]; then
+        case "${result}" in
+            installed|current|newer-preserved)
+                case "${result}" in
+                    installed) print_success "bb desktop installed and verified; not launched." ;;
+                    current) print_debug "bb desktop is already current and verified." ;;
+                    newer-preserved) print_debug "Newer verified bb desktop preserved." ;;
+                    *) return 1 ;;
+                esac
+                if [[ "${platform}" == "linux" ]]; then
+                    print_warning "bb desktop installation is verified; GUI/sandbox launch compatibility remains unverified. No launch or security-policy changes were performed."
+                fi
+                return 0 ;;
+            deferred-running) print_warning "bb desktop update deferred: verified app is running. Quit it yourself and rerun setup."; return 0 ;;
+            *) ;;
+        esac
+    fi
+    # Only controlled diagnostic tokens cross the helper boundary, never stderr.
+    if [[ "${result}" =~ ^failed:[a-z]+(-[a-z]+)*$ && "${status}" -ne 0 ]]; then
+        print_error "bb desktop ${result}. Existing app/user/server state preserved; see README recovery/prerequisites."
+    else
+        print_error "bb desktop failed: unverified helper result. See README recovery/prerequisites."
+    fi
+    return 1
+}
+# END BB DESKTOP WRAPPER
+
+# BEGIN BB DESKTOP PAYLOAD -- keep identical on supported platforms.
+bb_desktop_payload() {
+    /usr/bin/python3 -I - "$1" <<'BB_DESKTOP_PY'
+# Embedded bb desktop policy. Keep copies identical; never execute desktop code.
+import contextlib
+import hashlib
+import json
+import os
+from pathlib import Path
+import plistlib
+import pwd
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.parse
+import urllib.request
+import zipfile
+
+API = 'https://api.github.com/repos/get-bb/bb/releases'
+WEB = 'https://github.com/get-bb/bb/releases'
+VERSION = r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+UID = os.getuid()
+
+class Refusal(Exception):
+    pass
+
+def require(ok, reason):
+    if not ok:
+        raise Refusal(reason)
+
+def version(value):
+    require(isinstance(value, str) and re.fullmatch(VERSION, value), 'invalid-version')
+    return tuple(map(int, value.split('.')))
+
+def unique_json(pairs):
+    result = {}
+    for key, value in pairs:
+        require(key not in result, 'duplicate-metadata')
+        result[key] = value
+    return result
+
+class Redirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urllib.parse.urlsplit(newurl)
+        require(parsed.scheme == 'https' and parsed.hostname in
+                ('github.com', 'release-assets.githubusercontent.com') and
+                not parsed.username and not parsed.password and parsed.port in (None, 443),
+                'unsafe-redirect')
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+def fetch(url, target=None, maximum=16 * 1024 * 1024):
+    # No credentials, curl config, custom endpoints, or unbounded redirects/downloads.
+    opener = urllib.request.build_opener(Redirects())
+    request = urllib.request.Request(url, headers={'User-Agent': 'machine-setup-bb-desktop',
+                                                  'Accept': 'application/vnd.github+json'})
+    start = time.monotonic()
+    with opener.open(request, timeout=30) as response:
+        require(response.status == 200, 'http-status')
+        data = bytearray()
+        with (open(target, 'xb') if target else contextlib.nullcontext(None)) as output:
+            total = 0
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                require(total <= maximum and time.monotonic() - start < 600, 'download-limit')
+                if output:
+                    output.write(chunk)
+                else:
+                    data.extend(chunk)
+        if not target:
+            return json.loads(data, object_pairs_hook=unique_json)
+
+def release_asset(release, platform, tag):
+    require(isinstance(release, dict) and release.get('tag_name') == tag and
+            release.get('draft') is False and release.get('prerelease') is False and
+            release.get('html_url') == WEB + '/tag/' + tag, 'invalid-release')
+    require(tag == 'desktop-latest' or re.fullmatch('desktop-v' + VERSION, tag), 'invalid-tag')
+    assets = release.get('assets')
+    require(isinstance(assets, list), 'invalid-assets')
+    suffix = '-arm64.zip' if platform == 'macos' else '-x86_64.AppImage'
+    candidates = [a for a in assets if isinstance(a, dict) and
+                  isinstance(a.get('name'), str) and a['name'].endswith(suffix)]
+    require(len(candidates) == 1, 'ambiguous-artifact')
+    asset = candidates[0]
+    name = asset['name']
+    require(name.startswith('bb-'), 'invalid-artifact')
+    number = name[3:-len(suffix)]
+    version(number)
+    require(tag in ('desktop-latest', 'desktop-v' + number), 'release-version-mismatch')
+    require(type(asset.get('id')) is int and asset['id'] > 0 and
+            type(asset.get('size')) is int and 0 < asset['size'] <= 2 * 1024**3 and
+            isinstance(asset.get('digest'), str) and
+            re.fullmatch(r'sha256:[0-9a-f]{64}', asset['digest']) and
+            asset.get('state') == 'uploaded' and
+            asset.get('browser_download_url') == WEB + '/download/' + tag + '/' + name,
+            'invalid-artifact-metadata')
+    return {**asset, 'version': number}
+
+def command(args):
+    result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
+                            env={**os.environ, 'LC_ALL': 'C'})
+    require(result.returncode == 0, 'native-check-failed')
+    return (result.stdout + result.stderr).decode('utf-8', errors='strict')
+
+def linux_home_alias():
+    if not Path('/home').is_symlink():
+        return False
+    require(os.lstat('/home').st_uid == 0 and os.readlink('/home') in ('var/home', '/var/home'),
+            'unsafe-home-alias')
+    for ancestor in ('/', '/var', '/var/home'):
+        s = os.lstat(ancestor)
+        require(stat.S_ISDIR(s.st_mode) and s.st_uid == 0 and not s.st_mode & 0o022,
+                'unsafe-home-alias')
+    return True
+
+def trusted_home(raw, platform):
+    require(raw and os.path.isabs(raw) and str(Path(raw)) == raw and
+            not any(c in raw for c in '\n\r\x00'), 'unsafe-home')
+    home = Path(raw)
+    # Bazzite's one trusted system alias; no general realpath acceptance.
+    if platform == 'linux' and home.parts[:2] == ('/', 'home') and linux_home_alias():
+        home = Path('/var/home', *home.parts[2:])
+    account = pwd.getpwuid(UID).pw_dir
+    require(raw == account or str(home) == account, 'wrong-account-home')
+    directory(home)
+    require(home != Path('/') and home.stat().st_uid == UID, 'unsafe-home')
+    return home
+
+def directory(path, create=False):
+    # Check every ancestor before creation. Root-owned sticky /tmp is fixtures-only
+    # in practice; production stages beneath the verified application directory.
+    for item in [*reversed(path.parents), path]:
+        try:
+            s = item.lstat()
+        except FileNotFoundError:
+            require(create, 'missing-directory')
+            item.mkdir(mode=0o700)
+            s = item.lstat()
+        require(stat.S_ISDIR(s.st_mode) and s.st_uid in (0, UID) and
+                (not s.st_mode & 0o022 or
+                 (s.st_uid == 0 and s.st_mode & stat.S_ISVTX)), 'unsafe-directory')
+    return path
+
+def regular(path):
+    directory(path.parent)
+    s = path.lstat()
+    require(stat.S_ISREG(s.st_mode) and s.st_uid == UID and s.st_nlink == 1 and
+            not s.st_mode & 0o022, 'unsafe-file')
+    return s
+
+def stable(s):
+    return (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+
+def fingerprint(path):
+    s = regular(path)
+    digest = hashlib.sha256()
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as stream:
+        require(stable(os.fstat(stream.fileno())) == stable(s), 'file-changed')
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+        require(stable(os.fstat(stream.fileno())) == stable(s) and
+                stable(path.lstat()) == stable(s), 'file-changed')
+    return digest.hexdigest()
+
+def exists(path):
+    return os.path.lexists(path)
+
+def installed_linux(path, latest):
+    require(regular(path).st_mode & stat.S_IXUSR, 'nonexecutable-appimage')
+    digest = fingerprint(path)
+    with path.open('rb') as stream:
+        header = stream.read(20)
+    require(header[:4] == b'\x7fELF' and header[4:6] == b'\x02\x01' and
+            header[8:11] == b'AI\x02' and header[18:20] == b'\x3e\x00', 'invalid-appimage')
+    if latest['digest'] == 'sha256:' + digest and latest['size'] == path.stat().st_size:
+        return latest['version'], digest
+    # Hash the actual self-updated bytes, then find their official release identity.
+    # A bounded catalogue miss is a failure, never permission to overwrite a custom copy.
+    for page in range(1, 6):
+        releases = fetch(API + '?per_page=100&page=' + str(page))
+        require(isinstance(releases, list), 'invalid-catalogue')
+        matches = []
+        for release in releases:
+            tag = release.get('tag_name', '') if isinstance(release, dict) else ''
+            if not re.fullmatch('desktop-v' + VERSION, tag):
+                continue
+            if not any(isinstance(a, dict) and a.get('digest') == 'sha256:' + digest
+                       for a in release.get('assets', [])):
+                continue
+            asset = release_asset(release, 'linux', tag)
+            if asset['digest'] == 'sha256:' + digest and asset['size'] == path.stat().st_size:
+                matches.append(asset['version'])
+        require(len(set(matches)) <= 1, 'ambiguous-installed-version')
+        if matches:
+            return matches[0], digest
+        if len(releases) < 100:
+            break
+    raise Refusal('unverified-installed-appimage')
+
+def bundle(path):
+    directory(path)
+    require(path.stat().st_uid == UID, 'foreign-bundle')
+    # Framework symlinks are normal; allow only bundle-contained resolved targets.
+    for root, dirs, files in os.walk(path, followlinks=False):
+        for name in dirs + files:
+            item = Path(root, name)
+            s = item.lstat()
+            require(s.st_uid == UID, 'foreign-bundle-file')
+            if stat.S_ISLNK(s.st_mode):
+                require(item.resolve().is_relative_to(path.resolve()) and item.exists(), 'unsafe-bundle-link')
+            else:
+                require((stat.S_ISDIR(s.st_mode) or stat.S_ISREG(s.st_mode)) and
+                        not s.st_mode & 0o022, 'unsafe-bundle-file')
+    info = path / 'Contents/Info.plist'
+    regular(info)
+    data = plistlib.loads(info.read_bytes())
+    require(data.get('CFBundleIdentifier') == 'dev.bb.desktop' and
+            data.get('CFBundleExecutable') == 'bb', 'wrong-bundle-identity')
+    number = data.get('CFBundleShortVersionString')
+    version(number)
+    minimum = data.get('LSMinimumSystemVersion', '')
+    if minimum.count('.') == 1:
+        minimum += '.0'
+    current = command(['/usr/bin/sw_vers', '-productVersion']).strip()
+    if current.count('.') == 1:
+        current += '.0'
+    require(version(current) >= version(minimum), 'macos-too-old')
+    require(command(['/usr/bin/lipo', '-archs', str(path / 'Contents/MacOS/bb')]).strip() == 'arm64',
+            'wrong-bundle-architecture')
+    command(['/usr/bin/codesign', '--verify', '--deep', '--strict', str(path)])
+    signature = command(['/usr/bin/codesign', '-dv', '--verbose=4', str(path)])
+    team = re.search(r'^TeamIdentifier=([A-Z0-9]{10})$', signature, re.M)
+    require(team and re.search(r'^Identifier=dev\.bb\.desktop$', signature, re.M), 'wrong-signature')
+    assessment = command(['/usr/sbin/spctl', '--assess', '--type', 'execute', '--verbose=2', str(path)])
+    require('source=Notarized Developer ID' in assessment, 'not-notarized')
+    return number, team[1]
+
+def unpack_mac(archive, stage):
+    # Preflight the complete ZIP before ditto restores signed bundle metadata.
+    with zipfile.ZipFile(archive) as z:
+        entries = z.infolist()
+        require(len(entries) <= 200000 and sum(e.file_size for e in entries) <= 4 * 1024**3,
+                'archive-limit')
+        names, links = set(), set()
+        for entry in entries:
+            name = entry.filename.rstrip('/')
+            parts = name.split('/')
+            require(parts[0] in ('bb.app', '__MACOSX') and all(p not in ('', '.', '..') for p in parts) and
+                    '\\' not in name and name not in names, 'unsafe-archive-path')
+            names.add(name)
+            mode = entry.external_attr >> 16
+            require(stat.S_IFMT(mode) in (0, stat.S_IFREG, stat.S_IFDIR, stat.S_IFLNK), 'unsafe-archive-type')
+            if stat.S_ISLNK(mode):
+                require(parts[0] == 'bb.app' and entry.file_size < 4096, 'unsafe-archive-link')
+                target = z.read(entry).decode('utf-8')
+                resolved = os.path.normpath(os.path.join(os.path.dirname(name), target))
+                require(not os.path.isabs(target) and resolved.startswith('bb.app/'), 'unsafe-archive-link')
+                links.add(name)
+        for name in names:
+            require(not any(str(p) in links for p in Path(name).parents), 'archive-through-link')
+    command(['/usr/bin/ditto', '-x', '-k', str(archive), str(stage)])
+    return stage / 'bb.app'
+
+def linux_process_snapshot(proc):
+    fields = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
+    status = (proc / 'status').read_text()
+    uids = re.search(r'^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)$', status, re.M)
+    name = re.search(r'^Name:\s+([^\n]+)$', status, re.M)
+    state = re.search(r'^State:\s+([A-Z])\b', status, re.M)
+    require(len(fields) > 19 and fields[19].isdigit() and uids and name and state, 'process-inspection')
+    return fields[19], tuple(map(int, uids.groups())), name[1], state[1]
+
+def desktop_process_name(name):
+    # Titles are only a conservative screen when executable evidence is unavailable.
+    return bool(re.fullmatch(r'bb(?:\.AppImage| Helper[^\n]*)?', name))
+
+def linux_running(path):
+    found = False
+    for proc in Path('/proc').iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            before = linux_process_snapshot(proc)
+            _, owners, name, state = before
+            if state == 'Z' or (UID not in owners and not desktop_process_name(name)):
+                # Exclude stable foreign processes before private exe/env reads.
+                # A foreign native desktop title still needs an ownership check.
+                require(linux_process_snapshot(proc)[:3] == before[:3], 'process-changed')
+                continue
+            try:
+                exe = os.readlink(proc / 'exe')
+            except PermissionError:
+                raise Refusal('process-executable-unverified') from None
+            clean_exe = exe.removesuffix(' (deleted)')
+            require(os.path.isabs(clean_exe), 'process-executable-unverified')
+            exact = clean_exe == str(path)
+            native = desktop_process_name(Path(clean_exe).name)
+            candidate_running = False
+            if exact or native:
+                require(owners == (UID,) * 4, 'process-owner')
+                if exact:
+                    # The AppImage runtime/controller itself is sufficient evidence;
+                    # its environment is unnecessary and may be non-dumpable.
+                    candidate_running = True
+                else:
+                    try:
+                        env = (proc / 'environ').read_bytes().split(b'\0')
+                    except PermissionError:
+                        raise Refusal('process-environment-unverified') from None
+                    image = [e[9:].decode('utf-8') for e in env if e.startswith(b'APPIMAGE=')]
+                    require(len(image) == 1 and os.path.isabs(image[0]) and
+                            not any(c in image[0] for c in '\n\r'), 'ambiguous-process')
+                    belongs = image == [str(path)]
+                    if image[0].startswith('/home/') and str(path).startswith('/var/home/'):
+                        belongs = belongs or (linux_home_alias() and '/var' + image[0] == str(path))
+                    if belongs:
+                        # type2-runtime honors TMPDIR; do not assume /tmp or the
+                        # mount prefix's filename (argv[0] can name a symlink).
+                        runtime_dir = Path(clean_exe).parent.name
+                        require(Path(clean_exe).name == 'bb' and re.fullmatch(
+                            r'(?:\.mount_[^/]+|appimage_extracted_[^/]+)', runtime_dir),
+                            'unverified-desktop-executable')
+                        candidate_running = True
+            # A verified unrelated executable is not made relevant by a native
+            # title or inherited APPIMAGE. Never open its environment. Recheck its
+            # executable too, so an exec/UID/PID change cannot become an exclusion.
+            try:
+                after_exe = os.readlink(proc / 'exe')
+            except PermissionError:
+                raise Refusal('process-executable-unverified') from None
+            # R/S scheduling changes are not process identity changes.
+            require(after_exe == exe and linux_process_snapshot(proc)[:3] == before[:3], 'process-changed')
+            found = found or candidate_running
+        except FileNotFoundError:
+            require(not proc.exists(), 'process-inspection')
+    return found
+
+def running(path, platform):
+    if platform == 'macos':
+        rows = command(['/bin/ps', '-ww', '-axo', 'uid=,pid=,comm=']).splitlines()
+        require(rows, 'process-inspection')
+        found = False
+        for row in rows:
+            parts = row.strip().split(None, 2)
+            require(len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit(), 'process-inspection')
+            owner, _, exe = parts
+            if exe.startswith(str(path) + '/'):
+                require(int(owner) == UID, 'process-owner')
+                found = True
+            elif re.fullmatch(r'bb(?: Helper(?: \([^)]*\))?)?', exe):
+                raise Refusal('ambiguous-process')
+        return found
+    return linux_running(path)
+
+def menu_text(path):
+    # Desktop Exec is not a shell. Quote both Exec and desktop-string escapes;
+    # refuse field-code/path ambiguities rather than silently launch something else.
+    require(not any(c in str(path) for c in '\n\r\t%`$"\\'), 'unsafe-menu-path')
+    return ('[Desktop Entry]\nType=Application\nName=bb\nComment=bb agentic IDE\n'
+            'Exec="' + str(path) + '" --appimage-extract-and-run\n'
+            'Icon=applications-development\nTerminal=false\nCategories=Development;IDE;\n'
+            'X-Setup-BB-Desktop=1\n')
+
+def promote(candidate, target, menu, text, stage, verify, unchanged, platform):
+    # Preserve both prior objects through all validation/menu failures. No native
+    # updater lock is available: recheck process state immediately before rename.
+    unchanged()
+    if running(target, platform):
+        require(exists(target), 'unverified-desktop-process')
+        return 'deferred-running'
+    unchanged()
+    objects = [(candidate, target)]
+    if menu:
+        staged_menu = stage / 'menu.desktop'
+        staged_menu.write_text(text)
+        objects.append((staged_menu, menu))
+    moved = []
+    try:
+        for index, (source, dest) in enumerate(objects):
+            directory(dest.parent)
+            backup = stage / ('previous-' + str(index))
+            had_old = exists(dest)
+            if had_old:
+                os.rename(dest, backup)
+            moved.append((dest, backup, had_old))
+            os.rename(source, dest)
+        verify(target)
+        if menu:
+            regular(menu)
+            require(menu.read_text() == text, 'menu-verification')
+    except Exception:
+        for dest, backup, had_old in reversed(moved):
+            directory(dest.parent)
+            if exists(dest):
+                os.rename(dest, stage / ('rejected-' + dest.name))
+            if had_old:
+                os.rename(backup, dest)
+        raise
+    return 'installed'
+
+def install(platform):
+    os.umask(0o077)
+    require(UID != 0, 'root-account')
+    home = trusted_home(os.environ.get('HOME'), platform)
+    if platform == 'macos':
+        os_version = command(['/usr/bin/sw_vers', '-productVersion']).strip()
+        if os_version.count('.') == 1:
+            os_version += '.0'
+        require(version(os_version) >= (13, 0, 0), 'macos-too-old')
+        user_app, system_app = home / 'Applications/bb.app', Path('/Applications/bb.app')
+        require(not (exists(user_app) and exists(system_app)), 'ambiguous-applications')
+        target = system_app if exists(system_app) else user_app
+        menu = None
+    else:
+        target = home / '.local/opt/bb-desktop/bb.AppImage'
+        data_home = os.environ.get('XDG_DATA_HOME', str(home / '.local/share'))
+        raw_home = os.environ['HOME']
+        if raw_home != str(home) and data_home.startswith(raw_home + '/'):
+            data_home = str(home) + data_home[len(raw_home):]
+        require(os.path.isabs(data_home) and Path(data_home).is_relative_to(home) and
+                Path(data_home) != home and '..' not in Path(data_home).parts, 'unsafe-menu-directory')
+        menu = Path(data_home) / 'applications/dev.bb.desktop.desktop'
+    directory(target.parent, create=True)
+    require(target.parent.stat().st_uid == UID, 'foreign-applications-directory')
+    text = menu_text(target) if menu else None
+    old_menu = None
+    if menu:
+        directory(menu.parent, create=True)
+        if exists(menu):
+            regular(menu)
+            old_menu = menu.read_bytes()
+            require(old_menu == text.encode(), 'unmanaged-menu')
+    lock = target.parent / '.setup-bb-desktop.lock'
+    lock.mkdir(mode=0o700)  # An occupied/link/stale lock fails closed.
+    lock_identity = (lock.stat().st_dev, lock.stat().st_ino)
+    completed = False
+    try:
+        stage = Path(tempfile.mkdtemp(prefix='stage-', dir=lock))
+        latest = release_asset(fetch(API + '/tags/desktop-latest'), platform, 'desktop-latest')
+        previous = None
+        if exists(target):
+            previous = installed_linux(target, latest) if platform == 'linux' else bundle(target)
+            if platform == 'linux' and running(target, platform):
+                completed = True
+                return 'deferred-running'
+        if platform == 'linux':
+            # Installation-only contract: keep the required runtime baseline,
+            # but do not inspect policy or probe GUI/sandbox launch compatibility.
+            # The wrapper warns only after a strictly validated successful result.
+            libc = re.fullmatch(r'glibc ([0-9]+)\.([0-9]+)', os.confstr('CS_GNU_LIBC_VERSION') or '')
+            require(libc and tuple(map(int, libc.groups())) >= (2, 35), 'glibc-too-old')
+            if previous and version(previous[0]) >= version(latest['version']):
+                if menu and not exists(menu):
+                    # Menu-only convergence also needs the process/destination recheck.
+                    require(installed_linux(target, latest) == previous and not running(target, platform),
+                            'installation-changed')
+                    staged_menu = stage / 'menu.desktop'
+                    staged_menu.write_text(text)
+                    directory(menu.parent)
+                    # Exclusive publication: preserve a menu created concurrently.
+                    os.link(staged_menu, menu, follow_symlinks=False)
+                    staged_menu.unlink()
+                    regular(menu)
+                    require(menu.read_text() == text, 'menu-verification')
+                completed = True
+                return 'current' if previous[0] == latest['version'] else 'newer-preserved'
+        archive = stage / 'download'
+        fetch(latest['browser_download_url'], archive, latest['size'])
+        require(archive.stat().st_size == latest['size'] and
+                fingerprint(archive) == latest['digest'][7:], 'integrity-mismatch')
+        if platform == 'macos':
+            candidate = unpack_mac(archive, stage)
+            identity = bundle(candidate)
+            require(identity[0] == latest['version'], 'bundle-version-mismatch')
+            if previous:
+                require(previous[1] == identity[1], 'different-signing-team')
+                if running(target, platform):
+                    completed = True
+                    return 'deferred-running'
+                if version(previous[0]) >= version(identity[0]):
+                    completed = True
+                    return 'current' if previous[0] == identity[0] else 'newer-preserved'
+            verify = lambda path: require(bundle(path) == identity, 'bundle-changed')
+        else:
+            candidate = archive
+            candidate.chmod(0o700)
+            require(installed_linux(candidate, latest)[0] == latest['version'], 'invalid-appimage')
+            verify = lambda path: require(fingerprint(path) == latest['digest'][7:], 'integrity-mismatch')
+        def unchanged():
+            directory(target.parent)
+            actual = (installed_linux(target, latest) if platform == 'linux' else bundle(target)) if exists(target) else None
+            require(actual == previous, 'installation-changed')
+            if menu:
+                regular(menu) if exists(menu) else directory(menu.parent)
+                require((menu.read_bytes() if exists(menu) else None) == old_menu, 'menu-changed')
+        result = promote(candidate, target, menu, text, stage, verify, unchanged, platform)
+        completed = True
+        return result
+    finally:
+        # Retain an interrupted/failed rollback for manual recovery. Ordinary
+        # preflight/download failures and completed rollbacks can be retried.
+        directory(lock)
+        require((lock.stat().st_dev, lock.stat().st_ino) == lock_identity, 'transaction-changed')
+        backups = list(lock.glob('stage-*/previous-*'))
+        if completed or not backups:
+            require(shutil.rmtree.avoids_symlink_attacks, 'unsafe-cleanup-runtime')
+            shutil.rmtree(lock)
+
+def main():
+    try:
+        print(install(sys.argv[1]))
+    except Refusal as error:
+        print('failed:' + str(error))
+        return 1
+    except Exception:
+        # Native/network exceptions can include paths, environment, or credentials.
+        print('failed:operation-error')
+        return 1
+    return 0
+
+if __name__ == '__main__':
+    sys.exit(main())
+BB_DESKTOP_PY
+}
+# END BB DESKTOP PAYLOAD
+
 run_setup_tasks() {
     local _setup_had_errors=0
     local _infisical_retirement_failed=0
@@ -9989,7 +10587,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 246 | Last changed: Preserve npm policy and BB preparation compatibility${NC}"
+    echo -e "${GRAY}Version 248 | Last changed: Add headed bb desktop alongside machine preparation${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -10015,6 +10613,9 @@ run_setup_tasks() {
 
     print_section "Xcode Command Line Tools"
     install_xcode_cli_tools || _setup_had_errors=1
+
+    print_section "bb Desktop"
+    install_bb_desktop macos || _setup_had_errors=1
 
     if ! is_main_user; then
         if command -v brew >/dev/null 2>&1; then

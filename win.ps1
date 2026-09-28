@@ -8228,8 +8228,19 @@ function Complete-SetupLog {
     if ($script:SetupLogClosed) { Upload-Log }
 }
 
+function Install-BbDesktop {
+    if (Test-EnvLocalFlag "HEADLESS") {
+        Write-Debug "Skipping bb desktop: HEADLESS=1; existing applications untouched."
+    }
+    else {
+        Write-Debug "Skipping bb desktop: Windows has no supported native desktop artifact."
+    }
+    return $true
+}
+
 function Invoke-WindowsSetupTasks {
     $piSetupFailed = $false
+    $bbDesktopSetupFailed = $false
     $piOpenCodeGoReady = $false
     $script:PiProfileMutationsBlocked = $false
     $paseoPlainSetupFailed = $false
@@ -8240,13 +8251,15 @@ function Invoke-WindowsSetupTasks {
     $infisicalRetirementFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 161 | Last changed: Explain WSL2 preparation for manual BB enrollment"
+    Write-Host "Version 162 | Last changed: Preserve WSL2 enrollment guidance and desktop skip"
 
     Assert-HeadlessPaseoUnsupported
     $null = Get-PaseoReleaseChannel
 
     # Create placeholder token files early
     New-TokenPlaceholders
+
+    if (-not (Install-BbDesktop)) { $bbDesktopSetupFailed = $true }
 
     Write-Section "Package Installation"
     if (-not (Remove-InfisicalCli)) { $infisicalRetirementFailed = $true }
@@ -8400,6 +8413,9 @@ function Invoke-WindowsSetupTasks {
     }
     if ($infisicalRetirementFailed) {
         throw "Infisical retirement was incomplete."
+    }
+    if ($bbDesktopSetupFailed) {
+        throw "bb desktop setup was incomplete."
     }
 
     Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen
