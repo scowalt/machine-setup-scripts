@@ -3,6 +3,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 tmp=$(mktemp -d)
 trap 'rm -rf -- "${tmp}"' EXIT
+# Resolve Python before redirecting HOME; inherited mise shims may consult the
+# real account's config using the disposable home's separate trust state.
+python_bin=$(python3 -c 'import sys; print(sys.executable)')
+mkdir -p "${tmp}/interpreters"
+ln -s "${python_bin}" "${tmp}/interpreters/python3"
+export PATH="${tmp}/interpreters:${PATH}"
 python3 - "${tmp}" <<'PY'
 import pathlib, sys
 source = pathlib.Path('ubuntu.sh').read_text()
@@ -10,6 +16,9 @@ start = source.index('bb_server_platform_ready() {')
 end = source.index('\nrun_setup_tasks() {', start)
 pathlib.Path(sys.argv[1], 'helpers.sh').write_text(source[start:end])
 PY
+
+# Report unsafe setup directories before any package or lifecycle operation.
+python3 tests/test_bb_directory_preflight.py
 
 # Opt-in and platform gates are deliberately independent of machine identity.
 for value in '' 0 1 invalid; do

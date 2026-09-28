@@ -10312,6 +10312,51 @@ bb_owned_safe_directory() {
     [[ "${_owner}" == "${_uid}" && "${_mode}" =~ ^[0-7]{3,4}$ ]] && (( (8#${_mode} & 8#022) == 0 ))
 }
 
+# Diagnostic-only preflight: inspect known directories, never repair permissions.
+bb_setup_directory_preflight() {
+    local _directory="$1" _label _metadata _owner _mode _extra _uid
+    case "${_directory}" in
+        "${HOME}"|"${HOME}/.config"|"${HOME}/.config/systemd"|"${HOME}/.config/systemd/user"|"${HOME}/.config/setup-bb-server"|"${HOME}/.bb")
+            _label="\$HOME${_directory#"${HOME}"}" ;;
+        *) print_error 'BB directory preflight: unsupported managed location.'; return 1 ;;
+    esac
+    if [[ -L "${_directory}" ]]; then
+        print_error "BB directory preflight: ${_label} is a symbolic link; leaving it unchanged."
+        return 1
+    fi
+    if [[ ! -e "${_directory}" ]]; then
+        [[ "${_directory}" != "${HOME}" ]] && return 0
+        print_error "BB directory preflight: ${_label} is missing."
+        return 1
+    fi
+    if [[ ! -d "${_directory}" ]]; then
+        print_error "BB directory preflight: ${_label} is not a directory; leaving it unchanged."
+        return 1
+    fi
+    if ! _metadata=$(stat -c '%u %a' -- "${_directory}" 2>/dev/null) || ! _uid=$(id -u 2>/dev/null); then
+        print_error "BB directory preflight: could not inspect permissions for ${_label}; leaving it unchanged."
+        return 1
+    fi
+    read -r _owner _mode _extra <<< "${_metadata}"
+    if [[ ! "${_owner}" =~ ^[0-9]+$ || ! "${_uid}" =~ ^[0-9]+$ || ! "${_mode}" =~ ^[0-7]{3,4}$ || -n "${_extra}" || "${_metadata}" == *$'\n'* ]]; then
+        print_error "BB directory preflight: ${_label} has invalid ownership or mode metadata; leaving it unchanged."
+        return 1
+    fi
+    if [[ ! -O "${_directory}" || "${_owner}" != "${_uid}" ]]; then
+        print_error "BB directory preflight: ${_label} is not owned by the setup account; leaving it unchanged."
+        return 1
+    fi
+    if (( (8#${_mode} & 8#022) != 0 )); then
+        print_error "BB directory preflight: ${_label} is group- or world-writable (mode ${_mode}); setup will not change its permissions."
+        if (( (8#${_mode} & 8#002) == 0 )); then
+            print_message "After confirming group-write access is not needed, run this non-recursive correction and rerun setup: chmod g-w \"${_label}\""
+        else
+            print_message "Review access requirements and remove group/world write from ${_label} only before rerunning setup; do not change descendants."
+        fi
+        return 1
+    fi
+}
+
 bb_owned_metadata_file() {
     local _file="$1" _private="${2:-0}" _metadata _owner _links _mode _uid
     [[ -f "${_file}" && ! -L "${_file}" ]] || return 1
@@ -10835,20 +10880,20 @@ BB_CONFIG
 setup_bb_server() {
     local _dir="${HOME}/.config/setup-bb-server" _units="${HOME}/.config/systemd/user"
     local _state="${HOME}/.config/setup-bb-server/endpoint" _app _serve _guard _dns='' _port='' _origin='' _current_dns _i _root _mode _user _linger _tailscale_bin _app_active=0 _ingress_active=0 _app_enabled=0 _new_state=0 _old_app='' _old_serve='' _old_guard='' _app_unit _serve_unit
-    [[ "${HOME}" =~ ^/[a-zA-Z0-9_./-]+$ && -d "${HOME}" && -O "${HOME}" && ! -L "${HOME}" ]] || return 1
+    if [[ ! "${HOME}" =~ ^/[a-zA-Z0-9_./-]+$ ]]; then
+        print_error "BB directory preflight: \$HOME must be an absolute supported path."
+        return 1
+    fi
+    bb_setup_directory_preflight "${HOME}" || return 1
     _tailscale_bin=$(command -v tailscale) || return 1
     [[ "${_tailscale_bin}" == /usr/bin/tailscale || "${_tailscale_bin}" == /usr/local/bin/tailscale ]] || return 1
-    for _root in "${HOME}/.bb" "${HOME}/.bb/config.json" "${HOME}/.bb/env.json" "${HOME}/.bb/host-id" "${HOME}/.bb/auth.json" "${HOME}/.bb/server-moved.json" "${HOME}/.bb/server-import.json" "${HOME}/.config" "${HOME}/.config/systemd" "${_units}" "${_dir}"; do
+    for _root in "${HOME}/.config" "${HOME}/.config/systemd" "${_dir}" "${_units}" "${HOME}/.bb"; do
+        bb_setup_directory_preflight "${_root}" || return 1
+    done
+    for _root in "${HOME}/.bb/config.json" "${HOME}/.bb/env.json" "${HOME}/.bb/host-id" "${HOME}/.bb/auth.json" "${HOME}/.bb/server-moved.json" "${HOME}/.bb/server-import.json"; do
         [[ ! -L "${_root}" ]] || return 1
     done
     [[ ! -e "${HOME}/.bb/server-moved.json" && ! -e "${HOME}/.bb/server-import.json" ]] || return 1
-    for _root in "${HOME}" "${HOME}/.config" "${HOME}/.config/systemd" "${_dir}" "${_units}" "${HOME}/.bb"; do
-        if [[ -e "${_root}" ]]; then
-            [[ -d "${_root}" && -O "${_root}" ]] || return 1
-            _mode=$(stat -c %a -- "${_root}") || return 1
-            [[ "${_mode}" =~ ^[0-7]{3,4}$ ]] && (( (8#${_mode} & 8#022) == 0 )) || return 1
-        fi
-    done
     bb_owned_file "${_units}/setup-bb-app.service" '# setup-managed bb app v1' || return 1
     bb_owned_file "${_units}/setup-bb-ingress.service" '# setup-managed bb ingress v1' || return 1
     [[ ! -e "${_units}/setup-bb-app.service.d" && ! -L "${_units}/setup-bb-app.service.d" && ! -e "${_units}/setup-bb-ingress.service.d" && ! -L "${_units}/setup-bb-ingress.service.d" ]] || return 1
@@ -11025,7 +11070,7 @@ run_setup_tasks() {
     local PASEO_MUSE_DEFER_DAEMON_SETUP=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 270 | Last changed: Repair BB fresh installs and rollback"
+    echo -e "${GRAY}Version 271 | Last changed: Explain BB directory preflight failures"
 
     if ! acquire_setup_lock; then
         return 1
