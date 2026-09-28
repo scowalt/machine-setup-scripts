@@ -114,7 +114,6 @@ class GoSetupTests(unittest.TestCase):
                                "function Write-Debug($Message) { [Console]::WriteLine($Message) }\n" + wrapper(script) +
                                "\n$ok = Set-PiOpenCodeGoProvider\n"
                                "if (-not $PSNativeCommandUseErrorActionPreference) { throw 'caller preference changed' }\n"
-                               "[Console]::WriteLine('changed:' + $script:PiOpenCodeGoChanged)\n"
                                "if (-not $ok) { exit 1 }\n")
             args = [PWSH, "-NoProfile", "-NonInteractive", "-File", str(fixture)]
         elif use_wrapper:
@@ -122,7 +121,7 @@ class GoSetupTests(unittest.TestCase):
             fixture.write_text("set -eu\nprint_warning() { printf '%s\\n' \"$1\"; }\n"
                                "print_success() { printf '%s\\n' \"$1\"; }\n"
                                "print_debug() { printf '%s\\n' \"$1\"; }\n" + wrapper(script) +
-                               "\nconfigure_pi_opencode_go\nprintf 'changed:%s\\n' \"${PI_OPENCODE_GO_CHANGED}\"\n")
+                               "\nconfigure_pi_opencode_go\n")
             args = ["bash", str(fixture)]
         else:
             fixture = self.root / "helper.cjs"
@@ -479,10 +478,12 @@ console.log('alias-fixtures-passed');
                 self.env["NODE_PATH"] = "/does-not-exist"
                 result = self.run_helper(script, use_wrapper=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn("changed:True" if script == "win.ps1" else "changed:1", result.stdout)
+                self.assertIn("Pi Go credential synchronized in the active Pi profile.", result.stdout)
+                before = self.auth.read_bytes()
                 result = self.run_helper(script, use_wrapper=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn("changed:False" if script == "win.ps1" else "changed:0", result.stdout)
+                self.assertIn("Pi Go credential is unchanged.", result.stdout)
+                self.assertEqual(self.auth.read_bytes(), before)
                 self.put(self.envfile, "OPENCODE_GO_API_KEY=$UNSAFE\n")
                 self.assertEqual(self.run_helper(script, use_wrapper=True).returncode, 1)
                 self.put(self.envfile, "OPENCODE_GO_API_KEY=" + KEY + "\n")

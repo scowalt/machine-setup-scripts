@@ -19,9 +19,8 @@ class PreparationPermissions(unittest.TestCase):
         case.setUp()
         self.addCleanup(case.doCleanups)
         source = SOURCES[platform]
-        helpers = [function(source, n) for n in ['initialize_chezmoi', 'update_chezmoi']]
-        if 'with_bb_dotfiles_umask() {' in source:
-            helpers.insert(0, function(source, 'with_bb_dotfiles_umask'))
+        helpers = [preparation.BLOCK, function(SOURCES['ubuntu'], 'bb_server_selection')]
+        helpers += [function(source, n) for n in ['initialize_chezmoi', 'update_chezmoi']]
         if platform == 'pi':
             helpers.append(function(source, 'apply_chezmoi_config'))
             apply = 'apply_chezmoi_config; result=$?'
@@ -30,10 +29,9 @@ class PreparationPermissions(unittest.TestCase):
             apply = re.search(r'^        if ! [^\n]*chezmoi apply --force; then\n.*?^        fi$', main, re.M | re.S).group()
             apply = '_setup_had_errors=0\n' + apply + '\nresult=$_setup_had_errors'
         (case.root / 'dotfiles.sh').write_text('\n'.join(helpers))
-        # Extend the inert recording fixture for Pi's existing argv. Never allow
-        # native init/update (network/Git); normalize only native full apply.
-        stub = CHEZMOI_FIXTURE.replace('["apply", "--force"]', '["apply", "--force"] or sys.argv[1:] == ["apply", "--force", "--verbose"]')
-        for name, body in [('chezmoi', stub), ('git', GIT_FIXTURE)]:
+        # Reuse the shared argv-checking fixture, including Pi's verbose apply.
+        # This suite uses native mode only for full apply, never init/update.
+        for name, body in [('chezmoi', CHEZMOI_FIXTURE), ('git', GIT_FIXTURE)]:
             case.write_exe(name, '#!/usr/bin/python3\n' + body)
         case.write_exe('tmux', '#!/bin/bash\nexit 0\n')
         case.env['FIXTURE_CALLS'] = str(case.root / 'calls')
@@ -116,12 +114,10 @@ umask "$1"
                 managed = case.home / '.config/systemd/user/fixture.service'
                 managed.write_text('[Service]\nExecStart=/usr/bin/true\n')
                 managed.chmod(0o664)
-                # This fixture HOME is private: unrelated group bits do not
-                # grant another account access, even before managed convergence.
-                if sys.platform == 'linux':
-                    self.assertIn('not enrolled', case.run_helper(platform))
-                else:
-                    self.assertIn('preflight failed', case.run_helper(platform, expected=1))
+                # Private Linux ancestry excludes other account writers already;
+                # native dotfiles must still converge their managed modes.
+                out = case.run_helper(expected=0 if sys.platform == 'linux' else 1)
+                self.assertIn('not enrolled' if sys.platform == 'linux' else 'preflight failed', out)
                 for attempt in range(2):
                     self.assertEqual(self.run_stage(case, apply, native=True).returncode, 0)
                     self.assertEqual(managed.stat().st_mode & 0o777, 0o644)
@@ -135,15 +131,15 @@ umask "$1"
                 self.assertEqual((unit.lstat().st_mode, unit.read_bytes()), unit_before)
                 before = snapshot(case.home)
                 case.events.unlink()
-                out = case.run_helper(platform, expected=0 if sys.platform == 'linux' else 1)
+                out = case.run_helper(expected=0 if sys.platform == 'linux' else 1)
                 self.assertIn('not enrolled' if sys.platform == 'linux' else 'preflight failed', out)
                 self.assertNotIn('fixture-secret', out)
                 self.assertEqual(snapshot(case.home), before)
                 unit.chmod(0o666)
                 before = snapshot(case.home)
                 case.events.unlink()
-                out = case.run_helper(platform, expected=1)
-                self.assertIn('service-inventory:systemd-service:group-or-world-writable', out)
+                out = case.run_helper(expected=1)
+                self.assertIn('operation=service path=~/.config/systemd/user/unmanaged.service mode=0666 reason=writable-boundary', out)
                 self.assertEqual(snapshot(case.home), before)
                 self.assertNotIn('npm', case.log())
 
@@ -164,7 +160,7 @@ umask "$1"
         self.run_stage(case, apply, native=True)
         case.events.unlink()
         out = case.run_helper(expected=1)
-        self.assertIn('service-inventory:home-config:group-or-world-writable', out)
+        self.assertIn('operation=directory path=~/.config mode=0777 reason=writable-boundary', out)
         self.assertEqual(config.read_bytes(), before)
         self.assertNotIn('npm', case.log())
 

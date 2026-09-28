@@ -117,8 +117,6 @@ create_env_local() {
 
 # Machine/setup guards
 # HEADLESS=1
-# Paseo release channel (beta by default; use stable to follow stable releases)
-# PASEO_CHANNEL=beta
 # WORK_MACHINE=1
 # BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
@@ -1270,17 +1268,6 @@ install_chezmoi() {
     fi
 }
 
-# Chezmoi derives ordinary target modes from its inherited umask. Do not let
-# dotfile applies undo safe modes before BB server OR preparation preflight.
-# Keep this wrapper identical in the five Bash scripts. Restrict only this
-# command, preserving stricter masks and native explicit Chezmoi config.
-with_bb_dotfiles_umask() {
-    (
-        umask go-w || exit 1
-        "$@"
-    )
-}
-
 # Initialize chezmoi with Raspberry Pi optimizations
 initialize_chezmoi() {
     # If chezmoi isn't on PATH, fall back to ~/bin/chezmoi
@@ -1307,19 +1294,19 @@ initialize_chezmoi() {
         print_message "Initializing chezmoi with scowalt/dotfiles…"
         case "${DOTFILES_ACCESS_METHOD}" in
             ssh)
-                if ! with_bb_dotfiles_umask "${chezmoi_cmd}" init --apply --force scowalt/dotfiles --ssh; then
+                if ! with_bb_dotfiles_umask pi "${chezmoi_cmd}" init --apply --force scowalt/dotfiles --ssh; then
                     print_error "Failed to initialize chezmoi with the verified SSH key."
                     return 1
                 fi
                 ;;
             token)
-                if ! with_bb_dotfiles_umask "${chezmoi_cmd}" init --apply --force "https://github.com/scowalt/dotfiles.git"; then
+                if ! with_bb_dotfiles_umask pi "${chezmoi_cmd}" init --apply --force "https://github.com/scowalt/dotfiles.git"; then
                     print_error "Failed to initialize chezmoi with the verified GitHub token."
                     return 1
                 fi
                 ;;
             deploy)
-                if ! with_bb_dotfiles_umask "${chezmoi_cmd}" init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
+                if ! with_bb_dotfiles_umask pi "${chezmoi_cmd}" init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
                     print_error "Failed to initialize chezmoi with the verified deploy key."
                     return 1
                 fi
@@ -1401,7 +1388,7 @@ update_chezmoi() {
     local chez_src="${HOME}/.local/share/chezmoi"
     if [[ -d "${chez_src}" ]]; then
         print_message "Updating chezmoi dotfiles repository..."
-        if with_bb_dotfiles_umask "${chezmoi_cmd}" update > /dev/null; then
+        if with_bb_dotfiles_umask pi "${chezmoi_cmd}" update > /dev/null; then
             print_success "chezmoi dotfiles repository updated."
         else
             print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
@@ -1529,7 +1516,7 @@ apply_chezmoi_config() {
     fi
 
     # Run verbosely; bail if anything returns non‑zero
-    if ! with_bb_dotfiles_umask "${chezmoi_cmd}" apply --force --verbose; then
+    if ! with_bb_dotfiles_umask pi "${chezmoi_cmd}" apply --force --verbose; then
         print_error "chezmoi apply failed – fix the dotfiles, then rerun the script."
         return 1
     fi
@@ -2047,1503 +2034,6 @@ install_ntn_cli() {
 
 # Install Portless CLI (Tailscale HTTPS tunnel helper)
 # Standalone installer shared verbatim with the other setup entry points.
-# Managed Muse profile: offline merge with an identified local-owner barrier.
-# 0 = saved/unchanged or expected defer; 1 = unverified safety or failed work.
-# The caller MUST skip later headless lifecycle when the defer flag is 1.
-# shellcheck disable=SC2034 # Output flag is consumed by the caller, not on WSL.
-configure_paseo_muse_profile() {
-    PASEO_MUSE_DEFER_DAEMON_SETUP=0
-    if ! command -v node &> /dev/null; then
-        PASEO_MUSE_DEFER_DAEMON_SETUP=1
-        print_warning "Paseo Muse failed: Node.js is unavailable. Rerun setup outside Paseo after installing Node.js."
-        return 1
-    fi
-    local result status=0 line verified=0 receipt="" invalid=0 completed=0 reported_failure=0 reported_defer=0
-    local failure_pattern='^Paseo Muse failed: (account-home-mismatch|ancestry-unverified|command-unverified|concurrent-config-change|custom-home-permissions-unverified|custom-home-unverified|desktop-owned|duplicate-json-key|file-changed|headless-control-not-authorized|interrupted|invalid-config|invalid-home-override|invalid-json|invalid-mode|invalid-profiles|invalid-service-state|launchd-state-unverified|linked-path|metadata-too-large|operation-failed|owner-still-present|owner-unverified|ownership-changed|permission-handles-unavailable|permission-path-changed|permission-recovery-owner-unverified|permission-recovery-private-home-required|permission-repair-unverified|pid-lock-changed|pid-lock-present|pid-metadata-unverified|pid-release-failed|pid-unverified|pid-write-failed|process-inventory-unverified|restart-pid-not-ready|restart-pid-pending|restore-owner-conflict|restore-unverified|self-hosted-setup|service-changed-before-restore|service-environment-unverified|service-home-mismatch|service-home-unverified|service-owner-unresolved|service-pid-mismatch|service-pid-unverified|service-restore-failed|service-state-unverified|stale-pid-lock|stopped-state-unverified|temporary-cleanup-failed|temporary-file-changed|unknown-owner|unknown-writer|unmanaged-service|unmanaged-wrapper|unsafe-file-type|unsafe-json-number|unsafe-owner-or-mode|unsupported-platform|windows-acl-unverified|writer-still-present)\.$'
-    local recovery_pattern='^Paseo Muse recovery failed: (temporary-cleanup-failed|pid-release-failed|service-restore-failed)\.$'
-    local defer_pattern='^Paseo Muse deferred: (desktop-owned|self-hosted-setup|headless-control-not-authorized|unsupported-platform)\.$'
-    local diagnostic_pattern='^Paseo Muse diagnostic: inventory-(scan|stat|status|cmdline|environ|cgroup|identity|disappearance|privileged): (EACCES|EPERM|ENOENT|ESRCH|EIO|EINVAL|ENOTDIR|ELOOP|EMFILE|ENFILE|invalid|changed|missing|unknown|unavailable)\.$'
-    local _mode="${1:-sync}"
-    result=$(HEADLESS="${HEADLESS:-}" PASEO_MACOS_HEADLESS_CANARY="${PASEO_MACOS_HEADLESS_CANARY:-}" \
-        PASEO_MUSE_GO_CHANGED="${PI_OPENCODE_GO_CHANGED:-0}" env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${_mode}" 2>/dev/null <<'PASEO_MUSE_PROFILE_JS'
-// BEGIN PASEO MUSE PROFILE
-// Paseo 0.8 AgentProfileSchema uses z.string() for IDs (not PluginIdSchema).
-// pid-lock.js reserves <home>/paseo.pid before starting its config-owning worker.
-// Do not replace this offline transaction with a live whole-array config patch.
-const fs = require('node:fs');
-const path = require('node:path');
-const os = require('node:os');
-const { spawnSync } = require('node:child_process');
-const { randomUUID } = require('node:crypto');
-const id = 'setup:pi:opencode-go:muse-spark-1.3-contributor';
-const core = {provider: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', thinkingOptionId: 'xhigh'};
-const marker = 'Managed by scowalt machine setup: headless-paseo-daemon';
-const service = 'paseo.service';
-const label = 'com.scowalt.paseo-daemon';
-const platform = process.platform;
-const uid = process.getuid?.() ?? 0;
-const headless = process.env.HEADLESS === '1';
-const refresh = process.env.PASEO_MUSE_GO_CHANGED === '1';
-const mode = process.argv[2] || 'sync';
-const verifyOnly = mode === 'verify-owner';
-const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
-const expectedDeferrals = new Set(['desktop-owned', 'self-hosted-setup', 'headless-control-not-authorized', 'unsupported-platform']);
-class Refusal extends Error { constructor(code, failed = !expectedDeferrals.has(code)) { super(code); this.code = code; this.failed = failed; } }
-const refuse = code => { throw new Refusal(code); };
-const fail = code => { throw new Refusal(code, true); };
-const maxSnapshotBytes = 4 * 1024 * 1024;
-const maxPidBytes = 64 * 1024;
-let home, logicalHome, paseoHome, configPath, pidPath, accountRoots, customHome;
-let heldLock = null, restore = null, temporary = null, interrupted = false;
-// This read-only exception exists only while proving a repairable Linux owner.
-// It is cleared before service control or profile writes; verify-owner stays read-only.
-let permissionInspection = null;
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => { interrupted = true; });
-const checkpoint = async () => { await new Promise(resolve => setImmediate(resolve)); if (interrupted) fail('interrupted'); };
-function stat(file) {
-    try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-}
-function same(a, b) { return a === null ? b === null : b !== null && a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs; }
-function rootDirectory(file) {
-    const s = stat(file);
-    return s && s.isDirectory() && !s.isSymbolicLink() && s.uid === 0 && !(s.mode & 0o022);
-}
-function trustedSystemHomeAlias() {
-    const s = stat('/home');
-    return platform === 'linux' && s?.isSymbolicLink() && s.uid === 0 &&
-        ['var/home', '/var/home'].includes(fs.readlinkSync('/home')) &&
-        ['/', '/var', '/var/home'].every(rootDirectory);
-}
-function checkedPath(file, directory = false) {
-    const absolute = path.resolve(file);
-    let current = path.parse(absolute).root;
-    const parts = absolute.slice(current.length).split(path.sep).filter(Boolean);
-    for (let n = 0; n < parts.length; n++) {
-        current = path.join(current, parts[n]);
-        const s = stat(current);
-        if (!s) continue;
-        if (s.isSymbolicLink()) {
-            // Only Bazzite's root-owned system alias; never a linked user/profile.
-            if (current === '/home' && trustedSystemHomeAlias()) continue;
-            fail('linked-path');
-        }
-        const dir = n < parts.length - 1 || directory;
-        if (dir ? !s.isDirectory() : !s.isFile() || s.nlink !== 1) fail('unsafe-file-type');
-        if ((current === home || current.startsWith(home + path.sep)) && platform !== 'win32' &&
-            (s.uid !== uid || (s.mode & 0o022))) {
-            if (s.uid !== uid || (s.mode & 0o002) || !permissionInspection?.allowed.has(current)) fail('unsafe-owner-or-mode');
-            // A writable native PID may only be inspected inside an already private home.
-            if (current === pidPath && (stat(paseoHome).mode & 0o077)) fail('permission-recovery-private-home-required');
-            const prior = permissionInspection.paths.get(current);
-            if (prior && !same(prior, s)) fail('permission-path-changed');
-            permissionInspection.paths.set(current, s);
-        }
-    }
-    return stat(absolute);
-}
-function beginPermissionInspection(pidOnly = false) {
-    if (verifyOnly || !headless || platform !== 'linux' || /microsoft/i.test(os.release()) || customHome) return;
-    const dirs = pidOnly ? [] : ['.config', '.config/systemd', '.config/systemd/user'].map(p => path.join(home, p));
-    permissionInspection = {allowed: new Set([...dirs, pidPath]), paths: new Map()};
-    // Preflight every candidate before repairing anything. No recursion, links,
-    // ownership changes, world-writable paths or user/custom home repairs.
-    for (const dir of dirs) checkedPath(dir, true);
-    checkedPath(pidPath);
-}
-function repairInspectedPermissions() {
-    const planned = permissionInspection?.paths;
-    if (!planned?.size) { permissionInspection = null; return; }
-    const handles = new Map();
-    try {
-        if (!fs.constants.O_NOFOLLOW || !fs.constants.O_DIRECTORY) fail('permission-handles-unavailable');
-        const directoryFlags = fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW;
-        const pin = (file, directory) => {
-            if (handles.has(file)) return handles.get(file);
-            const parent = file === home ? null : pin(path.dirname(file), true);
-            const before = checkedPath(file, directory);
-            if (!before || planned.has(file) && !same(planned.get(file), before)) fail('permission-path-changed');
-            // Linux descriptor-relative traversal: only the verified HOME spelling
-            // is opened by absolute path. Never follow a replaced ancestor.
-            const target = parent ? `/proc/self/fd/${parent.fd}/${path.basename(file)}` : file;
-            const fd = fs.openSync(target, directory ? directoryFlags : fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
-            const entry = {fd, s: before};
-            handles.set(file, entry);
-            if (!same(before, fs.fstatSync(fd)) || !same(before, stat(file))) fail('permission-path-changed');
-            return entry;
-        };
-        for (const file of planned.keys()) pin(file, file !== pidPath);
-        const unchanged = () => {
-            for (const [file, entry] of handles) {
-                if (!same(entry.s, fs.fstatSync(entry.fd)) || !same(entry.s, stat(file))) fail('permission-path-changed');
-            }
-        };
-        unchanged();
-        for (const file of planned.keys()) {
-            unchanged();
-            const entry = handles.get(file);
-            const nextMode = (entry.s.mode & 0o7777) & ~0o022;
-            fs.fchmodSync(entry.fd, nextMode);
-            const after = fs.fstatSync(entry.fd);
-            if (after.uid !== uid || after.dev !== entry.s.dev || after.ino !== entry.s.ino ||
-                (after.mode & 0o7777) !== nextMode) fail('permission-repair-unverified');
-            entry.s = after;
-        }
-        unchanged();
-        permissionInspection = null;
-        for (const file of planned.keys()) checkedPath(file, file !== pidPath);
-        console.log('PASEO_MUSE_PERMISSIONS_REPAIRED');
-    } finally {
-        permissionInspection = null;
-        for (const {fd} of handles.values()) fs.closeSync(fd);
-    }
-}
-function checkWindowsMetadataAcl(file) {
-    if (platform !== 'win32') return;
-    let current = path.resolve(file);
-    const relative = path.relative(home, current);
-    if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) fail('windows-acl-unverified');
-    const existing = [];
-    while (true) {
-        if (stat(current)) existing.push(current);
-        if (current === home) break;
-        const parent = path.dirname(current);
-        if (parent === current) fail('windows-acl-unverified');
-        current = parent;
-    }
-    // Include HOME even when the default directory/file does not exist yet.
-    // Repeat for every snapshot, including native PID and staged JSON metadata.
-    const command = String.raw`$ErrorActionPreference='Stop'
-$env:PSModulePath = "$PSHOME\Modules"
-try {
-    $owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    $trusted = @($owner.Value, 'S-1-5-18', 'S-1-5-32-544')
-    $paths = @($env:PASEO_MUSE_ACL_PATHS | ConvertFrom-Json)
-    if ($paths.Count -eq 0 -or $paths[-1] -ne $env:PASEO_MUSE_ACCOUNT_HOME) { throw 'unverified-boundary' }
-    $writes = [System.Security.AccessControl.FileSystemRights]'Write,Delete,DeleteSubdirectoriesAndFiles,ChangePermissions,TakeOwnership'
-    foreach ($current in $paths) {
-        $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
-        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'linked' }
-        $acl = Get-Acl -LiteralPath $current
-        $sddl = $acl.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access)
-        if (-not $sddl.StartsWith('D:') -or $sddl.Contains('NO_ACCESS_CONTROL')) { throw 'unverified-access' }
-        if ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -notin $trusted) { throw 'unverified-owner' }
-        foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
-            if ($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
-            if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -notin $trusted -and
-                ($rule.FileSystemRights -band $writes)) { throw 'unverified-writer' }
-        }
-    }
-    [Console]::Out.Write('ok')
-} catch { exit 1 }`;
-    const result = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], true,
-        {PASEO_MUSE_ACL_PATHS: JSON.stringify(existing), PASEO_MUSE_ACCOUNT_HOME: home});
-    if (result?.trim() !== 'ok') fail('windows-acl-unverified');
-}
-function snapshot(file) {
-    const s = checkedPath(file);
-    checkWindowsMetadataAcl(file);
-    if (!s) return {s: null, text: null};
-    const limit = file === pidPath ? maxPidBytes : maxSnapshotBytes;
-    if (!Number.isSafeInteger(s.size) || s.size < 0 || s.size > limit) fail('metadata-too-large');
-    // Nonblocking open prevents a FIFO replacement from hanging read-only inspection.
-    const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
-    try {
-        const opened = fs.fstatSync(fd);
-        if (!opened.isFile() || opened.nlink !== 1 || !same(s, opened)) fail('file-changed');
-        // Read at most the checked size plus one byte, even if a writer grows it.
-        const bytes = Buffer.alloc(s.size + 1);
-        let used = 0;
-        while (used < bytes.length) {
-            const count = fs.readSync(fd, bytes, used, bytes.length - used, null);
-            if (count === 0) break;
-            used += count;
-        }
-        if (used !== s.size || !same(s, fs.fstatSync(fd)) || !same(s, checkedPath(file))) fail('file-changed');
-        return {s, text: bytes.subarray(0, used).toString('utf8')};
-    } finally { fs.closeSync(fd); }
-}
-function json(snap) {
-    if (snap.text === null) return null;
-    // JSON.parse silently discards duplicate keys. Refuse that ambiguous input.
-    const text = snap.text;
-    let at = 0;
-    const space = () => { while (/\s/.test(text[at] || '') && at < text.length) at++; };
-    function string() {
-        const start = at++;
-        while (at < text.length) { if (text[at++] === '"') return JSON.parse(text.slice(start, at)); if (text[at - 1] === '\\') at++; }
-        throw new Error();
-    }
-    function value() {
-        space();
-        if (text[at] === '"') { string(); return; }
-        if (text[at] === '{' || text[at] === '[') {
-            const object = text[at++] === '{', end = object ? '}' : ']';
-            const keys = new Set();
-            space();
-            if (text[at] === end) { at++; return; }
-            do {
-                space();
-                if (object) {
-                    if (text[at] !== '"') throw new Error();
-                    const key = string();
-                    if (keys.has(key)) fail('duplicate-json-key');
-                    keys.add(key); space(); if (text[at++] !== ':') throw new Error();
-                }
-                value(); space();
-                if (text[at] === end) { at++; return; }
-            } while (text[at++] === ',');
-            throw new Error();
-        }
-        const token = text.slice(at).match(/^(?:true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/);
-        if (!token) throw new Error();
-        at += token[0].length;
-    }
-    try {
-        const parsed = JSON.parse(text, (_key, item) => {
-            if (typeof item === 'number' && (!Number.isFinite(item) || Number.isInteger(item) && !Number.isSafeInteger(item))) fail('unsafe-json-number');
-            return item;
-        });
-        value(); space(); if (at !== text.length) throw new Error(); return parsed;
-    } catch (error) { if (error instanceof Refusal) throw error; fail('invalid-json'); }
-}
-function merge(snap) {
-    const config = snap.text === null ? {} : json(snap);
-    if (!record(config) || ('daemon' in config && !record(config.daemon))) fail('invalid-config');
-    const daemon = config.daemon || {};
-    const profiles = daemon.agentProfiles === undefined ? [] : daemon.agentProfiles;
-    if (!Array.isArray(profiles)) fail('invalid-profiles');
-    const ids = new Set();
-    for (const p of profiles) {
-        if (!record(p) || typeof p.id !== 'string' || typeof p.name !== 'string' || typeof p.provider !== 'string' || ids.has(p.id)) fail('invalid-profiles');
-        ids.add(p.id);
-        for (const key of ['model', 'modeId', 'thinkingOptionId', 'icon', 'color', 'notes']) {
-            if (key in p && typeof p[key] !== 'string') fail('invalid-profiles');
-        }
-        if ('featureValues' in p && !record(p.featureValues)) fail('invalid-profiles');
-    }
-    const managed = profiles.find(p => p.id === id);
-    if (managed && Object.entries(core).every(([key, value]) => managed[key] === value)) return null;
-    // A same-name user profile is not setup-owned. ID is the only ownership key.
-    const next = managed ? profiles.map(p => p.id === id ? {...p, ...core} : p) :
-        [...profiles, {id, name: 'Muse 1.3 Contributor', ...core}];
-    return JSON.stringify({...config, daemon: {...daemon, agentProfiles: next}}, null, 2) + '\n';
-}
-function run(command, args, optional = false, env = {}) {
-    if (platform === 'win32' && command === 'powershell.exe') {
-        const at = args.indexOf('-Command');
-        if (at >= 0) args = args.map((arg, n) => n === at + 1 ? '$env:PSModulePath = "$PSHOME\\Modules"; ' + arg : arg);
-    }
-    const result = spawnSync(command, args, {encoding: 'utf8', timeout: 30000, maxBuffer: 8 * 1024 * 1024,
-        windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
-        env: {...process.env, ...env, HOME: logicalHome, PASEO_HOME: paseoHome}});
-    if (result.error || result.status !== 0) {
-        if (optional) return null;
-        refuse('command-unverified');
-    }
-    return result.stdout;
-}
-function systemctl(args) {
-    const env = {XDG_RUNTIME_DIR: `/run/user/${uid}`, DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/${uid}/bus`};
-    const direct = run('systemctl', ['--user', ...args], true, env);
-    if (direct !== null) return direct;
-    return run('systemctl', [`--machine=${os.userInfo().username}@`, '--user', ...args], false, env);
-}
-function properties(text) {
-    const result = {};
-    for (const line of text.trim().split('\n')) {
-        const at = line.indexOf('=');
-        if (at <= 0 || Object.hasOwn(result, line.slice(0, at))) refuse('invalid-service-state');
-        result[line.slice(0, at)] = line.slice(at + 1);
-    }
-    return result;
-}
-function serviceState() {
-    return properties(systemctl(['show', service, '--property=Id,LoadState,ActiveState,SubState,MainPID,FragmentPath,DropInPaths,NeedDaemonReload,ControlGroup,User,ExecStart,Environment,EnvironmentFiles,KillMode']));
-}
-function live(pid) {
-    try { process.kill(pid, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; refuse('pid-unverified'); }
-}
-function pidInfo() {
-    const snap = snapshot(pidPath);
-    if (!snap.s) return {snap, info: null};
-    const info = json(snap);
-    if (!record(info) || !Number.isInteger(info.pid) || info.pid <= 1 ||
-        info.hostname !== os.hostname() || info.uid !== uid || typeof info.startedAt !== 'string' ||
-        !Number.isFinite(Date.parse(info.startedAt)) || !(info.listen === null || typeof info.listen === 'string') ||
-        ('desktopManaged' in info && typeof info.desktopManaged !== 'boolean')) refuse('pid-metadata-unverified');
-    return {snap, info};
-}
-// Procfs directory ownership can change with dumpability; it is not a UID oracle.
-// Recheck start identity and credentials around reads, and never turn a denied
-// read into an empty environment or evidence that a possible writer is absent.
-function inventoryFailure(operation, detail = 'invalid') {
-    const error = new Refusal('process-inventory-unverified', true);
-    error.operation = operation;
-    error.detail = ['EACCES', 'EPERM', 'ENOENT', 'ESRCH', 'EIO', 'EINVAL', 'ENOTDIR', 'ELOOP', 'EMFILE', 'ENFILE',
-        'invalid', 'changed', 'missing'].includes(detail) ? detail : 'unknown';
-    throw error;
-}
-// Only an already identity-checked account-associated PID is eligible. No
-// process-name exceptions, sudo policy changes, files written or signals sent.
-const linuxProtectedProcessProgram = String.raw`
-import errno, json, os, stat, sys
-class Changed(Exception): pass
-def need(ok):
-    if not ok: raise ValueError()
-def main():
-    raw = sys.stdin.buffer.read(16385); need(len(raw) <= 16384)
-    request = json.loads(raw)
-    need(set(request) == {'schema', 'uid', 'pid', 'identity', 'cgroup'} and type(request['schema']) is int and request['schema'] == 1)
-    uid, pid, expected = request['uid'], request['pid'], request['identity']
-    need(type(uid) is int and 0 <= uid < 0xffffffff and type(pid) is int and pid > 1)
-    need(os.geteuid() == 0 and os.environ.get('SUDO_UID') == str(uid))
-    need(set(expected) == {'parent', 'start', 'uids', 'dead'} and not expected['dead'])
-    need(isinstance(request['cgroup'], str))
-    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
-    proc = os.open('/proc', flags | os.O_DIRECTORY)
-    try:
-        root = os.fstat(proc)
-        need(root.st_uid == 0 and not root.st_mode & 0o022)
-        directory = os.open(str(pid), flags | os.O_DIRECTORY, dir_fd=proc)
-        try:
-            pinned = os.fstat(directory)
-            def unchanged_directory():
-                current = os.stat(str(pid), dir_fd=proc, follow_symlinks=False)
-                if (current.st_dev, current.st_ino) != (pinned.st_dev, pinned.st_ino): raise Changed()
-            def read(name, limit):
-                fd = os.open(name, flags, dir_fd=directory)
-                try:
-                    need(stat.S_ISREG(os.fstat(fd).st_mode))
-                    parts, size = [], 0
-                    while size <= limit:
-                        part = os.read(fd, min(65536, limit + 1 - size))
-                        if not part: break
-                        parts.append(part); size += len(part)
-                    need(size <= limit)
-                    return b''.join(parts).decode('utf-8')
-                finally: os.close(fd)
-            def identity():
-                raw = read('stat', 65536)
-                end = raw.rfind(')'); fields = raw[end + 2:].split()
-                need(raw.startswith(str(pid) + ' (') and end > 0 and raw[end + 1:end + 2] == ' ' and len(fields) >= 20)
-                need(fields[0] in 'RSDZTWtXxKWPIN' and fields[1].isdigit() and fields[19].isdigit())
-                status = read('status', 131072).splitlines()
-                def values(key, count):
-                    lines = [line.split(':', 1)[1].split() for line in status if line.startswith(key + ':')]
-                    need(len(lines) == 1 and len(lines[0]) == count and all(v.isascii() and v.isdigit() for v in lines[0]))
-                    return list(map(int, lines[0]))
-                uids = values('Uid', 4); gids = values('Gid', 4)
-                need(all(v < 0xffffffff for v in uids + gids))
-                parent = int(fields[1])
-                need(values('Pid', 1) == [pid] and values('PPid', 1) == [parent])
-                return {'parent': parent, 'start': fields[19], 'uids': uids, 'dead': fields[0] in 'ZXx'}, gids
-            before, gids = identity()
-            if before != expected: raise Changed()
-            need(before['uids'][0] == uid and not before['dead'])
-            unchanged_directory()
-            group = read('cgroup', 65536)
-            if group != request['cgroup']: raise Changed()
-            command = read('cmdline', 1048576)
-            def selected_environment():
-                selected = {}
-                for item in read('environ', 4194304).split('\0'):
-                    key, separator, value = item.partition('=')
-                    if separator and key in {'HOME', 'PASEO_HOME', 'PASEO_DESKTOP_MANAGED'}:
-                        need(key not in selected and len(value) <= 16384)
-                        selected[key] = value
-                return selected
-            environment = selected_environment()
-            # These fields can change without PID reuse; never merge two images.
-            if selected_environment() != environment or read('cmdline', 1048576) != command or read('cgroup', 65536) != group: raise Changed()
-            if identity() != (before, gids): raise Changed()
-            unchanged_directory()
-            return {'schema': 1, 'identity': before, 'cgroup': group, 'command': command, 'env': environment}
-        finally: os.close(directory)
-    finally: os.close(proc)
-try:
-    print(json.dumps(main(), ensure_ascii=True, separators=(',', ':')))
-except Exception as error:
-    detail = 'changed' if isinstance(error, Changed) else errno.errorcode.get(getattr(error, 'errno', None), 'invalid')
-    if detail not in {'changed', 'invalid', 'EACCES', 'EPERM', 'ENOENT', 'ESRCH', 'EIO', 'EINVAL', 'ENOTDIR', 'ELOOP', 'EMFILE', 'ENFILE'}: detail = 'unknown'
-    print(json.dumps({'schema': 1, 'error': detail}, separators=(',', ':')))
-    sys.exit(1)
-`;
-function protectedLinuxProcess(pid, identity, cgroup) {
-    // A saved/effective/fs UID association still matters to writer safety, but
-    // does not authorize privileged reads of another account's real-UID process.
-    if (identity.uids[0] !== uid) return {detail: 'EPERM'};
-    let result;
-    try {
-        result = spawnSync('/usr/bin/sudo', ['-n', '--', '/usr/bin/python3', '-I', '-S', '-c', linuxProtectedProcessProgram], {
-            input: JSON.stringify({schema: 1, uid, pid, identity, cgroup}),
-            env: {PATH: '/usr/bin:/bin', LANG: 'C.UTF-8'}, cwd: '/', encoding: 'utf8',
-            timeout: 5000, maxBuffer: 8 * 1024 * 1024, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']});
-        if (result.error) return {detail: 'unavailable'};
-        const receipt = JSON.parse(result.stdout);
-        const keys = (value, expected) => record(value) && Object.keys(value).sort().join(',') === expected;
-        if (result.status !== 0) {
-            const allowed = ['changed', 'invalid', 'EACCES', 'EPERM', 'ENOENT', 'ESRCH', 'EIO', 'EINVAL', 'ENOTDIR', 'ELOOP', 'EMFILE', 'ENFILE', 'unknown'];
-            return {detail: keys(receipt, 'error,schema') && receipt.schema === 1 && allowed.includes(receipt.error) ? receipt.error : 'unavailable'};
-        }
-        if (!keys(receipt, 'cgroup,command,env,identity,schema') || receipt.schema !== 1 || typeof receipt.command !== 'string' ||
-            !record(receipt.env) || Object.entries(receipt.env).some(([k,v]) => !['HOME', 'PASEO_HOME', 'PASEO_DESKTOP_MANAGED'].includes(k) || typeof v !== 'string' || v.includes('\0') || v.length > 16384)) return {detail: 'invalid'};
-        if (JSON.stringify(receipt.identity) !== JSON.stringify(identity) || receipt.cgroup !== cgroup) return {detail: 'changed'};
-        return {receipt};
-    } catch { return {detail: result?.status === 0 ? 'invalid' : 'unavailable'}; }
-}
-function linuxProcess(pid) {
-    const dir = `/proc/${pid}`;
-    let operation = 'inventory-stat';
-    const read = name => { operation = `inventory-${name}`; return fs.readFileSync(`${dir}/${name}`, 'utf8'); };
-    const identity = () => {
-        const raw = read('stat');
-        const end = raw.lastIndexOf(')');
-        const fields = raw.slice(end + 2).trim().split(/\s+/);
-        if (!raw.startsWith(`${pid} (`) || end < 0 || raw[end + 1] !== ' ' || fields.length < 20 ||
-            !/^[RSDZTWtXxKWPIN]$/.test(fields[0]) || !/^\d+$/.test(fields[1]) || !/^\d+$/.test(fields[19])) inventoryFailure(operation);
-        const parent = Number(fields[1]);
-        if (!Number.isSafeInteger(parent) || parent < 0) inventoryFailure(operation);
-        const status = read('status');
-        const value = (name, count) => {
-            const lines = status.split('\n').filter(line => line.startsWith(name + ':'));
-            if (lines.length !== 1) inventoryFailure(operation);
-            const values = lines[0].slice(name.length + 1).trim().split(/\s+/);
-            if (values.length !== count || values.some(v => !/^\d+$/.test(v) || !Number.isSafeInteger(Number(v)))) inventoryFailure(operation);
-            return values.map(Number);
-        };
-        const uids = value('Uid', 4);
-        if (uids.some(value => value >= 0xffffffff)) inventoryFailure(operation);
-        if (value('Pid', 1)[0] !== pid || value('PPid', 1)[0] !== parent) inventoryFailure('inventory-identity', 'changed');
-        return {parent, start: fields[19], uids, dead: ['Z', 'X', 'x'].includes(fields[0])};
-    };
-    try {
-        const before = identity();
-        const owned = before.uids.includes(uid);
-        // Keep service-group evidence even for foreign processes. Owner checks
-        // must reject foreign participants rather than silently excluding them.
-        const cgroup = read('cgroup');
-        let protectedReceipt = null;
-        const sensitive = name => {
-            try { return read(name); } catch (error) {
-                if (!['EACCES', 'EPERM'].includes(error.code)) throw error;
-                if (!protectedReceipt) {
-                    const result = protectedLinuxProcess(pid, before, cgroup);
-                    if (!result.receipt) {
-                        if (['ENOENT', 'ESRCH'].includes(result.detail)) throw Object.assign(new Error(), {code: result.detail});
-                        try { inventoryFailure(`inventory-${name}`, error.code); }
-                        catch (failure) { failure.privileged = result.detail; throw failure; }
-                    }
-                    protectedReceipt = result.receipt;
-                }
-                return name === 'cmdline' ? protectedReceipt.command :
-                    Object.entries(protectedReceipt.env).map(([k,v]) => `${k}=${v}`).join('\0');
-            }
-        };
-        const command = owned && !before.dead ? sensitive('cmdline').replace(/\0/g, ' ') : '';
-        const env = owned && !before.dead ? Object.fromEntries(sensitive('environ').split('\0').filter(v => v.includes('='))
-            .map(v => [v.slice(0, v.indexOf('=')), v.slice(v.indexOf('=') + 1)])) : {};
-        const after = identity();
-        if (JSON.stringify(before) !== JSON.stringify(after) || protectedReceipt &&
-            (command !== protectedReceipt.command.replace(/\0/g, ' ') || read('cgroup') !== protectedReceipt.cgroup)) inventoryFailure('inventory-identity', 'changed');
-        return {pid, ...before, command, env, cgroup, owned};
-    } catch (error) {
-        if (error instanceof Refusal) throw error;
-        if (error.code === 'ENOENT' || error.code === 'ESRCH') {
-            // hidepid or a missing field is not proof of exit. A reused/live PID
-            // remains a refusal; only ESRCH positively establishes disappearance.
-            try { process.kill(pid, 0); }
-            catch (probe) {
-                if (probe.code === 'ESRCH') return null;
-                inventoryFailure('inventory-disappearance', probe.code);
-            }
-        }
-        inventoryFailure(operation, error.code);
-    }
-}
-function inventory() {
-    const processes = [];
-    if (platform === 'linux') {
-        let entries;
-        try { entries = fs.readdirSync('/proc'); } catch (error) { inventoryFailure('inventory-scan', error.code); }
-        for (const entry of entries) {
-            if (!/^\d+$/.test(entry)) continue;
-            const pid = Number(entry);
-            if (!Number.isSafeInteger(pid) || pid <= 0) inventoryFailure('inventory-identity');
-            const row = linuxProcess(pid);
-            if (row) processes.push(row);
-        }
-    } else if (platform === 'darwin') {
-        const text = run('ps', ['-axww', '-o', 'pid=,ppid=,uid=,command=']);
-        for (const line of text.trim().split('\n')) {
-            const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
-            if (!match) refuse('process-inventory-unverified');
-            processes.push({pid: Number(match[1]), parent: Number(match[2]), command: match[4], owned: Number(match[3]) === uid});
-        }
-    } else if (platform === 'win32') {
-        const text = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-            '$ErrorActionPreference="Stop"; @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine) | ConvertTo-Json -Compress']);
-        let rows;
-        try { rows = JSON.parse(text); } catch { refuse('process-inventory-unverified'); }
-        if (!Array.isArray(rows)) refuse('process-inventory-unverified');
-        for (const row of rows) {
-            if (!Number.isInteger(row.ProcessId) || !Number.isInteger(row.ParentProcessId)) refuse('process-inventory-unverified');
-            processes.push({pid: row.ProcessId, parent: row.ParentProcessId,
-                command: `${row.Name || ''} ${row.ExecutablePath || ''} ${row.CommandLine || ''}`});
-        }
-    } else refuse('unsupported-platform');
-    if (!processes.some(p => p.pid === process.pid)) refuse('process-inventory-unverified');
-    verifySetupAncestry(processes);
-    return processes;
-}
-function descends(pid, parent, rows) {
-    const seen = new Set();
-    while (pid > 1 && !seen.has(pid)) {
-        if (pid === parent) return true;
-        seen.add(pid);
-        const p = rows.find(row => row.pid === pid);
-        if (!p) return false;
-        pid = p.parent;
-    }
-    return false;
-}
-function verifySetupAncestry(rows) {
-    let pid = process.pid;
-    const seen = new Set();
-    while (pid > 1) {
-        if (seen.has(pid)) refuse('ancestry-unverified');
-        seen.add(pid);
-        const row = rows.find(p => p.pid === pid);
-        if (!row || !Number.isInteger(row.parent) || row.parent < 0) refuse('ancestry-unverified');
-        pid = row.parent;
-    }
-}
-function inGroup(p, group) {
-    return !!group && (p.cgroup || '').split('\n').some(line => {
-        const value = line.slice(line.indexOf(':', line.indexOf(':') + 1) + 1);
-        return value === group || value.startsWith(group + '/');
-    });
-}
-function serviceMember(p) {
-    // Even without a native PID file, a process in this account's Paseo service
-    // cannot be excluded as unrelated solely because its credentials changed.
-    return (p.cgroup || '').split('\n').some(line => {
-        const value = line.slice(line.indexOf(':', line.indexOf(':') + 1) + 1);
-        return value.startsWith(`/user.slice/user-${uid}.slice/`) && value.split('/').includes(service);
-    });
-}
-function candidates(rows) {
-    return rows.filter(p => !p.dead && p.pid !== process.pid && (serviceMember(p) || p.owned !== false && (
-        /(?:@getpaseo[\\/]|paseo(?:\.exe|\.app|[\\/\s]|$)|supervisor-entrypoint|daemon-worker|node-entrypoint-runner)/i.test(p.command) ||
-        p.env?.PASEO_DESKTOP_MANAGED === '1' ||
-        (p.env?.PASEO_HOME && samePaseoHome(p.env.PASEO_HOME) && !descends(process.pid, p.pid, rows)))));
-}
-function ensureNoWriters(owner = null) {
-    const rows = inventory();
-    if (candidates(rows).length || (owner && rows.some(p => !p.dead && (inGroup(p, owner.group) || descends(p.pid, owner.pid, rows))))) refuse('writer-still-present');
-    if (owner && live(owner.pid)) refuse('owner-still-present');
-    return rows;
-}
-function checkWrapper() {
-    const file = path.join(home, '.local/bin/paseo-daemon-start');
-    const snap = snapshot(file);
-    const lines = snap.text?.trimEnd().split('\n');
-    // Accept the exact legacy shape and the new restrictive launch shape only.
-    if (lines?.length === 10 && lines[3] === 'umask 077') lines.splice(3, 1);
-    // Match setup's shell-quoted HOME without executing the wrapper or sourcing it.
-    const quoted = "'" + logicalHome.replace(/'/g, "'\\''") + "'";
-    const exec = lines?.at(-1)?.match(/^exec ('[^'\r\n]+') daemon start --foreground --listen '[^'\r\n]+'$/);
-    if (!lines || ![8, 9].includes(lines.length) || lines[0] !== '#!/bin/bash' || lines[1] !== `# ${marker}` ||
-        lines[2] !== 'set -euo pipefail' || lines[3] !== `export HOME=${quoted}` ||
-        !/^export PATH='[^'\r\n]*'$/.test(lines[4]) ||
-        !/^\[\[ -x '[^'\r\n]+' \]\] \|\| exit 127$/.test(lines[5]) ||
-        !exec || lines[6] !== `[[ -x ${exec[1]} ]] || exit 127` ||
-        lines.length === 9 && lines[7] !== `export PASEO_SETUP_CLI=${exec[1]}`) refuse('unmanaged-wrapper');
-    return {file, snap};
-}
-function sameHome(value) { return accountRoots.includes(value); }
-function accountPath(value) {
-    if (typeof value !== 'string' || !path.isAbsolute(value) || value.includes('\0') || value.split(path.sep).includes('..')) return null;
-    const absolute = path.resolve(value);
-    for (const root of accountRoots) {
-        const relative = path.relative(root, absolute);
-        if (relative && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)) return path.join(home, relative);
-    }
-    return null;
-}
-function samePaseoHome(value) { return accountPath(value) === paseoHome; }
-function daemonHomeMatches(value) {
-    // Upstream treats an explicitly empty PASEO_HOME as cwd, not as unset.
-    return value === undefined ? !customHome : samePaseoHome(value);
-}
-function checkCustomHome() {
-    if (!customHome) return;
-    const s = checkedPath(paseoHome, true);
-    // Only pre-existing, private custom directories have an established boundary.
-    if (!s) refuse('custom-home-unverified');
-    if (platform !== 'win32') {
-        if (s.uid !== uid || (s.mode & 0o077)) refuse('custom-home-permissions-unverified');
-        return;
-    }
-    const command = `$ErrorActionPreference='Stop';
-$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$trusted = @($sid, 'S-1-5-18', 'S-1-5-32-544')
-$directory = $env:PASEO_HOME
-while ($true) {
-    $acl = Get-Acl -LiteralPath $directory
-    if ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid) { throw 'unverified-owner' }
-    foreach ($rule in $acl.Access) {
-        if ($rule.AccessControlType -ne 'Allow') { continue }
-        $identity = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
-        if ($identity -in $trusted) { continue }
-        $writes = [System.Security.AccessControl.FileSystemRights]'Write,Delete,DeleteSubdirectoriesAndFiles,ChangePermissions,TakeOwnership'
-        if ($directory -eq $env:PASEO_HOME -or ($rule.FileSystemRights -band $writes)) { throw 'unverified-access' }
-    }
-    if ($directory -eq $env:PASEO_MUSE_ACCOUNT_HOME) { break }
-    $parent = [System.IO.Path]::GetDirectoryName($directory)
-    if (-not $parent -or $parent -eq $directory) { throw 'unverified-boundary' }
-    $directory = $parent
-}`;
-    if (run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], true,
-        {PASEO_MUSE_ACCOUNT_HOME: home}) === null) refuse('custom-home-permissions-unverified');
-}
-function verifyOwnerProcess(info, mainPid, group, rows) {
-    if (info.desktopManaged) refuse('desktop-owned');
-    if (!descends(info.pid, mainPid, rows)) refuse('service-pid-mismatch');
-    if (process.env.PASEO_AGENT_ID || descends(process.pid, mainPid, rows) ||
-        rows.some(p => p.pid === process.pid && inGroup(p, group))) refuse('self-hosted-setup');
-    if (candidates(rows).some(p => !descends(p.pid, mainPid, rows))) refuse('unknown-writer');
-    const owner = rows.find(p => p.pid === info.pid);
-    if (!owner || owner.owned === false || owner.dead || rows.some(p => !p.dead && p.owned === false &&
-        (descends(p.pid, mainPid, rows) || inGroup(p, group)))) refuse('owner-unverified');
-    if (platform === 'linux') {
-        if (!inGroup(owner, group) || !sameHome(owner.env?.HOME) ||
-            !daemonHomeMatches(owner.env?.PASEO_HOME)) refuse('service-home-mismatch');
-    } else {
-        // ps supplies the actual owner's environment; don't trust only the plist.
-        if (/\s/.test(logicalHome) || /\s/.test(paseoHome)) refuse('service-home-unverified');
-        const env = run('ps', ['eww', '-p', String(info.pid), '-o', 'command=']);
-        const account = [...env.matchAll(/(?:^|\s)HOME=([^\s]*)/g)];
-        const overrides = [...env.matchAll(/(?:^|\s)PASEO_HOME=([^\s]*)/g)];
-        if (account.length !== 1 || !sameHome(account[0][1]) || overrides.length > 1 ||
-            !daemonHomeMatches(overrides[0]?.[1])) refuse('service-home-mismatch');
-    }
-}
-function safeToRestore() {
-    // A new owner must not be masked by starting a replacement supervisor.
-    if (snapshot(pidPath).s) fail('restore-owner-conflict');
-    ensureNoWriters();
-}
-function linuxManagerHome() {
-    const environment = systemctl(['show-environment']);
-    const overrides = environment.split('\n').filter(line => line.startsWith('PASEO_HOME='));
-    if (overrides.length > 1 || !daemonHomeMatches(overrides[0]?.slice('PASEO_HOME='.length))) refuse('service-home-mismatch');
-}
-function linuxOwner(info, rows) {
-    if (!headless || /microsoft/i.test(os.release())) refuse('headless-control-not-authorized');
-    const file = path.join(home, '.config/systemd/user', service);
-    const unit = snapshot(file), wrapper = checkWrapper();
-    // Disallow user edits, extra directives, drop-ins and a stale loaded definition.
-    const expected = `# ${marker}\n[Unit]\nDescription=Paseo headless daemon\nDocumentation=https://www.getpaseo.com/\n\n[Service]\nType=simple\nExecStart=${logicalHome}/.local/bin/paseo-daemon-start\nWorkingDirectory=${logicalHome}\nEnvironment=HOME=${logicalHome}\nEnvironment=PATH=`;
-    const tail = '\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n';
-    if (!unit.text?.startsWith(expected) || !unit.text.endsWith(tail) || unit.text.slice(expected.length, -tail.length).includes('\n')) refuse('unmanaged-service');
-    const state = serviceState();
-    if (state.Id !== service || state.LoadState !== 'loaded' || state.ActiveState !== 'active' || state.SubState !== 'running' ||
-        state.FragmentPath !== path.join(logicalHome, '.config/systemd/user', service) || state.DropInPaths !== '' ||
-        state.NeedDaemonReload !== 'no' || state.EnvironmentFiles !== '' || !['', os.userInfo().username].includes(state.User) ||
-        state.KillMode !== 'control-group' || !state.ControlGroup?.startsWith(`/user.slice/user-${uid}.slice/`) ||
-        !state.ExecStart?.includes(`path=${logicalHome}/.local/bin/paseo-daemon-start ;`) ||
-        !state.Environment?.includes(`HOME=${logicalHome}`)) refuse('service-state-unverified');
-    linuxManagerHome();
-    const pid = Number(state.MainPID);
-    if (!Number.isInteger(pid) || pid <= 1) refuse('service-pid-unverified');
-    verifyOwnerProcess(info, pid, state.ControlGroup, rows);
-    return {pid, group: state.ControlGroup, file, unit, wrapper,
-        stop() { systemctl(['stop', service]); },
-        stopped() { const s = serviceState(); if (s.ActiveState !== 'inactive' || s.SubState !== 'dead' || s.MainPID !== '0') refuse('stopped-state-unverified'); },
-        start() {
-            const before = serviceState();
-            if (before.ActiveState === 'active' && before.SubState === 'running' && Number(before.MainPID) === pid) return;
-            safeToRestore(); linuxManagerHome(); systemctl(['start', service]);
-            const s = serviceState();
-            if (s.ActiveState !== 'active' || s.SubState !== 'running' || Number(s.MainPID) <= 1) fail('restore-unverified');
-        }};
-}
-async function finishRestoredPermissions(owner) {
-    if (platform !== 'linux' || customHome) return;
-    // Type=simple can report active before the native PID exists or is fully
-    // written. Do not let that race bypass the strict later ownership preflight.
-    for (let attempt = 0; attempt < 50; attempt++) {
-        try {
-            beginPermissionInspection(true);
-            const restarted = pidInfo();
-            if (!restarted.info) refuse('restart-pid-pending');
-            if (!live(restarted.info.pid)) refuse('pid-unverified');
-            const verified = linuxOwner(restarted.info, inventory());
-            if (!same(owner.unit.s, verified.unit.s) || !same(owner.wrapper.snap.s, verified.wrapper.snap.s)) refuse('ownership-changed');
-            if (snapshot(pidPath).text !== restarted.snap.text) fail('file-changed');
-            repairInspectedPermissions();
-            if (snapshot(pidPath).text !== restarted.snap.text) fail('file-changed');
-            return;
-        } catch (error) {
-            const pending = error instanceof Refusal && ['restart-pid-pending', 'invalid-json', 'file-changed', 'permission-path-changed'].includes(error.code);
-            if (!pending && error.code !== 'ENOENT') throw error;
-        } finally { permissionInspection = null; }
-        await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    fail('restart-pid-not-ready');
-}
-function launchList() {
-    const text = run('sudo', ['-n', 'launchctl', 'list']);
-    const rows = text.trim().split('\n');
-    if (!/^PID\s+Status\s+Label$/.test(rows.shift())) refuse('launchd-state-unverified');
-    return rows.map(line => { const m = line.match(/^(\d+|-)\s+(-?\d+)\s+(\S+)$/); if (!m) refuse('launchd-state-unverified'); return {pid: m[1] === '-' ? 0 : Number(m[1]), label: m[3]}; });
-}
-function macManagerHome() {
-    const domain = run('sudo', ['-n', 'launchctl', 'print', 'system']);
-    const environment = domain.match(/\benvironment = \{([^}]*?)\}/);
-    if (!environment) refuse('service-environment-unverified');
-    const overrides = environment[1].split('\n').map(line => line.trim()).filter(line => /^PASEO_HOME\s+=>/.test(line));
-    if (overrides.length > 1 || !daemonHomeMatches(overrides[0]?.replace(/^PASEO_HOME\s+=>\s*/, ''))) refuse('service-home-mismatch');
-}
-function macOwner(info, rows) {
-    if (!headless || process.env.PASEO_MACOS_HEADLESS_CANARY !== '1') refuse('headless-control-not-authorized');
-    const file = `/Library/LaunchDaemons/${label}.plist`;
-    const unit = snapshot(file), wrapper = checkWrapper();
-    if (!['/', '/Library', '/Library/LaunchDaemons'].every(rootDirectory) || !unit.s || unit.s.uid !== 0 ||
-        unit.s.mode & 0o022 || !unit.text.includes(`<!-- ${marker} -->`)) refuse('unmanaged-service');
-    let plist;
-    try { plist = JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', file])); } catch (error) { if (error instanceof Refusal) throw error; refuse('invalid-service-state'); }
-    if (plist.Label !== label || plist.UserName !== os.userInfo().username || plist.WorkingDirectory !== logicalHome ||
-        JSON.stringify(plist.ProgramArguments) !== JSON.stringify([path.join(logicalHome, '.local/bin/paseo-daemon-start')]) ||
-        plist.EnvironmentVariables?.HOME !== logicalHome || typeof plist.EnvironmentVariables?.PATH !== 'string' ||
-        Object.keys(plist.EnvironmentVariables).some(key => !['HOME', 'PATH'].includes(key)) ||
-        plist.RunAtLoad !== true || plist.KeepAlive !== true ||
-        Object.keys(plist).some(key => !['Label', 'UserName', 'ProgramArguments', 'WorkingDirectory', 'EnvironmentVariables', 'RunAtLoad', 'KeepAlive'].includes(key))) refuse('service-state-unverified');
-    const entry = launchList().find(p => p.label === label);
-    if (!entry || entry.pid <= 1) refuse('service-pid-unverified');
-    const printed = run('sudo', ['-n', 'launchctl', 'print', `system/${label}`]);
-    if (!printed.includes(`path = ${file}\n`) || !printed.includes(`program = ${logicalHome}/.local/bin/paseo-daemon-start\n`)) refuse('service-state-unverified');
-    verifyOwnerProcess(info, entry.pid, null, rows);
-    macManagerHome();
-    return {pid: entry.pid, group: null, file, unit, wrapper,
-        stop() { run('sudo', ['-n', 'launchctl', 'bootout', `system/${label}`]); },
-        stopped() { if (launchList().some(p => p.label === label)) refuse('stopped-state-unverified'); },
-        start() {
-            const loaded = launchList().find(p => p.label === label);
-            if (loaded?.pid === entry.pid) return;
-            if (loaded) fail('restore-owner-conflict');
-            safeToRestore(); macManagerHome(); run('sudo', ['-n', 'launchctl', 'bootstrap', 'system', file]);
-            if (!launchList().some(p => p.label === label && p.pid > 1)) fail('restore-unverified');
-        }};
-}
-function reservePid() {
-    // Never unlink a stale/foreign native lock: its owner may be racing startup.
-    if (snapshot(pidPath).s) refuse('pid-lock-present');
-    const text = JSON.stringify({pid: process.pid, startedAt: new Date().toISOString(), hostname: os.hostname(), uid, listen: null, heartbeat: true});
-    const fd = fs.openSync(pidPath, 'wx', 0o600);
-    heldLock = {fd, text, initial: fs.fstatSync(fd)};
-    fs.writeFileSync(fd, text);
-    fs.fsyncSync(fd);
-    heldLock.s = fs.fstatSync(fd);
-}
-function releasePid() {
-    if (!heldLock) return;
-    const held = heldLock;
-    heldLock = null;
-    try {
-        const current = snapshot(pidPath);
-        // A failed initial write still owns this inode; remove only our partial lock.
-        if (!current.s || held.initial.dev !== current.s.dev || held.initial.ino !== current.s.ino ||
-            !same(fs.fstatSync(held.fd), current.s) || (held.s && current.text !== held.text)) fail('pid-lock-changed');
-        fs.unlinkSync(pidPath);
-    } finally { fs.closeSync(held.fd); }
-}
-function secureTemporary(file, existing) {
-    if (platform !== 'win32') return;
-    const command = `$ErrorActionPreference='Stop';
-if ($env:PASEO_MUSE_EXISTING -eq '1') { $acl = Get-Acl -LiteralPath $env:PASEO_MUSE_CONFIG }
-else {
-    $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-    $acl = New-Object System.Security.AccessControl.FileSecurity
-    $acl.SetOwner($sid)
-    $acl.SetAccessRuleProtection($true, $false)
-    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')))
-    $system = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-18')
-    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, 'FullControl', 'Allow')))
-}
-Set-Acl -LiteralPath $env:PASEO_MUSE_TEMP -AclObject $acl`;
-    run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], false,
-        {PASEO_MUSE_EXISTING: existing ? '1' : '0', PASEO_MUSE_CONFIG: configPath, PASEO_MUSE_TEMP: file});
-}
-function lockUnchanged() {
-    const current = snapshot(pidPath);
-    if (!heldLock || !same(heldLock.s, current.s) || current.text !== heldLock.text) fail('pid-lock-changed');
-}
-async function main() {
-    if (!['sync', 'verify-owner'].includes(mode)) fail('invalid-mode');
-    logicalHome = path.resolve(os.homedir());
-    // HOME is trusted only for the effective account, not an arbitrary profile link.
-    const accountHome = path.resolve(os.userInfo().homedir);
-    if (fs.realpathSync(logicalHome) !== fs.realpathSync(accountHome)) refuse('account-home-mismatch');
-    home = fs.realpathSync(logicalHome);
-    checkedPath(logicalHome, true);
-    checkedPath(home, true);
-    accountRoots = [...new Set([home, logicalHome])];
-    if (platform === 'linux' && home.startsWith('/var/home/') && trustedSystemHomeAlias()) {
-        accountRoots.push(path.join('/home', path.relative('/var/home', home)));
-    }
-    const requested = process.env.PASEO_HOME;
-    if (requested !== undefined && (requested === '' || !path.isAbsolute(requested))) refuse('invalid-home-override');
-    paseoHome = requested === undefined ? path.join(home, '.paseo') : accountPath(requested);
-    if (!paseoHome) refuse('custom-home-unverified');
-    // Validate the supplied spelling too; only the trusted account aliases map.
-    if (requested !== undefined) checkedPath(requested, true);
-    customHome = paseoHome !== path.join(home, '.paseo');
-    configPath = path.join(paseoHome, 'config.json');
-    pidPath = path.join(paseoHome, 'paseo.pid');
-    checkedPath(paseoHome, true);
-    checkCustomHome();
-    if (customHome) {
-        // The later legacy service installer assumes the default home. It must
-        // not undo this transaction's verified custom-home owner selection.
-        console.log('PASEO_MUSE_DEFER_DAEMON_SETUP=1');
-        console.log('Paseo Muse custom home: later managed-daemon setup is skipped. Keep this owner\'s launch environment and update that owner separately.');
-        if (verifyOnly) return;
-    }
-    if (verifyOnly && (!headless || !['linux', 'darwin'].includes(platform) ||
-        platform === 'linux' && /microsoft/i.test(os.release()) ||
-        platform === 'darwin' && process.env.PASEO_MACOS_HEADLESS_CANARY !== '1')) refuse('headless-control-not-authorized');
-    let unchanged = false;
-    if (!verifyOnly) {
-        const initial = snapshot(configPath);
-        unchanged = merge(initial) === null && !refresh;
-        beginPermissionInspection();
-        if (unchanged && !permissionInspection?.paths.size) {
-            permissionInspection = null;
-            console.log('PASEO_MUSE_UNCHANGED'); return;
-        }
-    }
-    if (process.env.PASEO_AGENT_ID) refuse('self-hosted-setup');
-    const existing = pidInfo();
-    const rows = inventory();
-    let owner = null;
-    if (existing.info) {
-        if (!live(existing.info.pid)) refuse('stale-pid-lock');
-        if (existing.info.desktopManaged) refuse('desktop-owned');
-        owner = platform === 'linux' ? linuxOwner(existing.info, rows) : platform === 'darwin' ? macOwner(existing.info, rows) : null;
-        if (!owner) refuse('unknown-owner');
-        if (!same(existing.snap.s, snapshot(pidPath).s) || !same(owner.unit.s, snapshot(owner.file).s) ||
-            !same(owner.wrapper.snap.s, snapshot(owner.wrapper.file).s)) refuse('ownership-changed');
-    } else if (candidates(rows).length) refuse('unknown-writer');
-    if (permissionInspection?.paths.size) {
-        // No chmod until PID, process ancestry, exact wrapper/unit, loaded service,
-        // home selection and lack of drop-ins/other writers all agree on the owner.
-        if (!owner) refuse('permission-recovery-owner-unverified');
-        repairInspectedPermissions();
-        const secured = pidInfo();
-        if (secured.snap.text !== existing.snap.text) fail('permission-path-changed');
-        existing.snap = secured.snap;
-        const verified = linuxOwner(secured.info, inventory());
-        if (verified.pid !== owner.pid || !same(owner.unit.s, verified.unit.s) ||
-            !same(owner.wrapper.snap.s, verified.wrapper.snap.s)) refuse('ownership-changed');
-    } else permissionInspection = null;
-    if (unchanged) { console.log('PASEO_MUSE_UNCHANGED'); return; }
-    // This read-only preflight must not depend on whether the profile needs a merge.
-    // The caller retains the existing lifecycle implementation; no locks or files here.
-    if (verifyOnly) {
-        // A missing PID file is not evidence that the native service stopped.
-        if (!existing.info) {
-            if (platform === 'linux') {
-                const state = serviceState();
-                const stopped = state.ActiveState === 'inactive' && state.SubState === 'dead' ||
-                    state.ActiveState === 'failed' && state.SubState === 'failed';
-                if (!['loaded', 'not-found'].includes(state.LoadState) || !stopped || state.MainPID !== '0' ||
-                    rows.some(row => inGroup(row, state.ControlGroup))) refuse('service-owner-unresolved');
-            } else if (platform === 'darwin' && launchList().some(entry => entry.label === label)) {
-                // A loaded launchd job can relaunch without a current PID. Do not replace its owner.
-                refuse('service-owner-unresolved');
-            }
-        }
-        console.log('PASEO_MUSE_OWNER_VERIFIED'); return;
-    }
-    if (owner) {
-        console.log('PASEO_MUSE_RESTARTING');
-        await checkpoint();
-        // Arm restoration BEFORE stop: a timeout/failure can still have stopped it.
-        restore = owner;
-        owner.stop();
-        await checkpoint();
-        owner.stopped();
-    }
-    ensureNoWriters(owner);
-    checkedPath(paseoHome, true);
-    fs.mkdirSync(paseoHome, {recursive: true, mode: 0o700});
-    reservePid();
-    await checkpoint();
-    ensureNoWriters(owner);
-    if (owner) owner.stopped();
-    // Re-read AFTER shutdown. Daemon shutdown and concurrent unrelated updates win.
-    const before = snapshot(configPath);
-    const next = merge(before);
-    if (next !== null) {
-        if (Buffer.byteLength(next, 'utf8') > maxSnapshotBytes) fail('metadata-too-large');
-        temporary = path.join(paseoHome, `.config.setup-muse-${randomUUID()}.tmp`);
-        const fd = fs.openSync(temporary, 'wx', before.s ? before.s.mode & 0o777 : 0o600);
-        try {
-            if (before.s && platform !== 'win32') {
-                if (fs.fstatSync(fd).gid !== before.s.gid) fs.fchownSync(fd, before.s.uid, before.s.gid);
-                fs.fchmodSync(fd, before.s.mode & 0o777);
-            }
-            secureTemporary(temporary, !!before.s);
-            fs.writeFileSync(fd, next); fs.fsyncSync(fd);
-        } finally { fs.closeSync(fd); }
-        const pending = snapshot(temporary);
-        await checkpoint();
-        ensureNoWriters(owner);
-        if (owner) owner.stopped();
-        lockUnchanged();
-        const current = snapshot(configPath);
-        if (!same(before.s, current.s) || before.text !== current.text) fail('concurrent-config-change');
-        const ready = snapshot(temporary);
-        if (!same(pending.s, ready.s) || ready.text !== next) fail('temporary-file-changed');
-        fs.renameSync(temporary, configPath);
-        temporary = null;
-        console.log('PASEO_MUSE_UPDATED');
-    } else console.log('PASEO_MUSE_UNCHANGED');
-}
-(async () => {
-    let failure = null;
-    const recoveryFailures = [];
-    const recoveryFailed = (code, cause) => {
-        // Preserve the original operation and safe diagnostic through cleanup.
-        if (!failure) failure = cause instanceof Refusal ? cause : new Refusal(code, true);
-        recoveryFailures.push(code);
-    };
-    try { await main(); } catch (error) { failure = error; }
-    finally {
-        permissionInspection = null;
-        try { if (temporary) fs.unlinkSync(temporary); } catch (error) { recoveryFailed('temporary-cleanup-failed', error); }
-        try { releasePid(); } catch (error) { recoveryFailed('pid-release-failed', error); }
-        if (restore) {
-            try {
-                if (!same(restore.unit.s, snapshot(restore.file).s) || !same(restore.wrapper.snap.s, snapshot(restore.wrapper.file).s)) fail('service-changed-before-restore');
-                restore.start();
-                // The old wrapper may inherit umask 002 on this intermediate
-                // restart. Re-prove its ready PID owner and secure the new inode;
-                // the later headless installer migrates the wrapper to umask 077.
-                await finishRestoredPermissions(restore);
-                console.log('PASEO_MUSE_RESTORED');
-            }
-            catch (error) {
-                if (error instanceof Refusal && error.code === 'restart-pid-not-ready') console.log('Paseo Muse recovery: the restarted service did not provide a verified native PID within the retry limit. Inspect that service privately before rerunning setup.');
-                recoveryFailed('service-restore-failed', error);
-            }
-        }
-    }
-    if (failure) {
-        const controlled = failure instanceof Refusal;
-        const failed = recoveryFailures.length > 0 || !controlled || failure.failed;
-        console.log(`PASEO_MUSE_DEFER_DAEMON_SETUP=1`);
-        console.log(`Paseo Muse ${failed ? 'failed' : 'deferred'}: ${controlled ? failure.code : 'operation-failed'}.`);
-        if (controlled && failure.operation) console.log(`Paseo Muse diagnostic: ${failure.operation}: ${failure.detail}.`);
-        if (controlled && failure.privileged) console.log(`Paseo Muse diagnostic: inventory-privileged: ${failure.privileged}.`);
-        for (const code of recoveryFailures) console.log(`Paseo Muse recovery failed: ${code}.`);
-        if (controlled && failure.code === 'stale-pid-lock') console.log('Paseo Muse recovery: inspect the stale paseo.pid privately; remove it manually only after every local owner is confirmed stopped.');
-        if (controlled && (failure.code === 'unsafe-owner-or-mode' || failure.code.startsWith('permission-'))) console.log('Paseo Muse permissions: inspect ownership and write permissions on the selected home, PID and service paths. Automatic repair requires a verified default-home Linux setup-managed owner. Do not use recursive chmod or chown.');
-        if (controlled && ['custom-home-unverified', 'custom-home-permissions-unverified', 'invalid-home-override'].includes(failure.code)) console.log('Paseo Muse home: PASEO_HOME must be unset or an absolute directory below the account HOME, not HOME itself. Custom directories must already exist, be private and account-owned, and contain no linked paths.');
-        if (controlled && platform === 'linux' && failure.code === 'process-inventory-unverified') console.log('Paseo Muse process inspection: protected process reads require existing noninteractive sudo authorization. Do not stop system agents, change procfs permissions or weaken kernel protections.');
-        else console.log('Quit Paseo Desktop or stop the owning local daemon, then rerun setup from a terminal outside Paseo. Keep Desktop closed during setup. If Go authentication changed, restart that owner to refresh its model catalog.');
-        // Only established ownership/platform deferrals are warning-only.
-        process.exitCode = failed ? 1 : 0;
-        console.log(`PASEO_MUSE_RESULT=${failed ? 'failed' : 'deferred'}`);
-    } else console.log('PASEO_MUSE_RESULT=success');
-})();
-// END PASEO MUSE PROFILE
-PASEO_MUSE_PROFILE_JS
-    ) || status=$?
-    while IFS= read -r line; do
-        if [[ -n "${receipt}" ]]; then invalid=1; continue; fi
-        case "${line}" in
-            PASEO_MUSE_RESULT=success|PASEO_MUSE_RESULT=deferred|PASEO_MUSE_RESULT=failed) receipt=${line#*=} ;;
-            PASEO_MUSE_DEFER_DAEMON_SETUP=1) PASEO_MUSE_DEFER_DAEMON_SETUP=1 ;;
-            PASEO_MUSE_OWNER_VERIFIED) verified=1; completed=1; print_debug "Paseo managed-daemon ownership preflight passed." ;;
-            PASEO_MUSE_UPDATED) completed=1; print_success "Paseo Muse managed profile synchronized." ;;
-            PASEO_MUSE_UNCHANGED) completed=1; print_debug "Paseo Muse managed profile is unchanged." ;;
-            PASEO_MUSE_PERMISSIONS_REPAIRED) print_debug "Paseo Muse repaired verified managed-path permissions." ;;
-            PASEO_MUSE_RESTARTING) print_warning "Restarting the setup-managed local Paseo daemon to refresh Muse. Active agents may be interrupted." ;;
-            PASEO_MUSE_RESTORED) print_debug "Paseo Muse restored the local managed service." ;;
-            "Paseo Muse custom home: later managed-daemon setup is skipped. Keep this owner's launch environment and update that owner separately.") completed=1; print_warning "${line}" ;;
-            'Paseo Muse recovery: the restarted service did not provide a verified native PID within the retry limit. Inspect that service privately before rerunning setup.'|\
-            'Paseo Muse recovery: inspect the stale paseo.pid privately; remove it manually only after every local owner is confirmed stopped.'|\
-            'Paseo Muse permissions: inspect ownership and write permissions on the selected home, PID and service paths. Automatic repair requires a verified default-home Linux setup-managed owner. Do not use recursive chmod or chown.'|\
-            'Paseo Muse process inspection: protected process reads require existing noninteractive sudo authorization. Do not stop system agents, change procfs permissions or weaken kernel protections.'|\
-            'Paseo Muse home: PASEO_HOME must be unset or an absolute directory below the account HOME, not HOME itself. Custom directories must already exist, be private and account-owned, and contain no linked paths.'|\
-            'Quit Paseo Desktop or stop the owning local daemon, then rerun setup from a terminal outside Paseo. Keep Desktop closed during setup. If Go authentication changed, restart that owner to refresh its model catalog.') print_warning "${line}" ;;
-            *)
-                if [[ "${line}" =~ ${failure_pattern} || "${line}" =~ ${recovery_pattern} ]]; then
-                    reported_failure=1; print_warning "${line}"
-                elif [[ "${line}" =~ ${defer_pattern} ]]; then
-                    reported_defer=1; print_warning "${line}"
-                elif [[ "${line}" =~ ${diagnostic_pattern} ]]; then
-                    reported_failure=1; print_warning "${line}"
-                else
-                    invalid=1
-                fi
-                ;;
-        esac
-    done <<< "${result}"
-    if [[ "${invalid}" == 1 || -z "${receipt}" ]] ||
-        [[ "${receipt}" == success && ( "${completed}" != 1 || "${reported_failure}" == 1 || "${reported_defer}" == 1 ) ]] ||
-        [[ "${receipt}" == deferred && ( "${reported_defer}" != 1 || "${reported_failure}" == 1 || "${PASEO_MUSE_DEFER_DAEMON_SETUP}" != 1 ) ]]; then
-        status=1
-        print_warning "Paseo Muse profile setup failed: unverified-result. Helper output was not accepted."
-    fi
-    if [[ "${status}" != "0" || "${receipt}" == failed ]]; then
-        PASEO_MUSE_DEFER_DAEMON_SETUP=1
-        print_warning "Paseo Muse profile setup failed; later daemon setup must be skipped. Inspect the local service privately and rerun outside Paseo."
-        return 1
-    fi
-    if [[ "${_mode}" == "verify-owner" && "${verified}" -ne 1 && "${PASEO_MUSE_DEFER_DAEMON_SETUP}" -ne 1 ]]; then
-        PASEO_MUSE_DEFER_DAEMON_SETUP=1
-        print_warning "Paseo Muse ownership verification failed: unverified-result. Later daemon setup is skipped; rerun outside Paseo."
-        return 1
-    fi
-    return 0
-}
-
-remove_paseo_plain() {
-    if ! command -v node &> /dev/null; then
-        print_warning "Paseo Plain removal not confirmed: Node.js >=22.19 is required. Rerun setup or remove paseo-plain in the local daemon's Settings > Plugins."
-        return 1
-    fi
-    local result
-    local status=0
-    result=$(node --input-type=commonjs - "${PASEO_VALIDATED_CMD:-}" 2>/dev/null <<'PASEO_PLAIN_RETIREMENT_JS'
-// BEGIN PASEO PLAIN RETIREMENT
-const fs = require('node:fs');
-const path = require('node:path');
-const os = require('node:os');
-const { spawnSync } = require('node:child_process');
-const { createHash } = require('node:crypto');
-const { isDeepStrictEqual } = require('node:util');
-const id = 'paseo-plain';
-let operation = 'preflight';
-class SetupFailure extends Error {}
-function deferred(reason) {
-    console.log(`Paseo Plain removal deferred: ${reason}. Start the intended compatible local daemon and rerun setup, or remove paseo-plain in its Settings > Plugins. Do not enable plugins just for removal.`);
-    process.exitCode = 1;
-}
-// BEGIN PASEO CLI IDENTITY
-// Inspect package metadata before executing a CLI. A PATH hit is not proof of identity.
-function cliInfo(file) {
-    try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-}
-function cliHomeAlias(file, stat) {
-    return process.platform === 'linux' && file === '/home' && stat.uid === 0 &&
-        ['var/home', '/var/home'].includes(fs.readlinkSync(file)) && ['/', '/var', '/var/home'].every(dir => {
-            const s = cliInfo(dir);
-            return s?.isDirectory() && !s.isSymbolicLink() && s.uid === 0 && !(s.mode & 0o022);
-        });
-}
-function cliDirectory(directory) {
-    for (let current = path.resolve(directory); ; current = path.dirname(current)) {
-        const s = cliInfo(current);
-        if (!s) return false;
-        if (s.isSymbolicLink() && cliHomeAlias(current, s)) continue;
-        if (!s.isDirectory() || s.isSymbolicLink()) return false;
-        if (process.platform !== 'win32' && (![0, process.getuid()].includes(s.uid) || s.mode & 0o002 && !(s.uid === 0 && s.mode & 0o1000))) return false;
-        if (current === path.dirname(current)) return true;
-    }
-}
-function cliRegular(file) {
-    const s = cliInfo(file);
-    return s?.isFile() && !s.isSymbolicLink() && s.size <= 2 * 1024 * 1024 &&
-        cliDirectory(path.dirname(file)) && (process.platform === 'win32' || [0, process.getuid()].includes(s.uid) && !(s.mode & 0o002));
-}
-function cliPackage(root) {
-    const metadata = path.join(root, 'package.json');
-    if (!cliRegular(metadata)) return null;
-    const text = fs.readFileSync(metadata, 'utf8');
-    const data = JSON.parse(text);
-    // Reject duplicate keys rather than guessing which package declaration is authoritative.
-    const tokens = text.match(/"(?:[^"\\]|\\.)*"|[{}\[\]:,]/g) || [];
-    const stack = [];
-    for (let i = 0; i < tokens.length; i++) {
-        const token = tokens[i];
-        if (token === '{' || token === '[') stack.push(token === '{' ? new Set() : null);
-        else if (token === '}' || token === ']') stack.pop();
-        else if (token.startsWith('"') && tokens[i + 1] === ':') {
-            const key = JSON.parse(token), names = stack[stack.length - 1];
-            if (!names || names.has(key)) return null;
-            names.add(key);
-        }
-    }
-    const bin = typeof data?.bin === 'string' ? data.bin : data?.bin?.paseo;
-    if (data?.name !== '@getpaseo/cli' || typeof data.version !== 'string' ||
-        !/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(data.version) || typeof bin !== 'string' || path.isAbsolute(bin) ||
-        bin.split(/[\\/]/).some(p => p === '..')) return null;
-    const entry = path.resolve(root, bin);
-    if (!entry.startsWith(root + path.sep) || !cliRegular(entry)) return null;
-    return {root, entry, version: data.version};
-}
-function cliIdentity(command) {
-    try {
-        if (!path.isAbsolute(command) || !cliDirectory(path.dirname(command))) return null;
-        if (process.platform === 'win32' && command.endsWith('.cmd')) {
-            if (!cliRegular(command)) return null;
-            for (const base of [path.join(path.dirname(command), 'node_modules'), path.resolve(path.dirname(command), '../install/global/node_modules')]) {
-                const pkg = cliPackage(path.join(base, '@getpaseo/cli'));
-                if (pkg) return pkg;
-            }
-            return null;
-        }
-        const s = cliInfo(command);
-        if (!s || !s.isFile() && !s.isSymbolicLink()) return null;
-        // Only the command symlink is allowed. Neither its ancestors nor target directories can be links.
-        const target = s.isSymbolicLink() ? path.resolve(path.dirname(command), fs.readlinkSync(command)) : command;
-        if (!cliRegular(target)) return null;
-        for (let root = path.dirname(target); root !== path.dirname(root); root = path.dirname(root)) {
-            if (!cliInfo(path.join(root, 'package.json'))) continue;
-            const pkg = cliPackage(root);
-            return pkg?.entry === target ? pkg : null;
-        }
-    } catch { /* Invalid or unverified candidates remain untouched and are never executed. */ }
-    return null;
-}
-function selectPaseoCli(explicit = '') {
-    const names = process.platform === 'win32' ? ['paseo.cmd', 'paseo.exe'] : ['paseo'];
-    const candidates = explicit ? [explicit] : [
-        ...names.map(name => path.join(os.homedir(), '.bun/bin', name)),
-        ...(process.env.PATH || '').split(path.delimiter).filter(dir => path.isAbsolute(dir))
-            .flatMap(dir => names.map(name => path.join(dir, name))),
-    ];
-    for (const candidate of new Set(candidates)) {
-        const pkg = cliIdentity(candidate);
-        if (pkg && /^0\.8\.\d+(?:[-+][\w.-]+)?$/.test(pkg.version)) return [process.execPath, pkg.entry];
-        // A verified managed release owns selection even when Plain does not support it.
-        if (pkg && (explicit || path.dirname(candidate) === path.join(os.homedir(), '.bun/bin'))) return null;
-    }
-    return null;
-}
-// END PASEO CLI IDENTITY
-const info = cliInfo;
-const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-const owns = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
-function checkedPath(file, directory = false) {
-    // Validate every ancestor before reading metadata or asking Paseo to delete anything.
-    if (!cliDirectory(path.dirname(file))) throw new SetupFailure('unsafe-path');
-    const stat = info(file);
-    if (stat && (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile()) ||
-        process.platform !== 'win32' && (stat.uid !== process.getuid() || stat.mode & 0o022))) throw new SetupFailure('unsafe-path');
-    return stat;
-}
-function jsonFile(file, fallback = null) {
-    const stat = checkedPath(file);
-    if (!stat) return fallback;
-    if (stat.size > 2 * 1024 * 1024) throw new SetupFailure('metadata-limit');
-    return jsonDocument(fs.readFileSync(file, 'utf8'));
-}
-function jsonDocument(text) {
-    const data = JSON.parse(text);
-    if (!object(data)) throw new SetupFailure('invalid-metadata');
-    // Duplicate keys can conceal a source or endpoint from a different JSON reader.
-    const tokens = text.match(/"(?:[^"\\]|\\.)*"|[{}\[\]:,]/g) || [];
-    const stack = [];
-    for (let i = 0; i < tokens.length; i++) {
-        const token = tokens[i];
-        if (token === '{' || token === '[') stack.push(token === '{' ? new Set() : null);
-        else if (token === '}' || token === ']') stack.pop();
-        else if (token.startsWith('"') && tokens[i + 1] === ':') {
-            const key = JSON.parse(token), keys = stack[stack.length - 1];
-            if (!keys || keys.has(key)) throw new SetupFailure('duplicate-key');
-            keys.add(key);
-        }
-    }
-    return data;
-}
-function legacyPidBoundary(home) {
-    // A private home prevents group access to its native 0664 PID. This is a
-    // read-only exception, not permission repair or authority to manage a service.
-    const directory = checkedPath(home, true);
-    if (!directory || directory.mode & 0o077) throw new SetupFailure('legacy-pid-requires-private-home');
-    for (let current = path.dirname(home); ; current = path.dirname(current)) {
-        const stat = info(current);
-        if (stat?.isSymbolicLink() && cliHomeAlias(current, stat)) continue;
-        const trustedStickyRoot = stat?.uid === 0 && Boolean(stat.mode & 0o1000);
-        if (!stat?.isDirectory() || ![0, process.getuid()].includes(stat.uid) ||
-            stat.mode & 0o022 && !trustedStickyRoot) throw new SetupFailure('legacy-pid-unsafe-ancestor');
-        if (current === path.dirname(current)) break;
-    }
-}
-function readPidState(home) {
-    operation = 'pid preflight';
-    const identity = stat => stat && ({dev: stat.dev, ino: stat.ino, uid: stat.uid, mode: stat.mode});
-    const directory = checkedPath(home, true);
-    if (!directory) throw new SetupFailure('pid-home-changed');
-    const file = path.join(home, 'paseo.pid');
-    const initial = info(file);
-    if (!initial) return {home: identity(directory), pid: null, data: null};
-    const validate = stat => {
-        if (!stat || stat.isSymbolicLink() || !stat.isFile()) throw new SetupFailure('unsafe-path');
-        if (stat.nlink !== 1) throw new SetupFailure('linked-pid-file');
-        if (process.platform !== 'win32') {
-            if (stat.uid !== process.getuid()) throw new SetupFailure('foreign-pid-owner');
-            if (stat.mode & 0o022) {
-                if ((stat.mode & 0o7777) !== 0o664) throw new SetupFailure('unsafe-pid-permissions');
-                legacyPidBoundary(home);
-            }
-        }
-        if (stat.size > 2 * 1024 * 1024) throw new SetupFailure('metadata-limit');
-    };
-    validate(initial);
-    let fd;
-    try {
-        // Reject leaf swaps without following links or blocking on a substituted FIFO.
-        const flags = fs.constants.O_RDONLY | (process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
-        try { fd = fs.openSync(file, flags); }
-        catch (error) { if (error.code === 'ELOOP') throw new SetupFailure('pid-state-changed'); throw error; }
-        const opened = fs.fstatSync(fd);
-        validate(opened);
-        if (!isDeepStrictEqual(identity(initial), identity(opened)) || opened.size !== initial.size) throw new SetupFailure('pid-state-changed');
-        const buffer = Buffer.alloc(initial.size + 1);
-        let length = 0;
-        while (length < buffer.length) {
-            const count = fs.readSync(fd, buffer, length, buffer.length - length, length);
-            if (!count) break;
-            length += count;
-        }
-        const after = fs.fstatSync(fd), current = info(file);
-        validate(after);
-        validate(current);
-        if (!isDeepStrictEqual(identity(initial), identity(after)) || !isDeepStrictEqual(identity(initial), identity(current)) ||
-            after.size !== initial.size || current.size !== initial.size || length !== initial.size ||
-            !isDeepStrictEqual(identity(directory), identity(checkedPath(home, true)))) throw new SetupFailure('pid-state-changed');
-        return {home: identity(directory), pid: {...identity(after), size: after.size}, data: jsonDocument(buffer.subarray(0, length).toString('utf8'))};
-    } finally { if (fd !== undefined) fs.closeSync(fd); }
-}
-function childDirectory(parent, name) {
-    if (!checkedPath(parent, true)) return null;
-    const file = path.join(parent, name);
-    return checkedPath(file, true) ? file : null;
-}
-function tree(root) {
-    const entries = [];
-    let bytes = 0;
-    function visit(file, relative) {
-        const stat = info(file);
-        if (!stat || stat.isSymbolicLink() || !(stat.isDirectory() || stat.isFile()) ||
-            process.platform !== 'win32' && stat.uid !== process.getuid()) throw new SetupFailure('unsafe-settings');
-        if (entries.length >= 20000 || (bytes += stat.size) > 256 * 1024 * 1024) throw new SetupFailure('backup-limit');
-        entries.push([relative, stat.isDirectory() ? null : createHash('sha256').update(fs.readFileSync(file)).digest('hex')]);
-        if (stat.isDirectory()) for (const name of fs.readdirSync(file).sort()) visit(path.join(file, name), path.join(relative, name));
-    }
-    visit(root, '');
-    return entries;
-}
-function privateDirectory(directory) {
-    fs.mkdirSync(directory, {mode: 0o700});
-    if (process.platform !== 'win32') return;
-    const script = `$ErrorActionPreference = 'Stop'
-$env:PSModulePath = "$PSHOME\\Modules"
-$owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$acl = [System.Security.AccessControl.DirectorySecurity]::new()
-$acl.SetOwner($owner)
-$acl.SetAccessRuleProtection($true, $false)
-foreach ($sid in @($owner, [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'), [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))) {
-    $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
-}
-Set-Acl -LiteralPath $env:PASEO_PLAIN_RECOVERY_DIRECTORY -AclObject $acl`;
-    const result = spawnSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'),
-        ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
-            env: {...process.env, PASEO_PLAIN_RECOVERY_DIRECTORY: directory}, shell: false, windowsHide: true,
-            timeout: 15000, maxBuffer: 16384, stdio: ['ignore', 'pipe', 'pipe'],
-        });
-    if (result.error || result.status !== 0) throw new SetupFailure('private-backup-unavailable');
-}
-function backupSettings(home, native) {
-    if (!native) return;
-    operation = 'settings backup';
-    const snapshot = tree(native);
-    const parent = path.join(home, 'setup-recovery');
-    if (!checkedPath(parent, true)) privateDirectory(parent);
-    // Exclusive creation: an interrupted or previous retirement is never overwritten.
-    const backup = path.join(parent, 'paseo-plain-retirement');
-    if (checkedPath(backup, true)) throw new SetupFailure('retirement-backup-needs-review');
-    privateDirectory(backup);
-    const destination = path.join(backup, 'plugin-settings');
-    for (const [relative, hash] of snapshot) {
-        const target = path.join(destination, relative);
-        if (hash === null) fs.mkdirSync(target, {mode: 0o700});
-        else {
-            const fd = fs.openSync(target, 'wx', 0o600);
-            try { fs.writeFileSync(fd, fs.readFileSync(path.join(native, relative))); fs.fsyncSync(fd); }
-            finally { fs.closeSync(fd); }
-        }
-    }
-    if (!isDeepStrictEqual(snapshot, tree(native)) || !isDeepStrictEqual(snapshot, tree(destination))) throw new SetupFailure('settings-changed');
-    if (process.platform !== 'win32') {
-        // Persist directory entries as well as file contents before native removal.
-        const directories = snapshot.filter(([, hash]) => hash === null).map(([relative]) => path.join(destination, relative)).reverse();
-        for (const directory of [...directories, backup, parent, home]) {
-            const fd = fs.openSync(directory, 'r');
-            try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-        }
-    }
-    return snapshot;
-}
-function withoutPlain(data) {
-    const result = {...data};
-    delete result[id];
-    return result;
-}
-function otherConfig(config) {
-    return {...config, plugins: withoutPlain(config.plugins || {})};
-}
-function sourcesAt(home) {
-    const directory = childDirectory(home, 'plugins');
-    const sources = directory ? jsonFile(path.join(directory, 'sources.json'), {}) : {};
-    for (const record of Object.values(sources)) {
-        if (!object(record) || typeof record.remote !== 'string' || !record.remote ||
-            !(record.requestedRef === null || typeof record.requestedRef === 'string' && record.requestedRef) ||
-            !(record.trackingBranch === null || typeof record.trackingBranch === 'string' && record.trackingBranch) ||
-            !/^[0-9a-f]{40,64}$/.test(record.commit) || typeof record.pluginPath !== 'string' ||
-            typeof record.checkoutRoot !== 'string' || !path.isAbsolute(record.checkoutRoot) ||
-            Object.keys(record).some(key => !['remote', 'requestedRef', 'trackingBranch', 'commit', 'pluginPath', 'checkoutRoot'].includes(key))) {
-            throw new SetupFailure('invalid-source-metadata');
-        }
-    }
-    return sources;
-}
-function catalog(value) {
-    if (!Array.isArray(value) || value.some(item => !object(item) || typeof item.id !== 'string') ||
-        new Set(value.map(item => item.id)).size !== value.length) throw new SetupFailure('invalid-catalog');
-    return value;
-}
-function main() {
-    const [major, minor] = process.versions.node.split('.').map(Number);
-    if (major < 22 || (major === 22 && minor < 19)) return deferred('node-version');
-    const account = os.homedir();
-    const override = process.env.PASEO_HOME;
-    if (override !== undefined && (!override || !path.isAbsolute(override))) throw new SetupFailure('invalid-home');
-    const home = path.resolve(override === undefined ? path.join(account, '.paseo') : override);
-    const relative = path.relative(account, home);
-    if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new SetupFailure('outside-home');
-    if (!cliDirectory(account)) throw new SetupFailure('unsafe-home');
-    // Missing parents mean no installation; never create a daemon home for retirement.
-    let current = account;
-    for (const part of relative.split(path.sep)) {
-        current = path.join(current, part);
-        if (!checkedPath(current, true)) { console.log('Paseo Plain already absent.'); return; }
-    }
-    const configFile = path.join(home, 'config.json');
-    const config = jsonFile(configFile);
-    if (config?.plugins !== undefined && !object(config.plugins)) throw new SetupFailure('invalid-plugins');
-    const sources = sourcesAt(home);
-    if (!config || !owns(config.plugins || {}, id)) {
-        if (owns(sources, id)) throw new SetupFailure('orphan-source-needs-review');
-        console.log('Paseo Plain already absent.');
-        return;
-    }
-    if (!object(config.plugins[id]) || config.plugins[id].source !== 'directory' ||
-        typeof config.plugins[id].path !== 'string' || !path.isAbsolute(config.plugins[id].path)) throw new SetupFailure('invalid-registration');
-    const managed = path.join(home, 'plugins', id);
-    const nativeParent = childDirectory(home, 'plugin-settings');
-    const native = nativeParent ? childDirectory(nativeParent, id) : null;
-    if (owns(sources, id)) checkedPath(managed, true);
-    const within = (parent, file) => file === parent || file.startsWith(parent + path.sep);
-    const canonical = file => fs.existsSync(file) ? fs.realpathSync(file) : path.resolve(file);
-    const deleted = file => owns(sources, id) && within(path.join(fs.realpathSync(home), 'plugins', id), canonical(file)) ||
-        native && within(fs.realpathSync(native), canonical(file));
-    // Native removal deletes the managed ID directory and settings, not external sources.
-    // Refuse registrations/source records that share either deletion tree, including aliases.
-    for (const [key, source] of Object.entries(config.plugins)) {
-        if (!object(source) || typeof source.path !== 'string' || !path.isAbsolute(source.path)) throw new SetupFailure('invalid-registration');
-        if (key !== id && deleted(source.path) || key === id && native && within(fs.realpathSync(native), canonical(source.path))) {
-            throw new SetupFailure('shared-source-needs-review');
-        }
-    }
-    for (const [key, source] of Object.entries(sources)) {
-        if (key !== id && deleted(source.checkoutRoot)) throw new SetupFailure('shared-source-needs-review');
-    }
-    for (const preserved of ['plugin-data', 'setup-recovery']) {
-        if (deleted(path.join(home, preserved))) throw new SetupFailure('shared-source-needs-review');
-    }
-    const recoveryParent = childDirectory(home, 'setup-recovery');
-    const migration = recoveryParent ? childDirectory(recoveryParent, 'paseo-plain-release-to-main') : null;
-    if (migration && jsonFile(path.join(migration, 'state.json'))?.phase !== 'complete') throw new SetupFailure('migration-needs-review');
-    const localTarget = value => typeof value === 'string' && /^(127\.0\.0\.1|localhost|\[::1\]):[1-9][0-9]{0,4}$/.test(value) && Number(value.split(':').pop()) <= 65535;
-    if (config.daemon !== undefined && !object(config.daemon)) throw new SetupFailure('invalid-daemon');
-    if (config.daemon?.listen !== undefined && !localTarget(config.daemon.listen)) return deferred('nonlocal-endpoint');
-    const pidState = readPidState(home);
-    const pid = pidState.data;
-    if (pid && [pid.listen, pid.sockPath].some(value => value !== undefined && !localTarget(value))) return deferred('nonlocal-pid-endpoint');
-    const paseo = selectPaseoCli(process.argv[2] || '');
-    if (!paseo) return deferred('compatible-cli-unavailable');
-    const run = (args, timeout = 20000) => {
-        // Native heartbeats change timestamps, not identity, permissions or contents.
-        // Recheck before status can probe an endpoint and before every plugin command.
-        if (!isDeepStrictEqual(pidState, readPidState(home))) throw new SetupFailure('pid-state-changed');
-        operation = args[0] === 'daemon' ? 'daemon status' : `plugin ${args[3]}`;
-        const env = {...process.env, PASEO_HOME: home};
-        delete env.PASEO_HOST;
-        const result = spawnSync(paseo[0], [...paseo.slice(1), ...args], {
-            env, cwd: account, encoding: 'utf8', timeout, maxBuffer: 2 * 1024 * 1024,
-            stdio: ['ignore', 'pipe', 'pipe'], shell: false,
-        });
-        if (result.error) throw new SetupFailure(result.error.code === 'ETIMEDOUT' ? 'timeout' : 'spawn-failed');
-        if (result.status !== 0) throw new SetupFailure(Number.isInteger(result.status) ? `exit-${result.status}` : 'terminated');
-        try { return JSON.parse(result.stdout); } catch { throw new SetupFailure('invalid-response-json'); }
-    };
-    const status = run(['daemon', 'status', '--json']);
-    if (!object(status) || status.localDaemon !== 'running' || status.connectedDaemon !== 'reachable' ||
-        typeof status.home !== 'string' || fs.realpathSync(status.home) !== fs.realpathSync(home) || !localTarget(status.listen)) return deferred('local-daemon-unavailable');
-    if (![status.cliVersion, status.daemonVersion].every(v => typeof v === 'string' && /^0\.8\.\d+(?:[-+][\w.-]+)?$/.test(v))) return deferred('incompatible-daemon');
-    const args = ['--host', status.listen, 'plugin'];
-    const before = catalog(run([...args, 'ls', '--json']));
-    if (!before.some(item => item.id === id)) throw new SetupFailure('registration-catalog-mismatch');
-    const snapshot = backupSettings(home, native);
-    operation = 'removal preflight';
-    if (!isDeepStrictEqual(config, jsonFile(configFile)) || !isDeepStrictEqual(sources, sourcesAt(home)) ||
-        native && !isDeepStrictEqual(snapshot, tree(native))) throw new SetupFailure('state-changed');
-    if (owns(sources, id)) checkedPath(managed, true);
-    if (native) checkedPath(native, true);
-    run([...args, 'remove', id, '--json'], 180000);
-    const after = catalog(run([...args, 'ls', '--json']));
-    operation = 'removal verification';
-    const afterConfig = jsonFile(configFile);
-    const afterSources = sourcesAt(home);
-    if (!afterConfig || owns(afterConfig.plugins || {}, id) || owns(afterSources, id) || after.some(item => item.id === id) ||
-        !isDeepStrictEqual(otherConfig(config), otherConfig(afterConfig)) ||
-        !isDeepStrictEqual(withoutPlain(sources), afterSources) ||
-        !isDeepStrictEqual(before.filter(item => item.id !== id).map(item => item.id).sort(), after.map(item => item.id).sort()) ||
-        owns(sources, id) && info(managed) || native && info(native)) throw new SetupFailure('removal-not-confirmed');
-    console.log('Paseo Plain removed; saved plugin-data, external sources, and recovery backups preserved. Native settings, when present, were backed up under setup-recovery/paseo-plain-retirement.');
-}
-try { main(); } catch (error) {
-    const reason = error instanceof SetupFailure ? error.message : error instanceof SyntaxError ? 'invalid-json' :
-        ['EACCES', 'EPERM', 'ENOENT', 'EEXIST', 'ENOSPC', 'EROFS'].includes(error?.code) ? error.code : 'unexpected-error';
-    console.log(`Paseo Plain removal failure: ${operation}: ${reason}.`);
-    console.log('Removal is not confirmed. Inspect the intended local daemon in Settings > Plugins and review setup-recovery before retrying. Keep backups; do not reinstall the retired plugin.');
-    process.exitCode = 1;
-}
-// END PASEO PLAIN RETIREMENT
-PASEO_PLAIN_RETIREMENT_JS
-    ) || status=$?
-    if [[ "${status}" -ne 0 ]]; then
-        if [[ "${result}" == "Paseo Plain removal failure:"* || "${result}" == "Paseo Plain removal deferred:"* ]]; then
-            print_warning "${result}"
-        else
-            print_warning "Paseo Plain removal not confirmed: helper failed. Inspect the local daemon's Settings > Plugins before retrying."
-        fi
-        return 1
-    elif [[ "${result}" == "Paseo Plain removed;"* || "${result}" == "Paseo Plain already absent." ]]; then
-        print_success "${result}"
-    else
-        print_warning "Paseo Plain removal not confirmed: unexpected helper response."
-        return 1
-    fi
-}
-
 install_portless_cli() {
     if command -v portless &> /dev/null; then
         print_debug "Portless CLI is already installed."
@@ -4889,7 +3379,6 @@ configure_pi_opencode_go() {
     local _result="" _status=0
     local _operations='preflight|home|pi-package|pi-dependency|go-catalog|environment-file|active-profile|models-json|auth-lock|lock-dependency|auth-preflight|profile-create|lock-acquire|auth-read|auth-write|auth-cleanup|lock-release'
     local _reasons='acl-timeout|acl-unavailable|acl-unsafe|catalog-incompatible|concurrent-metadata-change|duplicate-json-key|file-changed|go-provider-overridden|invalid-credential|invalid-json|invalid-json-object|invalid-key-format|invalid-mode|invalid-providers|linked-directory|linked-or-nonregular-file|lock-compromised|lock-unavailable|lock-unverified|lock-version-unsupported|missing-directory|node-incompatible|oversized-metadata|pi-dependency-unavailable|pi-package-unavailable|unexpected-dependency|unowned-auth-file|unowned-home|unsafe-file-permissions|unsafe-json-number|unsafe-lock|unsafe-lock-dependency|unsafe-path|unsafe-profile|untrusted-directory|operation-failed|EACCES|EPERM|EROFS|ENOSPC|EDQUOT|ENOENT|ENOTDIR|EISDIR|ELOOP|EEXIST|EIO|ELOCKED|ECOMPROMISED|MODULE_NOT_FOUND|ERR_PACKAGE_PATH_NOT_EXPORTED'
-    PI_OPENCODE_GO_CHANGED=0
     if ! command -v node > /dev/null 2>&1; then
         print_warning "Pi Go setup failed: shared Node runtime unavailable."
         return 1
@@ -5257,8 +3746,8 @@ PI_OPENCODE_GO_JS
         return 1
     fi
     case "${_result}" in
-        missing-key) print_warning "Pi Go authentication not supplied: add OPENCODE_GO_API_KEY to ~/.env.local. Existing credentials were preserved; the Muse profile can still be configured." ;;
-        updated) PI_OPENCODE_GO_CHANGED=1; print_success "Pi Go credential synchronized in the active Pi profile." ;;
+        missing-key) print_warning "Pi Go authentication not supplied: add OPENCODE_GO_API_KEY to ~/.env.local. Existing credentials were preserved." ;;
+        updated) print_success "Pi Go credential synchronized in the active Pi profile." ;;
         unchanged) print_debug "Pi Go credential is unchanged." ;;
         catalog-ready) print_debug "Installed Pi supports Go Muse Contributor with native Responses/xhigh." ;;
         *) print_warning "Pi Go setup failed: invalid-helper-result. No safe helper detail was received."; return 1 ;;
@@ -5331,159 +3820,6 @@ read_env_local_value() {
     [[ -n "${_value}" ]] || return 1
     printf '%s\n' "${_value}"
 }
-
-# Paseo release channels. Keep this block identical in the Bash setup scripts.
-paseo_release_channel() {
-    # The setup-scoped value survives later helpers that source .env.local again.
-    local _channel="${_paseo_setup_channel:-${PASEO_CHANNEL:-}}"
-    if [[ -z "${_channel}" ]]; then
-        _channel=$(read_env_local_value "PASEO_CHANNEL" || true)
-    fi
-    case "${_channel:-beta}" in
-        beta|stable) printf '%s\n' "${_channel:-beta}" ;;
-        *)
-            print_error "Invalid PASEO_CHANNEL. Use beta or stable." >&2
-            return 1
-            ;;
-    esac
-}
-
-paseo_package_spec() {
-    local _channel
-    _channel=$(paseo_release_channel) || return 1
-    if [[ "${_channel}" == "stable" ]]; then
-        printf '%s\n' '@getpaseo/cli@latest'
-    else
-        printf '%s\n' '@getpaseo/cli@beta'
-    fi
-}
-
-paseo_desktop_is_running() {
-    if ! command -v pgrep &> /dev/null; then
-        return 2
-    fi
-    local _uid
-    _uid=$(id -u) || return 2
-    pgrep -u "${_uid}" -x 'Paseo|paseo' > /dev/null
-}
-
-# Fedora Atomic/Bazzite use a system /home alias. Never resolve user-owned links.
-# GNU stat is used only by the Linux caller below.
-paseo_desktop_is_system_home_alias() {
-    local _target _path _owner _mode
-    [[ -L "/home" ]] || return 1
-    _target=$(readlink "/home") || return 1
-    case "${_target}" in
-        var/home|"/var/home") ;;
-        *) return 1 ;;
-    esac
-    _owner=$(stat -c %u "/home" 2>/dev/null) || return 1
-    [[ "${_owner}" == 0 ]] || return 1
-    for _path in "/" "/var" "/var/home"; do
-        [[ -d "${_path}" && ! -L "${_path}" ]] || return 1
-        _owner=$(stat -c %u "${_path}" 2>/dev/null) || return 1
-        _mode=$(stat -c %a "${_path}" 2>/dev/null) || return 1
-        [[ "${_owner}" == 0 && "${_mode}" =~ ^[0-7]{3,4}$ ]] || return 1
-        (( (8#${_mode} & 0022) == 0 )) || return 1
-    done
-}
-
-configure_paseo_desktop_channel() {
-    local _platform="$1"
-    local _channel _dir _file _parent _input _tmp _process_status
-    _channel=$(paseo_release_channel) || return 1
-    case "${_platform}" in
-        macos) _dir="${HOME}/Library/Application Support/Paseo" ;;
-        linux) _dir="${XDG_CONFIG_HOME:-${HOME}/.config}/Paseo" ;;
-        wsl)
-            print_message "Run win.ps1 on the Windows host to select the Paseo Desktop release channel. WSL does not change host client files."
-            return 0
-            ;;
-        *) print_error "Unsupported Paseo Desktop platform."; return 1 ;;
-    esac
-    _dir="${PASEO_ELECTRON_USER_DATA_DIR:-${_dir}}"
-    _file="${_dir}/desktop-settings.json"
-
-    # Do not create desktop state on a headless machine without a client profile.
-    if [[ "${HEADLESS:-}" == "1" && ! -e "${_dir}" && ! -L "${_dir}" ]]; then
-        print_debug "No Paseo Desktop profile on this headless machine; skipping client channel setup."
-        return 0
-    fi
-    if [[ "${_platform}" == "linux" && ! -e "${_dir}" && ! -L "${_dir}" ]]; then
-        case "$(uname -m)" in
-            x86_64|amd64) ;;
-            *)
-                print_warning "Paseo publishes Linux Desktop builds only for x64. Use the daemon with a supported client or browser."
-                return 0
-                ;;
-        esac
-    fi
-    if [[ "${_dir}" != /* ]]; then
-        print_error "Paseo Desktop user-data path must be absolute."
-        return 1
-    fi
-    _parent="${_dir}"
-    while [[ "${_parent}" != / ]]; do
-        if [[ "${_platform}" == linux && "${_parent}" == "/home" ]] && paseo_desktop_is_system_home_alias; then
-            # Inspect the real system ancestors too, without resolving the client path.
-            _parent="/var/home"
-            continue
-        fi
-        if [[ -L "${_parent}" || ( -e "${_parent}" && ! -d "${_parent}" ) ]]; then
-            print_error "Unsafe Paseo Desktop directory. Linked or non-directory paths are not changed."
-            return 1
-        fi
-        _parent=$(dirname "${_parent}")
-    done
-    if [[ -L "${_file}" || ( -e "${_file}" && ! -f "${_file}" ) ]]; then
-        print_error "Unsafe Paseo Desktop settings path. Leaving it unchanged."
-        return 1
-    fi
-    if ! command -v jq &> /dev/null; then
-        print_error "jq is required to select the Paseo Desktop release channel."
-        return 1
-    fi
-    _input=/dev/null
-    if [[ -f "${_file}" ]]; then
-        _input="${_file}"
-        if ! jq -se 'length == 1 and (.[0] | type == "object" and .version == 1 and (.settings | type == "object") and ((has("migrations") | not) or (.migrations | type == "object")))' "${_file}" > /dev/null 2>&1; then
-            print_error "Invalid or unsupported Paseo Desktop settings. Leaving the file unchanged."
-            return 1
-        fi
-        if jq -e --arg channel "${_channel}" '.settings.releaseChannel == $channel and .migrations.legacyRendererSettingsImported == true' "${_file}" > /dev/null 2>&1; then
-            print_debug "Paseo Desktop release channel is already ${_channel}."
-            return 0
-        fi
-    fi
-    if paseo_desktop_is_running; then
-        print_error "Close Paseo Desktop and rerun setup to change its release channel. Setup does not stop the app or its daemon."
-        return 1
-    else
-        _process_status=$?
-        if [[ "${_process_status}" != "1" ]]; then
-            print_error "Cannot determine whether Paseo Desktop is running. Leaving client settings unchanged."
-            return 1
-        fi
-    fi
-    if ! (umask 077; mkdir -p "${_dir}"); then
-        print_error "Failed to create the Paseo Desktop settings directory."
-        return 1
-    fi
-    _tmp=$(mktemp "${_file}.tmp.XXXXXX") || return 1
-    # Match upstream's channel patch: prevent a legacy renderer preference from
-    # importing the old channel on launch. Preserve all other settings/migrations.
-    if ! jq -s --arg channel "${_channel}" '
-        (if length == 0 then {version: 1, settings: {}, migrations: {}} else .[0] end)
-        | .settings.releaseChannel = $channel
-        | .migrations.legacyRendererSettingsImported = true
-    ' "${_input}" > "${_tmp}" 2>/dev/null || ! chmod 600 "${_tmp}" || ! mv -f "${_tmp}" "${_file}"; then
-        rm -f "${_tmp}"
-        print_error "Failed to save the Paseo Desktop release channel."
-        return 1
-    fi
-    print_success "Paseo Desktop release channel set to ${_channel}. Open Desktop and check for updates in Settings > About."
-}
-# End Paseo release channels.
 
 # Remove the retired Synthetic provider without touching other providers or auth.json.
 remove_pi_synthetic_models() {
@@ -5804,998 +4140,15 @@ install_pi_cli() {
 }
 
 
-# shellcheck disable=SC2312
-# Managed marker used to distinguish setup-owned Paseo service artifacts from user-managed ones.
-PASEO_MANAGED_MARKER="Managed by scowalt machine setup: headless-paseo-daemon"
-PASEO_PACKAGE="@getpaseo/cli"
-PASEO_DEFAULT_LISTEN_TARGET="127.0.0.1:6767"
-PASEO_LISTEN_TARGET=""
-PASEO_SERVICE_NAME="paseo.service"
-PASEO_VALIDATED_CMD=""
-PASEO_VALIDATED_NODE=""
-PASEO_SERVICE_PATH=""
-PASEO_MANAGED_SERVICE_TOUCHED=0
-PASEO_PACKAGE_VERSION="unknown"
-PASEO_PACKAGE_CHANGED=0
-PASEO_DAEMON_WRAPPER_CHANGED=0
-PASEO_SYSTEMD_SERVICE_CHANGED=0
-PASEO_LAST_HEALTH_ERROR=""
-PASEO_LAST_HEALTH_SUMMARY=""
-
-paseo_service_path() {
-    printf '%s:%s:%s:%s:%s:%s:%s:%s:%s
-' \
-        "${HOME}/.local/bin" \
-        "${HOME}/.bun/bin" \
-        "${HOME}/.local/share/mise/shims" \
-        "${HOME}/.mise/shims" \
-        "${HOME}/.mise/bin" \
-        "/opt/homebrew/bin" \
-        "/home/linuxbrew/.linuxbrew/bin" \
-        "/usr/local/bin" \
-        "/usr/bin:/bin:/usr/sbin:/sbin"
-}
-
-paseo_effective_service_path() {
-    if [[ -n "${PASEO_SERVICE_PATH}" ]]; then
-        printf '%s
-' "${PASEO_SERVICE_PATH}"
-    else
-        paseo_service_path
-    fi
-}
-
-paseo_shell_quote() {
-    local _escaped=""
-
-    _escaped=$(printf '%s' "$1" | sed "s/'/'\\''/g") || return 1
-    printf "'%s'" "${_escaped}"
-}
-
-paseo_command_target() {
-    local _cmd=""
-    local _link_target=""
-    local _link_dir=""
-
-    if ! command -v paseo &> /dev/null; then
-        return 1
-    fi
-
-    _cmd=$(command -v paseo)
-
-    if command -v realpath &> /dev/null; then
-        realpath "${_cmd}" 2>/dev/null && return 0
-    fi
-
-    if readlink -f "${_cmd}" > /dev/null 2>&1; then
-        readlink -f "${_cmd}" 2>/dev/null && return 0
-    fi
-
-    if [[ -L "${_cmd}" ]]; then
-        _link_target=$(readlink "${_cmd}" 2>/dev/null || true)
-        if [[ "${_link_target}" == /* ]]; then
-            printf '%s\n' "${_link_target}"
-        elif [[ -n "${_link_target}" ]]; then
-            _link_dir=$(cd "$(dirname "${_cmd}")" && pwd -P)
-            printf '%s\n' "${_link_dir}/${_link_target}"
-        else
-            printf '%s\n' "${_cmd}"
-        fi
-    else
-        printf '%s\n' "${_cmd}"
-    fi
-}
-
-paseo_command_matches_bun_global() {
-    local _paseo_target="$1"
-    local _bun_global_bin="$2"
-    local _bun_paseo="${_bun_global_bin}/paseo"
-
-    [[ -n "${_paseo_target}" && -n "${_bun_global_bin}" && -e "${_bun_paseo}" ]] || return 1
-    [[ "${_paseo_target}" -ef "${_bun_paseo}" ]]
-}
-
-paseo_runtime_target() {
-    local _cmd=""
-
-    if ! command -v node &> /dev/null; then
-        return 1
-    fi
-
-    _cmd=$(command -v node)
-    if command -v realpath &> /dev/null; then
-        realpath "${_cmd}" 2>/dev/null && return 0
-    fi
-    if readlink -f "${_cmd}" > /dev/null 2>&1; then
-        readlink -f "${_cmd}" 2>/dev/null && return 0
-    fi
-    printf '%s\n' "${_cmd}"
-}
-
-paseo_path_owner() {
-    local _path="$1"
-
-    if stat -c '%U' "${_path}" >/dev/null 2>&1; then
-        stat -c '%U' "${_path}" 2>/dev/null
-    else
-        stat -f '%Su' "${_path}" 2>/dev/null || true
-    fi
-}
-
-paseo_path_is_group_or_world_writable() {
-    local _path="$1"
-    local _dir=""
-    local _unsafe=""
-
-    if [[ -z "${_path}" ]]; then
-        return 0
-    fi
-
-    _unsafe=$(find "${_path}" -prune \( -perm -020 -o -perm -002 \) -print -quit 2>/dev/null || true)
-    if [[ -n "${_unsafe}" ]]; then
-        return 0
-    fi
-
-    if [[ -d "${_path}" ]]; then
-        _dir="${_path}"
-    else
-        _dir=$(dirname "${_path}")
-    fi
-
-    [[ -d "${_dir}" ]] || return 0
-
-    while [[ -n "${_dir}" && "${_dir}" != "/" ]]; do
-        _unsafe=$(find "${_dir}" -prune \( -perm -020 -o -perm -002 \) -print -quit 2>/dev/null || true)
-        if [[ -n "${_unsafe}" ]]; then
-            return 0
-        fi
-        _dir=$(dirname "${_dir}")
-    done
-
-    _unsafe=$(find / -prune \( -perm -020 -o -perm -002 \) -print -quit 2>/dev/null || true)
-    [[ -n "${_unsafe}" ]]
-}
-
-paseo_harden_user_path_chain() {
-    local _path="$1"
-    local _label="$2"
-    local _home_real=""
-    local _target=""
-    local _dir=""
-    local _owner=""
-    local _target_under_home=0
-    local _user=""
-
-    [[ -n "${_path}" && -e "${_path}" ]] || return 0
-    [[ -n "${HOME}" && -d "${HOME}" ]] || return 0
-
-    _user=$(whoami || true)
-    [[ -n "${_user}" ]] || return 0
-
-    if command -v realpath &> /dev/null; then
-        _home_real=$(realpath "${HOME}" 2>/dev/null || true)
-        _target=$(realpath "${_path}" 2>/dev/null || true)
-    elif readlink -f "${HOME}" > /dev/null 2>&1 && readlink -f "${_path}" > /dev/null 2>&1; then
-        _home_real=$(readlink -f "${HOME}" 2>/dev/null || true)
-        _target=$(readlink -f "${_path}" 2>/dev/null || true)
-    else
-        _home_real=$(cd "${HOME}" && pwd -P) || return 0
-        if [[ -d "${_path}" ]]; then
-            _target=$(cd "${_path}" && pwd -P) || return 0
-        else
-            _dir=$(cd "$(dirname "${_path}")" && pwd -P) || return 0
-            _target="${_dir}/$(basename "${_path}")"
-        fi
-    fi
-
-    [[ -n "${_home_real}" && -n "${_target}" ]] || return 0
-
-    case "${_target}" in
-        "${_home_real}"|"${_home_real}/"*) _target_under_home=1 ;;
-        *) ;;
-    esac
-
-    _owner=$(paseo_path_owner "${_target}")
-    if [[ "${_owner}" == "${_user}" ]] && ! chmod go-w "${_target}"; then
-        print_error "Failed to harden Paseo ${_label} path permissions: ${_target}"
-        return 1
-    fi
-
-    if [[ -d "${_target}" ]]; then
-        _dir="${_target}"
-    else
-        _dir=$(dirname "${_target}")
-    fi
-
-    while [[ -n "${_dir}" && "${_dir}" != "/" ]]; do
-        if [[ "${_target_under_home}" == "1" ]]; then
-            case "${_dir}" in
-                "${_home_real}"|"${_home_real}/"*) ;;
-                *) break ;;
-            esac
-        fi
-
-        _owner=$(paseo_path_owner "${_dir}")
-        if [[ "${_owner}" == "${_user}" ]] && ! chmod go-w "${_dir}"; then
-            print_error "Failed to harden Paseo ${_label} parent permissions: ${_dir}"
-            return 1
-        elif [[ "${_owner}" != "${_user}" && "${_target_under_home}" != "1" ]]; then
-            break
-        fi
-
-        [[ "${_dir}" == "${_home_real}" ]] && break
-        _dir=$(dirname "${_dir}")
-    done
-}
-
-paseo_harden_service_path_components() {
-    local _path_value="$1"
-    local _component=""
-
-    while IFS= read -r _component; do
-        [[ -n "${_component}" ]] || continue
-
-        if [[ -L "${_component}" ]]; then
-            paseo_harden_user_path_chain "$(dirname "${_component}")" "service PATH component parent" || return 1
-        fi
-
-        [[ -e "${_component}" ]] || continue
-        paseo_harden_user_path_chain "${_component}" "service PATH component" || return 1
-    done < <(printf '%s\n' "${_path_value}" | tr ':' '\n' || true)
-}
-
-paseo_existing_service_path() {
-    local _path_value="$1"
-    local _component=""
-    local _result=""
-
-    while IFS= read -r _component; do
-        [[ -n "${_component}" && -d "${_component}" ]] || continue
-
-        if [[ -z "${_result}" ]]; then
-            _result="${_component}"
-        else
-            _result="${_result}:${_component}"
-        fi
-    done < <(printf '%s\n' "${_path_value}" | tr ':' '\n' || true)
-
-    printf '%s\n' "${_result}"
-}
-
-paseo_path_owner_is_trusted() {
-    local _path="$1"
-    local _dir=""
-    local _owner=""
-    local _user=""
-
-    _user=$(whoami || true)
-    _owner=$(paseo_path_owner "${_path}")
-    case "${_owner}" in
-        root|"${_user}"|linuxbrew|homebrew) ;;
-        *) return 1 ;;
-    esac
-
-    if [[ -d "${_path}" ]]; then
-        _dir="${_path}"
-    else
-        _dir=$(dirname "${_path}")
-    fi
-
-    [[ -d "${_dir}" ]] || return 1
-
-    while [[ -n "${_dir}" && "${_dir}" != "/" ]]; do
-        _owner=$(paseo_path_owner "${_dir}")
-        case "${_owner}" in
-            root|"${_user}"|linuxbrew|homebrew) ;;
-            *) return 1 ;;
-        esac
-        _dir=$(dirname "${_dir}")
-    done
-
-    return 0
-}
-
-paseo_validate_trusted_path() {
-    local _path="$1"
-    local _label="$2"
-
-    if [[ -z "${_path}" || ! -e "${_path}" ]]; then
-        print_error "Paseo ${_label} path is missing."
-        return 1
-    fi
-
-    if paseo_path_is_group_or_world_writable "${_path}"; then
-        print_error "Paseo ${_label} path is under a group/world-writable directory; refusing to trust it."
-        return 1
-    fi
-
-    if ! paseo_path_owner_is_trusted "${_path}"; then
-        print_error "Paseo ${_label} path has an untrusted owner in its parent chain; refusing to trust it."
-        return 1
-    fi
-}
-
-paseo_validate_service_path_components() {
-    local _path_value="$1"
-    local _component=""
-    local _resolved_component=""
-    local _link_target=""
-    local _link_dir=""
-
-    while IFS= read -r _component; do
-        [[ -n "${_component}" && -d "${_component}" ]] || continue
-
-        _resolved_component="${_component}"
-        if [[ -L "${_component}" ]]; then
-            if command -v realpath &> /dev/null; then
-                _resolved_component=$(realpath "${_component}" 2>/dev/null || true)
-            elif readlink -f "${_component}" > /dev/null 2>&1; then
-                _resolved_component=$(readlink -f "${_component}" 2>/dev/null || true)
-            else
-                _link_target=$(readlink "${_component}" 2>/dev/null || true)
-                if [[ "${_link_target}" == /* ]]; then
-                    _resolved_component="${_link_target}"
-                elif [[ -n "${_link_target}" ]]; then
-                    _link_dir=$(cd "$(dirname "${_component}")" && pwd -P)
-                    _resolved_component="${_link_dir}/${_link_target}"
-                fi
-            fi
-
-            if [[ -z "${_resolved_component}" || ! -d "${_resolved_component}" ]]; then
-                print_error "Paseo service PATH component ${_component} resolves to a missing target."
-                return 1
-            fi
-
-            # Symlink mode bits are commonly 0777 and not security-relevant; validate
-            # the trusted parent plus the resolved target instead.
-            paseo_validate_trusted_path "$(dirname "${_component}")" "service PATH component parent" || return 1
-        fi
-
-        paseo_validate_trusted_path "${_resolved_component}" "service PATH component" || return 1
-    done < <(printf '%s\n' "${_path_value}" | tr ':' '\n' || true)
-}
-
-paseo_trusted_service_path() {
-    local _path_value="$1"
-    local _component=""
-    local _result=""
-
-    while IFS= read -r _component; do
-        [[ -n "${_component}" && -d "${_component}" ]] || continue
-
-        if ! paseo_validate_service_path_components "${_component}" >/dev/null 2>&1; then
-            print_warning "Skipping untrusted optional Paseo service PATH component: ${_component}" >&2
-            continue
-        fi
-
-        if [[ -z "${_result}" ]]; then
-            _result="${_component}"
-        else
-            _result="${_result}:${_component}"
-        fi
-    done < <(printf '%s\n' "${_path_value}" | tr ':' '\n' || true)
-
-    printf '%s\n' "${_result}"
-}
-
-install_paseo_cli() {
-    local _global_packages=""
-    local _paseo_target=""
-    local _previous_paseo_target=""
-    local _previous_version_output=""
-    local _node_target=""
-    local _node_dir=""
-    local _version_output=""
-    local _service_path=""
-    local _bun_global_bin=""
-    local _package_spec=""
-
-    if [[ "${HEADLESS:-}" != "1" ]]; then
-        return 0
-    fi
-
-    _package_spec=$(paseo_package_spec) || return 1
-    PASEO_PACKAGE_CHANGED=0
-    print_message "Installing/updating ${_package_spec} for headless daemon setup..."
-
-    _service_path=$(paseo_service_path)
-    export PATH="${HOME}/.bun/bin:${_service_path}:${PATH}"
-
-    _previous_paseo_target=$(paseo_command_target 2>/dev/null || true)
-    if [[ -n "${_previous_paseo_target}" ]]; then
-        _previous_version_output=$(HOME="${HOME}" PATH="${PATH}" "${_previous_paseo_target}" --version 2>/dev/null || true)
-    fi
-    if ! command -v bun &> /dev/null; then
-        print_error "Bun not found. Cannot install ${PASEO_PACKAGE} for HEADLESS=1."
-        return 1
-    fi
-
-    if ! ensure_pi_node_runtime; then
-        print_error "A supported shared Node/npm runtime is required before installing ${PASEO_PACKAGE}."
-        return 1
-    fi
-
-    if ! bun install -g "${_package_spec}"; then
-        print_error "Failed to install ${_package_spec}."
-        return 1
-    fi
-
-    hash -r 2>/dev/null || true
-    _global_packages=$(bun pm ls -g 2>/dev/null || true)
-    if ! grep -Fq "${PASEO_PACKAGE}" <<< "${_global_packages}"; then
-        print_error "Paseo install validation failed: ${PASEO_PACKAGE} is not listed in Bun global packages."
-        return 1
-    fi
-
-    _paseo_target=$(paseo_command_target 2>/dev/null || true)
-    if [[ -z "${_paseo_target}" ]]; then
-        print_error "Paseo install validation failed: paseo command is not available after installing ${PASEO_PACKAGE}."
-        return 1
-    fi
-
-    _bun_global_bin=$(bun pm bin -g 2>/dev/null || true)
-    if [[ -z "${_bun_global_bin}" ]]; then
-        print_error "Paseo install validation failed: Bun global bin path could not be resolved."
-        return 1
-    fi
-    if ! paseo_command_matches_bun_global "${_paseo_target}" "${_bun_global_bin}"; then
-        if [[ "${_paseo_target}" == *"/node_modules/paseo/"* ]] || [[ "${_paseo_target}" == *"/node_modules/paseo/bin"* ]]; then
-            print_error "Paseo command resolves to the unrelated unscoped paseo package: ${_paseo_target}"
-        else
-            print_error "Paseo command does not match Bun's global paseo executable: ${_paseo_target}"
-        fi
-        return 1
-    fi
-
-    paseo_harden_user_path_chain "${_paseo_target}" "executable" || return 1
-    paseo_validate_trusted_path "${_paseo_target}" "executable" || return 1
-
-    _node_target=$(paseo_runtime_target 2>/dev/null || true)
-    if [[ -z "${_node_target}" ]]; then
-        print_error "Paseo runtime validation failed: node is not available for the service wrapper."
-        return 1
-    fi
-    paseo_harden_user_path_chain "${_node_target}" "runtime" || return 1
-    paseo_validate_trusted_path "${_node_target}" "runtime" || return 1
-
-    PASEO_VALIDATED_CMD="${_paseo_target}"
-    PASEO_VALIDATED_NODE="${_node_target}"
-    _node_dir=$(dirname "${_node_target}")
-    _service_path=$(paseo_service_path)
-    _service_path=$(paseo_existing_service_path "${_service_path}")
-    paseo_harden_service_path_components "${_service_path}" || return 1
-    _service_path=$(paseo_trusted_service_path "${_service_path}")
-    PASEO_SERVICE_PATH="${_node_dir}${_service_path:+:${_service_path}}"
-    if [[ -z "${PASEO_SERVICE_PATH}" ]]; then
-        print_error "Paseo service PATH validation failed: no existing PATH components remain."
-        return 1
-    fi
-    paseo_validate_service_path_components "${PASEO_SERVICE_PATH}" || return 1
-
-    if ! _version_output=$(HOME="${HOME}" PATH="${PASEO_SERVICE_PATH}:${PATH}" "${_paseo_target}" --version 2>/dev/null); then
-        print_error "Paseo install validation failed: validated paseo command did not run successfully with the service PATH."
-        return 1
-    fi
-
-    PASEO_PACKAGE_VERSION=$(printf '%s' "${_version_output}" | head -n 1 || true)
-    PASEO_PACKAGE_VERSION=$(printf '%s' "${PASEO_PACKAGE_VERSION}" | tr -cd '[:alnum:].:_/@ -' | cut -c1-80 || true)
-    [[ -n "${PASEO_PACKAGE_VERSION}" ]] || PASEO_PACKAGE_VERSION="unknown"
-
-    if [[ "${_previous_paseo_target}" != "${_paseo_target}" || "${_previous_version_output}" != "${_version_output}" ]]; then
-        PASEO_PACKAGE_CHANGED=1
-    fi
-
-    print_success "Paseo CLI ready (${PASEO_PACKAGE}, ${PASEO_PACKAGE_VERSION})."
-}
-
-write_paseo_daemon_wrapper() {
-    local _wrapper="${HOME}/.local/bin/paseo-daemon-start"
-    local _log_dir="${HOME}/.local/log/paseo-daemon"
-    local _tmp=""
-    local _home_q=""
-    local _path_q=""
-    local _cmd_q=""
-    local _node_q=""
-    local _listen_q=""
-    local _service_path=""
-
-    if [[ -z "${PASEO_VALIDATED_CMD}" ]]; then
-        print_error "Cannot write Paseo daemon wrapper before validating the paseo command."
-        return 1
-    fi
-    paseo_resolve_listen_target || return 1
-
-    PASEO_DAEMON_WRAPPER_CHANGED=0
-    mkdir -p "${HOME}/.local/bin" "${_log_dir}"
-    chmod 700 "${HOME}/.local/bin" "${_log_dir}"
-
-    _service_path=$(paseo_effective_service_path)
-    _home_q=$(paseo_shell_quote "${HOME}")
-    _path_q=$(paseo_shell_quote "${_service_path}")
-    _cmd_q=$(paseo_shell_quote "${PASEO_VALIDATED_CMD}")
-    _node_q=$(paseo_shell_quote "${PASEO_VALIDATED_NODE}")
-    _listen_q=$(paseo_shell_quote "${PASEO_LISTEN_TARGET}")
-    _tmp=$(mktemp)
-    if ! cat > "${_tmp}" << EOF
-#!/bin/bash
-# ${PASEO_MANAGED_MARKER}
-set -euo pipefail
-umask 077
-export HOME=${_home_q}
-export PATH=${_path_q}
-[[ -x ${_node_q} ]] || exit 127
-[[ -x ${_cmd_q} ]] || exit 127
-export PASEO_SETUP_CLI=${_cmd_q}
-exec ${_cmd_q} daemon start --foreground --listen ${_listen_q}
-EOF
-    then
-        rm -f "${_tmp}"
-        print_error "Failed to write Paseo daemon wrapper."
-        return 1
-    fi
-    if ! chmod 700 "${_tmp}"; then
-        rm -f "${_tmp}"
-        print_error "Failed to install Paseo daemon wrapper."
-        return 1
-    fi
-
-    if [[ -f "${_wrapper}" ]] && cmp -s "${_tmp}" "${_wrapper}"; then
-        rm -f "${_tmp}"
-        if ! chmod 700 "${_wrapper}"; then
-            print_error "Failed to secure Paseo daemon wrapper."
-            return 1
-        fi
-        print_debug "Paseo daemon wrapper is unchanged."
-    else
-        if ! mv "${_tmp}" "${_wrapper}"; then
-            rm -f "${_tmp}"
-            print_error "Failed to install Paseo daemon wrapper."
-            return 1
-        fi
-        PASEO_DAEMON_WRAPPER_CHANGED=1
-        print_success "Paseo daemon wrapper installed at ${_wrapper}."
-    fi
-}
-
-paseo_managed_service_is_active() {
-    paseo_systemctl_user is-active "${PASEO_SERVICE_NAME}" >/dev/null 2>&1
-}
-
-# systemd --user bus-backed control. When D-Bus is unavailable or stale (e.g.
-# after lingering sessions close PAM sessions and systemd --runtime-dir is
-# removed), fall back to the machined-mediated control channel
-# (`--machine=<user>@ --user`) which works for any user manager systemd
-# has spawned.
-paseo_systemctl_user() {
-    local _uid=""
-    local _runtime_dir=""
-    local _user=""
-
-    _uid=$(id -u 2>/dev/null || true)
-    [[ "${_uid}" =~ ^[0-9]+$ ]] || return 1
-    _runtime_dir="/run/user/${_uid}"
-
-    if XDG_RUNTIME_DIR="${_runtime_dir}" \
-        DBUS_SESSION_BUS_ADDRESS="unix:path=${_runtime_dir}/bus" \
-        systemctl --user "$@" 2>/dev/null; then
-        return 0
-    fi
-
-    _user=$(whoami 2>/dev/null || true)
-    if [[ -z "${_user}" ]]; then
-        return 1
-    fi
-
-    systemctl --machine="${_user}@" --user "$@" 2>/dev/null
-}
-
-paseo_managed_service_is_active_strict() {
-    local _attempt=0
-    local _max_attempts=${PASEO_ACTIVE_CHECK_ATTEMPTS:-5}
-    local _delay=${PASEO_ACTIVE_CHECK_DELAY:-1}
-
-    while [[ ${_attempt} -lt ${_max_attempts} ]]; do
-        if paseo_systemctl_user is-active "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
-            return 0
-        fi
-        _attempt=$(( _attempt + 1 ))
-        if [[ ${_attempt} -lt ${_max_attempts} ]]; then
-            sleep "${_delay}" || true
-        fi
-    done
-    return 1
-}
-
-stop_existing_paseo_daemon() {
-    local _service_path=""
-    local _state=""
-
-    if [[ -z "${PASEO_VALIDATED_CMD}" ]]; then
-        return 0
-    fi
-
-    if paseo_managed_service_is_active; then
-        print_debug "Existing Paseo daemon is already managed by ${PASEO_SERVICE_NAME}; leaving it running until change detection completes."
-        return 0
-    fi
-
-    _state=$(paseo_local_daemon_state 2>/dev/null || true)
-    if [[ "${_state}" != "running" ]]; then
-        print_debug "No running unmanaged Paseo daemon detected before service start."
-        return 0
-    fi
-
-    print_message "Stopping existing unmanaged Paseo daemon before service start..."
-    _service_path=$(paseo_effective_service_path)
-    if ! HOME="${HOME}" PATH="${_service_path}:${PATH}" paseo_run_with_timeout "${PASEO_STATUS_TIMEOUT_SECONDS:-10}" "${PASEO_VALIDATED_CMD}" daemon stop >/dev/null 2>&1; then
-        print_error "Failed to stop existing Paseo daemon before installing the managed service."
-        return 1
-    fi
-
-    sleep 1
-    _state=$(paseo_local_daemon_state 2>/dev/null || true)
-    if [[ "${_state}" == "running" ]]; then
-        print_error "Existing Paseo daemon is still running after stop; refusing to let it mask managed-service health."
-        return 1
-    fi
-}
-
-paseo_sanitize_status_value() {
-    printf '%s' "${1:-unknown}" | tr -cd '[:alnum:]_.:-' | cut -c1-64 || true
-}
-
-paseo_json_string_field() {
-    local _json="$1"
-    local _field="$2"
-
-    printf '%s\n' "${_json}" | sed -n "s/.*\"${_field}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n 1 || true
-}
-
-paseo_resolve_listen_target() {
-    local _config_file="${HOME}/.paseo/config.json"
-    local _configured_target="${PASEO_DEFAULT_LISTEN_TARGET}"
-    local _target=""
-    local _host=""
-    local _port=""
-
-    if [[ -n "${PASEO_LISTEN_TARGET}" ]]; then
-        return 0
-    fi
-
-    if [[ -f "${_config_file}" ]]; then
-        if ! command -v jq &> /dev/null; then
-            print_error "jq is required to read Paseo daemon.listen for HEADLESS=1."
-            return 1
-        fi
-        if ! _configured_target=$(jq -er --arg default "${PASEO_DEFAULT_LISTEN_TARGET}" '(.daemon.listen // $default) | if type == "string" then . else error("daemon.listen must be a string") end' "${_config_file}" 2>/dev/null); then
-            print_error "Failed to read daemon.listen from ${_config_file}."
-            return 1
-        fi
-    fi
-
-    _target=$(paseo_sanitize_status_value "${_configured_target}")
-    _host=${_target%:*}
-    _port=${_target##*:}
-    if [[ "${_configured_target}" != "${_target}" || "${_host}" != "127.0.0.1" || ! "${_port}" =~ ^[0-9]+$ ]] || (( 10#${_port} < 1 || 10#${_port} > 65535 )); then
-        print_error "Paseo daemon.listen must use 127.0.0.1 and a port for HEADLESS=1; found ${_target:-unknown}."
-        return 1
-    fi
-
-    PASEO_LISTEN_TARGET="${_target}"
-    print_debug "Paseo managed listener resolved from configuration: ${PASEO_LISTEN_TARGET}"
-}
-
-paseo_status_relay_disabled() {
-    local _json="$1"
-
-    printf '%s\n' "${_json}" | grep -Eqi '\"relayDisabled\"[[:space:]]*:[[:space:]]*true|\"relayEnabled\"[[:space:]]*:[[:space:]]*false|\"relay\"[[:space:]]*:[[:space:]]*\"disabled\"|\"relayStatus\"[[:space:]]*:[[:space:]]*\"disabled\"'
-}
-
-
-paseo_run_with_timeout() {
-    local _seconds="$1"
-    shift
-
-    if command -v timeout &> /dev/null; then
-        timeout "${_seconds}" "$@"
-    elif command -v perl &> /dev/null; then
-        perl -e 'alarm shift; exec @ARGV' "${_seconds}" "$@"
-    else
-        print_error "No timeout helper (timeout or perl) is available for Paseo health checks."
-        return 124
-    fi
-}
-
-paseo_local_daemon_state() {
-    local _status_json=""
-    local _service_path=""
-
-    _service_path=$(paseo_effective_service_path)
-    if ! _status_json=$(HOME="${HOME}" PATH="${_service_path}:${PATH}" paseo_run_with_timeout "${PASEO_STATUS_TIMEOUT_SECONDS:-10}" "${PASEO_VALIDATED_CMD}" daemon status --json 2>/dev/null); then
-        return 1
-    fi
-
-    paseo_json_string_field "${_status_json}" "localDaemon"
-}
-
-paseo_check_status_once() {
-    local _status_json=""
-    local _local_daemon=""
-    local _connected_daemon=""
-    local _field_value=""
-    local _service_path=""
-
-    _service_path=$(paseo_effective_service_path)
-    if ! _status_json=$(HOME="${HOME}" PATH="${_service_path}:${PATH}" paseo_run_with_timeout "${PASEO_STATUS_TIMEOUT_SECONDS:-10}" "${PASEO_VALIDATED_CMD}" daemon status --json 2>/dev/null); then
-        PASEO_LAST_HEALTH_ERROR="status command failed or timed out"
-        return 1
-    fi
-
-    if ! printf '%s' "${_status_json}" | grep -q '^{'; then
-        PASEO_LAST_HEALTH_ERROR="status command did not return JSON"
-        return 1
-    fi
-
-    _field_value=$(paseo_json_string_field "${_status_json}" "localDaemon")
-    _local_daemon=$(paseo_sanitize_status_value "${_field_value}")
-    _field_value=$(paseo_json_string_field "${_status_json}" "connectedDaemon")
-    _connected_daemon=$(paseo_sanitize_status_value "${_field_value}")
-    PASEO_LAST_HEALTH_SUMMARY="localDaemon=${_local_daemon:-unknown}, connectedDaemon=${_connected_daemon:-unknown}"
-
-    if [[ "${_local_daemon}" != "running" ]]; then
-        PASEO_LAST_HEALTH_ERROR="${PASEO_LAST_HEALTH_SUMMARY}"
-        return 1
-    fi
-
-    case "${_connected_daemon}" in
-        reachable|auth_required) ;;
-        auth_failed)
-            PASEO_LAST_HEALTH_ERROR="${PASEO_LAST_HEALTH_SUMMARY}"
-            return 1
-            ;;
-        *)
-            PASEO_LAST_HEALTH_ERROR="${PASEO_LAST_HEALTH_SUMMARY}"
-            return 1
-            ;;
-    esac
-
-    if paseo_status_relay_disabled "${_status_json}"; then
-        PASEO_LAST_HEALTH_ERROR="${PASEO_LAST_HEALTH_SUMMARY}, relay=disabled"
-        return 1
-    fi
-
-    PASEO_LAST_HEALTH_ERROR=""
-    return 0
-}
-
-wait_for_paseo_health() {
-    local _attempt=1
-    local _max_attempts="${PASEO_HEALTH_ATTEMPTS:-12}"
-    local _interval="${PASEO_HEALTH_INTERVAL_SECONDS:-5}"
-
-    while [[ "${_attempt}" -le "${_max_attempts}" ]]; do
-        if paseo_check_status_once; then
-            print_success "Paseo daemon health verified (${PASEO_LAST_HEALTH_SUMMARY})."
-            return 0
-        fi
-
-        print_debug "Waiting for Paseo daemon health (${_attempt}/${_max_attempts}): ${PASEO_LAST_HEALTH_ERROR}"
-        sleep "${_interval}"
-        _attempt=$((_attempt + 1))
-    done
-
-    print_error "Paseo daemon health check failed after ${_max_attempts} attempts: ${PASEO_LAST_HEALTH_ERROR}"
-    print_debug "Diagnostics: package=${PASEO_PACKAGE} version=${PASEO_PACKAGE_VERSION} node=${PASEO_VALIDATED_NODE:-unknown} user=$(whoami || true) home=${HOME} logs=${HOME}/.local/log/paseo-daemon"
-    return 1
-}
-
-paseo_service_process_pids() {
-    local _root_pid="$1"
-    local _process_rows=""
-
-    [[ -n "${_root_pid}" && "${_root_pid}" != "0" ]] || return 0
-    printf '%s\n' "${_root_pid}"
-
-    if ! _process_rows=$(ps -eo pid=,ppid= 2>/dev/null); then
-        return 0
-    fi
-
-    printf '%s\n' "${_process_rows}" | awk -v root="${_root_pid}" '
-        $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {
-            _pid = $1
-            _ppid = $2
-            children[_ppid] = children[_ppid] " " _pid
-        }
-        END {
-            if (root !~ /^[0-9]+$/) {
-                exit
-            }
-            seen[root] = 1
-            queue[1] = root
-            head = 1
-            tail = 1
-            while (head <= tail) {
-                _pid = queue[head++]
-                split(children[_pid], child, " ")
-                for (i in child) {
-                    if (child[i] != "" && !seen[child[i]]) {
-                        seen[child[i]] = 1
-                        queue[++tail] = child[i]
-                        print child[i]
-                    }
-                }
-            }
-        }
-    ' || true
-}
-
-paseo_listener_audit() {
-    local _pid="$1"
-    local _pid_list=""
-    local _listener_pid=""
-    local _listener_rows=""
-    local _listener_owner_pids=""
-    local _bad_listener=""
-    local _addr=""
-    local _listeners=""
-    local _listener_source=""
-
-    if [[ -z "${_pid}" || "${_pid}" == "0" ]]; then
-        print_error "Paseo service PID unavailable; cannot audit listeners for HEADLESS=1."
-        return 1
-    fi
-
-    _pid_list=$(paseo_service_process_pids "${_pid}" | awk 'NF && !seen[$0]++' || true)
-    if [[ -z "${_pid_list}" ]]; then
-        _pid_list="${_pid}"
-    fi
-
-    if command -v ss &> /dev/null; then
-        if ! _listener_source=$(ss -H -ltnp 2>/dev/null); then
-            print_error "Failed to inspect Paseo listeners with ss."
-            return 1
-        fi
-        if ! _listener_rows=$(printf '%s\n' "${_listener_source}" | awk -v pids="${_pid_list}" '
-            BEGIN {
-                split(pids, pid_values, /[[:space:]]+/)
-                for (i in pid_values) {
-                    if (pid_values[i] ~ /^[0-9]+$/) {
-                        wanted[pid_values[i]] = 1
-                    }
-                }
-            }
-            {
-                for (pid in wanted) {
-                    if ($0 ~ "pid=" pid ",") {
-                        print pid, $4
-                    }
-                }
-            }
-        '); then
-            print_error "Failed to parse Paseo listeners from ss output."
-            return 1
-        fi
-    elif command -v lsof &> /dev/null; then
-        _listener_source=$(
-            while IFS= read -r _listener_pid; do
-                [[ -n "${_listener_pid}" ]] || continue
-                lsof -nP -a -p "${_listener_pid}" -iTCP -sTCP:LISTEN 2>/dev/null || true
-            done <<< "${_pid_list}"
-        )
-        if ! _listener_rows=$(printf '%s\n' "${_listener_source}" | awk '$1 != "COMMAND" && $2 ~ /^[0-9]+$/ && $9 != "" {print $2, $9}'); then
-            print_error "Failed to parse Paseo listeners from lsof output."
-            return 1
-        fi
-    else
-        print_error "No listener-audit tool found (ss/lsof); cannot verify Paseo is loopback-only."
-        return 1
-    fi
-
-    # Paseo-launched agents remain in the service process tree and may open their
-    # own listeners. Audit only the process that owns Paseo's managed endpoint.
-    _listener_owner_pids=$(printf '%s\n' "${_listener_rows}" | awk -v target="${PASEO_LISTEN_TARGET}" '$2 == target && !seen[$1]++ {print $1}' || true)
-    if [[ -z "${_listener_owner_pids}" ]]; then
-        print_error "The managed Paseo service does not own its expected loopback listener (${PASEO_LISTEN_TARGET}); refusing to let another daemon satisfy health checks."
-        return 1
-    fi
-
-    _listeners=$(printf '%s\n' "${_listener_rows}" | awk -v pids="${_listener_owner_pids}" '
-        BEGIN {
-            split(pids, pid_values, /[[:space:]]+/)
-            for (i in pid_values) {
-                if (pid_values[i] ~ /^[0-9]+$/) {
-                    wanted[pid_values[i]] = 1
-                }
-            }
-        }
-        $1 in wanted {print $2}
-    ' || true)
-
-    while IFS= read -r _addr; do
-        [[ -n "${_addr}" ]] || continue
-        case "${_addr}" in
-            127.*|"[::1]:"*|"::1:"*|localhost:*|"[::ffff:127."*) ;;
-            *)
-                _bad_listener="${_addr}"
-                break
-                ;;
-        esac
-    done <<< "${_listeners}"
-
-    if [[ -n "${_bad_listener}" ]]; then
-        print_error "Paseo daemon appears to listen on a non-loopback address (${_bad_listener}); refusing HEADLESS=1 setup."
-        return 1
-    fi
-
-    print_debug "Paseo listener audit passed."
-}
-
-paseo_listener_target_available() {
-    local _managed_pid="${1:-}"
-    local _listener_source=""
-    local _occupied=""
-
-    if [[ -z "${PASEO_LISTEN_TARGET}" ]]; then
-        print_error "Paseo listener target is unavailable before service start."
-        return 1
-    fi
-
-    if command -v ss &> /dev/null; then
-        if ! _listener_source=$(ss -H -ltn 2>/dev/null); then
-            print_error "Failed to inspect the configured Paseo listener before service start."
-            return 1
-        fi
-        _occupied=$(printf '%s\n' "${_listener_source}" | awk -v target="${PASEO_LISTEN_TARGET}" '$4 == target {print; exit}' || true)
-    elif command -v lsof &> /dev/null; then
-        _listener_source=$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null || true)
-        _occupied=$(printf '%s\n' "${_listener_source}" | awk -v target="${PASEO_LISTEN_TARGET}" '$1 != "COMMAND" && $9 == target {print; exit}' || true)
-    else
-        print_error "No listener-audit tool found (ss/lsof); cannot check the configured Paseo listener before service start."
-        return 1
-    fi
-
-    if [[ -z "${_occupied}" ]]; then
-        return 0
-    fi
-    if [[ -n "${_managed_pid}" && "${_managed_pid}" != "0" ]] && paseo_listener_audit "${_managed_pid}" >/dev/null 2>&1; then
-        return 0
-    fi
-
-    print_error "Paseo listener target ${PASEO_LISTEN_TARGET} is already in use by another process. Set daemon.listen to an unused IPv4 loopback port and rerun setup."
-    return 1
-}
-
-paseo_service_owner_check() {
-    local _pid="$1"
-    local _expected_user=""
-    local _actual_user=""
-
-    if [[ -z "${_pid}" || "${_pid}" == "0" ]]; then
-        print_error "Paseo service PID unavailable; cannot verify managed service ownership."
-        return 1
-    fi
-
-    _expected_user=$(whoami || true)
-    _actual_user=$(ps -o user= -p "${_pid}" 2>/dev/null | awk '{print $1}' || true)
-    if [[ -z "${_actual_user}" ]]; then
-        print_error "Could not verify owner for Paseo service PID ${_pid}."
-        return 1
-    fi
-    if [[ "${_actual_user}" != "${_expected_user}" ]]; then
-        print_error "Paseo daemon is running as ${_actual_user}, expected ${_expected_user}."
-        return 1
-    fi
-}
-
-paseo_is_wsl_environment() {
+is_wsl_environment() {
     grep -qiE '(microsoft|wsl)' /proc/version /proc/sys/kernel/osrelease 2>/dev/null || [[ -n "${WSL_DISTRO_NAME:-}" ]] || [[ -f /proc/sys/fs/binfmt_misc/WSLInterop ]]
 }
 
-paseo_is_container_environment() {
+is_container_environment() {
     [[ -f /.dockerenv ]] || { command -v systemd-detect-virt &> /dev/null && systemd-detect-virt --container --quiet 2>/dev/null; }
 }
 
-paseo_headless_platform_gate() {
+headless_platform_gate() {
     if [[ "${HEADLESS:-}" != "1" ]]; then
         return 0
     fi
@@ -6804,699 +4157,15 @@ paseo_headless_platform_gate() {
         return 0
     fi
 
-    if paseo_is_wsl_environment; then
-        print_error "HEADLESS=1 Paseo daemon setup is unsupported in WSL because WSL cannot guarantee startup after Windows host reboot without login."
+    if is_wsl_environment; then
+        print_error "HEADLESS=1 setup is unsupported in WSL because WSL cannot guarantee startup after Windows host reboot without login."
         return 1
     fi
 
-    if paseo_is_container_environment; then
-        print_error "HEADLESS=1 Paseo daemon setup requires a booting native Linux user manager; container environments are unsupported."
+    if is_container_environment; then
+        print_error "HEADLESS=1 setup requires a booting native Linux user manager; container environments are unsupported."
         return 1
     fi
-}
-
-paseo_native_linux_preflight() {
-    local _user=""
-
-    if [[ "$(uname -s 2>/dev/null || true)" != "Linux" ]]; then
-        print_error "Native Linux Paseo headless service setup requires Linux."
-        return 1
-    fi
-
-    if paseo_is_wsl_environment; then
-        print_error "HEADLESS=1 Paseo daemon setup is unsupported in WSL because WSL cannot guarantee startup after Windows host reboot without login."
-        return 1
-    fi
-
-    if paseo_is_container_environment; then
-        print_error "HEADLESS=1 Paseo daemon setup requires a booting native Linux user manager; container environments are unsupported."
-        return 1
-    fi
-
-    _user=$(whoami || true)
-    if [[ -z "${_user}" || -z "${HOME}" || ! -d "${HOME}" ]]; then
-        print_error "Cannot resolve target user/home for Paseo daemon setup."
-        return 1
-    fi
-
-    if ! command -v loginctl &> /dev/null; then
-        print_error "loginctl is required to enable lingering for the Paseo user service."
-        return 1
-    fi
-
-    if ! command -v systemctl &> /dev/null; then
-        print_error "systemctl is required to manage the Paseo user service."
-        return 1
-    fi
-
-    if ! loginctl show-user "${_user}" >/dev/null 2>&1; then
-        print_error "loginctl cannot inspect user ${_user}; cannot guarantee no-login Paseo startup."
-        return 1
-    fi
-
-    if ! paseo_user_lingering_enabled "${_user}" && ! can_sudo; then
-        print_error "sudo access is required to enable lingering for HEADLESS=1 Paseo daemon setup."
-        return 1
-    fi
-
-    if ! paseo_systemctl_user show-environment >/dev/null 2>&1; then
-        print_error "The systemd user manager is unavailable; cannot configure the Paseo user service safely."
-        return 1
-    fi
-}
-
-paseo_user_lingering_enabled() {
-    local _user="$1"
-
-    { loginctl show-user "${_user}" --property=Linger 2>/dev/null || true; } | grep -q 'Linger=yes'
-}
-
-paseo_enable_lingering_strict() {
-    local _user=""
-
-    _user=$(whoami || true)
-    if paseo_user_lingering_enabled "${_user}"; then
-        print_debug "User lingering already enabled for Paseo daemon."
-        return 0
-    fi
-
-    if ! can_sudo; then
-        print_error "sudo access is required to enable lingering for HEADLESS=1 Paseo daemon setup."
-        return 1
-    fi
-
-    print_message "Enabling lingering for Paseo systemd user service..."
-    if ! sudo loginctl enable-linger "${_user}"; then
-        print_error "Failed to enable lingering for ${_user}."
-        return 1
-    fi
-
-    if ! paseo_user_lingering_enabled "${_user}"; then
-        print_error "Lingering verification failed for ${_user}."
-        return 1
-    fi
-    print_success "User lingering enabled for Paseo daemon."
-}
-
-paseo_existing_managed_service_check() {
-    local _service_file="${HOME}/.config/systemd/user/${PASEO_SERVICE_NAME}"
-    local _wrapper="${HOME}/.local/bin/paseo-daemon-start"
-
-    if [[ -f "${_service_file}" ]] && ! grep -qF "${PASEO_MANAGED_MARKER}" "${_service_file}"; then
-        print_error "Existing unmanaged ${_service_file} found. Remove or rename it before rerunning HEADLESS=1 setup."
-        return 1
-    fi
-
-    if [[ -f "${_wrapper}" ]] && ! grep -qF "${PASEO_MANAGED_MARKER}" "${_wrapper}"; then
-        print_error "Existing unmanaged ${_wrapper} found. Remove or rename it before rerunning HEADLESS=1 setup."
-        return 1
-    fi
-}
-
-paseo_linux_service_pid() {
-    paseo_systemctl_user show "${PASEO_SERVICE_NAME}" --property=MainPID --value 2>/dev/null | head -n 1 || true
-}
-
-install_paseo_systemd_user_service() {
-    local _service_dir="${HOME}/.config/systemd/user"
-    local _service_file="${_service_dir}/${PASEO_SERVICE_NAME}"
-    local _service_path=""
-    local _tmp=""
-
-    _service_path=$(paseo_effective_service_path)
-    PASEO_SYSTEMD_SERVICE_CHANGED=0
-    mkdir -p "${_service_dir}"
-    chmod 700 "${_service_dir}"
-
-    if [[ -f "${_service_file}" ]] && ! grep -qF "${PASEO_MANAGED_MARKER}" "${_service_file}"; then
-        print_error "Existing unmanaged ${_service_file} found. Remove or rename it before rerunning HEADLESS=1 setup."
-        return 1
-    fi
-
-    _tmp=$(mktemp)
-    if ! cat > "${_tmp}" << EOF
-# ${PASEO_MANAGED_MARKER}
-[Unit]
-Description=Paseo headless daemon
-Documentation=https://www.getpaseo.com/
-
-[Service]
-Type=simple
-ExecStart=${HOME}/.local/bin/paseo-daemon-start
-WorkingDirectory=${HOME}
-Environment=HOME=${HOME}
-Environment=PATH=${_service_path}
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-EOF
-    then
-        rm -f "${_tmp}"
-        print_error "Failed to write Paseo systemd user service."
-        return 1
-    fi
-    if ! chmod 600 "${_tmp}"; then
-        rm -f "${_tmp}"
-        print_error "Failed to install Paseo systemd user service."
-        return 1
-    fi
-
-    if [[ -f "${_service_file}" ]] && cmp -s "${_tmp}" "${_service_file}"; then
-        rm -f "${_tmp}"
-        if ! chmod 600 "${_service_file}"; then
-            print_error "Failed to secure Paseo systemd user service."
-            return 1
-        fi
-        print_debug "Paseo systemd user service definition is unchanged."
-    else
-        if ! mv "${_tmp}" "${_service_file}"; then
-            rm -f "${_tmp}"
-            print_error "Failed to install Paseo systemd user service."
-            return 1
-        fi
-        PASEO_SYSTEMD_SERVICE_CHANGED=1
-    fi
-
-    paseo_enable_lingering_strict || return 1
-
-    if [[ "${PASEO_SYSTEMD_SERVICE_CHANGED}" == "1" ]]; then
-        if ! paseo_systemctl_user daemon-reload; then
-            print_error "Failed to reload systemd user units for Paseo."
-            return 1
-        fi
-    fi
-
-    if ! paseo_systemctl_user enable "${PASEO_SERVICE_NAME}"; then
-        print_error "Failed to enable ${PASEO_SERVICE_NAME}."
-        return 1
-    fi
-
-    if ! paseo_managed_service_is_active; then
-        PASEO_MANAGED_SERVICE_TOUCHED=1
-        if ! paseo_systemctl_user start "${PASEO_SERVICE_NAME}"; then
-            print_debug "Initial start of ${PASEO_SERVICE_NAME} reported an error; attempting recovery."
-        fi
-    elif [[ "${PASEO_PACKAGE_CHANGED}" == "1" || "${PASEO_DAEMON_WRAPPER_CHANGED}" == "1" || "${PASEO_SYSTEMD_SERVICE_CHANGED}" == "1" ]]; then
-        PASEO_MANAGED_SERVICE_TOUCHED=1
-        if ! paseo_systemctl_user reset-failed "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
-            print_debug "reset-failed reported an error (unit may not be failed); continuing."
-        fi
-        # Kill any leftover orphan processes in the Paseo cgroup before restarting;
-        # otherwise systemd can refuse the new start (exit-code 219/cgroup).
-        paseo_systemctl_user kill "${PASEO_SERVICE_NAME}" --kill-whom=all >/dev/null 2>&1 || true
-        sleep 1
-        if ! paseo_systemctl_user restart "${PASEO_SERVICE_NAME}"; then
-            print_debug "Initial restart of ${PASEO_SERVICE_NAME} reported an error; attempting recovery."
-        fi
-    else
-        print_debug "Paseo package, wrapper, and service definition are unchanged; leaving the active daemon running."
-    fi
-
-    if ! paseo_systemctl_user is-enabled "${PASEO_SERVICE_NAME}" >/dev/null 2>&1; then
-        print_error "${PASEO_SERVICE_NAME} is not enabled after setup."
-        print_debug "Inspect privately with: systemctl --user is-enabled ${PASEO_SERVICE_NAME}"
-        return 1
-    fi
-
-    if ! paseo_managed_service_is_active_strict; then
-        # Give the service one last chance: reset failed state, sweep orphan
-        # processes, and start it before declaring failure.
-        paseo_systemctl_user reset-failed "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
-        paseo_systemctl_user kill "${PASEO_SERVICE_NAME}" --kill-whom=all >/dev/null 2>&1 || true
-        sleep 1
-        paseo_systemctl_user start "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
-        PASEO_MANAGED_SERVICE_TOUCHED=1
-    fi
-
-    if ! paseo_managed_service_is_active_strict; then
-        print_error "${PASEO_SERVICE_NAME} is not active after setup."
-        print_debug "State captured from systemd:"
-        paseo_systemctl_user status "${PASEO_SERVICE_NAME}" --no-pager 2>&1 | head -10 | sed 's/^/  /' || true
-        print_debug "Inspect privately with: journalctl --user -u ${PASEO_SERVICE_NAME} --no-pager"
-        return 1
-    fi
-
-    print_success "Paseo systemd user service enabled and active."
-}
-
-cleanup_paseo_managed_service() {
-    local _platform="$1"
-
-    if [[ "${PASEO_MANAGED_SERVICE_TOUCHED}" != "1" ]]; then
-        return 0
-    fi
-
-    case "${_platform}" in
-        Linux)
-            paseo_systemctl_user stop "${PASEO_SERVICE_NAME}" >/dev/null 2>&1 || true
-            ;;
-        *) ;;
-    esac
-    print_debug "Stopped managed Paseo service after failed verification; managed files and logs remain for inspection."
-}
-
-setup_headless_paseo_daemon() {
-    local _platform=""
-    local _service_pid=""
-
-    if [[ "${HEADLESS:-}" != "1" ]]; then
-        return 0
-    fi
-
-    _platform=$(uname -s 2>/dev/null || true)
-    if [[ "${_platform}" != "Linux" ]]; then
-        print_error "HEADLESS=1 Paseo daemon setup is unsupported on ${_platform:-this platform}."
-        return 1
-    fi
-    paseo_native_linux_preflight || return 1
-    paseo_existing_managed_service_check || return 1
-    # Package or wrapper updates may restart the owner even when Muse is unchanged.
-    configure_paseo_muse_profile verify-owner || return 1
-    if [[ "${PASEO_MUSE_DEFER_DAEMON_SETUP:-0}" == "1" ]]; then
-        return 0
-    fi
-
-    install_paseo_cli || return 1
-    paseo_resolve_listen_target || return 1
-    stop_existing_paseo_daemon || return 1
-    _service_pid=$(paseo_linux_service_pid || true)
-    paseo_listener_target_available "${_service_pid}" || return 1
-    write_paseo_daemon_wrapper || return 1
-
-    if ! install_paseo_systemd_user_service; then
-        cleanup_paseo_managed_service "${_platform}"
-        return 1
-    fi
-    _service_pid=$(paseo_linux_service_pid || true)
-
-    if ! paseo_service_owner_check "${_service_pid}" || ! wait_for_paseo_health || ! paseo_listener_audit "${_service_pid}"; then
-        cleanup_paseo_managed_service "${_platform}"
-        return 1
-    fi
-
-    print_success "Headless Paseo daemon is service-managed and locally reachable. Use Paseo's normal pairing flow later if needed."
-    cleanup_surplus_paseo_clis "${_service_pid}" || return 1
-}
-
-# Remove only unreferenced npm copies after the managed Bun service passes health checks.
-cleanup_surplus_paseo_clis() {
-    local _result="" _status=0
-    local _service_pid="${1:-}"
-    if [[ "${HEADLESS:-}" != "1" ]]; then
-        return 0
-    fi
-    if [[ -z "${PASEO_VALIDATED_CMD:-}" || -z "${PASEO_VALIDATED_NODE:-}" ]]; then
-        print_warning "Paseo CLI cleanup failed: retained CLI is not validated. No automatic retry was attempted."
-        return 1
-    fi
-    _result=$(env -u NODE_OPTIONS -u NODE_PATH "${PASEO_VALIDATED_NODE}" --input-type=commonjs - "${HOME}" "${PASEO_VALIDATED_CMD}" "${_service_pid}" 2>/dev/null <<'PASEO_CLI_CLEANUP_JS'
-// BEGIN PASEO CLI CLEANUP
-'use strict';
-const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
-const {spawnSync} = require('node:child_process');
-// BEGIN PASEO CLI IDENTITY
-// Inspect package metadata before executing a CLI. A PATH hit is not proof of identity.
-function cliInfo(file) {
-    try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-}
-function cliHomeAlias(file, stat) {
-    return process.platform === 'linux' && file === '/home' && stat.uid === 0 &&
-        ['var/home', '/var/home'].includes(fs.readlinkSync(file)) && ['/', '/var', '/var/home'].every(dir => {
-            const s = cliInfo(dir);
-            return s?.isDirectory() && !s.isSymbolicLink() && s.uid === 0 && !(s.mode & 0o022);
-        });
-}
-function cliDirectory(directory) {
-    for (let current = path.resolve(directory); ; current = path.dirname(current)) {
-        const s = cliInfo(current);
-        if (!s) return false;
-        if (s.isSymbolicLink() && cliHomeAlias(current, s)) continue;
-        if (!s.isDirectory() || s.isSymbolicLink()) return false;
-        if (process.platform !== 'win32' && (![0, process.getuid()].includes(s.uid) || s.mode & 0o002 && !(s.uid === 0 && s.mode & 0o1000))) return false;
-        if (current === path.dirname(current)) return true;
-    }
-}
-function cliRegular(file) {
-    const s = cliInfo(file);
-    return s?.isFile() && !s.isSymbolicLink() && s.size <= 2 * 1024 * 1024 &&
-        cliDirectory(path.dirname(file)) && (process.platform === 'win32' || [0, process.getuid()].includes(s.uid) && !(s.mode & 0o002));
-}
-function cliPackage(root) {
-    const metadata = path.join(root, 'package.json');
-    if (!cliRegular(metadata)) return null;
-    const text = fs.readFileSync(metadata, 'utf8');
-    const data = JSON.parse(text);
-    // Reject duplicate keys rather than guessing which package declaration is authoritative.
-    const tokens = text.match(/"(?:[^"\\]|\\.)*"|[{}\[\]:,]/g) || [];
-    const stack = [];
-    for (let i = 0; i < tokens.length; i++) {
-        const token = tokens[i];
-        if (token === '{' || token === '[') stack.push(token === '{' ? new Set() : null);
-        else if (token === '}' || token === ']') stack.pop();
-        else if (token.startsWith('"') && tokens[i + 1] === ':') {
-            const key = JSON.parse(token), names = stack[stack.length - 1];
-            if (!names || names.has(key)) return null;
-            names.add(key);
-        }
-    }
-    const bin = typeof data?.bin === 'string' ? data.bin : data?.bin?.paseo;
-    if (data?.name !== '@getpaseo/cli' || typeof data.version !== 'string' ||
-        !/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(data.version) || typeof bin !== 'string' || path.isAbsolute(bin) ||
-        bin.split(/[\\/]/).some(p => p === '..')) return null;
-    const entry = path.resolve(root, bin);
-    if (!entry.startsWith(root + path.sep) || !cliRegular(entry)) return null;
-    return {root, entry, version: data.version};
-}
-function cliIdentity(command) {
-    try {
-        if (!path.isAbsolute(command) || !cliDirectory(path.dirname(command))) return null;
-        if (process.platform === 'win32' && command.endsWith('.cmd')) {
-            if (!cliRegular(command)) return null;
-            for (const base of [path.join(path.dirname(command), 'node_modules'), path.resolve(path.dirname(command), '../install/global/node_modules')]) {
-                const pkg = cliPackage(path.join(base, '@getpaseo/cli'));
-                if (pkg) return pkg;
-            }
-            return null;
-        }
-        const s = cliInfo(command);
-        if (!s || !s.isFile() && !s.isSymbolicLink()) return null;
-        // Only the command symlink is allowed. Neither its ancestors nor target directories can be links.
-        const target = s.isSymbolicLink() ? path.resolve(path.dirname(command), fs.readlinkSync(command)) : command;
-        if (!cliRegular(target)) return null;
-        for (let root = path.dirname(target); root !== path.dirname(root); root = path.dirname(root)) {
-            if (!cliInfo(path.join(root, 'package.json'))) continue;
-            const pkg = cliPackage(root);
-            return pkg?.entry === target ? pkg : null;
-        }
-    } catch { /* Invalid or unverified candidates remain untouched and are never executed. */ }
-    return null;
-}
-function selectPaseoCli(explicit = '') {
-    const names = process.platform === 'win32' ? ['paseo.cmd', 'paseo.exe'] : ['paseo'];
-    const candidates = explicit ? [explicit] : [
-        ...names.map(name => path.join(os.homedir(), '.bun/bin', name)),
-        ...(process.env.PATH || '').split(path.delimiter).filter(dir => path.isAbsolute(dir))
-            .flatMap(dir => names.map(name => path.join(dir, name))),
-    ];
-    for (const candidate of new Set(candidates)) {
-        const pkg = cliIdentity(candidate);
-        if (pkg && /^0\.8\.\d+(?:[-+][\w.-]+)?$/.test(pkg.version)) return [process.execPath, pkg.entry];
-        // A verified managed release owns selection even when Plain does not support it.
-        if (pkg && (explicit || path.dirname(candidate) === path.join(os.homedir(), '.bun/bin'))) return null;
-    }
-    return null;
-}
-// END PASEO CLI IDENTITY
-const failure = reason => { throw new Error(reason); };
-const allowed = new Set(['unsafe-home', 'retained-unverified', 'retained-unusable', 'unsafe-candidate', 'npm-unavailable',
-    'process-inspection', 'service-inspection', 'in-use', 'service-reference', 'unknown-owner', 'metadata-changed',
-    'npm-failed', 'removal-unverified', 'operation-failed']);
-let removed = 0;
-function snapshot(file) {
-    const s = cliInfo(file);
-    return s ? [s.dev, s.ino, s.mode, s.uid, s.size, s.mtimeMs, s.ctimeMs, s.isSymbolicLink() ? fs.readlinkSync(file) : ''] : null;
-}
-function main() {
-    process.umask(0o077);
-    const logicalHome = process.argv[2], retainedCommand = process.argv[3];
-    if (!logicalHome || !path.isAbsolute(logicalHome) || !cliDirectory(logicalHome)) failure('unsafe-home');
-    const home = fs.realpathSync(logicalHome);
-    if (process.platform === 'win32' || fs.statSync(home).uid !== process.getuid()) failure('unsafe-home');
-    if (process.env.PASEO_HOME && path.resolve(process.env.PASEO_HOME) !== path.join(logicalHome, '.paseo') &&
-        path.resolve(process.env.PASEO_HOME) !== path.join(home, '.paseo')) {
-        console.log('paseo-cleanup:deferred:custom-home'); return;
-    }
-    const canonical = path.join(home, '.bun/install/global/node_modules/@getpaseo/cli');
-    const retained = cliIdentity(retainedCommand);
-    if (!retained || fs.realpathSync(retained.root) !== canonical) failure('retained-unverified');
-    const version = spawnSync(process.execPath, [retained.entry, '--version'], {
-        env: {...process.env, NODE_OPTIONS: '', NODE_PATH: ''}, encoding: 'utf8', timeout: 10000, maxBuffer: 8192,
-    });
-    if (version.error || version.status !== 0 || version.stdout.trim() !== retained.version) failure('retained-unusable');
-    const retainedFiles = [retainedCommand, retained.root, path.join(retained.root, 'package.json'), retained.entry];
-    const retainedBefore = retainedFiles.map(snapshot);
-    const verifiedServiceFiles = new Set();
-    const prefixes = [path.join(home, '.local')];
-    const mise = path.join(home, '.local/share/mise/installs/node');
-    if (cliInfo(mise)) {
-        if (!cliDirectory(mise)) failure('unsafe-candidate');
-        for (const version of fs.readdirSync(mise)) {
-            if (/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(version)) prefixes.push(path.join(mise, version));
-        }
-    }
-    const candidates = [];
-    for (const prefix of prefixes) {
-        const root = path.join(prefix, 'lib/node_modules/@getpaseo/cli');
-        if (!cliInfo(root)) continue;
-        const pkg = cliPackage(root), command = path.join(prefix, 'bin/paseo');
-        // Only the official one-command npm footprint is eligible, never arbitrary bins or man paths.
-        if (!pkg || fs.lstatSync(root).uid !== process.getuid()) failure('unsafe-candidate');
-        const document = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-        if (document.man || typeof document.bin !== 'object' || !document.bin || Array.isArray(document.bin) ||
-            Object.keys(document.bin).length !== 1 || !Object.hasOwn(document.bin, 'paseo')) failure('unsafe-candidate');
-        const s = cliInfo(command);
-        if (s && (!s.isSymbolicLink() || s.uid !== process.getuid() || cliIdentity(command)?.root !== root)) failure('unsafe-candidate');
-        const files = [prefix, path.join(prefix, 'lib'), path.join(prefix, 'lib/node_modules'),
-            path.join(prefix, 'lib/node_modules/@getpaseo'), root, path.join(root, 'package.json'), pkg.entry,
-            path.join(prefix, 'bin'), command];
-        const before = files.map(snapshot);
-        candidates.push({prefix, root, command, files, before});
-    }
-    if (!candidates.length) { console.log('paseo-cleanup:removed:0'); return; }
-    const npmEntry = [path.resolve(path.dirname(process.execPath), '../lib/node_modules/npm/bin/npm-cli.js'),
-        '/usr/share/nodejs/npm/bin/npm-cli.js'].find(file => cliRegular(file) &&
-            cliRegular(path.resolve(path.dirname(file), '../package.json')) &&
-            JSON.parse(fs.readFileSync(path.resolve(path.dirname(file), '../package.json'), 'utf8')).name === 'npm');
-    if (!npmEntry) failure('npm-unavailable');
-    const needles = candidates.flatMap(c => [c.root, c.command]).flatMap(file => [file, logicalHome + file.slice(home.length)]);
-    const hasReference = text => needles.some(needle => text.includes(needle));
-    function managedProcesses(rows, runtime) {
-        // The caller passes this PID only after managed-service convergence, health and listener checks.
-        const pid = Number(process.argv[4]);
-        const root = rows.find(row => row.pid === pid && row.uid === process.getuid());
-        if (!Number.isInteger(pid) || pid <= 1 || !root) return new Set();
-        const marker = 'Managed by scowalt machine setup: headless-paseo-daemon';
-        const wrapper = path.join(logicalHome, '.local/bin/paseo-daemon-start');
-        const safeFile = file => cliRegular(file) && cliInfo(file).uid === process.getuid() &&
-            cliInfo(file).nlink === 1 && !(cliInfo(file).mode & 0o022);
-        if (!safeFile(wrapper) || [logicalHome, retainedCommand, process.execPath].some(value => /['\n\r]/.test(value))) return new Set();
-        const lines = fs.readFileSync(wrapper, 'utf8').trimEnd().split('\n');
-        if (lines.length === 10 && lines[3] === 'umask 077') lines.splice(3, 1);
-        if (lines.length !== 9 || lines[0] !== '#!/bin/bash' || lines[1] !== `# ${marker}` ||
-            lines[2] !== 'set -euo pipefail' || lines[3] !== `export HOME='${logicalHome}'` ||
-            !/^export PATH='[^'\n]*'$/.test(lines[4]) || lines[5] !== `[[ -x '${process.execPath}' ]] || exit 127` ||
-            lines[6] !== `[[ -x '${retainedCommand}' ]] || exit 127` ||
-            lines[7] !== `export PASEO_SETUP_CLI='${retainedCommand}'`) return new Set();
-        const execPrefix = `exec '${retainedCommand}' daemon start --foreground --listen `;
-        const listen = lines[8].startsWith(execPrefix) ? lines[8].slice(execPrefix.length) : '';
-        if (!/^'127\.0\.0\.1:[1-9][0-9]{0,4}'$/.test(listen) || Number(listen.slice(1, -1).split(':')[1]) > 65535) return new Set();
-        const run = (command, args) => {
-            const result = spawnSync(command, args, {encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024});
-            if (result.error || result.status !== 0) failure('service-inspection');
-            return result.stdout;
-        };
-        const owned = new Set();
-        // Foreground CLI -> supervisor -> worker. Older builds can put the supervisor at MainPID.
-        // Do not extend trust to arbitrary agent descendants or nested daemon instances.
-        const supervisors = new Set(rows.filter(row => row.parent === pid && row.uid === process.getuid() &&
-            row.command === 'Paseo Supervisor').map(row => row.pid));
-        const nativeTree = rows.filter(row => row.pid === pid || row.parent === pid &&
-            ['Paseo Supervisor', 'Paseo Daemon'].includes(row.command) || supervisors.has(row.parent) && row.command === 'Paseo Daemon');
-        if (process.platform === 'linux') {
-            const file = path.join(logicalHome, '.config/systemd/user/paseo.service');
-            if (!safeFile(file) || !fs.readFileSync(file, 'utf8').startsWith(`# ${marker}\n`)) return owned;
-            const properties = 'Id,LoadState,ActiveState,SubState,MainPID,FragmentPath,DropInPaths,EnvironmentFiles,NeedDaemonReload,ControlGroup,ExecStart';
-            const text = run('/usr/bin/systemctl', ['--user', 'show', 'paseo.service', `--property=${properties}`]);
-            const state = Object.fromEntries(text.trim().split('\n').map(line => {
-                const at = line.indexOf('='); return [line.slice(0, at), line.slice(at + 1)];
-            }));
-            if (state.Id !== 'paseo.service' || state.LoadState !== 'loaded' || state.ActiveState !== 'active' ||
-                state.SubState !== 'running' || Number(state.MainPID) !== pid || state.FragmentPath !== file ||
-                state.DropInPaths !== '' || state.EnvironmentFiles !== '' || state.NeedDaemonReload !== 'no' ||
-                !state.ExecStart?.includes(`path=${wrapper} ;`) || !state.ControlGroup?.startsWith(`/user.slice/user-${process.getuid()}.slice/`)) return owned;
-            for (const row of nativeTree) {
-                if (row.uid !== process.getuid()) continue;
-                const env = runtime.get(row.pid)?.env;
-                if (!env || env.PASEO_SETUP_CLI !== retainedCommand || env.NODE_OPTIONS || env.NODE_PATH || ![home, logicalHome].includes(env.HOME) || env.PASEO_HOME &&
-                    ![path.join(home, '.paseo'), path.join(logicalHome, '.paseo')].includes(env.PASEO_HOME)) continue;
-                const groups = fs.readFileSync(`/proc/${row.pid}/cgroup`, 'utf8').trim().split('\n');
-                if (groups.some(line => line.slice(line.indexOf(':', line.indexOf(':') + 1) + 1) === state.ControlGroup)) owned.add(row.pid);
-            }
-            if (owned.has(pid)) { verifiedServiceFiles.add(file); verifiedServiceFiles.add(wrapper); }
-        } else if (process.platform === 'darwin' && process.env.PASEO_MACOS_HEADLESS_CANARY === '1') {
-            const label = 'com.scowalt.paseo-daemon', file = `/Library/LaunchDaemons/${label}.plist`;
-            if (!cliRegular(file) || cliInfo(file).uid !== 0 || cliInfo(file).mode & 0o022) return owned;
-            const plist = JSON.parse(run('/usr/bin/plutil', ['-convert', 'json', '-o', '-', file]));
-            if (plist.Label !== label || plist.UserName !== os.userInfo().username || plist.WorkingDirectory !== logicalHome ||
-                JSON.stringify(plist.ProgramArguments) !== JSON.stringify([wrapper]) || plist.EnvironmentVariables?.HOME !== logicalHome ||
-                Object.keys(plist.EnvironmentVariables || {}).some(key => !['HOME', 'PATH'].includes(key))) return owned;
-            const state = run('/usr/bin/sudo', ['-n', '/bin/launchctl', 'print', `system/${label}`]);
-            if (!state.includes(`path = ${file}\n`) || !state.includes(`program = ${wrapper}\n`) ||
-                Number(state.match(/\bpid = (\d+)/)?.[1]) !== pid) return owned;
-            if (/\s/.test(home)) return owned;
-            for (const row of nativeTree) {
-                if (row.uid !== process.getuid()) continue;
-                const env = runtime.get(row.pid)?.text;
-                if (!env) continue;
-                const origin = [...env.matchAll(/(?:^|\s)PASEO_SETUP_CLI=([^\s]*)/g)];
-                if (origin.length !== 1 || origin[0][1] !== retainedCommand) continue;
-                const homes = [...env.matchAll(/(?:^|\s)HOME=([^\s]*)/g)];
-                const overrides = [...env.matchAll(/(?:^|\s)PASEO_HOME=([^\s]*)/g)];
-                if (/(?:^|\s)NODE_(?:OPTIONS|PATH)=\S+/.test(env)) continue;
-                if (homes.length === 1 && homes[0][1] === logicalHome && overrides.length <= 1 &&
-                    (!overrides.length || !overrides[0][1] || overrides[0][1] === path.join(logicalHome, '.paseo'))) owned.add(row.pid);
-            }
-            if (owned.has(pid)) { verifiedServiceFiles.add(file); verifiedServiceFiles.add(wrapper); }
-        }
-        return owned;
-    }
-    function references() {
-        verifiedServiceFiles.clear();
-        const ps = spawnSync('/bin/ps', ['-ww', '-axo', 'uid=,pid=,ppid=,command='], {encoding: 'utf8', timeout: 10000, maxBuffer: 8 * 1024 * 1024});
-        if (ps.error || ps.status !== 0) failure('process-inspection');
-        const rows = ps.stdout.split('\n').filter(Boolean).map(line => {
-            const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/);
-            if (!match) failure('process-inspection');
-            return {uid: Number(match[1]), pid: Number(match[2]), parent: Number(match[3]), command: match[4]};
-        });
-        // A direct path reference always wins, even within the retained service's process tree.
-        if (rows.some(row => hasReference(row.command))) failure('in-use');
-        const paseoProcess = row => row.pid !== process.pid && /(?:^|[ /])paseo(?:\.app|\s|$)|@getpaseo\/(?:cli|server)/i.test(row.command);
-        const runtime = new Map();
-        for (const row of rows.filter(paseoProcess)) {
-            try {
-                if (process.platform === 'linux') {
-                    const cwd = fs.readlinkSync(`/proc/${row.pid}/cwd`);
-                    const text = fs.readFileSync(`/proc/${row.pid}/environ`).toString();
-                    if (hasReference(cwd) || hasReference(text)) failure('in-use');
-                    const env = Object.fromEntries(text.split('\0').filter(entry => entry.includes('='))
-                        .map(entry => { const at = entry.indexOf('='); return [entry.slice(0, at), entry.slice(at + 1)]; }));
-                    if (env.NODE_OPTIONS || env.NODE_PATH) failure('unknown-owner');
-                    runtime.set(row.pid, {env});
-                } else {
-                    const env = spawnSync('/bin/ps', ['eww', '-p', String(row.pid), '-o', 'command='], {encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024});
-                    const cwd = spawnSync('/usr/sbin/lsof', ['-a', '-p', String(row.pid), '-d', 'cwd', '-Fn'], {encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024});
-                    if (env.error || env.status !== 0 || cwd.error || cwd.status !== 0) failure('process-inspection');
-                    const paths = cwd.stdout.split('\n').filter(line => line.startsWith('n/'));
-                    if (paths.length !== 1) failure('process-inspection');
-                    if (hasReference(env.stdout) || hasReference(paths[0].slice(1))) failure('in-use');
-                    if (/(?:^|\s)NODE_(?:OPTIONS|PATH)=\S+/.test(env.stdout)) failure('unknown-owner');
-                    runtime.set(row.pid, {text: env.stdout});
-                }
-            } catch (error) { if (allowed.has(error.message)) throw error; failure('process-inspection'); }
-        }
-        const owned = managedProcesses(rows, runtime);
-        for (const row of rows) {
-            if (paseoProcess(row) &&
-                !row.command.includes(retained.root) && !row.command.includes(canonical) && !owned.has(row.pid)) failure('unknown-owner');
-        }
-        let roots = [path.join(home, 'Library/LaunchAgents'), '/Library/LaunchAgents', '/Library/LaunchDaemons',
-            '/System/Library/LaunchAgents', '/System/Library/LaunchDaemons'];
-        if (process.platform === 'linux') {
-            if (process.env.SYSTEMD_UNIT_PATH) failure('service-inspection');
-            roots = [];
-            for (const scope of ['--system', '--user']) {
-                const result = spawnSync('/usr/bin/systemd-analyze', [scope, 'unit-paths'],
-                    {encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024});
-                if (result.error || result.status !== 0 || !result.stdout.trim()) failure('service-inspection');
-                const paths = result.stdout.trim().split('\n');
-                if (paths.some(dir => !path.isAbsolute(dir))) failure('service-inspection');
-                roots.push(...paths);
-            }
-        }
-        if (process.env.XDG_CONFIG_HOME && process.env.XDG_CONFIG_HOME !== path.join(logicalHome, '.config') &&
-            process.env.XDG_CONFIG_HOME !== path.join(home, '.config')) failure('service-inspection');
-        const seen = new Set();
-        function inspectFile(file, depth = 0) {
-            if (seen.has(file)) return;
-            if (depth > 4 || seen.size > 10000) failure('service-inspection');
-            seen.add(file);
-            let text;
-            try {
-                // systemd's masked units deliberately point at this character device.
-                if (cliInfo(file)?.isSymbolicLink() && fs.readlinkSync(file) === '/dev/null') return;
-                const s = fs.statSync(file);
-                if (!s.isFile() || s.size > 1024 * 1024) failure('service-inspection');
-                text = fs.readFileSync(file, 'utf8');
-            } catch { failure('service-inspection'); }
-            const expanded = text.replace(/%h|\$\{HOME\}|\$HOME|~(?=\/)/g, home);
-            if (hasReference(expanded)) failure('service-reference');
-            // Follow account-local scripts referenced by service definitions, not arbitrary project trees.
-            const paths = expanded.match(/(?:\/[^\s"'<>;]+)+/g) || [];
-            for (const target of paths) {
-                if (!target.startsWith(home + path.sep) || target.startsWith(canonical + path.sep) || target === canonical || target === retainedCommand || target === process.execPath || !cliInfo(target)) continue;
-                if (target.startsWith(path.join(home, '.paseo') + path.sep)) continue; // Never open daemon state/credentials.
-                const s = cliInfo(target);
-                if (s.isFile() || s.isSymbolicLink()) inspectFile(target, depth + 1);
-            }
-            if (!verifiedServiceFiles.has(file) && /\bpaseo\b/i.test(text) && !expanded.includes(retained.root) && !expanded.includes(canonical) && !expanded.includes(retainedCommand) &&
-                !expanded.includes(path.join(home, '.local/bin/paseo-daemon-start'))) failure('unknown-owner');
-            if (!verifiedServiceFiles.has(file) && /\bpaseo\b/i.test(text) && /EnvironmentFile\s*=|<key>EnvironmentVariables<\/key>/.test(text)) failure('service-inspection');
-        }
-        function walk(directory, depth = 0) {
-            if (depth > 5) failure('service-inspection');
-            if (!cliInfo(directory)) return;
-            if (cliInfo(directory).isSymbolicLink()) failure('service-inspection');
-            for (const name of fs.readdirSync(directory, {withFileTypes: true})) {
-                const file = path.join(directory, name.name);
-                if (name.isDirectory()) walk(file, depth + 1);
-                else if (name.isSymbolicLink() && (name.name.endsWith('.d') || fs.statSync(file).isDirectory())) failure('service-inspection');
-                else if (/\.(?:service|conf|plist)$/.test(name.name)) inspectFile(file);
-            }
-        }
-        try { for (const directory of roots) walk(directory); }
-        catch (error) { if (allowed.has(error.message)) throw error; failure('service-inspection'); }
-    }
-    references(); // All candidates and references must pass before the first removal.
-    for (const candidate of candidates) {
-        // Other package-manager operations or service editors can run between candidates.
-        const unchanged = () => {
-            if (!cliIdentity(retainedCommand) || retainedFiles.some((file, index) =>
-                JSON.stringify(snapshot(file)) !== JSON.stringify(retainedBefore[index])) || candidate.files.some((file, index) =>
-                JSON.stringify(snapshot(file)) !== JSON.stringify(candidate.before[index]))) failure('metadata-changed');
-        };
-        unchanged();
-        references();
-        unchanged();
-        const result = spawnSync(process.execPath, [npmEntry, 'uninstall', '--global', '--prefix', candidate.prefix,
-            '--ignore-scripts', '--offline', '--no-audit', '--no-fund', '@getpaseo/cli'], {
-            cwd: home, env: {...process.env, NODE_OPTIONS: '', NODE_PATH: '', npm_config_ignore_scripts: 'true',
-                npm_config_offline: 'true', npm_config_audit: 'false', npm_config_fund: 'false'},
-            encoding: 'utf8', timeout: 60000, maxBuffer: 2 * 1024 * 1024,
-        });
-        if (result.error || result.status !== 0) failure('npm-failed');
-        if (cliInfo(candidate.root) || cliInfo(candidate.command) || !cliIdentity(retainedCommand) ||
-            retainedFiles.some((file, index) => JSON.stringify(snapshot(file)) !== JSON.stringify(retainedBefore[index]))) failure('removal-unverified');
-        removed++;
-    }
-    console.log(`paseo-cleanup:removed:${removed}`);
-}
-try { main(); }
-catch (error) {
-    const reason = allowed.has(error.message) ? error.message : 'operation-failed';
-    const deferred = ['in-use', 'service-reference', 'unknown-owner', 'service-inspection', 'process-inspection'].includes(reason);
-    console.log(`paseo-cleanup:${deferred ? 'deferred' : 'failed'}:${reason}`);
-    if (!deferred) process.exitCode = 1;
-}
-// END PASEO CLI CLEANUP
-PASEO_CLI_CLEANUP_JS
-) || _status=$?
-    if [[ "${_status}" -eq 0 && "${_result}" =~ ^paseo-cleanup:removed:([0-9]+)$ ]]; then
-        print_success "Paseo CLI cleanup removed ${BASH_REMATCH[1]} surplus installations; the retained CLI and daemon data were preserved."
-        return 0
-    fi
-    if [[ "${_status}" -eq 0 && "${_result}" =~ ^paseo-cleanup:deferred:(custom-home|in-use|service-reference|unknown-owner|service-inspection|process-inspection)$ ]]; then
-        print_warning "Paseo CLI cleanup deferred: ${BASH_REMATCH[1]}. Preserved referenced or unverified installations. Review local service ownership before removal."
-        return 0
-    fi
-    if [[ "${_result}" =~ ^paseo-cleanup:failed:(unsafe-home|retained-unverified|retained-unusable|unsafe-candidate|npm-unavailable|metadata-changed|npm-failed|removal-unverified|operation-failed)$ ]]; then
-        print_warning "Paseo CLI cleanup failed: ${BASH_REMATCH[1]}. Review local installations before retrying; setup did not reset daemon data."
-    else
-        print_warning "Paseo CLI cleanup failed: unrecognized helper result. Review local installations before retrying."
-    fi
-    return 1
 }
 
 # Remove Pi subagents extension
@@ -10339,27 +7008,34 @@ bb_machine_existing_role() {
     return 1
 }
 
-bb_machine_package_state() {
-    local _result _status=0
-    _result=$(node - "$1" "${HOME}" 2>/dev/null <<'BB_MACHINE_STATE'
+bb_machine_package_state_payload() {
+    node - "$1" "${HOME}" 2>/dev/null <<'BB_MACHINE_STATE'
 const fs = require('node:fs'), path = require('node:path'), {createRequire} = require('node:module');
 const [mode, home] = process.argv.slice(2), uid = process.getuid();
 const root = path.join(home, '.local/share/setup-bb-machine'), prefix = path.join(root, 'npm');
 const pkg = path.join(prefix, 'lib/node_modules/bb-app'), marker = path.join(root, 'owner.json');
 const owner = {kind: 'setup-bb-machine', schema: 1};
 const bins = {bb: 'dist/bb.js', 'bb-app': 'dist/bb-app.js', 'bb-server': 'dist/bb-server.js', 'bb-host-daemon': 'dist/bb-host-daemon.js'};
-function stat(f) { try { return fs.lstatSync(f); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
-let operation = 'platform-runtime', location = 'account';
-class PreparationFailure extends Error { constructor(reason) { super(); this.reason = reason; } }
-function check(ok, reason = 'unsafe-or-incomplete') { if (!ok) throw new PreparationFailure(reason); }
-function inside(f, dir) { return f === dir || f.startsWith(dir + path.sep); }
-function label(f) {
-  const known = {'': 'home', '.config': 'home-config', '.config/systemd': 'home-systemd', '.config/systemd/user': 'home-systemd-user', 'Library': 'home-library', 'Library/LaunchAgents': 'home-launchagents', '.local': 'home-local', '.local/share': 'home-local-share'};
-  const relative = path.relative(home, f);
-  if (Object.hasOwn(known, relative)) return known[relative];
-  if (inside(f, root)) return 'preparation-tree';
-  return 'ancestor'; // Never emit arbitrary paths, service text or process argv.
+let operation = 'home', location = 'home-boundary', observed = null;
+const failures = [], reported = new Set();
+function context(op, file, s = null) { operation = op; location = file; observed = s; }
+function safeLocation(f) {
+  if (f === home || f === 'home-boundary') return 'home-boundary';
+  if (!inside(f, home)) return 'external-boundary';
+  const rel = path.relative(home, f);
+  // Suppress control characters, long/custom names and ambiguous components.
+  return rel.length <= 120 && rel.split('/').every(n => /^[A-Za-z0-9_.@-]+$/.test(n) && !['.', '..'].includes(n)) ? '~/' + rel : 'path-suppressed';
 }
+function record(reason = 'unverified') {
+  const line = ['blocked', operation, safeLocation(location), observed ? (observed.mode & 0o7777).toString(8).padStart(4, '0') : 'unknown', reason].join(':');
+  if (failures.length < 8 && !reported.has(line)) { failures.push(line); reported.add(line); }
+}
+function inspect(fn) {
+  try { fn(); } catch (e) { record(e.reason || 'unverified'); }
+}
+function stat(f) { try { return fs.lstatSync(f); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
+function check(ok, reason = 'unverified') { if (!ok) throw Object.assign(new Error(), {reason}); }
+function inside(f, dir) { return f === dir || f.startsWith(dir + path.sep); }
 const serviceSnapshots = new Map(), serviceLinks = new Map(), serviceListings = new Map(), serviceGroupCandidates = new Map();
 const sameService = (a, b) => !!a && !!b && (a.isDirectory() ? ['dev', 'ino', 'uid', 'gid', 'mode'] :
   ['dev', 'ino', 'uid', 'gid', 'mode', 'nlink', 'size', 'mtimeMs', 'ctimeMs']).every(k => a[k] === b[k]);
@@ -10369,41 +7045,52 @@ function rememberService(file, s) {
   serviceSnapshots.set(file, s);
 }
 function servicePermissions(file, s, privateParent) {
-  check(!(s.mode & 0o002), 'group-or-world-writable');
+  check(!(s.mode & 0o002), 'writable-boundary');
   if (!(s.mode & 0o020)) return;
   // Read-only references are not owned artifacts. On Linux a private ancestor
   // excludes other accounts even when a descendant retains group write bits.
-  check(process.platform === 'linux', 'group-or-world-writable');
-  check(!s.isFile() || s.nlink === 1);
-  if (!privateParent) serviceGroupCandidates.set(file, s);
+  check(process.platform === 'linux', 'writable-boundary');
+  check(!s.isFile() || s.nlink === 1, 'unsafe-file');
+  if (!privateParent && !serviceGroupCandidates.has(file)) {
+    // Preserve parent-before-descendant inspection even for group-write paths.
+    // Cache only successful proofs; recheck the full set before package work.
+    verifyServiceGroups([[file, s]]);
+    serviceGroupCandidates.set(file, s);
+  }
 }
 function chain(dir, serviceInspection = false) {
   const privateParent = dir !== path.dirname(dir) ? chain(path.dirname(dir), serviceInspection) : false;
-  location = label(dir);
+  context('directory', dir);
   const s = stat(dir); if (!s) return privateParent;
+  observed = s;
   if (serviceInspection) rememberService(dir, s);
   if (process.platform === 'linux' && dir === '/home' && s.isSymbolicLink() && s.uid === 0 && ['var/home', '/var/home'].includes(fs.readlinkSync(dir))) {
     for (const p of ['/', '/var', '/var/home']) { const t = fs.lstatSync(p); check(t.isDirectory() && t.uid === 0 && !(t.mode & 0o022)); }
     return privateParent;
   }
-  check(s.isDirectory() && !s.isSymbolicLink(), 'linked-or-not-directory');
-  check(s.uid === (inside(dir, home) ? uid : 0) || (!inside(dir, home) && s.uid === uid), 'untrusted-owner');
+  check(!s.isSymbolicLink(), 'linked-path');
+  check(s.isDirectory(), 'non-directory');
+  check(s.uid === (inside(dir, home) ? uid : 0) || (!inside(dir, home) && s.uid === uid), 'unsafe-ownership');
   const stickyRoot = !inside(dir, home) && s.uid === 0 && (s.mode & 0o1000);
   if (!stickyRoot) {
     if (serviceInspection) servicePermissions(dir, s, privateParent);
-    else check(!(s.mode & 0o022), 'group-or-world-writable');
+    else check(!(s.mode & 0o022), 'writable-boundary');
   }
   return privateParent || ((s.uid === uid || s.uid === 0) && !(s.mode & 0o077));
 }
 function regular(f) {
-  location = label(f);
-  const s = fs.lstatSync(f);
-  check(s.isFile() && !s.isSymbolicLink() && s.uid === uid && s.nlink === 1 && !(s.mode & 0o022) && s.size > 0);
+  context('artifact', f);
+  const s = fs.lstatSync(f); observed = s;
+  check(!s.isSymbolicLink(), 'linked-path');
+  check(s.uid === uid, 'unsafe-ownership');
+  check(!(s.mode & 0o022), 'writable-boundary');
+  check(s.isFile() && s.nlink === 1 && s.size > 0, 'unsafe-file');
   return s;
 }
-function json(f) { check(regular(f).size < 1048576); return JSON.parse(fs.readFileSync(f, 'utf8')); }
-// Prove that a group-write bit grants no additional account write access. This
-// is read-only Linux inspection, not permission repair or a group-name guess.
+function json(f) {
+  check(regular(f).size < 1048576, 'unsafe-file');
+  try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { check(false, 'malformed-metadata'); }
+}
 const serviceGroupProgram = String.raw`
 import errno, json, os, stat, sys
 class Untrusted(Exception): pass
@@ -10510,10 +7197,10 @@ except Untrusted:
 except Exception:
     print('unverified'); sys.exit(1)
 `;
-function verifyServiceInspection() {
-  const candidates = [...serviceGroupCandidates];
+function verifyServiceGroups(candidates = [...serviceGroupCandidates]) {
   if (candidates.length) {
     const paths = candidates.map(([file, s]) => {
+      context(s.isDirectory() ? 'directory' : 'service', file, s);
       check(['dev', 'ino', 'uid', 'gid', 'mode'].every(k => Number.isSafeInteger(s[k])));
       return {path: file, dev: s.dev, ino: s.ino, uid: s.uid, gid: s.gid, mode: s.mode};
     });
@@ -10522,33 +7209,75 @@ function verifyServiceInspection() {
       timeout: 5000, maxBuffer: 1024, shell: false, stdio: ['pipe', 'pipe', 'pipe']});
     const blocked = /^blocked:(\d+)\n$/.exec(result.stdout || '');
     if (result.status !== 0 && blocked && candidates[Number(blocked[1])]) {
-      const file = candidates[Number(blocked[1])][0]; location = /\.(service|plist)$/.test(file) ? (file.endsWith('.service') ? 'systemd-service' : 'launchd-service') : label(file);
-      check(false, 'group-or-world-writable');
+      const [file, s] = candidates[Number(blocked[1])];
+      context(s.isDirectory() ? 'directory' : 'service', file, s);
+      check(false, 'writable-boundary');
     }
-    check(!result.error && result.status === 0 && result.stdout === 'trusted\n', 'inspection-failed');
+    check(!result.error && result.status === 0 && result.stdout === 'trusted\n');
   }
-  for (const [file, before] of serviceSnapshots) check(sameService(before, stat(file)));
-  for (const [file, target] of serviceLinks) check(fs.realpathSync(file) === target);
-  for (const [dir, names] of serviceListings) check(JSON.stringify(fs.readdirSync(dir).filter(n => /\.(service|plist)$/.test(n)).sort()) === JSON.stringify(names));
 }
-// Resolve linked registrations and pin bounded regular snapshots. No chmod,
-// adoption, service lifecycle or relaxation of the preparation-owned tree.
+function verifyServiceInspection() {
+  verifyServiceGroups();
+  for (const [file, before] of serviceSnapshots) {
+    context(before.isDirectory() ? 'directory' : 'service', file, before);
+    check(sameService(before, stat(file)));
+  }
+  for (const [file, target] of serviceLinks) {
+    context('service', file, serviceSnapshots.get(file));
+    check(fs.readlinkSync(file) === target);
+  }
+  for (const [dir, names] of serviceListings) {
+    context('directory', dir, serviceSnapshots.get(dir));
+    check(JSON.stringify(fs.readdirSync(dir).filter(n => /\.(service|plist)$/.test(n)).sort()) === JSON.stringify(names));
+  }
+}
+// Resolve service links one boundary at a time rather than realpath probing
+// descendants before their ancestors are checked. Trusted Homebrew opt links
+// and systemd masks remain read-only; bound cycles and never read a FIFO.
+function serviceTarget(file) {
+  let pending = file.split(path.sep).filter(Boolean), dir = path.parse(file).root, links = 0;
+  while (pending.length) {
+    chain(dir, true);
+    const name = pending.shift();
+    if (!name || name === '.') continue;
+    if (name === '..') { dir = path.dirname(dir); continue; }
+    const next = path.join(dir, name);
+    context('service', next);
+    const s = fs.lstatSync(next); observed = s;
+    rememberService(next, s);
+    if (s.isSymbolicLink()) {
+      check(++links <= 40, 'linked-path');
+      check(s.uid === uid || s.uid === 0, 'unsafe-ownership');
+      const target = fs.readlinkSync(next);
+      check(!serviceLinks.has(next) || serviceLinks.get(next) === target);
+      serviceLinks.set(next, target);
+      // Preserve POSIX ordering: resolve links before processing subsequent '..'.
+      pending = target.split(path.sep).concat(pending);
+      if (path.isAbsolute(target)) dir = path.parse(target).root;
+    } else dir = next;
+  }
+  return dir;
+}
+// Read-only service references are not preparation-owned artifacts. Resolve
+// ordinary linked registrations to a trusted regular target; never modify them.
 function serviceUnreferenced(file) {
-  const service = file.endsWith('.service') ? 'systemd-service' : 'launchd-service';
-  location = service;
-  const link = fs.lstatSync(file); check(link.uid === uid || link.uid === 0, 'untrusted-owner');
+  context('service', file);
+  const link = fs.lstatSync(file); observed = link;
+  check(link.uid === uid || link.uid === 0, 'unsafe-ownership');
   rememberService(file, link);
-  const target = link.isSymbolicLink() ? fs.realpathSync(file) : file;
-  if (link.isSymbolicLink()) serviceLinks.set(file, target);
-  check(!target.includes('setup-bb-machine'));
+  const target = link.isSymbolicLink() ? serviceTarget(file) : file;
+  check(!target.includes('setup-bb-machine'), 'referenced-copy');
   const privateParent = chain(path.dirname(target), true);
-  location = service;
-  const s = fs.lstatSync(target); rememberService(target, s);
+  context('service', target);
+  const s = fs.lstatSync(target); observed = s;
+  rememberService(target, s);
   if (link.isSymbolicLink() && target === '/dev/null') {
     check(s.isCharacterDevice() && s.uid === 0); return; // Native systemd mask; no read.
   }
-  check(s.isFile() && !s.isSymbolicLink() && (s.uid === uid || s.uid === 0) && s.size < 1048576);
+  check(s.uid === uid || s.uid === 0, 'unsafe-ownership');
+  check(s.isFile() && !s.isSymbolicLink() && s.size < 1048576, 'unsafe-file');
   servicePermissions(target, s, privateParent);
+  // Bound non-followed reads and revalidate snapshots before package work.
   const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
     check(sameService(s, fs.fstatSync(fd)));
@@ -10559,50 +7288,66 @@ function serviceUnreferenced(file) {
       used += count;
     }
     check(used === s.size && sameService(s, fs.fstatSync(fd)) && sameService(s, stat(target)));
-    check(!bytes.subarray(0, used).toString('utf8').includes('setup-bb-machine'));
+    check(!bytes.subarray(0, used).toString('utf8').includes('setup-bb-machine'), 'referenced-copy');
   } finally { fs.closeSync(fd); }
 }
 // Inspect only the dedicated preparation tree, never BB data or enrollment trees.
 function tree(dir) {
   chain(dir);
   for (const name of fs.readdirSync(dir)) {
-    const f = path.join(dir, name), s = fs.lstatSync(f);
-    check(s.uid === uid);
+    const f = path.join(dir, name);
+    context('artifact', f);
+    const s = fs.lstatSync(f); observed = s;
+    check(s.uid === uid, 'unsafe-ownership');
     if (s.isSymbolicLink()) {
       const target = path.resolve(dir, fs.readlinkSync(f));
-      check(inside(target, prefix));
+      check(inside(target, prefix), 'linked-path');
       // npm bin links may be dangling after an interrupted install. Never follow them.
-      const t = stat(target); check(!t || (t.isFile() && !t.isSymbolicLink()));
+      chain(path.dirname(target));
+      context('artifact', f, s);
+      const t = stat(target); check(!t || (t.isFile() && !t.isSymbolicLink()), 'linked-path');
     } else if (s.isDirectory()) tree(f);
-    else check(s.isFile() && s.nlink === 1 && !(s.mode & 0o022));
+    else {
+      check(!(s.mode & 0o022), 'writable-boundary');
+      check(s.isFile() && s.nlink === 1, 'unsafe-file');
+    }
   }
 }
 try {
   check(path.isAbsolute(home) && path.normalize(home) === home && home !== '/');
+  context('runtime', 'runtime');
   check(['linux', 'darwin'].includes(process.platform), 'unsupported-platform');
   const [major, minor] = process.versions.node.split('.').map(Number);
   check((major === 22 && minor >= 19) || major === 24 || major === 26, 'unsupported-runtime');
   // A custom running BB may use a non-default data directory. Read-only process
   // evidence blocks preparation rather than updating a possibly in-use copy.
-  operation = 'process-inventory';
-  const processes = require('node:child_process').execFileSync('ps', ['-U', String(uid), '-o', 'command='], {encoding: 'utf8', maxBuffer: 8 * 1024 * 1024});
-  check(!/(?:^|[\s/])(?:bb-app|bb-server|bb-host-daemon)(?:$|[\s/.])/m.test(processes), 'process-conflict');
+  inspect(() => {
+    context('process', 'process-inventory');
+    const processes = require('node:child_process').execFileSync('ps', ['-U', String(uid), '-o', 'command='], {encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe']});
+    check(!/(?:^|[\s/])(?:bb-app|bb-server|bb-host-daemon)(?:$|[\s/.])/m.test(processes), 'process-conflict');
+  });
   // Also preserve a stopped, manually named user service referencing this copy.
-  operation = 'service-inventory';
   for (const dir of [path.join(home, '.config/systemd/user'), path.join(home, 'Library/LaunchAgents')]) {
-    location = label(dir);
-    if (!stat(dir)) continue;
-    chain(dir, true);
-    const names = fs.readdirSync(dir).filter(n => /\.(service|plist)$/.test(n)).sort();
-    serviceListings.set(dir, names);
-    for (const name of names) serviceUnreferenced(path.join(dir, name));
+    if (failures.length >= 8) break;
+    inspect(() => {
+      // Validate parents BEFORE probing a descendant, even if it is absent.
+      chain(dir, true);
+      if (!stat(dir)) return;
+      const names = fs.readdirSync(dir).filter(n => /\.(service|plist)$/.test(n)).sort();
+      serviceListings.set(dir, names);
+      for (const name of names) {
+        if (failures.length >= 8) break;
+        inspect(() => serviceUnreferenced(path.join(dir, name)));
+      }
+    });
   }
-  verifyServiceInspection();
-  operation = 'preparation-tree';
-  chain(root);
-  if (stat(root)) {
+  if (failures.length < 8) inspect(verifyServiceInspection);
+  if (failures.length < 8) inspect(() => {
+    chain(root);
+    if (!stat(root)) return;
     check(JSON.stringify(json(marker)) === JSON.stringify(owner));
     check(!(fs.lstatSync(marker).mode & 0o077));
+    context('artifact', root); observed = fs.lstatSync(root);
     check(fs.readdirSync(root).every(n => ['owner.json', 'npm'].includes(n)));
     if (stat(prefix)) {
       tree(prefix);
@@ -10610,34 +7355,39 @@ try {
         if (stat(f)) { const j = json(f); check(j && typeof j === 'object' && !Array.isArray(j)); if (f === path.join(pkg, 'package.json')) check(j.name === 'bb-app'); }
       }
       for (const [dir, allowed] of [[prefix, ['bin', 'lib']], [path.join(prefix, 'lib'), ['node_modules']]]) {
-        if (stat(dir)) check(fs.readdirSync(dir).every(n => allowed.includes(n)));
+        context('directory', dir); observed = stat(dir);
+        if (observed) check(fs.readdirSync(dir).every(n => allowed.includes(n)));
       }
       const modules = path.join(prefix, 'lib/node_modules');
-      if (stat(modules)) check(fs.readdirSync(modules).every(n => n === 'bb-app' || n === '.package-lock.json' || /^\.bb-app-[A-Za-z0-9]+$/.test(n)));
+      context('directory', modules); observed = stat(modules);
+      if (observed) check(fs.readdirSync(modules).every(n => n === 'bb-app' || n === '.package-lock.json' || /^\.bb-app-[A-Za-z0-9]+$/.test(n)));
       if (stat(path.join(prefix, 'bin'))) {
         for (const bin of fs.readdirSync(path.join(prefix, 'bin'))) {
-          check(Object.hasOwn(bins, bin));
           const f = path.join(prefix, 'bin', bin);
+          context('artifact', f); observed = fs.lstatSync(f);
+          check(Object.hasOwn(bins, bin));
           check(fs.lstatSync(f).isSymbolicLink() && path.resolve(path.dirname(f), fs.readlinkSync(f)) === path.join(pkg, bins[bin]));
         }
       }
     }
-  }
+  });
+  // No reserve/install/validation can follow a failed independent branch.
+  if (failures.length) throw new Error();
+  context('artifact', root);
   if (mode === 'reserve') {
-    operation = 'reserve'; location = 'preparation-tree';
     if (!stat(root)) {
       fs.mkdirSync(root, {recursive: true, mode: 0o700});
       fs.writeFileSync(marker, JSON.stringify(owner) + '\n', {flag: 'wx', mode: 0o600});
     }
     for (const dir of [path.join(prefix, 'lib/node_modules'), path.join(prefix, 'bin')]) fs.mkdirSync(dir, {recursive: true, mode: 0o700});
   } else if (mode === 'verify') {
-    operation = 'artifact-verification';
     const j = json(path.join(pkg, 'package.json'));
     check(j.name === 'bb-app' && /^\d+\.\d+\.\d+$/.test(j.version));
     check(Array.isArray(j.os) && j.os.includes(process.platform));
     for (const [bin, entry] of Object.entries(bins)) {
       check(j.bin?.[bin] === entry); regular(path.join(pkg, entry));
       const f = path.join(prefix, 'bin', bin);
+      context('artifact', f); observed = fs.lstatSync(f);
       check(fs.lstatSync(f).isSymbolicLink() && fs.realpathSync(f) === fs.realpathSync(path.join(pkg, entry)));
       check(fs.statSync(f).mode & 0o111);
     }
@@ -10646,6 +7396,7 @@ try {
     check(fs.readdirSync(chunks).some(n => n.endsWith('.js') && regular(path.join(chunks, n))));
     const require = createRequire(path.join(pkg, 'package.json'));
     for (const name of ['better-sqlite3', 'node-pty', '@parcel/watcher', 'fs-native-extensions']) {
+      context('artifact', path.join(pkg, 'node_modules', name));
       const entry = require.resolve(name); check(inside(entry, pkg)); regular(entry);
       const loaded = require(name);
       if (name === 'better-sqlite3') { const db = new loaded(':memory:'); db.close(); }
@@ -10654,34 +7405,58 @@ try {
       if (name === 'fs-native-extensions') check(typeof loaded.tryLock === 'function' && typeof loaded.unlock === 'function');
     }
   } else check(['preflight', 'reserve'].includes(mode));
-  console.log('ok');
-} catch (error) {
-  console.log(`${operation}:${location}:${error instanceof PreparationFailure ? error.reason : 'inspection-failed'}`);
+  process.stdout.write('ok\n');
+} catch (e) {
+  if (!failures.length) record(e.reason || 'unverified');
+  // Deliberately not an exhaustive inventory: unsafe descendants are never inspected.
+  process.stdout.write(failures.join('\n') + '\nfailed:incomplete\n');
   process.exitCode = 1;
 }
 BB_MACHINE_STATE
-    ) || _status=$?
-    [[ "${_status}" == 0 && "${_result}" == ok ]] && return 0
-    # Accept only one controlled terminal result; never echo raw helper output.
-    if [[ "${_status}" != 0 && "${_result}" =~ ^(platform-runtime|process-inventory|service-inventory|preparation-tree|reserve|artifact-verification):(account|home|home-config|home-systemd|home-systemd-user|home-library|home-launchagents|home-local|home-local-share|preparation-tree|ancestor|systemd-service|launchd-service):(unsafe-or-incomplete|linked-or-not-directory|untrusted-owner|group-or-world-writable|unsupported-platform|unsupported-runtime|process-conflict|inspection-failed)$ ]]; then
-        print_error "BB preparation check failed: ${_result}."
-        if [[ "${_result}" == *:group-or-world-writable ]]; then
-            print_message 'Review the indicated directory or service permissions privately. Chezmoi-managed paths use its effective umask; explicit config and unmanaged files are preserved. See README BB preparation recovery; do not recursively chmod or delete service/state files.'
+}
+
+bb_machine_package_state() {
+    local _mode="$1" _result _status=0 _line _op _path _observed _reason _count=0 _terminal=0 _valid=1
+    local _record='^blocked:(home|runtime|process|directory|service|artifact):([^:]+):(unknown|[0-7]{4}):(unverified|linked-path|non-directory|unsafe-ownership|writable-boundary|unsafe-file|malformed-metadata|referenced-copy|unsupported-platform|unsupported-runtime|process-conflict)$'
+    local _relative='^~/[A-Za-z0-9_.@/-]+$'
+    case "${_mode}" in preflight|reserve|verify) ;; *) return 1 ;; esac
+    # Bound even malformed/addon output before storing it. Never forward stderr.
+    _result=$(set -o pipefail; bb_machine_package_state_payload "${_mode}" 2>/dev/null | head -c 4097 |
+        node -e 'let text=""; process.stdin.on("data", b => { text += b; if (text.length > 4096 || /[^\x20-\x7e\n]/.test(text)) process.exit(1); }); process.stdin.on("end", () => { if (!/^(?:[ -~]+\n)+$/.test(text)) process.exit(1); process.stdout.write(text); });' 2>/dev/null) || _status=$?
+    if [[ "${_status}" -eq 0 && "${_result}" == ok ]]; then return 0; fi
+    if [[ "${_status}" -ne 0 && ${#_result} -le 4096 ]]; then
+        while IFS= read -r _line; do
+            if [[ "${_line}" == failed:incomplete && "${_count}" -gt 0 && "${_terminal}" -eq 0 ]]; then
+                _terminal=1
+            elif [[ "${_terminal}" -eq 0 && "${_line}" =~ ${_record} ]]; then
+                _path="${BASH_REMATCH[2]}"
+                case "${_path}" in home-boundary|external-boundary|path-suppressed) ;;
+                    *)
+                        if [[ ! "${_path}" =~ ${_relative} || ${#_path} -gt 122 || "${_path}" == *'/../'* || "${_path}" == *'/./'* || "${_path}" == */.. || "${_path}" == */. || "${_path}" == *'//'* || "${_path}" == */ ]]; then _valid=0; break; fi ;;
+                esac
+                _count=$((_count + 1))
+                if [[ "${_count}" -gt 8 ]]; then _valid=0; break; fi
+            else
+                _valid=0; break
+            fi
+        done <<< "${_result}"
+        if [[ "${_valid}" -eq 1 && "${_terminal}" -eq 1 && "${_count}" -le 8 ]]; then
+            # Validate the ENTIRE protocol before logging any record.
+            while IFS=: read -r _line _op _path _observed _reason; do
+                [[ "${_line}" == blocked ]] || continue
+                print_error "BB preparation ${_mode}: operation=${_op} path=${_path} mode=${_observed} reason=${_reason}"
+            done <<< "${_result}"
+            print_error 'BB preparation blocker report incomplete: unsafe descendants and remaining checks were not inspected.'
+            return 1
         fi
-    else
-        print_error 'BB preparation check failed: unrecognized helper result; details suppressed.'
     fi
+    print_error "BB preparation ${_mode}: unverified helper result; diagnostic output suppressed."
     return 1
 }
 
-setup_bb_machine() {
-    local _platform="$1" _kernel _release _prefix="${HOME}/.local/share/setup-bb-machine/npm" _bin _found _version _policy
-    local _npm_userconfig _npm_globalconfig
-    local -a _npm_context
-    if bb_machine_existing_role; then
-        print_message 'BB preparation deferred: existing BB state, service or data/prefix override preserved. Manage that installation manually; readiness was not checked.'
-        return 0
-    fi
+# Reuse the preparation platform gate before dotfiles, without Node/npm or lifecycle work.
+bb_machine_platform_ready() {
+    local _platform="$1" _kernel _release
     _kernel=$(uname -s) || return 1
     case "${_kernel}" in Darwin|Linux) ;; *) print_error 'BB preparation supports macOS/Linux only; use WSL2 on Windows.'; return 1 ;; esac
     if [[ "${_platform}" == wsl ]]; then
@@ -10689,6 +7464,38 @@ setup_bb_machine() {
         case "${_kernel}:${_release}" in Linux:*[Mm]icrosoft*WSL2*) ;; *) print_error 'BB preparation requires WSL2.'; return 1 ;; esac
         [[ "${HEADLESS:-}" != 1 ]] || { print_error 'WSL HEADLESS=1 remains unsupported for BB preparation.'; return 1; }
     fi
+}
+
+# Chezmoi alone owns target convergence. Keep native config precedence and the
+# caller's stricter mask; known roles receive no preparation-driven restriction.
+with_bb_dotfiles_umask() {
+    (
+        local _platform="$1" _selection=1 _protect=0
+        shift
+        if [[ "${_platform}" == ubuntu ]]; then
+            bb_server_selection && _selection=0 || _selection=$?
+            [[ "${_selection}" -ne 0 ]] || _protect=1
+        fi
+        if [[ "${_selection}" -eq 1 ]] && ! bb_machine_existing_role &&
+            bb_machine_platform_ready "${_platform}" >/dev/null 2>&1; then
+            _protect=1
+        fi
+        if [[ "${_protect}" -eq 1 ]]; then
+            umask go-w || exit 1
+        fi
+        "$@"
+    )
+}
+
+setup_bb_machine() {
+    local _platform="$1" _prefix="${HOME}/.local/share/setup-bb-machine/npm" _bin _found _version _policy
+    local _npm_userconfig _npm_globalconfig
+    local -a _npm_context
+    if bb_machine_existing_role; then
+        print_message 'BB preparation deferred: existing BB state, service or data/prefix override preserved. Manage that installation manually; readiness was not checked.'
+        return 0
+    fi
+    bb_machine_platform_ready "${_platform}" || return 1
     for _bin in bb bb-app bb-server bb-host-daemon; do
         _found=$(command -v "${_bin}" 2>/dev/null || true)
         if [[ -n "${_found}" && "${_found}" != "${_prefix}/bin/${_bin}" ]]; then
@@ -10697,7 +7504,7 @@ setup_bb_machine() {
         fi
     done
     ensure_shared_node_runtime || { print_error 'BB preparation requires the shared Node/npm runtime.'; return 1; }
-    bb_machine_package_state preflight || { print_error 'BB preparation role/ownership, platform, runtime or artifact preflight failed; review existing BB processes, user services and private preparation permissions. No package changes made.'; return 1; }
+    bb_machine_package_state preflight || { print_error 'BB preparation preflight failed; no package changes made. Reconcile explicit Chezmoi permission overrides or unmanaged blockers manually; see README recovery guidance.'; return 1; }
     _version=$(npm --version 2>/dev/null) || return 1
     [[ "${_version}" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]] || return 1
     if (( BASH_REMATCH[1] < 11 || (BASH_REMATCH[1] == 11 && BASH_REMATCH[2] < 19) )); then
@@ -10810,10 +7617,9 @@ run_setup_tasks() {
     local _infisical_retirement_ok=1
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
-    local PASEO_MUSE_DEFER_DAEMON_SETUP=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 229 | Last changed: Verify protected processes and private service references"
+    echo -e "${GRAY}Version 231 | Last changed: Verify private service references without adopting permissions"
 
     if ! acquire_setup_lock; then
         return 1
@@ -10822,8 +7628,6 @@ run_setup_tasks() {
     # Create placeholder env file early
     create_env_local
 
-    local _paseo_channel_override="${PASEO_CHANNEL:-}"
-    local _paseo_setup_channel=""
     # Source env vars early so optional setup flags are available
     if [[ -f "${HOME}/.env.local" ]]; then
         set -a
@@ -10832,11 +7636,7 @@ run_setup_tasks() {
         set +a
     fi
 
-    if [[ -n "${_paseo_channel_override}" ]]; then
-        PASEO_CHANNEL="${_paseo_channel_override}"
-    fi
-    _paseo_setup_channel=$(paseo_release_channel) || return 1
-    paseo_headless_platform_gate || return 1
+    headless_platform_gate || return 1
 
     print_section "User & System Setup"
     ensure_not_root || return 1
@@ -10994,13 +7794,6 @@ run_setup_tasks() {
         _setup_had_errors=1
     fi
 
-    if [[ "${_pi_go_ready}" -eq 1 ]]; then
-        configure_paseo_muse_profile || _setup_had_errors=1
-    else
-        PASEO_MUSE_DEFER_DAEMON_SETUP=1
-        print_warning "Muse profile and Paseo daemon setup deferred because Pi OpenCode Go setup is unavailable."
-    fi
-
     if ! remove_simple_english_skill; then
         _setup_had_errors=1
     fi
@@ -11027,15 +7820,7 @@ run_setup_tasks() {
     install_act
     install_tmux_plugins
     enable_user_lingering
-    configure_paseo_desktop_channel linux || return 1
-    if [[ "${PASEO_MUSE_DEFER_DAEMON_SETUP:-0}" != "1" ]]; then
-        setup_headless_paseo_daemon || return 1
-    fi
     install_iterm2_shell_integration
-
-    if ! remove_paseo_plain; then
-        _setup_had_errors=1
-    fi
 
     print_section "Final Updates"
 

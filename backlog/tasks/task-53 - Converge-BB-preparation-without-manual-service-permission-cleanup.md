@@ -1,31 +1,32 @@
 ---
-id: DRAFT-1
-title: Converge BB preparation and Paseo ownership checks without manual host cleanup
+id: TASK-53
+title: Converge BB preparation without manual service permission cleanup
 status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-28 21:21'
-updated_date: '2026-09-28 22:31'
+updated_date: '2026-09-28 23:05'
 labels: []
 dependencies: []
 references:
   - ubuntu.sh
+  - tests/test_bb_service_trust.py
   - tests/test_bb_machine_preparation.py
-  - tests/test_paseo_muse_profile.py
+  - tests/paseo-non-management-contract.sh
 ---
 
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Follow up Arcane Ubuntu v277: managed dotfiles converge, but BB preparation still rejects group-writable unrelated service targets, while Paseo inventory fails on protected account processes including the verified systemd user manager. User authorizes repository changes only and requires idempotent machine configuration, not direct Arcane repairs. Preserve existing ownership, credentials, services and unknown-owner safety checks; do not solve this with hardcoded Arcane paths, blanket chmod, or blind EACCES exemptions.
+Resolve Arcane-style BB preparation failures from safely inspectable group-writable service references without adopting or chmodding unrelated services/projects. Preserve private preparation ownership, unknown-writer failures, scoped Chezmoi eligibility, bounded diagnostics and parent-before-descendant inspection. The initial protected-process Paseo work was superseded during integration by upstream TASK-52: preserve its complete non-management policy instead of restoring inventory or a sudo reader. User authorizes publication to remote main, not live Arcane setup or repairs.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 Repeated setup can prepare its private BB copy in the Arcane service-reference scenario through a documented, evidence-backed policy while preserving unrelated service files, targets, ownership and running services.
-- [x] #2 Linux Paseo ownership inspection accounts for protected account processes without requiring those processes to be stopped or weakening kernel protections; unknown identities and possible Paseo writers remain blocked.
-- [x] #3 The same isolated fixtures exercise all observed blockers together, repeated runs, positive and negative ownership cases, changed process/path identities, and final failure aggregation without live setup or service operations.
-- [x] #4 Shared helper copies, platform gates and setup versioning remain consistent; documentation explains owned configuration convergence, preserved unrelated state and any remaining safety prerequisites.
+- [x] #2 The same isolated fixtures exercise all observed blockers together, repeated runs, positive and negative ownership cases, changed process/path identities, and final failure aggregation without live setup or service operations.
+- [x] #3 Shared helper copies, platform gates and setup versioning remain consistent; documentation explains owned configuration convergence, preserved unrelated state and any remaining safety prerequisites.
+- [x] #4 Preserve upstream Paseo non-management: no setup-owned Paseo inventory, sudo reader, lifecycle action or profile mutation is reintroduced.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -58,6 +59,12 @@ Shared embedded code equality remains verified (five BB blocks, six Muse helpers
 No setup was run on Arcane; no host permissions, services, sudoers or kernel policy were changed. Real sudo authorization/inspection on Arcane and native macOS/Windows rollout are not claimed. Optional integration modules/dotfiles sources remain unconfigured where suites report skips. Changes remain local and uncommitted; no push or deployment was performed.
 
 User authorized publication to remote main. Fetch found upstream 84edeea, which removes Paseo management entirely and uses TASK-52 for that retirement. Preserve upstream non-management rather than revive the obsolete sudo inventory reader. Retain the BB read-only trust fix and revalidate the integrated tree; move this implementation record through the native draft workflow to obtain an unambiguous task ID.
+
+Native draft promotion resolves the concurrent task ID collision: this implementation is now TASK-53; upstream TASK-52 remains the Paseo non-management change. Merge policy preserves upstream scoped Chezmoi eligibility, bounded multi-error/path/mode diagnostics, and parent-before-descendant service link traversal while adding the read-only BB permission proof and stable snapshots. The superseded Paseo implementation remains only in the parent commit history.
+
+Integrated upstream 84edeea without reviving retired Paseo management. BB retains upstream scoped dotfiles eligibility, safe path/mode diagnostics, the eight-blocker/4096-byte protocol and parent-before-descendant link resolution. Added link/listing/FIFO race cases to verify the merged snapshots. Integrated preparation contract passes (28 preparation, 16 dotfiles, 3 permissions, 8 trust groups plus PowerShell). Updated old blanket-rejection fixtures to retain explicit unsafe world-write failures and positive private-group preservation. Upstream Windows non-management fixture failed unchanged under portable PowerShell: stub discovery missed inline-parameter functions, then engine caches polluted the account snapshot. Fixed only that fixture discovery/cache isolation; non-management and headless contracts now pass. No Windows production change beyond upstream.
+
+Integrated full pre-push hooks passed in 738.35 seconds with portable PowerShell available (all tests/*.sh, Markdownlint and ShellCheck). Final review added a red-to-green shared-group ancestor fixture: verify group/ACL permissions before probing descendants, cache only successful proofs and recheck the full set before package changes. The final 8-group service trust suite plus upstream unsafe-ancestor and five-copy-equality tests pass after that guard. The actual push will run the full hooks again on the final merge commit, without bypass. Native Arcane rollout and optional external dotfiles integrations are not claimed.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
@@ -66,36 +73,35 @@ User authorized publication to remote main. Fetch found upstream 84edeea, which 
 ## Summary
 
 ```text
-BB preparation
-  read-only service references
-    private ancestor OR verified exclusive primary group/ACL boundary
-    stable reference snapshots -> maintain setup-owned copy
-Paseo inventory
-  denied account real-UID command/environment read
-    scoped noninteractive sudo reader -> unchanged ownership checks
+BB service reference
+  prove ancestor permissions before descending
+  private boundary OR exclusive primary group + ACL proof
+  bounded read + stable reference checks
+  maintain only the setup-owned BB copy
 ```
 
-Preserve unrelated service files, project modes and enrollment state instead of requiring Arcane-specific chmod. Keep unsafe groups/ACLs/links, unknown identities, foreign real-UID reads and possible writers blocked. Privileged inspection is bounded and read-only, returns selected ownership fields, and never changes security policy. Synchronize helpers, increment versions, and document the policy.
+Merge with upstream 84edeea without reviving retired Paseo management. Preserve its scoped Chezmoi eligibility, safe relative-path/mode diagnostics, bounded multi-error reporting and link traversal. Leave unrelated service contents/modes unchanged, while shared groups, uncertain ACLs, world write, stale identities and actual BB references remain blockers. No sudo is added by the final tree.
 
 ## Evidence
 
-- **Before:** Combined linked 0775/0664 service fixtures and multiple protected manager/agent rows blocked otherwise valid setup. An explicit directory-backed initgroups override also exposed an insufficient group-proof check.
-  **After:** Repeated preparation/profile/verify-owner cases pass without unrelated mutation; negative membership, ACL, identity/race, writer, response-protocol and finalization cases remain blocked.
-- Full configured pre-push suite passed (705.53 seconds), including portable PowerShell coverage. Final BB/server reruns, ShellCheck, Markdown lint and diff checks passed after the last initgroups guard. Extracted procfs-reader fixtures include a disposable native nondumpable child; no live daemon or root process inventory was used.
+- **Before:** Repeated Arcane-shaped linked 0775/0664 service fixtures failed; a merged shared-group boundary initially allowed a descendant probe before permission proof.
+  **After:** Repeated safe preparation preserves all service files, while shared-group/FIFO/link/listing/protocol races fail before package work and unsafe descendants are not probed.
+- Integrated BB contract: 28 preparation, 16 dotfiles, 3 permission and 8 trust groups, plus PowerShell guidance. Paseo non-management and headless callers pass with portable PowerShell. Full configured pre-push hooks passed in 738.35 seconds; final eager-proof reruns pass, and publishing retains mandatory hooks.
+- Correct the upstream Windows non-management fixture to discover inline-parameter functions and isolate PowerShell runtime caches outside the preserved account snapshot. Production Windows source remains unchanged from upstream.
 
 ## Merge Danger
 
 **Door:** two-way
 
-No data migration or unrelated permission adoption. Reverting removes the new inspection paths; future setup still requires verifiable ownership.
+No migration, unrelated chmod, enrollment or daemon lifecycle operation. Reversion restores stricter read-only preparation refusals.
 
 **Blast Radius:** setup
 
-Linux service-reference trust and protected-process inventory; shared Bash/PowerShell wrappers carry the policy. Existing noninteractive sudo authorization and native Python are required for protected reads. Native platform/Arcane rollout remains unverified, and optional external integrations retain documented skips. No commit, push or deployment is included.
+Five shared Bash preparation helpers and their regression tests. Unsafe/unverifiable boundaries remain fatal. Native Arcane/macOS/Windows rollout remains unverified; optional cross-repository/native integration skips are retained. No live machine changes are included.
 <!-- SECTION:FINAL_SUMMARY:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
-- [x] #1 Affected BB/Muse, runtime/ownership/headless and PowerShell contracts pass, plus full pre-push hooks and diff/syntax checks.
-- [x] #2 Review preservation, native privilege boundaries, shared helper equality and fixture-versus-rollout limitations; update documentation and final summary.
+- [x] #1 Review preservation, native privilege boundaries, shared helper equality and fixture-versus-rollout limitations; update documentation and final summary.
+- [x] #2 Affected BB, non-management, runtime/headless and PowerShell contracts pass, plus full configured pre-push hooks, syntax and diff checks.
 <!-- DOD:END -->

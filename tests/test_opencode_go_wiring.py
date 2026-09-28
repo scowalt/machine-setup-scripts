@@ -1,4 +1,4 @@
-"""Contract v2: inert Pi/Go/profile orchestration, including the AskClaude policy gate."""
+"""Contract v3: independent Pi/Go/package orchestration and safety gates."""
 import json
 import os
 from pathlib import Path
@@ -27,11 +27,6 @@ class WiringTests(unittest.TestCase):
             gates = '\n'.join(re.search(rf'^{fn}\(\) \{{\n.*?^\}}', source, re.M | re.S)[0]
                               for fn in ('macos_developer_tools_ready_for', 'macos_existing_prerequisites'))
             block = gates + '\nMACOS_DEVELOPER_TOOLS_STATE=${MACOS_DEVELOPER_TOOLS_STATE:-ready}\n' + block
-        if name == "pi.sh":
-            # Pi configures its shell between these blocks; that work is not executed.
-            gate = '    if [[ "${PASEO_MUSE_DEFER_DAEMON_SETUP:-0}" != "1" ]]; then'
-            begin = main.index(gate)
-            block += main[begin:main.index("    fi", begin) + len("    fi")]
         return block
 
     def run_bash(self, name, scenario):
@@ -58,14 +53,6 @@ remove_pi_prose() { record retirement; [[ "${SCENARIO}" != retirement-failure ]]
 install_pi_cli() { record pi-install; [[ "${SCENARIO}" != pi-failure ]]; }
 prepare_pi_mcp_adapter() { record packages; [[ "${SCENARIO}" != package-failure ]]; }
 configure_pi_opencode_go() { record go; [[ "${SCENARIO}" != go-failure ]]; }
-configure_paseo_muse_profile() {
-    record muse
-    case "${SCENARIO}" in
-        deferred) PASEO_MUSE_DEFER_DAEMON_SETUP=1 ;;
-        profile-failure) PASEO_MUSE_DEFER_DAEMON_SETUP=1; return 1 ;;
-    esac
-}
-setup_headless_paseo_daemon() { record daemon; }
 exercise() {
 '''
         code += self.bash_block(name)
@@ -89,24 +76,20 @@ exercise() {
                 self.assertLess(calls.index("permissions"), calls.index("askclaude"))
                 self.assertLess(calls.index("askclaude"), calls.index("retirement"))
                 self.assertLess(calls.index("pi-install"), calls.index("go"))
-                self.assertLess(calls.index("packages"), calls.index("muse"))
-                if name != "wsl.sh":
-                    self.assertLess(calls.index("muse"), calls.index("daemon"))
-                else:
-                    self.assertNotIn("daemon", calls)
+                self.assertLess(calls.index("go"), calls.index("packages"))
+                self.assertLess(calls.index("packages"), calls.index("setup_pi_mcp_adapter"))
+                self.assertLess(calls.index("setup_pi_goal_autoresearch"), calls.index("refresh_pi_packages"))
 
-    def test_failures_are_aggregated_and_deferred_updates_do_not_restart(self):
+    def test_failures_are_aggregated_and_block_package_operations(self):
         for name in BASH:
             for scenario in ("permissions-failure", "askclaude-failure", "retirement-failure", "pi-failure", "go-failure",
-                             "package-failure", "profile-failure", "deferred"):
+                             "package-failure"):
                 with self.subTest(script=name, scenario=scenario):
                     calls = self.run_bash(name, scenario)
-                    failed = 0 if scenario == "deferred" else 1
                     ready = 0 if scenario in ("permissions-failure", "askclaude-failure", "retirement-failure", "pi-failure", "go-failure") else 1
-                    self.assertEqual(calls[-1], f"result:{failed}:{ready}")
-                    self.assertEqual("muse" in calls, bool(ready))
-                    if not ready or scenario in ("deferred", "profile-failure"):
-                        self.assertNotIn("daemon", calls)
+                    self.assertEqual(calls[-1], f"result:1:{ready}")
+                    self.assertNotIn("setup_pi_mcp_adapter", calls)
+                    self.assertNotIn("refresh_pi_packages", calls)
                     if scenario in ("permissions-failure", "askclaude-failure", "retirement-failure", "pi-failure"):
                         self.assertNotIn("go", calls)
                     if scenario in ("permissions-failure", "askclaude-failure"):
@@ -115,7 +98,7 @@ exercise() {
                         self.assertIn("setup_matt_pocock_skills", calls)
                     self.assertEqual("packages" in calls, bool(ready))
 
-    def test_macos_unverified_tools_block_packages_and_daemon(self):
+    def test_macos_unverified_tools_block_packages(self):
         calls = self.run_bash('mac.sh', 'developer-tools-unverified')
         self.assertEqual(calls, ['result:1:0'])
 
@@ -139,7 +122,6 @@ function Remove-PiProse { $script:calls += 'retirement'; $env:SCENARIO -ne 'reti
 function Install-PiCli { $script:calls += 'pi-install'; $env:SCENARIO -ne 'pi-failure' }
 function Prepare-PiMcpAdapter { $script:calls += 'packages'; $env:SCENARIO -ne 'package-failure' }
 function Set-PiOpenCodeGoProvider { $script:calls += 'go'; $env:SCENARIO -ne 'go-failure' }
-function Set-PaseoMuseProfile { $script:calls += 'muse'; $env:SCENARIO -ne 'profile-failure' }
 '''
         code += block
         code += "\n@{failed=$piSetupFailed;ready=$piOpenCodeGoReady;calls=$script:calls} | ConvertTo-Json -Compress\n"
@@ -147,7 +129,7 @@ function Set-PaseoMuseProfile { $script:calls += 'muse'; $env:SCENARIO -ne 'prof
             fixture = Path(tmp) / "wiring.ps1"
             fixture.write_text(code)
             for scenario in ("success", "permissions-failure", "askclaude-failure", "retirement-failure", "pi-failure", "go-failure",
-                             "package-failure", "profile-failure"):
+                             "package-failure"):
                 with self.subTest(scenario=scenario):
                     result = subprocess.run(
                         [PWSH, "-NoProfile", "-NonInteractive", "-File", str(fixture)], cwd=tmp,
@@ -157,9 +139,11 @@ function Set-PaseoMuseProfile { $script:calls += 'muse'; $env:SCENARIO -ne 'prof
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     state = json.loads(result.stdout.splitlines()[-1])
                     self.assertEqual(state["failed"], scenario != "success")
-                    ready = scenario in ("success", "package-failure", "profile-failure")
+                    ready = scenario in ("success", "package-failure")
                     self.assertEqual(state["ready"], ready)
-                    self.assertEqual("muse" in state["calls"], ready)
+                    if scenario != 'success':
+                        self.assertNotIn('Setup-PiMcpAdapter', state['calls'])
+                        self.assertNotIn('Update-PiPackages', state['calls'])
                     self.assertEqual("packages" in state["calls"], ready)
                     if scenario in ("permissions-failure", "askclaude-failure"):
                         self.assertNotIn("retirement", state["calls"])
@@ -169,7 +153,8 @@ function Set-PaseoMuseProfile { $script:calls += 'muse'; $env:SCENARIO -ne 'prof
                         self.assertLess(state["calls"].index("permissions"), state["calls"].index("askclaude"))
                         self.assertLess(state["calls"].index("askclaude"), state["calls"].index("retirement"))
                         self.assertLess(state["calls"].index("pi-install"), state["calls"].index("go"))
-                        self.assertLess(state["calls"].index("packages"), state["calls"].index("muse"))
+                        self.assertLess(state["calls"].index("go"), state["calls"].index("packages"))
+                        self.assertLess(state["calls"].index("packages"), state["calls"].index("Setup-PiMcpAdapter"))
 
 
 if __name__ == "__main__":

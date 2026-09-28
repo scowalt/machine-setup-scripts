@@ -814,7 +814,7 @@ class WiringTests(unittest.TestCase):
         windows = (ROOT / 'win.ps1').read_text()
         self.assertIn('if (-not (Install-BbDesktop)) { $bbDesktopSetupFailed = $true }', windows)
         self.assertIn('if ($bbDesktopSetupFailed)', windows)
-        self.assertLess(windows.index('    Assert-HeadlessPaseoUnsupported'), windows.index('    if (-not (Install-BbDesktop))'))
+        self.assertLess(windows.index('    Assert-HeadlessUnsupported'), windows.index('    if (-not (Install-BbDesktop))'))
 
     def run_wrapper(self, entry, headless='', system='Linux', arch='x86_64', kernel='native', result='installed', status=0, arm_capable='0'):
         script = wrapper('mac') + '''

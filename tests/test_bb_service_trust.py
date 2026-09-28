@@ -175,6 +175,43 @@ class ServiceGroupProof(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == 'linux', 'Linux read-only group/ACL proof')
 class PreparationReferenceIntegration(unittest.TestCase):
+    def test_changed_service_link_listing_and_fifo_fail_before_package_work(self):
+        for change in ['link', 'listing', 'fifo']:
+            with self.subTest(change=change):
+                case = preparation.Preparation(); case.setUp(); self.addCleanup(case.doCleanups)
+                units = case.home / '.config/systemd/user'
+                units.mkdir(parents=True)
+                target = case.home / 'ordinary.unit'
+                target.write_text('unrelated fixture-secret\n')
+                unit = units / 'ordinary.service'
+                unit.symlink_to(target)
+                other = case.home / 'other.unit'
+                other.write_text('ExecStart=' + str(case.prefix / 'bin/bb-host-daemon'))
+                preload = case.root / 'race-preload.cjs'
+                preload.write_text("""
+const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process');
+const read=fs.readSync,home=process.env.HOME,target=path.join(home,'ordinary.unit');
+let changed=false;
+fs.readSync=function(fd,...args) {
+  const count=read.call(fs,fd,...args);
+  if(!changed && fs.readlinkSync(`/proc/self/fd/${fd}`)===target) {
+    changed=true;
+    const unit=path.join(home,'.config/systemd/user/ordinary.service');
+    if(process.env.SERVICE_RACE==='link') { fs.unlinkSync(unit);fs.symlinkSync(path.join(home,'other.unit'),unit); }
+    else if(process.env.SERVICE_RACE==='listing') fs.writeFileSync(path.join(path.dirname(unit),'late.service'),'fixture-secret');
+    else { fs.unlinkSync(target);cp.execFileSync('/usr/bin/mkfifo',[target]); }
+  }
+  return count;
+};
+""")
+                (case.tools / 'node').unlink()
+                case.write_exe('node', f'#!/bin/bash\nexec {NODE!r} --require {str(preload)!r} "$@"\n')
+                out = case.run_helper(expected=1, SERVICE_RACE=change)
+                self.assertIn('reason=unverified', out)
+                self.assertNotIn('fixture-secret', out)
+                self.assertNotIn('npm ', case.log())
+                self.assertFalse(case.prefix.exists())
+
     def test_shared_home_exclusive_group_preserves_all_arcane_shapes_twice(self):
         case = preparation.Preparation(); case.setUp(); self.addCleanup(case.doCleanups)
         account_fixture(case.root)
@@ -197,6 +234,19 @@ class PreparationReferenceIntegration(unittest.TestCase):
         preload.write_text("""
 const cp=require('node:child_process'),fs=require('node:fs'),path=require('node:path');
 const spawn=cp.spawnSync,root=process.env.FIXTURE_ROOT;
+if(process.env.GROUP_DENY_DESCENT==='1') {
+  const unsafe=path.join(process.env.HOME,'Code/project/deploy');
+  for(const name of ['lstatSync','statSync','readFileSync','readlinkSync','readdirSync','openSync']) {
+    const original=fs[name];
+    fs[name]=function(file,...args) {
+      if(String(file).startsWith(unsafe+'/')) {
+        fs.appendFileSync(path.join(root,'unsafe-descent'),'probe\\n');
+        throw Error('unsafe descendant');
+      }
+      return original.call(fs,file,...args);
+    };
+  }
+}
 cp.spawnSync=function(command,args,options) {
   if(command==='/usr/bin/python3') {
     if(JSON.stringify(args.slice(0,3))!==JSON.stringify(['-I','-S','-c']) || args.length!==4 ||
@@ -216,8 +266,9 @@ cp.spawnSync=function(command,args,options) {
             self.assertEqual(before, (snapshot(case.home / 'Code'), snapshot(case.home / '.config')))
         (case.root / 'system/etc/group').write_text(f'account:x:{os.getgid()}:other\n')
         case.events.unlink()
-        output = case.run_helper(expected=1)
-        self.assertIn('group-or-world-writable', output)
+        output = case.run_helper(expected=1, GROUP_DENY_DESCENT='1')
+        self.assertFalse((case.root / 'unsafe-descent').exists(), 'shared-group ancestry was probed before its permission proof')
+        self.assertIn('reason=writable-boundary', output)
         self.assertNotIn('npm ', case.log())
         self.assertEqual(before, (snapshot(case.home / 'Code'), snapshot(case.home / '.config')))
         account_fixture(case.root)
@@ -226,7 +277,7 @@ cp.spawnSync=function(command,args,options) {
                 (case.root / 'group-response.json').write_text(json.dumps({'status': status, 'stdout': output, 'stderr': 'fixture-secret'}))
                 case.events.unlink()
                 out = case.run_helper(expected=1)
-                self.assertIn('inspection-failed', out)
+                self.assertIn('reason=unverified', out)
                 self.assertNotIn('fixture-secret', out)
                 self.assertNotIn('npm ', case.log())
                 self.assertEqual(before, (snapshot(case.home / 'Code'), snapshot(case.home / '.config')))

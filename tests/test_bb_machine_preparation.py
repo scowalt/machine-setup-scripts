@@ -186,6 +186,141 @@ setup_bb_machine "$1"
     def log(self):
         return self.events.read_text() if self.events.exists() else ""
 
+    def test_observed_permissions_report_blockers_without_mutation(self):
+        directory = self.home / '.config'
+        (directory / 'systemd/user').mkdir(parents=True)
+        directory.chmod(0o777)
+        before = snapshot(self.home)
+        out = self.run_helper(expected=1)
+        self.assertEqual(snapshot(self.home), before)
+        self.assertIn('operation=directory path=~/.config mode=0777 reason=writable-boundary', out)
+        self.assertNotIn('npm', self.log())
+        directory.chmod(0o755)
+        self.run_helper()
+
+    def test_observed_service_mode_reports_blocker_without_mutation(self):
+        service = self.home / '.config/systemd/user/tmux.service'
+        service.parent.mkdir(parents=True, exist_ok=True)
+        service.write_text('SECRET_SERVICE_CONTENT\n')
+        service.chmod(0o666)
+        before = snapshot(self.home)
+        out = self.run_helper(expected=1)
+        self.assertEqual(snapshot(self.home), before)
+        self.assertIn('operation=service path=~/.config/systemd/user/tmux.service mode=0666 reason=writable-boundary', out)
+        self.assertNotIn('SECRET_SERVICE_CONTENT', out)
+        self.assertNotIn('npm', self.log())
+        service.chmod(0o644)
+        self.run_helper()
+
+    def test_independent_blockers_limits_and_secret_safe_paths(self):
+        for name in ['.config/systemd/user/tmux.service', 'Library/LaunchAgents/other.plist']:
+            p = self.home / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text('SECRET_CONTENT --token=SECRET_ARGUMENT')
+            p.chmod(0o666)
+        before = snapshot(self.home)
+        out = self.run_helper(expected=1, PROCESSES='bb-server --token=SECRET_PROCESS')
+        self.assertEqual(snapshot(self.home), before)
+        self.assertIn('operation=process', out)
+        self.assertIn('path=~/.config/systemd/user/tmux.service mode=0666', out)
+        self.assertIn('path=~/Library/LaunchAgents/other.plist mode=0666', out)
+        self.assertNotIn('SECRET', out)
+        for n in range(20):
+            p = self.home / f'.config/systemd/user/unit-{n}.service'
+            p.write_text('SECRET')
+            p.chmod(0o666)
+        out = self.run_helper(expected=1)
+        self.assertEqual(out.count('operation='), 8)
+        self.assertLess(len(out), 4096)
+        self.assertIn('report incomplete', out)
+        shutil.rmtree(self.home / '.config/systemd/user')
+        (self.home / '.config/systemd/user').mkdir()
+        p = self.home / '.config/systemd/user/SECRET_NAME\n.service'
+        p.write_text('SECRET_CONTENT')
+        p.chmod(0o666)
+        out = self.run_helper(expected=1)
+        self.assertIn('path=path-suppressed mode=0666', out)
+        self.assertNotIn('SECRET', out)
+        p.unlink()
+        target = self.root / 'SECRET_EXTERNAL_PATH'
+        target.write_text('SECRET_CONTENT')
+        target.chmod(0o666)
+        (p.parent / 'external.service').symlink_to(target)
+        out = self.run_helper(expected=1)
+        self.assertIn('path=external-boundary mode=0666', out)
+        self.assertNotIn('SECRET', out)
+        self.assertNotIn('npm', self.log())
+
+    def test_diagnostic_inspection_stops_below_unsafe_ancestor(self):
+        code = BLOCK.split("<<'BB_MACHINE_STATE'\n", 1)[1].split('\nBB_MACHINE_STATE', 1)[0]
+        bad = self.home / '.config'
+        (bad / 'systemd/user').mkdir(parents=True)
+        bad.chmod(0o777)
+        safe = self.home / 'Library/LaunchAgents'
+        safe.mkdir(parents=True)
+        (safe / 'other.plist').write_text('SECRET')
+        (safe / 'other.plist').chmod(0o666)
+        driver = r'''
+const fs = require('node:fs'), vm = require('node:vm');
+const [home, code, unsafe] = process.argv.slice(1), touched = [];
+let output = '';
+const fake = new Proxy(fs, {get(target, key) {
+  if (!['lstatSync', 'statSync', 'readFileSync', 'readdirSync', 'realpathSync'].includes(key)) return target[key];
+  return (f, ...args) => {
+    if (String(f).startsWith(unsafe + '/')) { touched.push(String(f)); throw Error('do not descend'); }
+    return target[key](f, ...args);
+  };
+}});
+const proc = {argv: ['node', '-', 'preflight', home], getuid: () => process.getuid(), platform: process.platform,
+              versions: process.versions, stdout: {write(s) { output += s; }}};
+vm.runInNewContext(code, {process: proc, require: n => n === 'node:fs' ? fake : n === 'node:child_process' ? {execFileSync: () => ''} : require(n)});
+console.log(JSON.stringify({touched, output, status: proc.exitCode}));
+'''
+        for branch in ['.config', 'unsafe-target']:
+            if branch == 'unsafe-target':
+                bad.chmod(0o755)
+                target = self.home / branch
+                target.mkdir()
+                target.chmod(0o777)
+                (bad / 'systemd/user/linked.service').symlink_to(target / 'uninspected/service')
+            result = subprocess.run([NODE, '-e', driver, str(self.home), code, str(self.home / branch)], env=self.env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            data = json.loads(result.stdout)
+            self.assertEqual(data['status'], 1)
+            self.assertEqual(data['touched'], [])
+            self.assertIn(f'~/{branch}:0777:writable-boundary', data['output'])
+            self.assertIn('~/Library/LaunchAgents/other.plist:0666:writable-boundary', data['output'])
+
+    def test_malformed_helper_output_is_wholly_suppressed(self):
+        valid = 'blocked:directory:~/.config:0775:writable-boundary\nfailed:incomplete'
+        bad = ['SECRET', '', 'ok', valid + '\nfailed:incomplete', valid + '\nSECRET', valid + '\n', 'ok\n\n',
+               'blocked:unknown:~/.config:0775:writable-boundary\nfailed:incomplete',
+               valid.replace('writable-boundary', 'SECRET'), valid.replace('0775', '9999'),
+               valid.replace('~/.config', '~/../SECRET'), valid.replace('~/.config', '/SECRET'),
+               valid.replace('~/.config', '~/bad\x1bSECRET'), 'X' * 100000,
+               '\n'.join([valid.splitlines()[0]] * 9 + ['failed:incomplete'])]
+        for payload, status in [(s, '1') for s in bad] + [(valid, '0')]:
+            with self.subTest(payload=payload[:80], status=status):
+                result = subprocess.run(['/bin/bash', '-c', '''source "$FIXTURE_ROOT/helpers.sh"
+bb_machine_package_state_payload() { printf '%s\\n' "$PAYLOAD"; echo SECRET_STDERR >&2; return "$STATUS"; }
+print_error() { printf '%s\\n' "$*"; }
+bb_machine_package_state preflight
+'''], env=self.env | {'PAYLOAD': payload, 'STATUS': status}, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stderr, '')
+                self.assertEqual(result.stdout, 'BB preparation preflight: unverified helper result; diagnostic output suppressed.\n')
+
+    def test_binary_or_unterminated_helper_output_cannot_become_success(self):
+        for payload in [r'ok\000\n', r'ok\r\n', 'ok']:
+            result = subprocess.run(['/bin/bash', '-c', '''source "$FIXTURE_ROOT/helpers.sh"
+bb_machine_package_state_payload() { printf '%b' "$PAYLOAD"; }
+print_error() { echo "$*"; }
+bb_machine_package_state preflight
+'''], env=self.env | {'PAYLOAD': payload}, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stderr, '')
+            self.assertEqual(result.stdout, 'BB preparation preflight: unverified helper result; diagnostic output suppressed.\n')
+
     def test_identical_helpers(self):
         for source in SOURCES.values():
             self.assertEqual(BLOCK, source.split(START, 1)[1].split(END, 1)[0])
@@ -196,7 +331,7 @@ setup_bb_machine "$1"
         driver = r'''
 const vm = require('node:vm');
 const fixture = JSON.parse(process.argv[1]), code = process.argv[2];
-const fakeProcess = {argv: ['node', '-', 'preflight', '/home/fixture'], getuid: () => 1000, platform: fixture.platform || 'linux', versions: {node: fixture.node || '24.20.0'}, exitCode: 0};
+const fakeProcess = {argv: ['node', '-', 'preflight', '/home/fixture'], getuid: () => 1000, platform: fixture.platform || 'linux', versions: {node: fixture.node || '24.20.0'}, stdout: {write(s) { process.stdout.write(s); }}, exitCode: 0};
 const fs = {
   lstatSync(p) {
     if (!['/', '/var', '/var/home', '/home', '/home/fixture'].includes(p)) throw Object.assign(Error(), {code: 'ENOENT'});
@@ -208,10 +343,14 @@ const fs = {
 vm.runInNewContext(code, {process: fakeProcess, require: n => n === 'node:fs' ? fs : n === 'node:child_process' ? {execFileSync: () => ''} : require(n)});
 process.exit(fakeProcess.exitCode);
 '''
-        for fixture, expected in [({}, 0), ({'target': 'var/home'}, 0), ({'target': '/other'}, 1), ({'foreignAlias': True}, 1), ({'writable': True}, 1), ({'userLink': True}, 1), ({'platform': 'darwin'}, 1), ({'node': '23.0.0'}, 1), ({'node': '22.18.0'}, 1)]:
+        for fixture, expected in [({}, 0), ({'target': 'var/home'}, 0), ({'target': '/other'}, 1), ({'foreignAlias': True}, 1), ({'writable': True}, 1), ({'userLink': True}, 1), ({'platform': 'darwin'}, 1), ({'platform': 'win32'}, 1), ({'node': '23.0.0'}, 1), ({'node': '22.18.0'}, 1)]:
             with self.subTest(fixture=fixture):
                 result = subprocess.run([NODE, '-e', driver, json.dumps(fixture), code], env=self.env, capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, expected, result.stderr)
+                if 'node' in fixture:
+                    self.assertIn('blocked:runtime:external-boundary:unknown:unsupported-runtime', result.stdout)
+                if fixture.get('platform') == 'win32':
+                    self.assertIn('blocked:runtime:external-boundary:unknown:unsupported-platform', result.stdout)
 
     def test_first_install_update_and_unrelated_preservation(self):
         for name in [".env.local", ".npmrc", ".bashrc", "project/file", ".pi/agent/auth.json", ".local/lib/node_modules/other/data"]:
@@ -349,6 +488,25 @@ process.exit(fakeProcess.exitCode);
         target.chmod(0o666)
         self.run_helper(expected=1)
 
+    def test_service_links_resolve_dotdot_after_opt_link(self):
+        cellar = self.home / 'brew/Cellar/example/1.0'
+        cellar.mkdir(parents=True)
+        opt = self.home / 'brew/opt/example'
+        opt.parent.mkdir(parents=True)
+        opt.symlink_to('../Cellar/example/1.0')
+        target = cellar.parent / 'reference.plist'
+        target.write_text(f'ExecStart={self.prefix}/bin/bb-app\n')
+        (opt.parent / 'reference.plist').write_text('unrelated decoy\n')
+        unit = self.home / 'Library/LaunchAgents/other.plist'
+        unit.parent.mkdir(parents=True)
+        unit.symlink_to(str(opt) + '/../reference.plist')
+        before = snapshot(self.home)
+        self.run_helper(expected=1)
+        self.assertEqual(snapshot(self.home), before)
+        self.assertNotIn('npm', self.log())
+        target.write_text('unrelated actual target\n')
+        self.run_helper()
+
     def test_wsl_exact_headless_semantics(self):
         for flags in [{}, {'HEADLESS': ''}, {'HEADLESS': '0'}, {'HEADLESS': 'true'}, {'HEADLESS': 'false'}]:
             with self.subTest(flags=flags):
@@ -438,31 +596,30 @@ process.exit(fakeProcess.exitCode);
         self.assertNotIn('npm ', self.log())
 
     def test_controlled_permission_diagnostics_preserve_each_blocked_location(self):
-        directories = {'.config': 'home-config', '.config/systemd': 'home-systemd',
-                       '.config/systemd/user': 'home-systemd-user', 'Library': 'home-library',
-                       'Library/LaunchAgents': 'home-launchagents'}
+        directories = ['.config', '.config/systemd', '.config/systemd/user',
+                       'Library', 'Library/LaunchAgents']
         for name in directories:
             (self.home / name).mkdir(exist_ok=True)
-        for name, label in directories.items():
-            for mode in [0o777]:
+        for name in directories:
+            for mode in ([0o777] if sys.platform == 'linux' else [0o775, 0o777]):
                 with self.subTest(name=name, mode=oct(mode)):
                     p = self.home / name
                     p.chmod(mode)
                     before = snapshot(self.home)
                     out = self.run_helper(expected=1)
-                    self.assertIn(f'service-inventory:{label}:group-or-world-writable', out)
+                    self.assertIn(f'operation=directory path=~/{name} mode={mode:04o} reason=writable-boundary', out)
                     self.assertNotIn(str(self.home), out)
                     self.assertNotIn('npm', self.log())
                     self.assertEqual(snapshot(self.home), before)
                     p.chmod(0o700)
-        for name, label in [('.config/systemd/user/fixture-secret.service', 'systemd-service'),
-                            ('Library/LaunchAgents/fixture-secret.plist', 'launchd-service')]:
+        # Safe relative service names are useful diagnostics; their contents stay secret.
+        for name in ['.config/systemd/user/ordinary.service', 'Library/LaunchAgents/ordinary.plist']:
             p = self.home / name
             p.write_text('fixture-secret: never print service contents\n')
             p.chmod(0o666)
             before = snapshot(self.home)
             out = self.run_helper(expected=1)
-            self.assertIn(f'service-inventory:{label}:group-or-world-writable', out)
+            self.assertIn(f'operation=service path=~/{name} mode=0666 reason=writable-boundary', out)
             self.assertNotIn('fixture-secret', out)
             self.assertEqual(snapshot(self.home), before)
             p.unlink()
@@ -470,20 +627,21 @@ process.exit(fakeProcess.exitCode);
         directory.rmdir()
         directory.symlink_to(self.tools)
         out = self.run_helper(expected=1)
-        self.assertIn('service-inventory:home-systemd-user:linked-or-not-directory', out)
+        self.assertIn('operation=directory path=~/.config/systemd/user mode=0777 reason=linked-path', out)
         self.assertNotIn(str(self.tools), out)
 
     def test_process_and_artifact_diagnostics_do_not_disclose_raw_errors(self):
         out = self.run_helper(expected=1, PROCESSES='bb-server --token fixture-secret')
-        self.assertIn('process-inventory:account:process-conflict', out)
+        self.assertIn('operation=process path=external-boundary mode=unknown reason=process-conflict', out)
         self.assertNotIn('fixture-secret', out)
         self.write_exe('ps', '#!/bin/bash\necho fixture-secret >&2; exit 1\n')
         out = self.run_helper(expected=1)
-        self.assertIn('process-inventory:account:inspection-failed', out)
+        self.assertIn('operation=process path=external-boundary mode=unknown reason=unverified', out)
         self.assertNotIn('fixture-secret', out)
         self.write_exe('ps', '#!/bin/bash\nexit 0\n')
         out = self.run_helper(expected=1, FAIL_ADDON='node-pty')
-        self.assertIn('artifact-verification:preparation-tree:inspection-failed', out)
+        self.assertIn('BB preparation verify: operation=artifact', out)
+        self.assertIn('reason=unverified', out)
         self.assertNotIn('fixture native load failure', out)
         self.run_helper()
         marker = self.prefix.parent / 'owner.json'
@@ -491,7 +649,7 @@ process.exit(fakeProcess.exitCode);
         before = snapshot(self.home)
         self.events.unlink()
         out = self.run_helper(expected=1)
-        self.assertIn('preparation-tree:preparation-tree:inspection-failed', out)
+        self.assertIn('operation=artifact path=~/.local/share/setup-bb-machine/owner.json mode=0600 reason=malformed-metadata', out)
         self.assertNotIn('fixture-secret', out)
         self.assertNotIn('npm', self.log())
         self.assertEqual(snapshot(self.home), before)
@@ -505,7 +663,7 @@ process.exit(fakeProcess.exitCode);
                 self.write_exe('node', f'#!/bin/bash\nprintf "{output}\\n"\necho fixture-secret >&2\nexit {status}\n')
                 before = snapshot(self.home)
                 out = self.run_helper(expected=1)
-                self.assertIn('unrecognized helper result', out)
+                self.assertIn('unverified helper result; diagnostic output suppressed', out)
                 self.assertNotIn('fixture-secret', out)
                 self.assertNotIn('npm', self.log())
                 self.assertEqual(snapshot(self.home), before)
@@ -630,7 +788,7 @@ command() {
                     for name in ["bb_server_selection", "bb_server_restore_process_override"]:
                         setup += re.search(rf"^{name}\(\) \{{\n.*?^\}}", source, re.M | re.S).group() + "\n"
                 if platform == "wsl":
-                    setup += re.search(r"^fail_unsupported_headless_paseo_daemon\(\) \{\n.*?^\}", source, re.M | re.S).group() + "\n"
+                    setup += re.search(r"^fail_unsupported_headless\(\) \{\n.*?^\}", source, re.M | re.S).group() + "\n"
                 setup += 'run_setup_tasks; result=$?; echo finalized >> "$EVENTS"; exit "$result"\n'
                 cases = [({}, 0, True), ({"PREP_FAIL": "1"}, 1, True), ({"PI_FAIL": "1"}, 1, True)]
                 if platform == 'mac':

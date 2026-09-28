@@ -148,7 +148,7 @@ print_error() { printf 'ERROR: %s\\n' "$*"; }
                         code += '\nfunction Update-PiPackages { Write-Host "PACKAGE-STEP:refresh"; return $' + ('false' if failure == 'refresh' else 'true') + ' }'
                         code += '''
 function Test-EnvLocalFlag { return $false }
-function Remove-PaseoPlain { Write-Host 'UNRELATED-CONTINUED'; return $true }
+function Remove-CompoundEngineeringResources { Write-Host 'UNRELATED-CONTINUED'; return $true }
 function Get-SetupLogDirectory { return (Join-Path $env:HOME 'logs') }
 function Start-Transcript { }
 function Complete-SetupLog { Write-Host 'LOG-FINALIZED' }
@@ -168,7 +168,7 @@ function Complete-SetupLog { Write-Host 'LOG-FINALIZED' }
                         code += '\nrefresh_pi_packages() { echo "PACKAGE-STEP:refresh"; return ' + ('1' if failure == 'refresh' else '0') + '; }'
                         code += '''
 print_warning() { printf '%s\\n' "$*"; }
-remove_paseo_plain() { printf 'UNRELATED-CONTINUED\\n'; }
+remove_compound_engineering_resources() { printf 'UNRELATED-CONTINUED\\n'; }
 start_setup_log() { :; }
 finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
 '''
