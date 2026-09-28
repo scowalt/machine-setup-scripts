@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-28 19:17'
-updated_date: '2026-09-28 20:26'
+updated_date: '2026-09-28 20:35'
 labels: []
 dependencies: []
 references:
@@ -27,6 +27,7 @@ Arcane setup failed before BB package changes because service directories were 0
 - [x] #3 Unsafe or unmanaged paths and services remain untouched and blocked; existing role deferrals, npm policy, manual enrollment ownership, headless gates and failure aggregation are preserved.
 - [x] #4 Isolated native Chezmoi and extracted-caller fixtures reproduce Arcane writable modes, verify convergence of managed paths and repeated preparation, preserve unmanaged paths, and cover unsafe metadata plus diagnostic secrecy.
 - [x] #5 README explains managed-mode convergence and manual recovery for remaining unsafe locations; modified setup-script versions are incremented.
+- [x] #6 The full pre-push PowerShell retirement fixture isolates the existing BB Desktop caller with an inert success stub, without changing Windows setup or bypassing retirement/finalization assertions.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -54,6 +55,10 @@ User approved the proposed repository fix in this thread. Diagnosis used authent
 - Self-review confirmed shared preparation payload/wrapper equality, no relaxed safety predicates, no automatic chmod/chown, no changed npm policy or server/enrollment lifecycle, preserved caller masks and explicit native config. Version bumps are +1 in all five Bash setup scripts. Only repository files and temporary fixtures changed during implementation; no commit, push or deployment.
 
 User authorized merging this change into remote main. Fetched origin/main and confirmed it exactly matches the implementation base; preparing an attributed commit and normal fast-forward push with repository hooks enabled. This does not authorize running setup on Arcane.
+
+Merge-time hook verification found a pre-existing Windows Infisical fixture failure: its extracted caller now invokes Install-BbDesktop but the fixture lacks that stub. Reproduced exit 1 from unchanged origin/main using three files in a temporary directory; adding only an in-memory success stub produced exit 0. Adding that test-only isolation correction under the existing regression-verification plan before retrying all hooks. Initial HTTPS push also lacked shell credentials; read-only API verification confirmed the existing account owner token permits this repo, used only in process environment with command-scoped git credential helper (no persisted credentials). No force or hook bypass.
+
+The corrected Infisical contract now passes with PWSH_BIN enabled, retaining real retirement failure aggregation and log-finalization assertions. Only the unrelated Desktop action is stubbed. Removed only the three Python cache files produced by the initial hook run; subsequent hook tests disable bytecode output.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
@@ -64,6 +69,8 @@ Fixed the BB preparation dotfiles permission regression across all five Bash set
 Added allowlisted operation/location/reason diagnostics with fail-closed terminal-output validation. Existing safety checks, unrelated services, BB ownership, npm policy and enrollment state are preserved. Unmanaged writable paths remain blocked for private manual review rather than being recursively repaired. README documents recovery; all five script versions were incremented.
 
 Verification: native Chezmoi regression fixtures reproduced the failure before the patch and now pass repeated preparation using inert artifacts; secret-safety, unmanaged-path preservation and real caller/argv fixtures pass. Preparation/server, reliability/PowerShell, runtime, headless, AI-agent, CLT/Homebrew, weekly and reboot suites plus lint/diff checks passed. Optional external-source/native-skill integrations were skipped where unconfigured. No Arcane changes, deployment, commit or push; actual native rollout remains unverified.
+
+Merge-time follow-up: the full optional PowerShell hook exposed an unchanged-main Infisical caller fixture missing the new Desktop function stub. Added one inert Install-BbDesktop success stub; baseline red/temporary-stub green and the complete Infisical contract confirm the fix without Windows setup changes or weakened assertions.
 <!-- SECTION:FINAL_SUMMARY:END -->
 
 ## Definition of Done
