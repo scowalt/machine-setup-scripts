@@ -1,4 +1,4 @@
-"""Homebrew helper + actual final caller/main seams; no live setup or brew."""
+"""Contract v2: Homebrew/OpenCode exclusion + final caller seams; no live setup/brew."""
 from pathlib import Path
 import re
 import subprocess
@@ -45,6 +45,7 @@ brew() {
         script += '\n' + function('macos_developer_tools_ready_for')
         script += '\n' + function('macos_clt_summary')
         script += '\n' + function('list_unresolved_brew_outdated_items')
+        script += '\n' + re.search(r'^opencode_guarded_brew_upgrade\(\) \(\n.*?^\)', SOURCE, re.M | re.S)[0]
         script += '\n' + function('update_brew')
         script += '\nrun_setup_tasks() {\nlocal _setup_had_errors=${EARLIER}\nlocal _infisical_retirement_failed=${INFISICAL_FAILED}\n'
         script += 'if is_main_user; then\n print_section "Final Updates"' + tail

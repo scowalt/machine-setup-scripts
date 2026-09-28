@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 4 | Last changed: Preserve independent Pi Go package ordering without Paseo
+# Version 5 | Last changed: Require bounded OpenCode v2 installation without agent integrations
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -111,13 +111,15 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '_resource_path="\$\{_agent_dir\}/compound-engineering"' 'legacy Compound Engineering install manifest cleanup path'
 done
 
-# The OpenCode CLI remains retired. The distinct built-in Pi Go provider
-# and its documentation must not restore CLI installation or agent skills.
+# The OpenCode v2 CLI is install-only. Go credentials and native agent-skill
+# targets remain separate; installation must not restore old integrations.
 for file in "${bash_setup_scripts[@]}"; do
-    assert_not_contains "${file}" 'install_opencode|validate_opencode_keys|BAN_OPENCODE|--agent opencode|opencode-ai|anomalyco/tap/opencode|opencode\.ai/install|config/opencode/skills' 'retired opencode setup'
+    assert_contains "${file}" '^install_opencode_cli\(\)' 'verified OpenCode v2 native installer'
+    assert_contains "${file}" '^[[:space:]]+install_opencode_cli \|\| _setup_had_errors=1$' 'aggregated OpenCode installation result'
+    assert_not_contains "${file}" 'validate_opencode_keys|BAN_OPENCODE|--agent opencode|opencode\.ai/install|config/opencode/skills' 'unapproved OpenCode integrations'
 done
-assert_not_contains win.ps1 'Install-OpenCode|Validate-OpenCodeKeys|BAN_OPENCODE|--agent opencode|opencode-ai|AnomalyCo\.OpenCode|opencode\.ai/install' 'retired OpenCode CLI setup'
-assert_not_contains README.md 'opencode-ai|anomalyco/tap/opencode|opencode\.ai/install' 'retired OpenCode CLI installer instructions'
+assert_contains win.ps1 '^function Install-OpenCodeCli' 'verified Windows OpenCode native installer'
+assert_not_contains win.ps1 'Validate-OpenCodeKeys|BAN_OPENCODE|--agent opencode|opencode\.ai/install' 'unapproved OpenCode integrations'
 assert_contains README.md 'OPENCODE_GO_API_KEY' 'dedicated Go setup credential documentation'
 assert_contains README.md 'opencode-go/muse-spark-1\.3-contributor' 'subscription Contributor model documentation'
 assert_contains win.ps1 'function Set-PiOpenCodeGoProvider' 'PowerShell Go credential helper'

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Version 1 | Last changed: Isolate OpenCode ownership guard in APT regression fixtures
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -277,6 +278,8 @@ apt_output=$(SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${source
         source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
         can_sudo() { return 0; }
         dpkg() { return 0; }
+        # The extracted OpenCode contract exercises ownership separately.
+        opencode_apt_upgrade_safe() { return 0; }
         apt-mark() { [[ "$1" == "showhold" ]] && return 0; }
         sudo() {
             printf "%s\n" "$*" >> "${CALL_LOG}"

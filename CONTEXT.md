@@ -72,6 +72,10 @@ _Avoid_: Daemon installation, machine discovery
 The user-level Node runtime used by managed tools and projects without a runtime override. A project-specific selection takes precedence.
 _Avoid_: System Node, Pi-only runtime
 
+**OpenCode CLI**:
+The terminal-based OpenCode coding agent. It is distinct from the OpenCode Desktop application and the OpenCode Go subscription used by Pi.
+_Avoid_: OpenCode Go client, OpenCode Desktop
+
 **OpenCode Go subscription**:
 A coding subscription that provides model access for Pi. It is distinct from paid OpenCode Zen usage and the OpenCode CLI.
 _Avoid_: OpenCode installation, Zen subscription
