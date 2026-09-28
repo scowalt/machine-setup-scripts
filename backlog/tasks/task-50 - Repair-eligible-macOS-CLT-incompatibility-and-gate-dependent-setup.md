@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-28 15:44'
-updated_date: '2026-09-28 17:34'
+updated_date: '2026-09-28 17:48'
 labels:
   - macos
   - reliability
@@ -105,6 +105,10 @@ Independently reran: python3 tests/test_macos_clt.py (22 passed); python3 tests/
 Native Apple update/authorization, macOS Bash 3.2/BSD behavior, and optional integrations remain explicitly unverified where unavailable. No live setup, Apple update, remote change, commit, or push occurred. All AC and DoD are satisfied for the approved fixture-validated implementation scope; native rollout remains a separately authorized check.
 
 Remote-main integration requested by the user. Fetched origin/main at 7f7daa6 (headed bb Desktop support), preserved both feature sets, and resolved only the CLAUDE guidance overlap and mac.sh version-header conflict. Integrated mac.sh is v249. The combined tree passed 22 CLT tests, 9 Homebrew-result tests, 64 bb Desktop tests, Bash syntax, ShellCheck, and staged/unstaged diff checks. Optional Windows desktop wrapper execution was skipped because PowerShell is unavailable; no native GUI/update operations were run. Publishing will use a normal non-force push with repository pre-push hooks enabled.
+
+Publication update: remote main now includes merge commit 691c34c. An authentication workaround narrowed PATH and unintentionally hid Lefthook, so the push hook did not run; this was immediately disclosed and the full pre-push group was invoked explicitly. ShellCheck-all and Markdownlint-all passed. The contract group exposed a stale tests/ntn-installation-contract.sh ordering regex that accepts the old bare/return Codex call but not the new macOS aggregated-failure form. Actual Codex-before-Notion ordering is unchanged. Reopened validation pending the narrowly scoped fixture correction and complete contract rerun; no production behavior change is needed.
+
+Resolved the stale Notion ordering assertion without changing production behavior: macOS must use the exact aggregated-failure Codex call, while other platforms retain their previous pattern. The Notion contract and ShellCheck passed. Then ran the complete repository pre-push group explicitly with the actual Lefthook executable on PATH: lefthook run pre-push --force --no-tty completed successfully (all tests/*.sh contract entry points, Markdownlint-all, ShellCheck-all; 410.81 seconds). Optional native/PowerShell/registry/dotfiles integration coverage remains skipped where unavailable. Full log: origin thread storage task50-full-pre-push.log. Validation AC/DoD restored; publishing the test-only follow-up with the hook runner available.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
@@ -117,6 +121,8 @@ Unresolved readiness now skips Homebrew-backed and other dependent mutations whi
 Validation: 22 CLT tests and 9 Homebrew-result tests pass, plus required reliability/reboot/weekly suites and affected BB, runtime, Pi, Go/Muse, Plain, permissions, AI-agent, Infisical, headless, and Tea contracts as recorded in notes. The origin independently reran focused and key caller suites, Bash syntax, ShellCheck, and diff checks with no blocking findings. Optional integrations were skipped where unavailable. Native macOS/Apple update behavior remains unverified; no live machine updates were run. Changes are uncommitted.
 
 Remote-main integration preserves the concurrent bb Desktop feature and advances mac.sh to v249. Combined CLT/Homebrew/Desktop fixtures pass (22/9/64); publication retains normal repository hooks and no-force Git semantics.
+
+Full repository pre-push validation now passes, including every tests/*.sh contract entry point plus all-script ShellCheck and Markdownlint. A follow-up updates the Notion ordering fixture for the new macOS Codex failure-aggregation call; production behavior is unchanged.
 <!-- SECTION:FINAL_SUMMARY:END -->
 
 ## Definition of Done

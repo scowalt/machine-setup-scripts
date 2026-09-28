@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Version 1 | Last changed: Recognize aggregated macOS Codex failures in ordering checks
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -102,7 +103,11 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_function_not_contains "${file}" install_ntn_cli 'command -v ntn' 'presence-only early return'
     assert_function_not_contains "${file}" install_ntn_cli 'bun|npm' 'Node package-manager dependency'
     assert_function_not_contains "${file}" install_ntn_cli 'ntn login|ntn completions' 'authentication or completion automation'
-    assert_order "${file}" '^[[:space:]]+install_codex_cli([[:space:]]+\|\|[[:space:]]+return 1)?$' '^[[:space:]]+install_ntn_cli$' 'Codex before Notion CLI'
+    codex_call='^[[:space:]]+install_codex_cli([[:space:]]+\|\|[[:space:]]+return 1)?$'
+    if [[ "${file}" == mac.sh ]]; then
+        codex_call='^[[:space:]]+install_codex_cli \|\| _setup_had_errors=1$'
+    fi
+    assert_order "${file}" "${codex_call}" '^[[:space:]]+install_ntn_cli$' 'Codex before Notion CLI'
     assert_order "${file}" '^[[:space:]]+install_ntn_cli$' '^[[:space:]]+remove_rtk_resources[[:space:]]+\|\|[[:space:]]+return 1$' 'Notion CLI before retired RTK cleanup'
 done
 
