@@ -19,8 +19,8 @@ function Complete-SetupLog { Write-Host 'log-finalized' }
 function Assert-HeadlessPaseoUnsupported { }
 function Get-PaseoReleaseChannel { 'beta' }
 function New-TokenPlaceholders { }
-# Desktop setup is unrelated to this extracted retirement/logging seam.
-function Install-BbDesktop { $true }
+# Desktop setup is outside this retirement/finalization fixture.
+function Install-BbDesktop { return $true }
 function Write-Section { param($Message) }
 function Install-WingetPackages { }
 $secretsManager = [regex]::Match($source, '(?s)function Install-SecretsManager \{.*?\n\}')

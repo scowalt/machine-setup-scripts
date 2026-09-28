@@ -328,6 +328,7 @@ umask "$2"
                                  [expected, expected, expected])
 
     def test_native_without_opt_in_retains_inherited_umask_behavior(self):
+        # This class retains an existing .bb role; preparation is deferred.
         for selection in (None, "", "0", "invalid"):
             with self.subTest(selection=selection):
                 result = self.run_stage(selection=selection, native=True)

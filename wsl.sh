@@ -8086,15 +8086,15 @@ function tree(dir) {
 try {
   check(path.isAbsolute(home) && path.normalize(home) === home && home !== '/');
   context('runtime', 'runtime');
-  check(['linux', 'darwin'].includes(process.platform));
+  check(['linux', 'darwin'].includes(process.platform), 'unsupported-platform');
   const [major, minor] = process.versions.node.split('.').map(Number);
-  check((major === 22 && minor >= 19) || major === 24 || major === 26);
+  check((major === 22 && minor >= 19) || major === 24 || major === 26, 'unsupported-runtime');
   // A custom running BB may use a non-default data directory. Read-only process
   // evidence blocks preparation rather than updating a possibly in-use copy.
   inspect(() => {
     context('process', 'process-inventory');
     const processes = require('node:child_process').execFileSync('ps', ['-U', String(uid), '-o', 'command='], {encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe']});
-    check(!/(?:^|[\s/])(?:bb-app|bb-server|bb-host-daemon)(?:$|[\s/.])/m.test(processes), 'referenced-copy');
+    check(!/(?:^|[\s/])(?:bb-app|bb-server|bb-host-daemon)(?:$|[\s/.])/m.test(processes), 'process-conflict');
   });
   // Also preserve a stopped, manually named user service referencing this copy.
   for (const dir of [path.join(home, '.config/systemd/user'), path.join(home, 'Library/LaunchAgents')]) {
@@ -8184,7 +8184,7 @@ BB_MACHINE_STATE
 
 bb_machine_package_state() {
     local _mode="$1" _result _status=0 _line _op _path _observed _reason _count=0 _terminal=0 _valid=1
-    local _record='^blocked:(home|runtime|process|directory|service|artifact):([^:]+):(unknown|[0-7]{4}):(unverified|linked-path|non-directory|unsafe-ownership|writable-boundary|unsafe-file|malformed-metadata|referenced-copy)$'
+    local _record='^blocked:(home|runtime|process|directory|service|artifact):([^:]+):(unknown|[0-7]{4}):(unverified|linked-path|non-directory|unsafe-ownership|writable-boundary|unsafe-file|malformed-metadata|referenced-copy|unsupported-platform|unsupported-runtime|process-conflict)$'
     local _relative='^~/[A-Za-z0-9_.@/-]+$'
     case "${_mode}" in preflight|reserve|verify) ;; *) return 1 ;; esac
     # Bound even malformed/addon output before storing it. Never forward stderr.
@@ -8386,7 +8386,7 @@ run_setup_tasks() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 211 | Last changed: Preserve BB preparation dotfile permissions and report blockers${NC}"
+    echo -e "${GRAY}Version 212 | Last changed: Merge scoped BB preparation permissions and diagnostics${NC}"
 
     if ! acquire_setup_lock; then
         return 1

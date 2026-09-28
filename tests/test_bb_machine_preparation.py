@@ -331,7 +331,7 @@ bb_machine_package_state preflight
         driver = r'''
 const vm = require('node:vm');
 const fixture = JSON.parse(process.argv[1]), code = process.argv[2];
-const fakeProcess = {argv: ['node', '-', 'preflight', '/home/fixture'], getuid: () => 1000, platform: fixture.platform || 'linux', versions: {node: fixture.node || '24.20.0'}, stdout: {write() {}}, exitCode: 0};
+const fakeProcess = {argv: ['node', '-', 'preflight', '/home/fixture'], getuid: () => 1000, platform: fixture.platform || 'linux', versions: {node: fixture.node || '24.20.0'}, stdout: {write(s) { process.stdout.write(s); }}, exitCode: 0};
 const fs = {
   lstatSync(p) {
     if (!['/', '/var', '/var/home', '/home', '/home/fixture'].includes(p)) throw Object.assign(Error(), {code: 'ENOENT'});
@@ -343,10 +343,14 @@ const fs = {
 vm.runInNewContext(code, {process: fakeProcess, require: n => n === 'node:fs' ? fs : n === 'node:child_process' ? {execFileSync: () => ''} : require(n)});
 process.exit(fakeProcess.exitCode);
 '''
-        for fixture, expected in [({}, 0), ({'target': 'var/home'}, 0), ({'target': '/other'}, 1), ({'foreignAlias': True}, 1), ({'writable': True}, 1), ({'userLink': True}, 1), ({'platform': 'darwin'}, 1), ({'node': '23.0.0'}, 1), ({'node': '22.18.0'}, 1)]:
+        for fixture, expected in [({}, 0), ({'target': 'var/home'}, 0), ({'target': '/other'}, 1), ({'foreignAlias': True}, 1), ({'writable': True}, 1), ({'userLink': True}, 1), ({'platform': 'darwin'}, 1), ({'platform': 'win32'}, 1), ({'node': '23.0.0'}, 1), ({'node': '22.18.0'}, 1)]:
             with self.subTest(fixture=fixture):
                 result = subprocess.run([NODE, '-e', driver, json.dumps(fixture), code], env=self.env, capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, expected, result.stderr)
+                if 'node' in fixture:
+                    self.assertIn('blocked:runtime:external-boundary:unknown:unsupported-runtime', result.stdout)
+                if fixture.get('platform') == 'win32':
+                    self.assertIn('blocked:runtime:external-boundary:unknown:unsupported-platform', result.stdout)
 
     def test_first_install_update_and_unrelated_preservation(self):
         for name in [".env.local", ".npmrc", ".bashrc", "project/file", ".pi/agent/auth.json", ".local/lib/node_modules/other/data"]:
@@ -566,6 +570,79 @@ process.exit(fakeProcess.exitCode);
         manifest.unlink()
         os.mkfifo(manifest)
         self.run_helper(expected=1)  # Must fail promptly rather than open the FIFO.
+
+    def test_controlled_permission_diagnostics_preserve_each_blocked_location(self):
+        directories = ['.config', '.config/systemd', '.config/systemd/user',
+                       'Library', 'Library/LaunchAgents']
+        for name in directories:
+            (self.home / name).mkdir(exist_ok=True)
+        for name in directories:
+            for mode in [0o775, 0o777]:
+                with self.subTest(name=name, mode=oct(mode)):
+                    p = self.home / name
+                    p.chmod(mode)
+                    before = snapshot(self.home)
+                    out = self.run_helper(expected=1)
+                    self.assertIn(f'operation=directory path=~/{name} mode={mode:04o} reason=writable-boundary', out)
+                    self.assertNotIn(str(self.home), out)
+                    self.assertNotIn('npm', self.log())
+                    self.assertEqual(snapshot(self.home), before)
+                    p.chmod(0o700)
+        # Safe relative service names are useful diagnostics; their contents stay secret.
+        for name in ['.config/systemd/user/ordinary.service', 'Library/LaunchAgents/ordinary.plist']:
+            p = self.home / name
+            p.write_text('fixture-secret: never print service contents\n')
+            p.chmod(0o664)
+            before = snapshot(self.home)
+            out = self.run_helper(expected=1)
+            self.assertIn(f'operation=service path=~/{name} mode=0664 reason=writable-boundary', out)
+            self.assertNotIn('fixture-secret', out)
+            self.assertEqual(snapshot(self.home), before)
+            p.unlink()
+        directory = self.home / '.config/systemd/user'
+        directory.rmdir()
+        directory.symlink_to(self.tools)
+        out = self.run_helper(expected=1)
+        self.assertIn('operation=directory path=~/.config/systemd/user mode=0777 reason=linked-path', out)
+        self.assertNotIn(str(self.tools), out)
+
+    def test_process_and_artifact_diagnostics_do_not_disclose_raw_errors(self):
+        out = self.run_helper(expected=1, PROCESSES='bb-server --token fixture-secret')
+        self.assertIn('operation=process path=external-boundary mode=unknown reason=process-conflict', out)
+        self.assertNotIn('fixture-secret', out)
+        self.write_exe('ps', '#!/bin/bash\necho fixture-secret >&2; exit 1\n')
+        out = self.run_helper(expected=1)
+        self.assertIn('operation=process path=external-boundary mode=unknown reason=unverified', out)
+        self.assertNotIn('fixture-secret', out)
+        self.write_exe('ps', '#!/bin/bash\nexit 0\n')
+        out = self.run_helper(expected=1, FAIL_ADDON='node-pty')
+        self.assertIn('BB preparation verify: operation=artifact', out)
+        self.assertIn('reason=unverified', out)
+        self.assertNotIn('fixture native load failure', out)
+        self.run_helper()
+        marker = self.prefix.parent / 'owner.json'
+        marker.write_text('fixture-secret: malformed JSON')
+        before = snapshot(self.home)
+        self.events.unlink()
+        out = self.run_helper(expected=1)
+        self.assertIn('operation=artifact path=~/.local/share/setup-bb-machine/owner.json mode=0600 reason=malformed-metadata', out)
+        self.assertNotIn('fixture-secret', out)
+        self.assertNotIn('npm', self.log())
+        self.assertEqual(snapshot(self.home), before)
+
+    def test_helper_terminal_protocol_fails_closed_without_echoing_unknown_output(self):
+        (self.tools / 'node').unlink()  # Never overwrite the actual Node symlink target.
+        for output, status in [('fixture-secret', 1), ('ok\\nfixture-secret', 0),
+                               ('ok', 1), ('', 0), ('process-inventory:account:process-conflict', 0),
+                               ('process-inventory:account:fixture-secret', 1)]:
+            with self.subTest(output=output, status=status):
+                self.write_exe('node', f'#!/bin/bash\nprintf "{output}\\n"\necho fixture-secret >&2\nexit {status}\n')
+                before = snapshot(self.home)
+                out = self.run_helper(expected=1)
+                self.assertIn('unverified helper result; diagnostic output suppressed', out)
+                self.assertNotIn('fixture-secret', out)
+                self.assertNotIn('npm', self.log())
+                self.assertEqual(snapshot(self.home), before)
 
     def test_policy_failures_leave_no_owned_record(self):
         for settings in [{"NPM_VERSION": "11.18.0"}, {"IGNORE": "true"}, {"DANGEROUS": "true"}, {"ALLOW": "none"}, {"STRICT": "false"}, {"RUNTIME_FAIL": "1"}, {"CONFIG_PATH_FAIL": "1"}]:

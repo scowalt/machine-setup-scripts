@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi-task51'
 created_date: '2026-09-28 17:32'
-updated_date: '2026-09-28 20:37'
+updated_date: '2026-09-28 20:55'
 labels:
   - bb
   - setup
@@ -98,6 +98,8 @@ User authorized merging the reviewed change into remote main. Fetched origin/mai
 - Git had no active HTTPS/gh login; verified the existing account GH_TOKEN for scowalt and used it through a command-scoped gh credential helper. No credential output, persisted login or global Git configuration changes.
 
 Fixture-only Install-BbDesktop stub added; standalone full Infisical contract now passes with PowerShell enabled, retaining failure aggregation and log-finalization assertions. No production Windows changes.
+
+Concurrent-main integration: full pre-push contracts and lint passed (including PowerShell) with isolated /var/tmp fixtures, but main advanced to 39a3d77 during the suite. Main now contains an independently implemented same-issue fix and the same Windows fixture stub, plus its own TASK-51 record. Retain this thread approved narrower role eligibility and bounded diagnostics, adapt and preserve main extra regression coverage, and archive this duplicate planning record via CLI before consolidating into main active TASK-51. No live changes or force push.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
