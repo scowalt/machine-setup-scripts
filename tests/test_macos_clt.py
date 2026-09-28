@@ -116,7 +116,6 @@ unzip() { [[ "$*" == -v && "${PROBE_FAIL:-}" != unzip ]]; }
 tmux() { :; }
 can_sudo() { printf 'unexpected:can_sudo\n' >> "$HOME/calls"; return 90; }
 open() { printf 'unexpected:GUI\n' >> "$HOME/calls"; return 90; }
-paseo_release_channel() { printf 'stable'; }
 matt_pocock_skills_disabled() { [[ "${BAN_MATT_POCOCK_SKILLS:-0}" == 1 ]]; }
 check_dotfiles_access() { [[ "${DOTFILES_ACCESS:-0}" == 1 ]]; }
 setup_dotfiles_deploy_key() { return 1; }
@@ -301,7 +300,7 @@ ensure_macos_developer_tools_ready
                      'setup_tailscale', 'install_nerd_font', 'install_betterdisplay', 'install_codex_cli',
                      'install_gitea_client', 'update_brew', 'install_tmux_plugins', 'install_sfw', 'install_gemini_cli',
                      'install_portless_cli', 'setup_bb_machine', 'setup_matt_pocock_skills', 'install_pi_cli',
-                     'refresh_pi_packages', 'configure_paseo_muse_profile', 'setup_headless_paseo_daemon')
+                     'refresh_pi_packages')
         for persona in ('primary', 'secondary'):
             for diagnostic in ('incompatible', 'crash'):
                 result, calls = self.run_case({'PERSONA': persona, 'DIAGNOSTIC': diagnostic, 'UPDATES': '',
@@ -354,7 +353,7 @@ ensure_macos_developer_tools_ready
         self.assertNotIn('work:initialize_chezmoi', calls)
         for name in ('retire_global_backlog_mcp', 'prepare_pi_profile_permissions',
                      'remove_rtk_resources', 'remove_attention_span_resources', 'remove_simple_english_skill',
-                     'remove_show_me_skill', 'remove_pr_lens_skill', 'remove_paseo_plain', 'configure_paseo_desktop_channel'):
+                     'remove_show_me_skill', 'remove_pr_lens_skill'):
             self.assertIn('work:' + name, calls)
         result, calls = self.run_case({'DIAGNOSTIC': 'crash', 'PROBE_FAIL': 'git', 'DOTFILES_ACCESS': '1'}, caller=True)
         self.assertNotIn('work:retire_global_backlog_mcp', calls)  # PATH presence is insufficient.

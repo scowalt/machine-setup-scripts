@@ -16,8 +16,7 @@ function New-Item { param($ItemType, [switch]$Force, $Path, $ErrorAction) }
 function Invoke-PendingSetupLogUploads { }
 function Start-Transcript { param($Path, [switch]$NoClobber, $ErrorAction) }
 function Complete-SetupLog { Write-Host 'log-finalized' }
-function Assert-HeadlessPaseoUnsupported { }
-function Get-PaseoReleaseChannel { 'beta' }
+function Assert-HeadlessUnsupported { }
 function New-TokenPlaceholders { }
 function Write-Section { param($Message) }
 function Install-WingetPackages { }

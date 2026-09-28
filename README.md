@@ -12,7 +12,7 @@ Main-user setup may attempt **one in-place CLT repair** only for selected, real 
 
 Repair uses cached/noninteractive sudo privileges where available. Otherwise it permits one ordinary `sudo -v` opportunity only with a usable controlling terminal and `HEADLESS` not exactly `1`. The actual installation always uses `sudo -n` with closed stdin, so credential expiry cannot cause another prompt. This policy is local to CLT repair; unrelated setup privilege behavior is unchanged.
 
-Unresolved or unverified readiness blocks core/cask installs, Tailscale migration, Codex/Tea migration, final Homebrew upgrades, full dotfiles application (which can execute installation scripts), tmux plugin installs, and package/native-addon work (Bun packages, BB preparation, Pi/packages, Matt Pocock installation and dependent Muse/daemon setup). Prebuilt shared-runtime preparation (including its files-only shell repair) and metadata retirement require already-working prerequisites rather than PATH presence alone. Native Bun/Claude/Notion installers can continue with verified download prerequisites; OS/SSH configuration, Infisical retirement, filesystem-only cleanup, reboot reporting and log finalization remain independent. Existing Pi/Paseo safety checks still apply. The final summary identifies repair state and skipped work. Successful repair clears only the initial compatibility finding; failed queries/installations/bootstrap cleanup and unrelated failures still make the run incomplete/nonzero.
+Unresolved or unverified readiness blocks core/cask installs, Tailscale migration, Codex/Tea migration, final Homebrew upgrades, full dotfiles application (which can execute installation scripts), tmux plugin installs, and package/native-addon work (Bun packages, BB preparation, Pi/packages, Matt Pocock installation). Prebuilt shared-runtime preparation (including its files-only shell repair) and metadata retirement require already-working prerequisites rather than PATH presence alone. Native Bun/Claude/Notion installers can continue with verified download prerequisites; OS/SSH configuration, Infisical retirement, filesystem-only cleanup, reboot reporting and log finalization remain independent. Existing Pi safety checks still apply. The final summary identifies repair state and skipped work. Successful repair clears only the initial compatibility finding; failed queries/installations/bootstrap cleanup and unrelated failures still make the run incomplete/nonzero.
 
 For manual remediation, inspect the reported selected directory, `DEVELOPER_DIR`, macOS/CLT receipt/compiler versions, and failed/unavailable named checks. The machine owner should review Apple Software Update or [Apple Developer downloads](https://developer.apple.com/download/all/), preserve existing tools/selection, resolve the reported issue, and rerun setup. Restart manually if Apple requires it; dependent work stays blocked until verification passes. Linux fixtures cover orchestration with inert commands and temporary paths, **not native Apple update behavior**. Real macOS/Bash 3.2/BSD-tool and authorization/update behavior still need a separately authorized Mac validation.
 
@@ -44,7 +44,7 @@ Setup removes the tintinweb Pi subagents extension when it is present. It also r
 
 All machines default Pi to GPT-6 Astra (`openai-codex/gpt-6-astra`) with `xhigh` thinking, including work machines. Setup removes the retired Synthetic provider from Pi's `models.json` and preserves other providers and local credentials. z.ai remains optional when a key exists. On a new machine, use `/login` in Pi to connect your ChatGPT subscription.
 
-Before Pi profile changes, setup secures `~/.pi`, `~/.pi/agent`, and the profile selected by `PI_CODING_AGENT_DIR`. Unix directories use owner-only permissions (`0700`). Windows directories use private native access controls. Setup first checks both profiles and their ancestors. It changes only account-owned, real profile directories inside HOME and safely creates missing profile directories. It does not change HOME, unrelated ancestors, profile contents, or credential permissions. Linked paths, foreign ownership, unsafe ancestors, and outside-HOME profiles block later Pi mutations and dependent daemon setup. The trusted Linux `/home` system alias remains supported. Creating a missing Unix profile requires `/usr/bin/python3` with descriptor-relative directory operations. If this support is absent, setup fails safely without path-based creation.
+Before Pi profile changes, setup secures `~/.pi`, `~/.pi/agent`, and the profile selected by `PI_CODING_AGENT_DIR`. Unix directories use owner-only permissions (`0700`). Windows directories use private native access controls. Setup first checks both profiles and their ancestors. It changes only account-owned, real profile directories inside HOME and safely creates missing profile directories. It does not change HOME, unrelated ancestors, profile contents, or credential permissions. Linked paths, foreign ownership, unsafe ancestors, and outside-HOME profiles block later Pi mutations. The trusted Linux `/home` system alias remains supported. Creating a missing Unix profile requires `/usr/bin/python3` with descriptor-relative directory operations. If this support is absent, setup fails safely without path-based creation.
 
 Setup removes the retired `pi-prose` package on each machine's next run, including previously user-selected copies. It cleans the default global Pi profile and the profile selected by `PI_CODING_AGENT_DIR`. Cleanup removes the Pi package declarations, direct npm dependency declarations, matching lockfile records, and installed package directory. It does not change project-local packages, unrelated packages, credentials, or existing custom prose files, including empty or malformed `prose/config.json` files.
 
@@ -64,7 +64,7 @@ Codex, Gemini CLI, and Pi discover the canonical shared copies in `~/.agents/ski
 
 Claude Code is installed with Anthropic's native installer rather than npm/Bun. Setup installs or updates Claude Code on supported machines, with no opt-out. Setup ignores `BAN_CLAUDE_CODE`, including values in existing `.env.local` files. Those files remain unchanged. Run Claude Code's normal login/account flow before using Fable or the Pi Claude bridge. If setup warns that another `claude` command shadows the native binary, resolve PATH/package shadowing or use the native path shown in the warning before authenticating.
 
-Codex CLI is installed per user with OpenAI's standalone installer on Ubuntu, WSL, Raspberry Pi, and Bazzite, from Homebrew's native `codex` cask on macOS, and from OpenAI's native GitHub release binary on Windows. The per-user Linux install keeps `codex` in `~/.local/bin`, so headless Paseo can use it without trusting another user's shared Homebrew prefix. Setup removes the older Bun package and smoke-tests the binary with Node stripped from PATH.
+Codex CLI is installed per user with OpenAI's standalone installer on Ubuntu, WSL, Raspberry Pi, and Bazzite, from Homebrew's native `codex` cask on macOS, and from OpenAI's native GitHub release binary on Windows. The per-user Linux install keeps `codex` in `~/.local/bin`, without trusting another user's shared Homebrew prefix. Setup removes the older Bun package and smoke-tests the binary with Node stripped from PATH.
 
 On Linux, setup gives the Codex installer a temporary `HOME`. Explicit `CODEX_INSTALL_DIR` and `CODEX_HOME` values keep the binary and data in the account. Existing `CODEX_HOME` choices remain in use. Installer profile changes stay in the temporary home, which setup removes afterward. Chezmoi alone manages the real shell profiles. Run `bash tests/codex-profile-isolation-contract.sh` for isolated regression tests.
 
@@ -72,7 +72,7 @@ Setup removes legacy global Impeccable skill copies and Cursor subagent files th
 
 Notion CLI is installed with Notion's native installer on macOS and Linux and with WinGet on Windows. The native installer supports x64 and ARM64, while the Windows package supports x64 only; unsupported architectures warn and continue setup. Setup does not authenticate Notion CLI or configure shell completions. Run `ntn login` manually when you are ready to connect a workspace.
 
-## OpenCode Go and the Muse Contributor profile
+## OpenCode Go for Pi
 
 All six scripts add OpenCode Go access for Pi on personal and work machines. Setup uses Pi's built-in Go provider, not the retired OpenCode CLI. GPT-6 Astra remains the default.
 
@@ -84,15 +84,11 @@ OPENCODE_GO_API_KEY=your-go-api-key
 
 Use a plain, single-line API-key value, not a shell command or variable reference. New environment files contain a commented example. Existing files remain unchanged, so add the entry yourself before rerunning setup. Keep the file private to your account. On Unix, use `chmod 600 ~/.env.local` before setup. Do not put real keys in Git, commands, or shared logs.
 
-Setup reads this dedicated entry and copies a nonempty key into the `opencode-go` entry in Pi's private `auth.json`. This local copy lets headless Paseo authenticate without loading the whole environment file. `PI_CODING_AGENT_DIR` selects the active Pi directory, or setup uses `~/.pi/agent`. Paseo must launch Pi with the same directory. No other global or project Pi profile receives the key.
+Setup reads this dedicated entry and copies a nonempty key into the `opencode-go` entry in Pi's private `auth.json`. This local copy lets Pi authenticate without loading the whole environment file. `PI_CODING_AGENT_DIR` selects the active Pi directory, or setup uses `~/.pi/agent`. No other global or project Pi profile receives the key.
 
 A changed key replaces the stored Go credential on the next setup run. A missing or empty entry preserves the stored credential. Go credential setup preserves other credentials and does not add a Zen credential or change `models.json`. Pi itself recognizes the shared `OPENCODE_API_KEY` variable for both Zen and Go, but this setup uses `OPENCODE_GO_API_KEY` only. Do not rename it to the shared variable.
 
-Setup adds a Paseo profile named `Muse 1.3 Contributor`. It selects Pi, model `opencode-go/muse-spark-1.3-contributor`, and native `xhigh` reasoning. The profile is a selectable alternative, not a new default. It lives in `<PASEO_HOME>/config.json` under `daemon.agentProfiles`, or in `~/.paseo/config.json` when no override exists. This is separate from Electron's `desktop-settings.json` and from Pi's global profile directory.
-
-A custom `PASEO_HOME` must be an existing, private, account-owned directory below HOME, without linked paths. Use an absolute path without `..` segments. Empty, relative, outside-HOME, and HOME-itself overrides block synchronization and make setup fail. A running managed daemon and its service manager must select the same home. After custom-home synchronization, setup skips the later managed-daemon installer because that installer assumes the default home. Keep the custom owner's launch environment and update that owner separately.
-
-Later runs recreate a deleted managed profile and restore its provider, model, and reasoning level. Other profiles and optional customizations remain unchanged. Setup can add the profile before you supply a key, with a warning that authentication is missing. If Pi installation or Go validation fails, subsequent Pi package operations, profile setup, and managed-daemon setup are deferred.
+Pi's built-in catalog offers `opencode-go/muse-spark-1.3-contributor` with native `xhigh` reasoning as a selectable alternative, not a new default. If Pi installation or Go validation fails, subsequent Pi package operations are blocked while unrelated setup continues and the final result reports failure.
 
 ### Go setup failure diagnostics
 
@@ -112,29 +108,13 @@ For permission failures, inspect the named boundary before changing anything. Do
 
 ### Subscription and data policy
 
-The [Go Contributor offering](https://opencode.ai/docs/go/#privacy) permits Meta to retain prompts and responses and use them for model training. It has geographic restrictions and requires account-level training consent. This profile is available on work machines too, so follow your employer's data policy when selecting it.
+The [Go Contributor offering](https://opencode.ai/docs/go/#privacy) permits Meta to retain prompts and responses and use them for model training. It has geographic restrictions and requires account-level training consent. This model is available on work machines too, so follow your employer's data policy when selecting it.
 
 Maintain an active Go subscription and keep **Use balance** disabled in the OpenCode console. With that option enabled, the Go service can spend Zen balance after subscription limits are reached. Selecting the Go provider alone does not guarantee subscription-only billing. Setup does not purchase subscriptions, enable consent, change billing settings, test account entitlement, or fall back to the paid Zen model.
 
-### Daemon updates and recovery
+Malformed configuration and linked Pi paths require manual review rather than replacement. An explicit `opencode-go` provider override in the active Pi `models.json` blocks Go setup instead of silently changing its endpoint or reasoning policy. Review that override yourself before rerunning setup.
 
-Run setup from a terminal outside the Paseo daemon that it must restart. Restarts interrupt active agent turns, tools, and Paseo terminals. Saved sessions can be resumed, but a restart does not preserve uninterrupted work. Do not edit Paseo configuration during setup. Setup reserves `paseo.pid` to block daemon startup, but external editors can ignore this protection.
-
-When a profile change needs a stopped daemon, setup can stop and start its identified, setup-managed local service. A changed Go credential also needs a refresh of Paseo's cached model list. Setup keeps unchanged runs nondisruptive and attempts to restore the service even if the profile write fails. Native Linux headless support and the macOS canary gate remain unchanged. Windows and WSL do not gain managed headless daemons, and WSL does not change Windows-host profiles.
-
-If setup cannot safely control the owning daemon, it leaves the profile unchanged. Established Desktop ownership and setup running inside its daemon are expected, warning-only deferrals. Unverified process inventory, ownership or home selection, and unverified service definitions (including drop-ins or environment files such as Chezmoi's GitHub-token drop-in) instead make the final setup result nonzero. Dependent daemon updates and surplus-CLI cleanup stay blocked while unrelated work and log finalization continue. Platform ineligibility and verified custom-home skips retain their existing behavior.
-
-On Linux, setup verifies process UID tuples and start identity instead of assuming that `/proc` directory ownership identifies the account. It keeps ancestry and service-group evidence but avoids unrelated foreign processes' command lines and environments. Unreadable relevant metadata remains a safety block, not proof that no daemon is running. Diagnostics report a controlled operation and reason, such as `Paseo Muse diagnostic: inventory-environ: EACCES.`, without process arguments, environment contents, or custom paths. Unknown helper output is rejected rather than echoed.
-
-For an ownership block, pause and stop the local daemon through its owner, close Desktop if applicable, and rerun setup from an outside terminal. For process-inspection failures, review the controlled diagnostic privately; stopping Paseo may not resolve the underlying permission problem. Do not start a second daemon or weaken `/proc` permissions to bypass the check.
-
-On native Linux with `HEADLESS=1` and the default Paseo home, setup can repair the known group-write permission problem. It first verifies the running setup-managed service, its process, and its exact wrapper and service definition. It can then remove group-write permission from `~/.paseo/paseo.pid` and the three directories `~/.config`, `~/.config/systemd`, and `~/.config/systemd/user`. PID repair requires an already private `~/.paseo`. All candidates are checked before any repair, and each change uses a verified open file handle. Setup does not recurse, change owners, alter file contents, or change HOME. World-writable paths, linked paths, foreign owners, stopped or unverified services, and custom homes need manual review.
-
-Managed daemon wrappers set `umask 077`, which makes newly created PID files private even when the account uses `umask 002`. After a Muse restart through an older wrapper, setup waits briefly for the complete native PID, verifies its owner again, and secures that new PID before the later daemon update. A timeout fails setup instead of claiming a verified restore. The later update installs the restrictive wrapper through the existing service lifecycle. The read-only ownership check never repairs permissions. If a permission failure remains, inspect the reported boundaries; merely stopping Paseo may not fix it. Do not use recursive `chmod` or `chown` as recovery.
-
-Malformed configuration and linked managed paths require manual review rather than replacement. An explicit `opencode-go` provider override in the active Pi `models.json` also blocks this addition instead of silently changing its endpoint or reasoning policy. Review that override yourself before rerunning setup. Keep existing custom home overrides aligned with the actual daemon and Pi launch configuration. Setup does not change remote hosts or shell profiles.
-
-Run `bash tests/pi-opencode-go-contract.sh`, `bash tests/paseo-muse-profile-contract.sh`, and `bash tests/opencode-go-wiring-contract.sh` for offline fixtures. Set `PWSH_BIN` to include PowerShell wrapper coverage. Tests use temporary homes and mocked daemon controls, not live setup or model requests. These tests do not prove account acceptance or native Windows, macOS, or ARM behavior. For an additional offline native-lock and catalog check, set `PI_GO_LOCK_MODULE` to the installed Pi dependency's `proper-lockfile/index.js`. Set `PASEO_MUSE_PID_LOCK_MODULE` to Paseo 0.8.0's `dist/src/server/pid-lock.js` to test native daemon-start exclusion and PID creation under both permissive and restrictive umasks. These probes use only temporary fixtures and do not start a daemon.
+Run `bash tests/pi-opencode-go-contract.sh` and `bash tests/opencode-go-wiring-contract.sh` for offline fixtures. Set `PWSH_BIN` to include PowerShell wrapper coverage. Tests use temporary homes, not live setup or model requests. These tests do not prove account acceptance or native Windows, macOS, or ARM behavior. For an additional offline native-lock and catalog check, set `PI_GO_LOCK_MODULE` to the installed Pi dependency's `proper-lockfile/index.js`.
 
 ## Repository-local Backlog MCP
 
@@ -266,96 +246,23 @@ Tea stores the application token in its local configuration. Do not add this con
 
 Every machine setup script installs Portless CLI for Tailscale HTTPS tunnel helpers.
 
-## Paseo release channels
+## Unmanaged legacy Paseo
 
-Setup defaults to the Paseo beta channel on personal and work machines. `PASEO_CHANNEL=beta` selects `@getpaseo/cli@beta` for managed daemons and Beta for Desktop updates. `PASEO_CHANNEL=stable` selects `@getpaseo/cli@latest` and Stable for Desktop updates. Other values stop Paseo setup before it changes packages or client files.
+Paseo is no longer managed by setup. All six scripts leave existing installations, Desktop settings, profiles, services, credentials, plugins (including Plain), data, and recovery files untouched. They do not invoke or contact Paseo, require a running daemon, check its processes or permissions, remove redundant CLIs, or migrate sessions to BB. Maintenance or removal is the machine owner's responsibility, not a future setup step.
 
-Set `PASEO_CHANNEL` in the process environment or `~/.env.local`. A nonempty process value takes priority. Setup adds only a commented example to new environment files and preserves existing files.
+Old `PASEO_*` configuration values no longer control or block setup. New environment templates omit those knobs; existing `~/.env.local` files are preserved. Independent Pi OpenCode Go support and the full third-party skill suite remain, including upstream skills that mention Paseo.
 
-Each machine adopts the channel on its next setup run. These changes do not update remote machines automatically. Managed daemons retain the headless limits below and restart when their package, managed service, or managed Muse profile requires it. Non-headless runs do not install a standalone daemon.
+The dotfiles repository also stops distributing the GitHub-token helper and systemd drop-in. Source removal adds no target deletion rules and does not change already-deployed helpers, drop-ins, token files, or services. Deploy the source changes together; there is no automatic uninstall or enrollment.
 
-For Desktop clients, setup selects the update channel on macOS, native Linux, and Windows. It does not install or replace the Desktop app, launch a client, or start a bundled daemon. If Desktop is not installed, get it from the [Paseo download page](https://paseo.sh/download?channel=beta).
+Run `bash tests/paseo-non-management-contract.sh` for inert caller/state-preservation and source-absence coverage. Set `PASEO_UNMANAGED_DOTFILES_SOURCE` to a dotfiles checkout for the optional cross-repository source contract; it never applies dotfiles.
 
-Close Desktop before setup changes its channel. Setup refuses to edit settings cached by a running app, because the app can overwrite external changes. After setup, open Desktop and select **Settings → About → Check** to download the selected update. Let Desktop complete the update to upgrade its bundled daemon too. If Desktop already uses the selected channel, setup leaves the file unchanged, even while the app runs.
+## Headless setup
 
-Setup changes `settings.releaseChannel` and marks the legacy renderer import complete in `desktop-settings.json`. This prevents an older channel preference from replacing the selected channel. Setup preserves other settings and migration flags. It rejects malformed files, unknown document versions, linked paths, and paths that are not regular files or directories.
+`HEADLESS=1` is an exact-match machine classification, not a service off switch. Unset, `0`, `true`, and `false` do not enable headless mode. macOS retains its power/remote-access settings, and BB desktop skips exact `1` without changing existing apps. Ubuntu configures unrestricted passwordless sudo only when both `HEADLESS=1` and `HEADLESS_PASSWORDLESS_SUDO=1` are set.
 
-Linux permits one system link: `/home` pointing exactly to `var/home` or `/var/home`, as on Bazzite. The link and `/`, `/var`, and `/var/home` must belong to root. Those directories must be real directories without group or world write permission. Links within user homes, Desktop profiles, and settings files remain unsupported. Run setup normally on Bazzite. No terminal change or path override is required.
+WSL and native Windows fail early for exact `HEADLESS=1`, before environment-template or tool changes, because no-login headless operation remains unsupported. BB preparation independently preserves the WSL boundary. Native Linux scripts (`ubuntu.sh`, `pi.sh`, and `bazzite.sh`) retain their headless WSL/container rejection. Removing legacy tool management does not broaden platform support or automatically configure a replacement daemon. BB server opt-in and manual machine enrollment remain separate decisions.
 
-Desktop uses these user-data paths, separate from the standalone daemon's `PASEO_HOME`:
-
-- macOS: `~/Library/Application Support/Paseo/desktop-settings.json`.
-- Linux: `${XDG_CONFIG_HOME:-~/.config}/Paseo/desktop-settings.json`.
-- Windows: `%APPDATA%\Paseo\desktop-settings.json`.
-
-Setup honors `PASEO_ELECTRON_USER_DATA_DIR` when it contains an absolute path. Non-headless runs seed an absent Desktop profile on supported platforms. Headless runs change only existing Desktop profiles. WSL does not modify Windows client files. Run `win.ps1` on the Windows host and set its channel there.
-
-The v0.8 beta has Desktop builds for macOS and Windows on x64 and ARM64, and Linux on x64. Linux ARM machines, including Raspberry Pi, can use the daemon with a supported remote client or browser. Setup does not seed an absent Linux ARM Desktop profile. It can change an existing profile for a custom Desktop build. The daemon-served web client follows the daemon package. The hosted web app has no setting managed by these scripts.
-
-For Android betas, install the APK manually from [GitHub releases](https://github.com/getpaseo/paseo/releases). iOS and the mobile app stores have no beta channel. These scripts do not manage mobile installations.
-
-To return to stable, set `PASEO_CHANNEL=stable` and rerun setup with Desktop closed. Managed daemons install the current npm `latest` version, which can be older than the beta. Desktop waits for a newer stable release and does not automatically downgrade. Back up Paseo data before downgrading a daemon. Changing the channel does not undo data migrations.
-
-See [Paseo update instructions](https://paseo.sh/docs/updates.md). The client document format matches [the v0.8 beta Desktop settings store](https://github.com/getpaseo/paseo/blob/4eab53e24e1b57c74b00945aa48a89d68ed755e3/packages/desktop/src/settings/desktop-settings.ts). Tests use temporary fixtures and do not install, update, or start Paseo. Run `bash tests/paseo-release-channel-contract.sh` and `pwsh -NoProfile -File tests/paseo-release-channel-powershell.ps1` for channel coverage.
-
-## Paseo Plain retirement
-
-All six setup scripts remove the `paseo-plain` plugin on each machine's next setup run. They no longer install, update, or migrate it. Removal includes disabled installations, custom repositories, pinned revisions, and directory registrations under that exact ID. Other plugin IDs are untouched. Setup does not inventory or contact other machines.
-
-Removal uses the selected local daemon's native plugin command. It preserves other plugins, global plugin enablement, credentials, projects, external source directories, `<PASEO_HOME>/plugin-data/paseo-plain` (preferences and cached rewrites), and existing recovery backups. Native removal deletes the managed checkout and `plugin-settings/paseo-plain`; setup first copies those native settings into a private `setup-recovery/paseo-plain-retirement/plugin-settings` backup. It never reinstalls the plugin. Saved data and backups are retained, not automatically purged.
-
-The helper selects `PASEO_HOME`, or `~/.paseo` when unset. Explicit overrides must be absolute directories below the account HOME; empty, relative, HOME-itself, outside-HOME, and linked paths are rejected. The trusted Linux `/home` → `/var/home` system alias remains supported. Missing homes or registrations are an offline no-op. Malformed/linked metadata, shared deletion targets, and unfinished migrations require review instead of automatic removal.
-
-Removal requires Node.js >=22.19 and a reachable local Paseo 0.8.x daemon with a metadata-verified compatible CLI. The explicitly validated CLI or existing Bun global CLI takes precedence over PATH. An incompatible verified managed release does not fall back to an older PATH installation. Pi and enabled plugins are **not** prerequisites. The helper uses an explicit loopback `--host`, ignores inherited `PASEO_HOST`, and does not enable plugins, start/restart a daemon, change release channels, or make model requests.
-
-Legacy POSIX daemons can have an account-owned `paseo.pid` with mode `0664`, created under an older launch umask. Retirement may **read** that exact mode only when the PID is a regular, single-link file inside a private account-owned Paseo home, with trusted non-writable ancestors (root-owned sticky temporary directories are permitted). It leaves all permissions unchanged. Other metadata still rejects group/world write access. PID links, foreign ownership, other writable modes, nonlocal endpoints, or changed PID/home identity remain blocked. Bounded, nonblocking, no-follow reads and rechecks before CLI commands protect this exception; native heartbeat timestamps are allowed to change.
-
-This read-only PID rule is independent of managed-daemon permission recovery. Retirement can therefore proceed when that separate step defers for process inspection or service drop-ins, without taking over the service or hiding the earlier setup error. A blocked PID check reports a controlled `pid preflight` operation and reason for private review, not a request for blanket `chmod` or a daemon restart.
-
-If removal is blocked, setup reports a failed result while continuing unrelated work. Start the intended compatible local daemon and rerun setup, or remove `paseo-plain` from that daemon's **Settings > Plugins**. Do not enable plugins just for removal. Existing headless/platform restrictions remain unchanged; WSL does not manage the Windows host's daemon. Run the appropriate setup separately on each machine/account and selected Paseo home.
-
-Diagnostics contain controlled operation/reason labels, such as `Paseo Plain removal failure: plugin remove: exit-1.`, not raw command output, exception text, credentials, or preferences. A timeout does not prove that the daemon stopped working: inspect plugin status before retrying. Do not edit plugin settings concurrently with removal.
-
-### Paseo Plain migration recovery
-
-Existing `setup-recovery/paseo-plain-release-to-main` backups remain untouched. An unfinished `state.json` blocks retirement until reviewed. Preserve the backup, confirm any previous operation has finished, and remove the plugin through the intended daemon's Settings rather than resuming the retired release-to-main migration. Never overwrite the entire daemon configuration or source registry with plugin-specific backup records.
-
-An existing retirement backup also blocks another destructive attempt while native settings remain. Inspect the intended local daemon and compare the saved settings first. Once no operation is pending, preserve/archive that retirement backup before retrying. Do not move any recovery directory still used as a directory source by another plugin. If removal already finished, a rerun is a no-op and keeps the backup. Retirement never restores the plugin or overwrites newer settings.
-
-### Retirement tests
-
-Run `bash tests/paseo-plain-setup-contract.sh`. Fixtures extract helpers instead of sourcing full setup scripts; they use temporary homes and inert CLIs. Set `PWSH_BIN` for PowerShell wrapper coverage. Native Windows ACL behavior still requires Windows verification.
-
-The optional native source/configuration-manager fixture needs an installed Paseo 0.8 module:
-
-```bash
-PASEO_TEST_PLUGIN_SERVICE_MODULE=/absolute/path/to/server/plugins/index.js \
-  node tests/paseo-plain-native-retirement.mjs
-```
-
-It uses Paseo's real PID writer under a legacy `002` umask and verifies removal without changing the resulting `0664` PID. Coverage includes an active directory plugin with no managed store or native settings, disabled plugins/global switch, preserved external sources/data, native-settings backups, and idempotent reruns. Plugin execution and CLI transport are simulated: no listener, authentication, or model request is used. Git is file-only with isolated configuration/hooks. The contract wrapper also verifies that poisoned Git variables cannot mutate the caller's repository.
-
-## Headless Paseo daemon
-
-Set `HEADLESS=1` only when provisioning a machine that must remain remotely operable after logout or reboot. On native Linux setup scripts (`ubuntu.sh`, `pi.sh`, and `bazzite.sh`), this installs `@getpaseo/cli`, creates a managed `paseo.service` systemd user service with lingering enabled, starts it, and verifies local daemon health before setup succeeds. Ubuntu only configures unrestricted passwordless sudo when `HEADLESS_PASSWORDLESS_SUDO=1` is also set.
-
-The service uses the IPv4 loopback address and port from `daemon.listen`. Each user on a multi-user machine must use a different port. If another process uses the configured port, setup stops before it starts the service.
-
-`HEADLESS=1` is an exact-match provisioning trigger, not an off switch. Unset values, `HEADLESS=0`, and `HEADLESS=true` do not install or mutate Paseo service state. To disable a previously configured machine, manually stop/disable the managed service and use Paseo's normal unpairing/removal flow.
-
-macOS `HEADLESS=1` skips the headless Paseo daemon with a warning unless `PASEO_MACOS_HEADLESS_CANARY=1` is also set for an approved no-login canary run; the rest of setup continues. WSL and native Windows fail early with a clear unsupported message because they cannot yet guarantee a true no-login Paseo daemon after host reboot.
-
-Setup preserves Paseo's relay-based connection model, does not open inbound ports, and does not run or print pairing material. After the daemon is running, pair manually with Paseo's normal pairing flow.
-
-### Surplus Paseo CLI installations
-
-A surplus installation is a verified redundant global Paseo CLI. After eligible headless setup validates the retained Bun CLI and the managed daemon's health, cleanup checks known account-owned npm locations. These locations are `~/.local/lib/node_modules/@getpaseo/cli` and the global npm stores in `~/.local/share/mise/installs/node/<version>`. Version or absence from PATH alone does not authorize removal. Custom prefixes, source and project installations, Desktop bundles, unrelated packages, and all `PASEO_HOME` data remain unchanged.
-
-Cleanup uses native npm removal with offline mode and lifecycle scripts disabled. It checks all candidates before the first removal and checks running processes and service references before each removal. A reference from a stopped service also prevents removal. Cleanup adds no daemon restart or stop operation. It runs after the existing managed-service update and preserves any installation still in use or with uncertain ownership. The managed wrapper records its CLI launch path in `PASEO_SETUP_CLI`. A wrapper update uses the existing managed-service restart flow only after read-only ownership checks reject Desktop, custom, and self-hosted owners. Cleanup checks process launch origin, working directories, and runtime environment references before removing another CLI. Custom daemon homes and incomplete process or service inspection defer cleanup with a controlled reason.
-
-The existing native Linux headless and macOS canary gates apply to cleanup. Windows and WSL do not gain a managed headless installer or destructive CLI cleanup. When cleanup defers, review the local service references before manually removing an installation. Do not remove daemon state or plugin recovery files to repair CLI selection.
-
-Run `bash tests/pi-profile-permissions-contract.sh` and `bash tests/paseo-cli-cleanup-contract.sh` for the new offline fixtures. The cleanup suite exercises native npm only against a temporary prefix. Use `PWSH_BIN` for available PowerShell wrapper coverage. Portable PowerShell does not prove native Windows ACL behavior.
+Run `bash tests/headless-contract.sh` for temporary, inert platform/flag/sudo-policy fixtures. Pi profile permission protections remain independent; run `bash tests/pi-profile-permissions-contract.sh` with `PWSH_BIN` for available PowerShell coverage. Portable PowerShell does not prove native Windows ACL behavior.
 
 ## Windows
 
@@ -381,7 +288,7 @@ The five Bash scripts prepare stable official `bb-app@latest` software on non-se
 
 Preparation uses the shared Node runtime and native npm, never Bun. BB currently supports Node 22.19+, 24 and 26 (shared setup requires at least 22.20); npm >=11.19 is required for strict command-scoped allowances for `better-sqlite3`, `node-pty` and `@parcel/watcher`. An incompatible explicit npm script policy fails preparation rather than being replaced. Before changing npm's destination prefix, setup captures its effective global-install `userconfig` and `globalconfig` paths and pins those paths for every policy probe, install and rebuild. Registry/auth/security settings from the original prefix remain effective, with native user/environment value precedence; no configuration values or credentials are copied, replaced or printed. Policy/path-capture failures occur before preparation ownership is reserved. Native addon availability/build requirements still depend on the OS, architecture and runtime; failed installation or loading is reported as incomplete, not readiness (including on Linux ARM).
 
-Setup owns only `~/.local/share/setup-bb-machine/`, with a private ownership record and separate npm prefix. The prepared CLI is `~/.local/share/setup-bb-machine/npm/bin/bb`, using shared Node on PATH. Setup deliberately does not add global BB commands or shell configuration: this avoids shadowing an existing CLI or becoming the manual installer's global-package fallback. Reruns update only this preparation copy and rebuild its native addons for shared Node prefix/ABI changes; other runtime/package installations are not removed. An owned interrupted install can be retried. Linked, malformed, writable or unowned preparation locations fail without being adopted. Required preparation failures contribute to the final failed setup result while unrelated setup and log finalization continue, independently of Pi/Paseo credential and permission checks.
+Setup owns only `~/.local/share/setup-bb-machine/`, with a private ownership record and separate npm prefix. The prepared CLI is `~/.local/share/setup-bb-machine/npm/bin/bb`, using shared Node on PATH. Setup deliberately does not add global BB commands or shell configuration: this avoids shadowing an existing CLI or becoming the manual installer's global-package fallback. Reruns update only this preparation copy and rebuild its native addons for shared Node prefix/ABI changes; other runtime/package installations are not removed. An owned interrupted install can be retried. Linked, malformed, writable or unowned preparation locations fail without being adopted. Required preparation failures contribute to the final failed setup result while unrelated setup and log finalization continue, independently of Pi credential and permission checks.
 
 Existing `~/.bb`, `~/.bb-machines`, setup-server ownership state, known BB user services or BB data/prefix environment overrides conservatively defer preparation **without claiming verified readiness**, including when `BB_SERVER` is unset or `0`. Existing BB commands outside the preparation prefix are an ownership conflict and are left untouched for manual review. Read-only account process and user-service checks also block ambiguous running BB launchers/daemons using custom data locations or manually named services referencing the preparation copy. Unrelated linked service registrations are read through their trusted regular targets without modification; empty files and native `/dev/null` masks are preserved. Actual references, dangling/unreadable targets and unsafe inspection still fail closed. This read-only link handling does not relax checks on setup-owned preparation files. Do not delete state or service files to bypass these safeguards. Setup never updates an enrolled machine's private package, even if the server selected a different version; manual enrollment and its upstream updater own that installation and startup service. Preparation adds no daemon restart or automatic role conversion.
 

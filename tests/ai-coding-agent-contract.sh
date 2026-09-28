@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 3 | Last changed: Require aggregated macOS Codex failures behind readiness gate
+# Version 4 | Last changed: Preserve independent Pi Go package ordering without Paseo
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -74,9 +74,8 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_order "${file}" "${codex_call}" '^[[:space:]]+remove_rtk_resources[[:space:]]+\|\|[[:space:]]+return 1$' 'Codex CLI installed before retired RTK cleanup'
     assert_order "${file}" '^[[:space:]]+elif install_pi_cli; then$' '^[[:space:]]+setup_pi_claude_bridge \|\| \{ _setup_had_errors=1; _pi_package_maintenance_ok=0; \}$' 'Pi installed before Pi Claude bridge'
     assert_contains "${file}" '^configure_pi_opencode_go\(\)' 'Pi Go credential helper'
-    assert_contains "${file}" '^configure_paseo_muse_profile\(\)' 'managed Muse profile helper'
     assert_order "${file}" '^[[:space:]]+elif install_pi_cli; then$' '^[[:space:]]+if configure_pi_opencode_go; then$' 'Pi installed before Go authentication'
-    assert_order "${file}" '^[[:space:]]+if configure_pi_opencode_go; then$' '^[[:space:]]+configure_paseo_muse_profile( sync)? \|\| _setup_had_errors=1$' 'Go validated before Muse profile setup'
+    assert_order "${file}" '^[[:space:]]+if configure_pi_opencode_go; then$' '^[[:space:]]+if \[\[ "\$\{_pi_go_ready\}" -eq 1 \]\] && prepare_pi_mcp_adapter; then$' 'Go validated before Pi package operations'
     assert_contains "${file}" '^setup_pi_mcp_adapter\(\)' 'Pi MCP adapter setup function'
     assert_contains "${file}" 'npm:pi-mcp-adapter' 'Pi MCP adapter package source'
     assert_contains "${file}" '^[[:space:]]+setup_pi_mcp_adapter \|\| _setup_had_errors=1$' 'Pi MCP adapter main wiring'
@@ -122,12 +121,8 @@ assert_not_contains README.md 'opencode-ai|anomalyco/tap/opencode|opencode\.ai/i
 assert_contains README.md 'OPENCODE_GO_API_KEY' 'dedicated Go setup credential documentation'
 assert_contains README.md 'opencode-go/muse-spark-1\.3-contributor' 'subscription Contributor model documentation'
 assert_contains win.ps1 'function Set-PiOpenCodeGoProvider' 'PowerShell Go credential helper'
-assert_contains win.ps1 'function Set-PaseoMuseProfile' 'PowerShell managed Muse profile helper'
 assert_order win.ps1 '^[[:space:]]+elseif \(Install-PiCli\) \{$' '^[[:space:]]+if \(Set-PiOpenCodeGoProvider\)' 'Pi installed before Go authentication'
-assert_order win.ps1 '^[[:space:]]+if \(Set-PiOpenCodeGoProvider\)' '^[[:space:]]+if \(-not \(Set-PaseoMuseProfile\)\)' 'Go validated before Muse profile setup'
-for file in mac.sh ubuntu.sh pi.sh bazzite.sh; do
-    assert_order "${file}" '^[[:space:]]+configure_paseo_muse_profile \|\| _setup_had_errors=1$' '^[[:space:]]+setup_headless_paseo_daemon \|\| return 1$' 'Muse profile synchronized before daemon setup'
-done
+assert_order win.ps1 '^[[:space:]]+if \(Set-PiOpenCodeGoProvider\)' '^[[:space:]]+if \([$]piOpenCodeGoReady -and \(Prepare-PiMcpAdapter\)\)' 'Go validated before Pi package operations'
 
 assert_contains mac.sh 'brew (install|upgrade) --cask codex' 'native Codex Homebrew cask install'
 for file in "${linux_codex_scripts[@]}"; do
@@ -188,7 +183,7 @@ assert_contains win.ps1 'Join-Path [$]agentDir "compound-engineering"' 'legacy C
 assert_contains README.md 'macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows' 'all-machine AI coding agent statement'
 assert_contains README.md 'Claude Code CLI and Codex CLI' 'Claude/Codex README contract'
 assert_contains README.md "OpenAI's standalone installer" 'per-user Linux Codex installer documentation'
-assert_contains README.md '\.local/bin' 'Paseo-compatible Codex path documentation'
+assert_contains README.md '\.local/bin' 'per-user Codex path documentation'
 assert_contains README.md 'Pi Claude bridge' 'Pi Claude bridge README contract'
 assert_contains README.md 'retired .@juicesharp/rpiv-ask-user-question. and .@juicesharp/rpiv-todo. packages' 'retired RPIV packages README contract'
 assert_contains README.md 'pi-web-access' 'Pi Web Access README contract'

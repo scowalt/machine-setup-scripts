@@ -533,7 +533,7 @@ command() {
                     for name in ["bb_server_selection", "bb_server_restore_process_override"]:
                         setup += re.search(rf"^{name}\(\) \{{\n.*?^\}}", source, re.M | re.S).group() + "\n"
                 if platform == "wsl":
-                    setup += re.search(r"^fail_unsupported_headless_paseo_daemon\(\) \{\n.*?^\}", source, re.M | re.S).group() + "\n"
+                    setup += re.search(r"^fail_unsupported_headless\(\) \{\n.*?^\}", source, re.M | re.S).group() + "\n"
                 setup += 'run_setup_tasks; result=$?; echo finalized >> "$EVENTS"; exit "$result"\n'
                 cases = [({}, 0, True), ({"PREP_FAIL": "1"}, 1, True), ({"PI_FAIL": "1"}, 1, True)]
                 if platform == 'mac':

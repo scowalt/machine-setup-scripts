@@ -9,7 +9,7 @@ The set of tools and artifacts that must be present or absent after a setup run.
 _Avoid_: Target configuration, final setup
 
 **Incomplete setup run**:
-A setup run with a failed required operation or an unverified required result. Intentional user exclusions and expected Paseo deferrals do not by themselves make the run incomplete.
+A setup run with a failed required operation or an unverified required result. Intentional user exclusions and verified managed-tool deferrals do not by themselves make the run incomplete.
 _Avoid_: Successful setup with errors, warning-only failure
 
 **macOS developer-tool readiness**:
@@ -35,6 +35,10 @@ _Avoid_: Gitea CLI, Gitea server command
 **Managed tool**:
 A development tool whose installation, configuration, update, and removal are controlled by the setup scripts.
 _Avoid_: Provisioned tool, setup tool
+
+**Unmanaged legacy tool**:
+A formerly managed tool whose existing installation and data are left for the machine owner to maintain or remove. Its presence is neither required nor prohibited by the desired machine state.
+_Avoid_: Retired managed tool, automatically uninstalled tool
 
 **bb desktop app**:
 The native graphical application for the bb agentic IDE published by get-bb/bb. It is distinct from browser access and a separately managed bb server.
@@ -63,22 +67,6 @@ _Avoid_: Daemon installation, machine discovery
 **Shared Node runtime**:
 The user-level Node runtime used by managed tools and projects without a runtime override. A project-specific selection takes precedence.
 _Avoid_: System Node, Pi-only runtime
-
-**Managed Paseo profile**:
-A named Paseo agent launch choice included in the desired machine state. Its managed core consists of the agent provider, model, and reasoning level.
-_Avoid_: Agent instance, Desktop preference
-
-**Expected Paseo deferral**:
-A managed Paseo operation deliberately postponed because Desktop owns the local daemon or setup is running inside it. The reason is established, rather than an unresolved safety check.
-_Avoid_: Ownership verification failure, completed profile update
-
-**Unverified Paseo safety check**:
-A check that lacks trustworthy evidence to determine whether a managed profile or daemon change would conflict with a running owner or writer. It is distinct from an expected Paseo deferral.
-_Avoid_: Expected deferral, proof that no daemon is running
-
-**Surplus Paseo CLI installation**:
-A verified redundant global Paseo CLI installation in a known package-manager location, separate from the retained CLI. Age or version alone does not establish this status.
-_Avoid_: Abandoned Paseo, old Paseo
 
 **OpenCode Go subscription**:
 A coding subscription that provides model access for Pi. It is distinct from paid OpenCode Zen usage and the OpenCode CLI.
