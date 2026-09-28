@@ -978,6 +978,19 @@ install_chezmoi() {
     fi
 }
 
+# Chezmoi derives ordinary target modes from its inherited umask. Do not let
+# BB-enabled dotfile applies undo safe directory modes before BB preflight.
+# Scope the additive restriction to this command and preserve native config
+# overrides; neither the caller's umask nor the BB safety checks are changed.
+with_bb_dotfiles_umask() {
+    (
+        if [[ "${BB_SERVER:-}" == 1 ]]; then
+            umask go-w || exit 1
+        fi
+        "$@"
+    )
+}
+
 # Initialize chezmoi if not already initialized
 initialize_chezmoi() {
     local chez_src="${HOME}/.local/share/chezmoi"
@@ -992,19 +1005,19 @@ initialize_chezmoi() {
         print_message "Initializing chezmoi with scowalt/dotfiles..."
         case "${DOTFILES_ACCESS_METHOD}" in
             ssh)
-                if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
+                if ! with_bb_dotfiles_umask chezmoi init --apply --force scowalt/dotfiles --ssh; then
                     print_error "Failed to initialize chezmoi with the verified SSH key."
                     return 1
                 fi
                 ;;
             token)
-                if ! chezmoi init --apply --force "https://github.com/scowalt/dotfiles.git"; then
+                if ! with_bb_dotfiles_umask chezmoi init --apply --force "https://github.com/scowalt/dotfiles.git"; then
                     print_error "Failed to initialize chezmoi with the verified GitHub token."
                     return 1
                 fi
                 ;;
             deploy)
-                if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
+                if ! with_bb_dotfiles_umask chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
                     print_error "Failed to initialize chezmoi with the verified deploy key."
                     return 1
                 fi
@@ -1100,7 +1113,7 @@ update_chezmoi() {
             git -C "${chez_src}" merge --abort > /dev/null 2>&1
             git -C "${chez_src}" clean -fd > /dev/null 2>&1
         fi
-        if chezmoi update --force > /dev/null; then
+        if with_bb_dotfiles_umask chezmoi update --force > /dev/null; then
             print_success "chezmoi dotfiles repository updated."
         else
             print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
@@ -10353,6 +10366,7 @@ bb_setup_directory_preflight() {
         else
             print_message "Review access requirements and remove group/world write from ${_label} only before rerunning setup; do not change descendants."
         fi
+        print_message 'For Chezmoi-managed directories, review its explicit umask setting if an apply restores write access; setup preserves that setting.'
         return 1
     fi
 }
@@ -11070,7 +11084,7 @@ run_setup_tasks() {
     local PASEO_MUSE_DEFER_DAEMON_SETUP=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 271 | Last changed: Explain BB directory preflight failures"
+    echo -e "${GRAY}Version 272 | Last changed: Preserve BB-safe modes through dotfiles setup"
 
     if ! acquire_setup_lock; then
         return 1
@@ -11214,7 +11228,7 @@ HELPER_EOF
             _setup_had_errors=1
         fi
         update_chezmoi
-        if ! chezmoi apply --force; then
+        if ! with_bb_dotfiles_umask chezmoi apply --force; then
             print_error "Failed to apply chezmoi dotfiles."
             _setup_had_errors=1
         fi

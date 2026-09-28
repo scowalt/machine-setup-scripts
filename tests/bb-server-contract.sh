@@ -19,6 +19,8 @@ PY
 
 # Report unsafe setup directories before any package or lifecycle operation.
 python3 tests/test_bb_directory_preflight.py
+# Exercise the earlier dotfile apply, including native Chezmoi when available.
+PYTHONDONTWRITEBYTECODE=1 python3 tests/test_bb_dotfiles_umask.py
 
 # Opt-in and platform gates are deliberately independent of machine identity.
 for value in '' 0 1 invalid; do
