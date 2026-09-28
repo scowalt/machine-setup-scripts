@@ -413,6 +413,79 @@ process.exit(fakeProcess.exitCode);
         os.mkfifo(manifest)
         self.run_helper(expected=1)  # Must fail promptly rather than open the FIFO.
 
+    def test_controlled_permission_diagnostics_preserve_each_blocked_location(self):
+        directories = {'.config': 'home-config', '.config/systemd': 'home-systemd',
+                       '.config/systemd/user': 'home-systemd-user', 'Library': 'home-library',
+                       'Library/LaunchAgents': 'home-launchagents'}
+        for name in directories:
+            (self.home / name).mkdir(exist_ok=True)
+        for name, label in directories.items():
+            for mode in [0o775, 0o777]:
+                with self.subTest(name=name, mode=oct(mode)):
+                    p = self.home / name
+                    p.chmod(mode)
+                    before = snapshot(self.home)
+                    out = self.run_helper(expected=1)
+                    self.assertIn(f'service-inventory:{label}:group-or-world-writable', out)
+                    self.assertNotIn(str(self.home), out)
+                    self.assertNotIn('npm', self.log())
+                    self.assertEqual(snapshot(self.home), before)
+                    p.chmod(0o700)
+        for name, label in [('.config/systemd/user/fixture-secret.service', 'systemd-service'),
+                            ('Library/LaunchAgents/fixture-secret.plist', 'launchd-service')]:
+            p = self.home / name
+            p.write_text('fixture-secret: never print service contents\n')
+            p.chmod(0o664)
+            before = snapshot(self.home)
+            out = self.run_helper(expected=1)
+            self.assertIn(f'service-inventory:{label}:group-or-world-writable', out)
+            self.assertNotIn('fixture-secret', out)
+            self.assertEqual(snapshot(self.home), before)
+            p.unlink()
+        directory = self.home / '.config/systemd/user'
+        directory.rmdir()
+        directory.symlink_to(self.tools)
+        out = self.run_helper(expected=1)
+        self.assertIn('service-inventory:home-systemd-user:linked-or-not-directory', out)
+        self.assertNotIn(str(self.tools), out)
+
+    def test_process_and_artifact_diagnostics_do_not_disclose_raw_errors(self):
+        out = self.run_helper(expected=1, PROCESSES='bb-server --token fixture-secret')
+        self.assertIn('process-inventory:account:process-conflict', out)
+        self.assertNotIn('fixture-secret', out)
+        self.write_exe('ps', '#!/bin/bash\necho fixture-secret >&2; exit 1\n')
+        out = self.run_helper(expected=1)
+        self.assertIn('process-inventory:account:inspection-failed', out)
+        self.assertNotIn('fixture-secret', out)
+        self.write_exe('ps', '#!/bin/bash\nexit 0\n')
+        out = self.run_helper(expected=1, FAIL_ADDON='node-pty')
+        self.assertIn('artifact-verification:preparation-tree:inspection-failed', out)
+        self.assertNotIn('fixture native load failure', out)
+        self.run_helper()
+        marker = self.prefix.parent / 'owner.json'
+        marker.write_text('fixture-secret: malformed JSON')
+        before = snapshot(self.home)
+        self.events.unlink()
+        out = self.run_helper(expected=1)
+        self.assertIn('preparation-tree:preparation-tree:inspection-failed', out)
+        self.assertNotIn('fixture-secret', out)
+        self.assertNotIn('npm', self.log())
+        self.assertEqual(snapshot(self.home), before)
+
+    def test_helper_terminal_protocol_fails_closed_without_echoing_unknown_output(self):
+        (self.tools / 'node').unlink()  # Never overwrite the actual Node symlink target.
+        for output, status in [('fixture-secret', 1), ('ok\\nfixture-secret', 0),
+                               ('ok', 1), ('', 0), ('process-inventory:account:process-conflict', 0),
+                               ('process-inventory:account:fixture-secret', 1)]:
+            with self.subTest(output=output, status=status):
+                self.write_exe('node', f'#!/bin/bash\nprintf "{output}\\n"\necho fixture-secret >&2\nexit {status}\n')
+                before = snapshot(self.home)
+                out = self.run_helper(expected=1)
+                self.assertIn('unrecognized helper result', out)
+                self.assertNotIn('fixture-secret', out)
+                self.assertNotIn('npm', self.log())
+                self.assertEqual(snapshot(self.home), before)
+
     def test_policy_failures_leave_no_owned_record(self):
         for settings in [{"NPM_VERSION": "11.18.0"}, {"IGNORE": "true"}, {"DANGEROUS": "true"}, {"ALLOW": "none"}, {"STRICT": "false"}, {"RUNTIME_FAIL": "1"}, {"CONFIG_PATH_FAIL": "1"}]:
             with self.subTest(settings=settings):

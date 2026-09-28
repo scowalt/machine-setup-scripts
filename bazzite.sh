@@ -876,6 +876,17 @@ install_chezmoi() {
     fi
 }
 
+# Chezmoi derives ordinary target modes from its inherited umask. Do not let
+# dotfile applies undo safe modes before BB server OR preparation preflight.
+# Keep this wrapper identical in the five Bash scripts. Restrict only this
+# command, preserving stricter masks and native explicit Chezmoi config.
+with_bb_dotfiles_umask() {
+    (
+        umask go-w || exit 1
+        "$@"
+    )
+}
+
 # Initialize chezmoi if not already initialized
 initialize_chezmoi() {
     local chez_src="${HOME}/.local/share/chezmoi"
@@ -890,19 +901,19 @@ initialize_chezmoi() {
         print_message "Initializing chezmoi with scowalt/dotfiles..."
         case "${DOTFILES_ACCESS_METHOD}" in
             ssh)
-                if ! chezmoi init --apply --force scowalt/dotfiles --ssh; then
+                if ! with_bb_dotfiles_umask chezmoi init --apply --force scowalt/dotfiles --ssh; then
                     print_error "Failed to initialize chezmoi with the verified SSH key."
                     return 1
                 fi
                 ;;
             token)
-                if ! chezmoi init --apply --force "https://github.com/scowalt/dotfiles.git"; then
+                if ! with_bb_dotfiles_umask chezmoi init --apply --force "https://github.com/scowalt/dotfiles.git"; then
                     print_error "Failed to initialize chezmoi with the verified GitHub token."
                     return 1
                 fi
                 ;;
             deploy)
-                if ! chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
+                if ! with_bb_dotfiles_umask chezmoi init --apply --force "git@github-dotfiles:scowalt/dotfiles.git"; then
                     print_error "Failed to initialize chezmoi with the verified deploy key."
                     return 1
                 fi
@@ -998,7 +1009,7 @@ update_chezmoi() {
             git -C "${chez_src}" merge --abort > /dev/null 2>&1
             git -C "${chez_src}" clean -fd > /dev/null 2>&1
         fi
-        if chezmoi update --force > /dev/null; then
+        if with_bb_dotfiles_umask chezmoi update --force > /dev/null; then
             print_success "chezmoi dotfiles repository updated."
         else
             print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
@@ -9450,7 +9461,8 @@ bb_machine_existing_role() {
 }
 
 bb_machine_package_state() {
-    node - "$1" "${HOME}" >/dev/null 2>&1 <<'BB_MACHINE_STATE'
+    local _result _status=0
+    _result=$(node - "$1" "${HOME}" 2>/dev/null <<'BB_MACHINE_STATE'
 const fs = require('node:fs'), path = require('node:path'), {createRequire} = require('node:module');
 const [mode, home] = process.argv.slice(2), uid = process.getuid();
 const root = path.join(home, '.local/share/setup-bb-machine'), prefix = path.join(root, 'npm');
@@ -9458,20 +9470,31 @@ const pkg = path.join(prefix, 'lib/node_modules/bb-app'), marker = path.join(roo
 const owner = {kind: 'setup-bb-machine', schema: 1};
 const bins = {bb: 'dist/bb.js', 'bb-app': 'dist/bb-app.js', 'bb-server': 'dist/bb-server.js', 'bb-host-daemon': 'dist/bb-host-daemon.js'};
 function stat(f) { try { return fs.lstatSync(f); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
-function check(ok) { if (!ok) throw new Error('unsafe or incomplete preparation'); }
+let operation = 'platform-runtime', location = 'account';
+class PreparationFailure extends Error { constructor(reason) { super(); this.reason = reason; } }
+function check(ok, reason = 'unsafe-or-incomplete') { if (!ok) throw new PreparationFailure(reason); }
 function inside(f, dir) { return f === dir || f.startsWith(dir + path.sep); }
+function label(f) {
+  const known = {'': 'home', '.config': 'home-config', '.config/systemd': 'home-systemd', '.config/systemd/user': 'home-systemd-user', 'Library': 'home-library', 'Library/LaunchAgents': 'home-launchagents', '.local': 'home-local', '.local/share': 'home-local-share'};
+  const relative = path.relative(home, f);
+  if (Object.hasOwn(known, relative)) return known[relative];
+  if (inside(f, root)) return 'preparation-tree';
+  return 'ancestor'; // Never emit arbitrary paths, service text or process argv.
+}
 function chain(dir) {
   if (dir !== path.dirname(dir)) chain(path.dirname(dir));
+  location = label(dir);
   const s = stat(dir); if (!s) return;
   if (process.platform === 'linux' && dir === '/home' && s.isSymbolicLink() && s.uid === 0 && ['var/home', '/var/home'].includes(fs.readlinkSync(dir))) {
     for (const p of ['/', '/var', '/var/home']) { const t = fs.lstatSync(p); check(t.isDirectory() && t.uid === 0 && !(t.mode & 0o022)); }
     return;
   }
-  check(s.isDirectory() && !s.isSymbolicLink());
-  check(s.uid === (inside(dir, home) ? uid : 0) || (!inside(dir, home) && s.uid === uid));
-  check(!(s.mode & 0o022) || (!inside(dir, home) && s.uid === 0 && (s.mode & 0o1000)));
+  check(s.isDirectory() && !s.isSymbolicLink(), 'linked-or-not-directory');
+  check(s.uid === (inside(dir, home) ? uid : 0) || (!inside(dir, home) && s.uid === uid), 'untrusted-owner');
+  check(!(s.mode & 0o022) || (!inside(dir, home) && s.uid === 0 && (s.mode & 0o1000)), 'group-or-world-writable');
 }
 function regular(f) {
+  location = label(f);
   const s = fs.lstatSync(f);
   check(s.isFile() && !s.isSymbolicLink() && s.uid === uid && s.nlink === 1 && !(s.mode & 0o022) && s.size > 0);
   return s;
@@ -9480,15 +9503,19 @@ function json(f) { check(regular(f).size < 1048576); return JSON.parse(fs.readFi
 // Read-only service references are not preparation-owned artifacts. Resolve
 // ordinary linked registrations to a trusted regular target; never modify them.
 function serviceUnreferenced(file) {
-  const link = fs.lstatSync(file); check(link.uid === uid || link.uid === 0);
+  const service = file.endsWith('.service') ? 'systemd-service' : 'launchd-service';
+  location = service;
+  const link = fs.lstatSync(file); check(link.uid === uid || link.uid === 0, 'untrusted-owner');
   const target = link.isSymbolicLink() ? fs.realpathSync(file) : file;
   check(!target.includes('setup-bb-machine'));
   chain(path.dirname(target));
+  location = service;
   const s = fs.lstatSync(target);
   if (link.isSymbolicLink() && target === '/dev/null') {
     check(s.isCharacterDevice() && s.uid === 0); return; // Native systemd mask; no read.
   }
-  check(s.isFile() && !s.isSymbolicLink() && (s.uid === uid || s.uid === 0) && !(s.mode & 0o022) && s.size < 1048576);
+  check(s.isFile() && !s.isSymbolicLink() && (s.uid === uid || s.uid === 0) && s.size < 1048576);
+  check(!(s.mode & 0o022), 'group-or-world-writable');
   // Empty units/plists cannot reference this copy. Dangling, unreadable and
   // non-regular targets remain uncertain and fail closed, including FIFOs.
   check(!fs.readFileSync(target, 'utf8').includes('setup-bb-machine'));
@@ -9510,21 +9537,25 @@ function tree(dir) {
 }
 try {
   check(path.isAbsolute(home) && path.normalize(home) === home && home !== '/');
-  check(['linux', 'darwin'].includes(process.platform));
+  check(['linux', 'darwin'].includes(process.platform), 'unsupported-platform');
   const [major, minor] = process.versions.node.split('.').map(Number);
-  check((major === 22 && minor >= 19) || major === 24 || major === 26);
+  check((major === 22 && minor >= 19) || major === 24 || major === 26, 'unsupported-runtime');
   // A custom running BB may use a non-default data directory. Read-only process
   // evidence blocks preparation rather than updating a possibly in-use copy.
+  operation = 'process-inventory';
   const processes = require('node:child_process').execFileSync('ps', ['-U', String(uid), '-o', 'command='], {encoding: 'utf8', maxBuffer: 8 * 1024 * 1024});
-  check(!/(?:^|[\s/])(?:bb-app|bb-server|bb-host-daemon)(?:$|[\s/.])/m.test(processes));
+  check(!/(?:^|[\s/])(?:bb-app|bb-server|bb-host-daemon)(?:$|[\s/.])/m.test(processes), 'process-conflict');
   // Also preserve a stopped, manually named user service referencing this copy.
+  operation = 'service-inventory';
   for (const dir of [path.join(home, '.config/systemd/user'), path.join(home, 'Library/LaunchAgents')]) {
+    location = label(dir);
     if (!stat(dir)) continue;
     chain(dir);
     for (const name of fs.readdirSync(dir).filter(n => /\.(service|plist)$/.test(n))) {
       serviceUnreferenced(path.join(dir, name));
     }
   }
+  operation = 'preparation-tree';
   chain(root);
   if (stat(root)) {
     check(JSON.stringify(json(marker)) === JSON.stringify(owner));
@@ -9550,12 +9581,14 @@ try {
     }
   }
   if (mode === 'reserve') {
+    operation = 'reserve'; location = 'preparation-tree';
     if (!stat(root)) {
       fs.mkdirSync(root, {recursive: true, mode: 0o700});
       fs.writeFileSync(marker, JSON.stringify(owner) + '\n', {flag: 'wx', mode: 0o600});
     }
     for (const dir of [path.join(prefix, 'lib/node_modules'), path.join(prefix, 'bin')]) fs.mkdirSync(dir, {recursive: true, mode: 0o700});
   } else if (mode === 'verify') {
+    operation = 'artifact-verification';
     const j = json(path.join(pkg, 'package.json'));
     check(j.name === 'bb-app' && /^\d+\.\d+\.\d+$/.test(j.version));
     check(Array.isArray(j.os) && j.os.includes(process.platform));
@@ -9578,8 +9611,24 @@ try {
       if (name === 'fs-native-extensions') check(typeof loaded.tryLock === 'function' && typeof loaded.unlock === 'function');
     }
   } else check(['preflight', 'reserve'].includes(mode));
-} catch { process.exitCode = 1; }
+  console.log('ok');
+} catch (error) {
+  console.log(`${operation}:${location}:${error instanceof PreparationFailure ? error.reason : 'inspection-failed'}`);
+  process.exitCode = 1;
+}
 BB_MACHINE_STATE
+    ) || _status=$?
+    [[ "${_status}" == 0 && "${_result}" == ok ]] && return 0
+    # Accept only one controlled terminal result; never echo raw helper output.
+    if [[ "${_status}" != 0 && "${_result}" =~ ^(platform-runtime|process-inventory|service-inventory|preparation-tree|reserve|artifact-verification):(account|home|home-config|home-systemd|home-systemd-user|home-library|home-launchagents|home-local|home-local-share|preparation-tree|ancestor|systemd-service|launchd-service):(unsafe-or-incomplete|linked-or-not-directory|untrusted-owner|group-or-world-writable|unsupported-platform|unsupported-runtime|process-conflict|inspection-failed)$ ]]; then
+        print_error "BB preparation check failed: ${_result}."
+        if [[ "${_result}" == *:group-or-world-writable ]]; then
+            print_message 'Review the indicated directory or service permissions privately. Chezmoi-managed paths use its effective umask; explicit config and unmanaged files are preserved. See README BB preparation recovery; do not recursively chmod or delete service/state files.'
+        fi
+    else
+        print_error 'BB preparation check failed: unrecognized helper result; details suppressed.'
+    fi
+    return 1
 }
 
 setup_bb_machine() {
@@ -10253,7 +10302,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     local PASEO_MUSE_DEFER_DAEMON_SETUP=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 128 | Last changed: Add headed bb desktop alongside machine preparation"
+    echo -e "${GRAY}Version 129 | Last changed: Preserve BB preparation modes and explain preflight failures"
 
     if ! acquire_setup_lock; then
         return 1
@@ -10374,7 +10423,7 @@ HELPER_EOF
             _setup_had_errors=1
         fi
         update_chezmoi
-        if ! chezmoi apply --force; then
+        if ! with_bb_dotfiles_umask chezmoi apply --force; then
             print_error "Failed to apply chezmoi dotfiles."
             _setup_had_errors=1
         fi

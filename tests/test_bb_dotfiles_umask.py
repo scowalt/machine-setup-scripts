@@ -207,7 +207,7 @@ umask "$2"
                         result = self.run_stage(stage, mask, selection, method)
                         self.assertEqual(result.returncode, 0, result)
                         self.assertEqual(self.calls(), [{"command": "chezmoi", "args": args,
-                            "umask": restricted if selection == "1" else mask}])
+                            "umask": restricted}])
                         git_args = [["-C", str(self.home / ".local/share/chezmoi"), *args]
                                     for args in (("reset", "--hard", "HEAD"),
                                                  ("merge", "--abort"), ("clean", "-fd"))]
@@ -260,14 +260,14 @@ umask "$2"
                 self.assertEqual([((self.home / p).stat().st_mode & 0o777) for p in DIRECTORIES],
                                  [expected, expected, expected])
 
-    def test_native_without_opt_in_retains_inherited_umask_behavior(self):
+    def test_native_preparation_without_server_opt_in_also_preserves_safe_modes(self):
         for selection in (None, "", "0", "invalid"):
             with self.subTest(selection=selection):
                 result = self.run_stage(selection=selection, native=True)
                 self.assertEqual(result.returncode, 0, result)
                 self.assertEqual([((self.home / p).stat().st_mode & 0o777) for p in DIRECTORIES],
-                                 [0o775, 0o775, 0o775])
-                self.assertIn("group- or world-writable (mode 775)", self.preflight())
+                                 [0o755, 0o755, 0o755])
+                self.assertEqual(self.preflight(), "DIRECTORY_PREFLIGHT_PASSED\n")
 
     def test_native_explicit_config_umask_wins_without_being_rewritten(self):
         config = self.config.read_text()
