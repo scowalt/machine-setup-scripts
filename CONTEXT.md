@@ -40,6 +40,10 @@ _Avoid_: Provisioned tool, setup tool
 A formerly managed tool whose existing installation and data are left for the machine owner to maintain or remove. Its presence is neither required nor prohibited by the desired machine state.
 _Avoid_: Retired managed tool, automatically uninstalled tool
 
+**Managed dotfile**:
+A user-level configuration file or directory whose desired contents and permissions are owned by Chezmoi. Being inspected by a setup preflight does not make an otherwise unmanaged path a managed dotfile.
+_Avoid_: BB-owned configuration, Any file under HOME
+
 **bb desktop app**:
 The native graphical application for the bb agentic IDE published by get-bb/bb. It is distinct from browser access and a separately managed bb server.
 _Avoid_: BBEdit, bb browser shortcut

@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-28 20:33'
-updated_date: '2026-09-28 21:17'
+updated_date: '2026-09-28 21:29'
 labels: []
 dependencies: []
 references:
@@ -62,6 +62,8 @@ Removed duplicated Paseo management and callers from all six scripts, preserving
 - Unavailable checks: pwsh/PowerShell wrappers and native Windows ACLs; native Apple/ARM/GUI/boot rollout; optional native skills CLI and npm registry/adapter probes without supplied CLI paths. No live setup, Paseo/BB lifecycle/inventory, credential access, app/skill execution, model request, dotfiles apply to real HOME, enrollment, commit, push or branch change. Dotfiles changes are exactly README plus removal of the two approved source artifacts; .chezmoiremove is unchanged.
 
 Origin review completed: compared retained function bodies and renamed platform/tmux helpers against HEAD; only approved Paseo removal, generic headless diagnostics, template/version changes and Go notification decoupling alter runtime behavior. Confirmed dotfiles diff is exactly the two source removals plus README, with no deletion rules. Independently reran Bash syntax, ShellCheck, cross-repository Paseo non-management, generic headless, Pi/Go wiring and both whitespace checks successfully (PowerShell cases explicitly skipped). Inspected successful isolated Python and Backlog rerun logs to reconcile the earlier concurrent-fixture failure in the initial final logs. No implementation blockers found; changes remain uncommitted.
+
+Publication integration: merged current origin/main into the approved change, preserving newer BB preparation permission safeguards, controlled diagnostics and Windows fixture isolation. Resolved glossary additions by keeping both terms; advanced five Bash versions beyond remote main. Adapted the headless fixture to the newly extracted BB platform gate without changing its policy. Merged-state non-management, headless, BB preparation/permissions/server/Desktop, Pi/Go wiring, reliability, CLT/Homebrew and ShellCheck validation passed; PowerShell remains unavailable.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

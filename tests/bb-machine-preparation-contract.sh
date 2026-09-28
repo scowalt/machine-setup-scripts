@@ -2,6 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PYTHONDONTWRITEBYTECODE=1 python3 tests/test_bb_machine_preparation.py
+PYTHONDONTWRITEBYTECODE=1 python3 tests/test_bb_dotfiles_umask.py
+PYTHONDONTWRITEBYTECODE=1 python3 tests/test_bb_preparation_permissions.py
 
 pwsh_bin="${PWSH_BIN:-}"
 if [[ -z "${pwsh_bin}" ]]; then pwsh_bin=$(command -v pwsh || true); fi

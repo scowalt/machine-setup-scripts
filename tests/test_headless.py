@@ -97,7 +97,8 @@ systemctl() {
         for name in BASH:
             text = (ROOT / name).read_text()
             self.assertIn('[[ "${HEADLESS:-}" == "1" ]]', function(text, 'install_bb_desktop'))
-            self.assertIn('[[ "${HEADLESS:-}" != 1 ]]', function(text, 'setup_bb_machine'))
+            self.assertIn('[[ "${HEADLESS:-}" != 1 ]]', function(text, 'bb_machine_platform_ready'))
+            self.assertIn('bb_machine_platform_ready "${_platform}" || return 1', function(text, 'setup_bb_machine'))
 
     def test_windows_early_generic_gate_source(self):
         source = (ROOT / 'win.ps1').read_text()
