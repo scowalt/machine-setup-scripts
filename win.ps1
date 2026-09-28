@@ -8240,7 +8240,7 @@ function Invoke-WindowsSetupTasks {
     $infisicalRetirementFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 160 | Last changed: Retire Infisical before package updates"
+    Write-Host "Version 161 | Last changed: Explain WSL2 preparation for manual BB enrollment"
 
     Assert-HeadlessPaseoUnsupported
     $null = Get-PaseoReleaseChannel
@@ -8281,6 +8281,7 @@ function Invoke-WindowsSetupTasks {
     Install-GeminiCli
     Install-CodexCli
     Install-PortlessCli
+    Write-Message 'BB does not support native Windows. Run wsl.sh inside an existing WSL2 distro to prepare its CLI/daemon software, then manually enroll with one chosen BB server over private Tailscale. This script does not install BB or provision WSL.'
     if (-not (Prepare-PiProfilePermissions)) {
         $script:PiProfileMutationsBlocked = $true
         $piSetupFailed = $true

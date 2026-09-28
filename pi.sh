@@ -10186,6 +10186,218 @@ check_pending_reboot() {
     fi
 }
 
+# Installation only: keep this block identical in the five Bash scripts.
+# A private npm prefix avoids global BB bins and the enrollment installer's fallback.
+bb_machine_existing_role() {
+    local _file
+    [[ -z "${BB_DATA_DIR:-}" && -z "${BB_APP_NPM_PREFIX:-}" ]] || return 0
+    for _file in "${HOME}/.bb" "${HOME}/.bb-machines" "${HOME}/.config/setup-bb-server" \
+        "${XDG_CONFIG_HOME:-${HOME}/.config}/setup-bb-server" \
+        "${HOME}"/.config/systemd/user/*bb*.service "${HOME}"/Library/LaunchAgents/*bb*.plist; do
+        [[ ! -e "${_file}" && ! -L "${_file}" ]] || return 0
+    done
+    return 1
+}
+
+bb_machine_package_state() {
+    node - "$1" "${HOME}" >/dev/null 2>&1 <<'BB_MACHINE_STATE'
+const fs = require('node:fs'), path = require('node:path'), {createRequire} = require('node:module');
+const [mode, home] = process.argv.slice(2), uid = process.getuid();
+const root = path.join(home, '.local/share/setup-bb-machine'), prefix = path.join(root, 'npm');
+const pkg = path.join(prefix, 'lib/node_modules/bb-app'), marker = path.join(root, 'owner.json');
+const owner = {kind: 'setup-bb-machine', schema: 1};
+const bins = {bb: 'dist/bb.js', 'bb-app': 'dist/bb-app.js', 'bb-server': 'dist/bb-server.js', 'bb-host-daemon': 'dist/bb-host-daemon.js'};
+function stat(f) { try { return fs.lstatSync(f); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
+function check(ok) { if (!ok) throw new Error('unsafe or incomplete preparation'); }
+function inside(f, dir) { return f === dir || f.startsWith(dir + path.sep); }
+function chain(dir) {
+  if (dir !== path.dirname(dir)) chain(path.dirname(dir));
+  const s = stat(dir); if (!s) return;
+  if (process.platform === 'linux' && dir === '/home' && s.isSymbolicLink() && s.uid === 0 && ['var/home', '/var/home'].includes(fs.readlinkSync(dir))) {
+    for (const p of ['/', '/var', '/var/home']) { const t = fs.lstatSync(p); check(t.isDirectory() && t.uid === 0 && !(t.mode & 0o022)); }
+    return;
+  }
+  check(s.isDirectory() && !s.isSymbolicLink());
+  check(s.uid === (inside(dir, home) ? uid : 0) || (!inside(dir, home) && s.uid === uid));
+  check(!(s.mode & 0o022) || (!inside(dir, home) && s.uid === 0 && (s.mode & 0o1000)));
+}
+function regular(f) {
+  const s = fs.lstatSync(f);
+  check(s.isFile() && !s.isSymbolicLink() && s.uid === uid && s.nlink === 1 && !(s.mode & 0o022) && s.size > 0);
+  return s;
+}
+function json(f) { check(regular(f).size < 1048576); return JSON.parse(fs.readFileSync(f, 'utf8')); }
+// Read-only service references are not preparation-owned artifacts. Resolve
+// ordinary linked registrations to a trusted regular target; never modify them.
+function serviceUnreferenced(file) {
+  const link = fs.lstatSync(file); check(link.uid === uid || link.uid === 0);
+  const target = link.isSymbolicLink() ? fs.realpathSync(file) : file;
+  check(!target.includes('setup-bb-machine'));
+  chain(path.dirname(target));
+  const s = fs.lstatSync(target);
+  if (link.isSymbolicLink() && target === '/dev/null') {
+    check(s.isCharacterDevice() && s.uid === 0); return; // Native systemd mask; no read.
+  }
+  check(s.isFile() && !s.isSymbolicLink() && (s.uid === uid || s.uid === 0) && !(s.mode & 0o022) && s.size < 1048576);
+  // Empty units/plists cannot reference this copy. Dangling, unreadable and
+  // non-regular targets remain uncertain and fail closed, including FIFOs.
+  check(!fs.readFileSync(target, 'utf8').includes('setup-bb-machine'));
+}
+// Inspect only the dedicated preparation tree, never BB data or enrollment trees.
+function tree(dir) {
+  chain(dir);
+  for (const name of fs.readdirSync(dir)) {
+    const f = path.join(dir, name), s = fs.lstatSync(f);
+    check(s.uid === uid);
+    if (s.isSymbolicLink()) {
+      const target = path.resolve(dir, fs.readlinkSync(f));
+      check(inside(target, prefix));
+      // npm bin links may be dangling after an interrupted install. Never follow them.
+      const t = stat(target); check(!t || (t.isFile() && !t.isSymbolicLink()));
+    } else if (s.isDirectory()) tree(f);
+    else check(s.isFile() && s.nlink === 1 && !(s.mode & 0o022));
+  }
+}
+try {
+  check(path.isAbsolute(home) && path.normalize(home) === home && home !== '/');
+  check(['linux', 'darwin'].includes(process.platform));
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  check((major === 22 && minor >= 19) || major === 24 || major === 26);
+  // A custom running BB may use a non-default data directory. Read-only process
+  // evidence blocks preparation rather than updating a possibly in-use copy.
+  const processes = require('node:child_process').execFileSync('ps', ['-U', String(uid), '-o', 'command='], {encoding: 'utf8', maxBuffer: 8 * 1024 * 1024});
+  check(!/(?:^|[\s/])(?:bb-app|bb-server|bb-host-daemon)(?:$|[\s/.])/m.test(processes));
+  // Also preserve a stopped, manually named user service referencing this copy.
+  for (const dir of [path.join(home, '.config/systemd/user'), path.join(home, 'Library/LaunchAgents')]) {
+    if (!stat(dir)) continue;
+    chain(dir);
+    for (const name of fs.readdirSync(dir).filter(n => /\.(service|plist)$/.test(n))) {
+      serviceUnreferenced(path.join(dir, name));
+    }
+  }
+  chain(root);
+  if (stat(root)) {
+    check(JSON.stringify(json(marker)) === JSON.stringify(owner));
+    check(!(fs.lstatSync(marker).mode & 0o077));
+    check(fs.readdirSync(root).every(n => ['owner.json', 'npm'].includes(n)));
+    if (stat(prefix)) {
+      tree(prefix);
+      for (const f of [path.join(pkg, 'package.json'), path.join(prefix, 'lib/node_modules/.package-lock.json')]) {
+        if (stat(f)) { const j = json(f); check(j && typeof j === 'object' && !Array.isArray(j)); if (f === path.join(pkg, 'package.json')) check(j.name === 'bb-app'); }
+      }
+      for (const [dir, allowed] of [[prefix, ['bin', 'lib']], [path.join(prefix, 'lib'), ['node_modules']]]) {
+        if (stat(dir)) check(fs.readdirSync(dir).every(n => allowed.includes(n)));
+      }
+      const modules = path.join(prefix, 'lib/node_modules');
+      if (stat(modules)) check(fs.readdirSync(modules).every(n => n === 'bb-app' || n === '.package-lock.json' || /^\.bb-app-[A-Za-z0-9]+$/.test(n)));
+      if (stat(path.join(prefix, 'bin'))) {
+        for (const bin of fs.readdirSync(path.join(prefix, 'bin'))) {
+          check(Object.hasOwn(bins, bin));
+          const f = path.join(prefix, 'bin', bin);
+          check(fs.lstatSync(f).isSymbolicLink() && path.resolve(path.dirname(f), fs.readlinkSync(f)) === path.join(pkg, bins[bin]));
+        }
+      }
+    }
+  }
+  if (mode === 'reserve') {
+    if (!stat(root)) {
+      fs.mkdirSync(root, {recursive: true, mode: 0o700});
+      fs.writeFileSync(marker, JSON.stringify(owner) + '\n', {flag: 'wx', mode: 0o600});
+    }
+    for (const dir of [path.join(prefix, 'lib/node_modules'), path.join(prefix, 'bin')]) fs.mkdirSync(dir, {recursive: true, mode: 0o700});
+  } else if (mode === 'verify') {
+    const j = json(path.join(pkg, 'package.json'));
+    check(j.name === 'bb-app' && /^\d+\.\d+\.\d+$/.test(j.version));
+    check(Array.isArray(j.os) && j.os.includes(process.platform));
+    for (const [bin, entry] of Object.entries(bins)) {
+      check(j.bin?.[bin] === entry); regular(path.join(pkg, entry));
+      const f = path.join(prefix, 'bin', bin);
+      check(fs.lstatSync(f).isSymbolicLink() && fs.realpathSync(f) === fs.realpathSync(path.join(pkg, entry)));
+      check(fs.statSync(f).mode & 0o111);
+    }
+    for (const entry of ['server/dist/index.js', 'app/dist/index.html', 'host-daemon/dist/bb', 'host-daemon/dist/daemon-bundle.mjs', 'host-daemon/dist/bb-provider-bridge-worker.mjs', 'host-daemon/dist/bb-parcel-watcher-child.mjs', 'host-daemon/dist/bb-plugin-host-worker.mjs']) regular(path.join(pkg, entry));
+    const chunks = path.join(pkg, 'host-daemon/dist/bb-chunks'); chain(chunks);
+    check(fs.readdirSync(chunks).some(n => n.endsWith('.js') && regular(path.join(chunks, n))));
+    const require = createRequire(path.join(pkg, 'package.json'));
+    for (const name of ['better-sqlite3', 'node-pty', '@parcel/watcher', 'fs-native-extensions']) {
+      const entry = require.resolve(name); check(inside(entry, pkg)); regular(entry);
+      const loaded = require(name);
+      if (name === 'better-sqlite3') { const db = new loaded(':memory:'); db.close(); }
+      if (name === 'node-pty') check(typeof loaded.spawn === 'function');
+      if (name === '@parcel/watcher') check(typeof loaded.subscribe === 'function');
+      if (name === 'fs-native-extensions') check(typeof loaded.tryLock === 'function' && typeof loaded.unlock === 'function');
+    }
+  } else check(['preflight', 'reserve'].includes(mode));
+} catch { process.exitCode = 1; }
+BB_MACHINE_STATE
+}
+
+setup_bb_machine() {
+    local _platform="$1" _kernel _release _prefix="${HOME}/.local/share/setup-bb-machine/npm" _bin _found _version _policy
+    local _npm_userconfig _npm_globalconfig
+    local -a _npm_context
+    if bb_machine_existing_role; then
+        print_message 'BB preparation deferred: existing BB state, service or data/prefix override preserved. Manage that installation manually; readiness was not checked.'
+        return 0
+    fi
+    _kernel=$(uname -s) || return 1
+    case "${_kernel}" in Darwin|Linux) ;; *) print_error 'BB preparation supports macOS/Linux only; use WSL2 on Windows.'; return 1 ;; esac
+    if [[ "${_platform}" == wsl ]]; then
+        _release=$(uname -r) || return 1
+        case "${_kernel}:${_release}" in Linux:*[Mm]icrosoft*WSL2*) ;; *) print_error 'BB preparation requires WSL2.'; return 1 ;; esac
+        [[ "${HEADLESS:-}" != 1 ]] || { print_error 'WSL HEADLESS=1 remains unsupported for BB preparation.'; return 1; }
+    fi
+    for _bin in bb bb-app bb-server bb-host-daemon; do
+        _found=$(command -v "${_bin}" 2>/dev/null || true)
+        if [[ -n "${_found}" && "${_found}" != "${_prefix}/bin/${_bin}" ]]; then
+            print_error 'BB preparation found an unmanaged BB command; leaving it untouched. Review existing installation ownership manually.'
+            return 1
+        fi
+    done
+    ensure_shared_node_runtime || { print_error 'BB preparation requires the shared Node/npm runtime.'; return 1; }
+    bb_machine_package_state preflight || { print_error 'BB preparation role/ownership, platform, runtime or artifact preflight failed; review existing BB processes, user services and private preparation permissions. No package changes made.'; return 1; }
+    _version=$(npm --version 2>/dev/null) || return 1
+    [[ "${_version}" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]] || return 1
+    if (( BASH_REMATCH[1] < 11 || (BASH_REMATCH[1] == 11 && BASH_REMATCH[2] < 19) )); then
+        print_error 'BB preparation requires npm >=11.19 with native-addon allowlisting.'; return 1
+    fi
+    # npm derives its default globalconfig from prefix. Capture the original
+    # global-install context BEFORE selecting our destination; retain native
+    # user/environment value precedence instead of copying or replacing policy.
+    if ! _npm_userconfig=$(npm --global config get userconfig 2>/dev/null) ||
+        ! _npm_globalconfig=$(npm --global config get globalconfig 2>/dev/null) ||
+        [[ "${_npm_userconfig}" != /* || "${_npm_globalconfig}" != /* || "${_npm_userconfig}${_npm_globalconfig}" == *$'\n'* ]]; then
+        print_error 'BB preparation could not preserve the original npm configuration paths.'; return 1
+    fi
+    _npm_context=("--userconfig=${_npm_userconfig}" "--globalconfig=${_npm_globalconfig}")
+    for _policy in ignore-scripts dangerously-allow-all-scripts; do
+        _found=$(npm --global --prefix "${_prefix}" "${_npm_context[@]}" config get "${_policy}" 2>/dev/null) || return 1
+        [[ "${_found}" == false ]] || { print_error 'BB preparation cannot use the explicit npm script policy; policy was preserved.'; return 1; }
+    done
+    _found=$(npm --global --prefix "${_prefix}" "${_npm_context[@]}" config get allow-scripts 2>/dev/null) || return 1
+    if [[ -n "${_found}" ]] && ! node -e 'const a=process.argv[1].split(",").map(s=>s.trim()).sort(); process.exit(JSON.stringify(a)===JSON.stringify(["@parcel/watcher","better-sqlite3","node-pty"])?0:1)' "${_found}" >/dev/null 2>&1; then
+        print_error 'BB preparation refuses to replace an explicit npm addon policy.'; return 1
+    fi
+    _found=$(npm --global --prefix "${_prefix}" "${_npm_context[@]}" config get strict-allow-scripts --strict-allow-scripts 2>/dev/null) || return 1
+    [[ "${_found}" == true ]] || return 1
+    _found=$(npm --global --prefix "${_prefix}" "${_npm_context[@]}" config get allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher 2>/dev/null) || return 1
+    [[ "${_found}" == better-sqlite3,node-pty,@parcel/watcher ]] || return 1
+    bb_machine_package_state reserve || return 1
+    print_message 'Installing stable BB preparation software (no enrollment or service startup)...'
+    if ! ( umask 077; npm install --global --prefix "${_prefix}" "${_npm_context[@]}" --engine-strict --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher bb-app@latest < /dev/null >/dev/null 2>&1 ); then
+        print_error 'BB preparation npm install failed; the owned partial copy can be retried.'; return 1
+    fi
+    # Rebuild only native addons, including when the shared Node ABI/prefix changed.
+    if ! ( umask 077; npm rebuild --global --prefix "${_prefix}" "${_npm_context[@]}" --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher better-sqlite3 node-pty @parcel/watcher < /dev/null >/dev/null 2>&1 ); then
+        print_error 'BB preparation native-addon rebuild failed; no BB lifecycle command was run.'; return 1
+    fi
+    bb_machine_package_state verify || { print_error 'BB preparation artifacts/native dependencies failed verification; no daemon was started.'; return 1; }
+    print_success 'BB software prepared; not enrolled and no BB service created.'
+    print_message "Preparation CLI: ${_prefix}/bin/bb (shared Node must be on PATH)."
+    print_message 'Next: open your ONE chosen BB server over private Tailscale, use its Add machine instructions, and manually run its enrollment command in this machine. Do not run bb-app to pair.'
+}
+# End shared BB machine preparation.
+
 run_setup_tasks() {
     local _setup_had_errors=0
     local _infisical_retirement_ok=1
@@ -10194,7 +10406,7 @@ run_setup_tasks() {
     local PASEO_MUSE_DEFER_DAEMON_SETUP=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 224 | Last changed: Retire Infisical before package updates"
+    echo -e "${GRAY}Version 226 | Last changed: Preserve npm policy and BB preparation compatibility"
 
     if ! acquire_setup_lock; then
         return 1
@@ -10309,6 +10521,7 @@ run_setup_tasks() {
         print_warning "Skipping dotfiles management - no access to repository."
     fi
 
+    setup_bb_machine pi || { print_error 'BB machine preparation incomplete; existing BB state was preserved.'; _setup_had_errors=1; }
     if ! prepare_pi_profile_permissions; then
         PI_PROFILE_MUTATIONS_BLOCKED=1
         _setup_had_errors=1

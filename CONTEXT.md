@@ -28,6 +28,22 @@ _Avoid_: Provisioned tool, setup tool
 An independent main application server for the bb agentic IDE published by get-bb/bb, with its own projects and sessions. It is distinct from BBEdit and from an execution machine enrolled with another bb server.
 _Avoid_: BBEdit server, bb execution machine
 
+**bb execution machine**:
+A machine enrolled with a bb server to host project files and run agents. Enrollment does not make it an independent bb server.
+_Avoid_: Secondary bb server, browser client
+
+**bb machine daemon**:
+The local background component connecting a bb execution machine to its bb server. It is distinct from the main application server.
+_Avoid_: Main server, browser client
+
+**bb machine preparation**:
+Installation of the local software needed for later manual enrollment as a bb execution machine. A prepared machine is not necessarily enrolled, running a daemon, or reachable from a server.
+_Avoid_: Pairing, connected machine
+
+**bb machine enrollment**:
+The authorized association of an execution machine with a particular bb server. Installing software alone does not establish this association.
+_Avoid_: Daemon installation, machine discovery
+
 **Shared Node runtime**:
 The user-level Node runtime used by managed tools and projects without a runtime override. A project-specific selection takes precedence.
 _Avoid_: System Node, Pi-only runtime
