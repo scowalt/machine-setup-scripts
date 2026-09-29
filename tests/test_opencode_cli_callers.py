@@ -1,4 +1,4 @@
-"""Contract v3: extracted OpenCode callers validate controlled HTTP diagnostics."""
+"""Contract v4: extracted callers validate controlled Homebrew/policy diagnostics."""
 import os
 from pathlib import Path
 import re
@@ -27,6 +27,22 @@ DIAGNOSTICS += [(result, status, None) for result, status in [
     ('SECRET\nopencode-cli:download-failed:package-version:http-406', 1),
     ('OPENCODE-CLI:download-failed:package-version:http-406', 1),
     ('opencode-cli:recovery-required', 1),
+]]
+
+DIAGNOSTICS += [(f'opencode-cli:policy-failed:{operation}:{reason}', 1,
+                 f'OpenCode CLI blocked (operation={operation}, reason={reason}).')
+                for operation, reason in [('homebrew-preflight', 'brew-group-shared'), ('homebrew-preflight', 'brew-identity-source'),
+                                          ('homebrew-preflight', 'brew-acl-unverified'), ('homebrew-preflight', 'native-EACCES'),
+                                          ('installation', 'pinned'), ('installation', 'unverified-copy'), ('installation', 'native-ENOENT')]]
+DIAGNOSTICS += [(result, status, None) for result, status in [
+    ('opencode-cli:policy-failed:homebrew-preflight:brew-path', 0),
+    ('opencode-cli:policy-failed:SECRET:brew-path', 1),
+    ('opencode-cli:policy-failed:homebrew-preflight:SECRET', 1),
+    ('opencode-cli:policy-failed:homebrew-preflight:native-SECRET', 1),
+    ('opencode-cli:policy-failed:homebrew-preflight:brew-path\nSECRET', 1),
+    ('opencode-cli:policy-failed:homebrew-preflight:brew-path\r', 1),
+    ('opencode-cli:policy-failed:homebrew-preflight:brew-path SECRET', 1),
+    ('opencode-cli:policy-failed:homebrew-preflight:BREW-PATH', 1),
 ]]
 
 
@@ -78,6 +94,7 @@ exit "${MOCK_STATUS:-0}"
                         self.assertIn(diagnostic, run.stdout)
                     else:
                         self.assertNotIn('OpenCode CLI download failed (', run.stdout)
+                        self.assertNotIn('OpenCode CLI blocked (', run.stdout)
                     self.assertEqual('rollback needs manual recovery' in run.stdout, result == 'opencode-cli:recovery-required')
             for extra in [{'MOCK_NODE_PREREQUISITE': '1'}, {}]:
                 setup = 'macos_existing_prerequisites() { return 1; }\n' if not extra else ''
@@ -203,6 +220,7 @@ if ($result) { exit 0 } else { exit 1 }
                     self.assertIn(diagnostic, run.stdout)
                 else:
                     self.assertNotIn('OpenCode CLI download failed (', run.stdout)
+                    self.assertNotIn('OpenCode CLI blocked (', run.stdout)
                 self.assertEqual('rollback needs manual recovery' in run.stdout, result == 'opencode-cli:recovery-required')
 
     @unittest.skipUnless(PWSH, 'No existing PWSH_BIN/pwsh: native Windows/PowerShell execution not claimed')

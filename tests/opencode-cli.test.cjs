@@ -1,4 +1,4 @@
-// Version 2 | Last changed: Cover HTTP negotiation and controlled download diagnostics
+// Version 3 | Last changed: Verify private-group Homebrew trust and safe preflight diagnostics
 'use strict';
 process.umask(0o077);
 const {test} = require('node:test');
@@ -270,7 +270,7 @@ function virtualPolicy(f, overrides = {}, modules = {}, log = () => assert.fail(
     const module = {exports: {}};
     const fakeProcess = {platform: 'linux', env: {}, getuid: process.getuid, report: process.report, argv: ['node', 'fixture'], ...overrides};
     vm.runInNewContext(fs.readFileSync(require.resolve('../lib/opencode-cli.cjs'), 'utf8'), {
-        require: name => name === 'node:fs' ? proxy : modules[name] || require(name), module, process: fakeProcess,
+        require: name => modules[name] || (name === 'node:fs' ? proxy : require(name)), module, process: fakeProcess,
         Buffer, URL, setTimeout, clearTimeout, console: {log, error: () => assert.fail('unexpected output')},
     });
     return {api: module.exports, mapped, process: fakeProcess};
@@ -431,6 +431,192 @@ test('real version-probe helper isolates HOME, cwd and application credentials',
     assert.equal(observed.options.env.OPENCODE_CONFIG, undefined);
     assert.equal(observed.options.env.NODE_OPTIONS, undefined);
     assert.equal(observed.options.timeout, 20000);
+});
+// Real native proof code runs with all filesystem/account/procfs access redirected
+// to fixtures. No host process inventory, native OpenCode or live Homebrew is read.
+function privateBrewFixture(t, platform = 'linux') {
+    const f = fixture(t), prefix = '/home/linuxbrew/.linuxbrew', calls = [], observed = [];
+    const command = prefix + '/bin/opencode', cellar = prefix + '/Cellar/opencode/1.18.33';
+    const logical = file => typeof file === 'string' && (file === '/' || file === '/home' || file.startsWith('/home/linuxbrew') || /^\/(etc|proc|usr)(\/|$)/.test(file));
+    const mapped = file => logical(file) ? path.join(f.home, 'system', file.slice(1)) : file;
+    const uid = process.getuid(), gid = process.getgid();
+    function put(file, text, mode = 0o644) {
+        fs.mkdirSync(path.dirname(mapped(file)), {recursive: true});
+        fs.writeFileSync(mapped(file), text); fs.chmodSync(mapped(file), mode);
+    }
+    put('/etc/nsswitch.conf', 'passwd: files systemd\ngroup: files systemd\ninitgroups: files systemd\n');
+    put('/etc/passwd', `account:x:${uid}:${gid}:fixture:/fixture:/bin/false\nother:x:${uid+1}:${gid+1}:fixture:/other:/bin/false\n`);
+    put('/etc/group', `account:x:${gid}:\nother:x:${gid+1}:\n`);
+    put('/proc/self/mountinfo', '19 20 0:21 / /proc rw,nosuid,nodev,noexec - proc proc rw\n');
+    put('/proc/123/task/123/status', `Uid:\t${uid+1} ${uid+1} ${uid+1} ${uid+1}\nGid:\t${gid+1} ${gid+1} ${gid+1} ${gid+1}\nGroups:\t${gid+1}\n`);
+    put('/proc/123/task/123/stat', '123 (inert fixture) S ' + Array(18).fill('0').join(' ') + ' 12345\n');
+    put('/usr/bin/python3.12', 'INERT python marker', 0o755);
+    fs.symlinkSync('python3.12', mapped('/usr/bin/python3'));
+    put(cellar + '/bin/opencode', f.publish('opencode-linux-x64-baseline', '1.18.33'), 0o555);
+    put(cellar + '/INSTALL_RECEIPT.json', '{"source":{"tap":"anomalyco/tap"}}', 0o664);
+    fs.mkdirSync(mapped(prefix + '/bin'), {recursive: true});
+    fs.symlinkSync('../Cellar/opencode/1.18.33/bin/opencode', mapped(command));
+    function modes(dir) {
+        fs.chmodSync(dir, 0o755);
+        for (const name of fs.readdirSync(dir)) if (fs.lstatSync(path.join(dir, name)).isDirectory()) modes(path.join(dir, name));
+    }
+    modes(mapped('/'));
+    for (const dir of [prefix + '/Cellar', prefix + '/Cellar/opencode', cellar, cellar + '/bin']) fs.chmodSync(mapped(dir), 0o775);
+    f.statOverrides = new Map();
+    const proxy = new Proxy(fs, {get(object, key) {
+        if (typeof object[key] !== 'function') return object[key];
+        return (...args) => {
+            if (logical(args[0])) {
+                observed.push([key, args[0]]);
+                assert.ok(!['chmodSync', 'chownSync', 'writeFileSync', 'unlinkSync', 'rmSync', 'mkdirSync', 'linkSync', 'symlinkSync'].includes(key), 'Homebrew/system writes forbidden except command quarantine/restore');
+                if (key === 'openSync') assert.equal(args[1] & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_TRUNC), 0);
+                if (key === 'renameSync') assert.ok(args[0] === command || args[0].startsWith(prefix + '/bin/.opencode-setup-recovery-'));
+            }
+            const value = object[key](...args.map(mapped));
+            if (key === 'lstatSync' && logical(args[0]) && (args[0] === '/' || args[0] === '/home' || /^\/(etc|proc|usr)(\/|$)/.test(args[0]))) value.uid = 0;
+            if (key === 'lstatSync' && f.statOverrides.has(args[0])) Object.assign(value, f.statOverrides.get(args[0]));
+            if (key === 'renameSync' && args[0] === command && f.afterQuarantine) f.afterQuarantine(args[1]);
+            return value;
+        };
+    }});
+    const native = {spawnSync: (file, args, options) => {
+        calls.push({file, args, options});
+        assert.equal(file, '/usr/bin/python3.12');
+        assert.deepEqual(Array.from(args.slice(0, 3)), ['-I', '-S', '-c']);
+        assert.equal(args.length, 4); assert.equal(options.shell, false); assert.equal(options.cwd, '/');
+        assert.equal(options.timeout, 5000); assert.equal(options.maxBuffer, 1024);
+        assert.deepEqual({...options.env}, {PATH: '/usr/bin:/bin', LANG: 'C.UTF-8'});
+        if (f.proofReply) return f.proofReply;
+        const result = require('node:child_process').spawnSync('/usr/bin/python3', ['-I', '-S',
+            path.join(__dirname, 'fixtures/opencode-homebrew-proof.py'), f.home, args[3]], options);
+        assert.equal(result.stderr, '', 'native fixture must suppress exception output');
+        return result;
+    }, execFileSync: () => assert.fail('application execution forbidden')};
+    const {api} = virtualPolicy(f, {platform}, {'node:fs': proxy, 'node:child_process': native});
+    f.options.commands = [command];
+    return Object.assign(f, {api, command, prefix, cellar, mapped, put, calls, observed});
+}
+test('observed 0775/0664 Homebrew layout requires native proof and migrates inertly without permission changes', async t => {
+    for (let repeat = 0; repeat < 2; repeat++) {
+        const f = privateBrewFixture(t);
+        const before = fs.statSync(f.mapped(f.cellar + '/INSTALL_RECEIPT.json'));
+        assert.equal(f.api.brewCopy(f.command).release, '1.18.33');
+        assert.ok(f.calls.length > 0, 'must obtain native proof, not merely accept owner/gid');
+        assert.equal(await f.api.install(f.options), 'migrated');
+        assert.equal(fs.existsSync(f.mapped(f.command)), false);
+        assert.equal(fs.statSync(f.mapped(f.cellar + '/bin')).mode & 0o777, 0o775);
+        const after = fs.statSync(f.mapped(f.cellar + '/INSTALL_RECEIPT.json'));
+        assert.equal(after.mode & 0o777, 0o664); assert.equal(after.ino, before.ino); assert.equal(after.mtimeMs, before.mtimeMs);
+        assert.equal(f.probes.length, 2);
+        f.options.commands = [f.dest];
+        assert.equal(await f.api.install(f.options), 'current');
+    }
+});
+for (const cause of ['primary', 'supplementary', 'stale-thread', 'native-primary', 'native-supplementary', 'wrong-primary', 'wrong-group-name', 'unknown-passwd', 'unknown-group', 'unknown-initgroups',
+    'acl-present', 'acl-default', 'acl-unavailable', 'hidden-processes', 'malformed-status', 'missing-status', 'changed-membership', 'changed-native-membership', 'changed-config', 'changed-mount', 'swap-path',
+    'world-write', 'root-group-write', 'foreign-owner', 'linked-ancestor', 'missing-python', 'unsafe-python', 'linked-python', 'unsafe-tool-owner', 'linked-tool-parent']) {
+    test(`Homebrew native proof rejects ${cause} before mutation or unsafe descendant reads`, async t => {
+        const f = privateBrewFixture(t), uid = process.getuid(), gid = process.getgid();
+        const boundary = f.prefix + '/Cellar', system = file => f.mapped(file);
+        let reason = 'brew-proof-unverified';
+        if (cause === 'primary') { f.put('/etc/passwd', `account:x:${uid}:${gid}:fixture:/a:/bin/false\nother:x:${uid+1}:${gid}:fixture:/b:/bin/false\n`); reason = 'brew-group-shared'; }
+        if (cause === 'supplementary') { f.put('/etc/group', `account:x:${gid}:other\n`); reason = 'brew-group-shared'; }
+        if (cause === 'wrong-primary') { f.put('/etc/passwd', `account:x:${uid}:${gid+1}:fixture:/a:/bin/false\n`); reason = 'brew-group-shared'; }
+        if (cause === 'wrong-group-name') { f.put('/etc/group', `shared:x:${gid}:\n`); reason = 'brew-group-shared'; }
+        if (cause === 'stale-thread') {
+            f.put('/proc/123/task/124/status', `Uid: ${uid+1} ${uid+1} ${uid+1} ${uid+1}\nGid: ${gid+1} ${gid+1} ${gid+1} ${gid+1}\nGroups: ${gid}\n`);
+            f.put('/proc/123/task/124/stat', '124 (fixture) S ' + Array(18).fill('0').join(' ') + ' 12346\n'); reason = 'brew-group-shared';
+        }
+        if (cause.startsWith('unknown-')) {
+            const database = cause.slice(8);
+            f.put('/etc/nsswitch.conf', ['passwd', 'group', 'initgroups'].map(key => `${key}: ${key === database ? 'files sss' : 'files'}`).join('\n'));
+            reason = 'brew-identity-source';
+        }
+        if (['acl-present', 'acl-default', 'acl-unavailable', 'changed-membership', 'changed-native-membership', 'changed-config', 'changed-mount', 'swap-path', 'native-primary', 'native-supplementary'].includes(cause)) {
+            fs.writeFileSync(path.join(f.home, cause), 'fixture');
+            reason = cause.startsWith('acl-') ? (cause === 'acl-unavailable' ? 'brew-acl-unverified' : 'brew-acl-present') : cause.startsWith('native-') ? 'brew-group-shared' : 'brew-snapshot-changed';
+        }
+        if (cause === 'hidden-processes') f.put('/proc/self/mountinfo', '19 20 0:21 / /proc rw - proc proc rw,hidepid=2\n');
+        if (cause === 'malformed-status') f.put('/proc/123/task/123/status', 'Uid: SECRET malformed\n');
+        if (cause === 'missing-status') fs.unlinkSync(system('/proc/123/task/123/status'));
+        if (cause === 'world-write') { fs.chmodSync(system(boundary), 0o777); reason = 'brew-path'; }
+        if (cause === 'root-group-write') { f.statOverrides.set(boundary, {uid: 0}); reason = 'brew-path'; }
+        if (cause === 'foreign-owner') { f.statOverrides.set(boundary, {uid: uid+1}); reason = 'brew-path'; }
+        if (cause === 'linked-ancestor') {
+            fs.renameSync(system(boundary), system(boundary + '-saved')); fs.symlinkSync('Cellar-saved', system(boundary)); reason = 'brew-path';
+        }
+        if (cause === 'missing-python') { fs.unlinkSync(system('/usr/bin/python3')); reason = 'native-ENOENT'; }
+        if (cause === 'unsafe-python') { fs.chmodSync(system('/usr/bin/python3.12'), 0o777); reason = 'brew-proof-tool'; }
+        if (cause === 'linked-python') { fs.unlinkSync(system('/usr/bin/python3')); fs.symlinkSync('/SECRET/python', system('/usr/bin/python3')); reason = 'brew-proof-tool'; }
+        if (cause === 'unsafe-tool-owner') { f.statOverrides.set('/usr/bin/python3.12', {uid: uid+1}); reason = 'brew-proof-tool'; }
+        if (cause === 'linked-tool-parent') {
+            fs.renameSync(system('/usr/bin'), system('/usr/bin-saved')); fs.symlinkSync('bin-saved', system('/usr/bin')); reason = 'brew-proof-tool';
+        }
+        const beforeLink = fs.readlinkSync(system(f.command));
+        await assert.rejects(f.api.install(f.options), error => {
+            assert.equal(f.api.failureResult(error), `opencode-cli:policy-failed:homebrew-preflight:${reason}`); return true;
+        });
+        assert.equal(fs.readlinkSync(system(f.command)), beforeLink); assert.equal(f.probes.length, 0);
+        assert.deepEqual(fs.readdirSync(path.dirname(f.dest)), []);
+        assert.equal(f.observed.some(([, file]) => file.startsWith(boundary + '/')), false, 'do not inspect descendants of an untrusted boundary');
+    });
+}
+test('Homebrew proof rejects malformed native replies and never echoes native stderr/errors', async t => {
+    for (const reply of [{status: 1, stdout: 'trusted\n'}, {status: 0, stdout: 'trusted\nSECRET'}, {status: 0, stdout: ''},
+        {status: 1, stdout: 'blocked:SECRET\n'}, {status: 1, stdout: 'blocked:brew-group-shared\nSECRET'},
+        {status: 0, stdout: 'trusted\n', stderr: 'SECRET native stderr'}, {status: 0, stdout: 'trusted\n', signal: 'SIGTERM'},
+        {error: {code: 'ETIMEDOUT', message: 'SECRET exception'}}]) {
+        const f = privateBrewFixture(t); f.proofReply = {stderr: '', ...reply};
+        await assert.rejects(f.api.install(f.options), error => {
+            const expected = reply.error ? 'native-ETIMEDOUT' : 'brew-proof-unverified';
+            assert.equal(f.api.failureResult(error), `opencode-cli:policy-failed:homebrew-preflight:${expected}`); return true;
+        });
+        assert.equal(fs.existsSync(f.mapped(f.command)), true); assert.equal(fs.existsSync(f.dest), false); assert.equal(f.probes.length, 0);
+    }
+});
+test('private-group allowance is Linux Homebrew-only; standalone paths and macOS remain strict', async t => {
+    const mac = privateBrewFixture(t, 'darwin');
+    assert.throws(() => mac.api.brewCopy(mac.command), /brew-path/); assert.equal(mac.calls.length, 0);
+    const f = fixture(t); const command = f.legacy(); fs.chmodSync(path.dirname(command), 0o775);
+    await assert.rejects(policy.install(f.options), /unsafe-path/); assert.equal(f.probes.length, 0);
+});
+for (const change of ['membership', 'receipt', 'identity', 'pin', 'probe-failure', 'after-quarantine', 'backup-reference']) test(`Homebrew migration rechecks ${change} and preserves recovery`, async t => {
+    const f = privateBrewFixture(t); let probes = 0;
+    const changeMembership = () => f.put('/etc/group', `account:x:${process.getgid()}:other\n`);
+    const native = f.mapped(f.cellar + '/bin/opencode'), original = fs.readFileSync(native);
+    if (change === 'identity') { fs.chmodSync(native, 0o755); fs.writeFileSync(native, 'INERT custom command'); }
+    if (change === 'pin') f.put(f.prefix + '/var/homebrew/pinned/opencode', 'inert pin');
+    if (change === 'after-quarantine') f.afterQuarantine = changeMembership;
+    if (change === 'backup-reference') f.afterQuarantine = backup => {
+        fs.unlinkSync(f.mapped(backup)); fs.symlinkSync('../SECRET-foreign-target', f.mapped(backup));
+    };
+    const recoveryRequired = ['after-quarantine', 'backup-reference'].includes(change);
+    f.options.probe = () => {
+        probes++;
+        if (probes === 1 && change === 'membership') changeMembership();
+        if (probes === 1 && change === 'receipt') f.put(f.cellar + '/INSTALL_RECEIPT.json', '{"source":{"tap":"custom/tap"}}');
+        if (probes === 2 && change === 'probe-failure') throw new Error('inert probe failure');
+    };
+    await assert.rejects(f.api.install(f.options), error => {
+        if (recoveryRequired) assert.equal(f.api.failureResult(error), 'opencode-cli:recovery-required');
+        return true;
+    });
+    assert.equal(fs.existsSync(f.dest), false);
+    if (!recoveryRequired) assert.equal(fs.readlinkSync(f.mapped(f.command)), '../Cellar/opencode/1.18.33/bin/opencode');
+    else assert.ok(fs.readdirSync(f.mapped(f.prefix + '/bin')).some(name => name.startsWith('.opencode-setup-recovery-')));
+    if (change !== 'identity') assert.deepEqual(fs.readFileSync(native), original);
+    assert.equal(fs.statSync(f.mapped(f.cellar + '/bin')).mode & 0o777, 0o775);
+});
+test('typed policy/native diagnostics do not accept forged exceptions or malformed reasons', async t => {
+    for (const error of [new Error('brew-path'), new Error('pinned'), {reason: 'brew-group-shared', operation: 'homebrew-preflight'},
+        {code: 'EACCES', message: 'SECRET'}, new Error('opencode-cli:policy-failed:homebrew-preflight:brew-path')]) {
+        assert.equal(policy.failureResult(error), 'opencode-cli:failed');
+    }
+    const f = fixture(t); fs.chmodSync(f.home, 0o777);
+    await assert.rejects(policy.install(f.options), error => {
+        assert.equal(policy.failureResult(error), 'opencode-cli:policy-failed:installation:unsafe-path');
+        error.reason = null; assert.equal(policy.failureResult(error), 'opencode-cli:failed'); return true;
+    });
 });
 test('Homebrew receipt, official native identity, pin and macOS readiness gates', async t => {
     for (const mode of ['migrate', 'pinned', 'unready', 'custom-tap']) {
