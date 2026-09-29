@@ -1179,7 +1179,7 @@ function Install-GeminiCli {
 # Function to install/update Codex CLI from OpenAI's native GitHub release
 # binary, so codex does not depend on Node.js/Bun being present at runtime.
 # BEGIN GENERATED OPENCODE CLI
-# Version 1 | Last changed: Install verified stable OpenCode v2 native commands
+# Version 2 | Last changed: Fix OpenCode HTTP metadata and safe download diagnostics
 function Test-OpenCodeCliAcl {
     param([string]$HomePath)
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -1312,13 +1312,40 @@ function target(platform = process.platform, machine = os.machine(), glibc = pro
     }
     return result;
 }
+// Only these labels/statuses may cross the core-to-shell diagnostic boundary.
+class DownloadError extends Error {
+    constructor(operation, status) { super('download'); this.operation = operation; this.status = status; }
+}
+function failureResult(error) {
+    if (error?.message === 'recovery-required') return 'opencode-cli:recovery-required';
+    if (error instanceof DownloadError && ['latest-release', 'package-index', 'package-version', 'artifact-download', 'download'].includes(error.operation)) {
+        const status = Number.isInteger(error.status) && error.status >= 100 && error.status <= 599 ? error.status : 'unknown';
+        return `opencode-cli:download-failed:${error.operation}:http-${status}`;
+    }
+    return 'opencode-cli:failed';
+}
+function downloadOperation(parsed) {
+    if (parsed.hostname === 'opencode.ai') return parsed.pathname === '/update/api/latest/cli/npm' ? 'latest-release' : 'download';
+    let pathname;
+    try { pathname = decodeURIComponent(parsed.pathname); } catch { fail('url'); }
+    // Scoped names may use either a literal or percent-encoded slash. Only whole
+    // package indexes support npm's abbreviated media type; versions require JSON.
+    if (/^\/(?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+\/?$/.test(pathname)) return 'package-index';
+    if (/^\/(?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+\/-\/[A-Za-z0-9_.-]+\.tgz$/.test(pathname)) return 'artifact-download';
+    if (/^\/(?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/.test(pathname)) return 'package-version';
+    return 'download';
+}
 function fetchBytes(url, limit = 32 * 1024 * 1024) {
     const parsed = new URL(url);
     if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port ||
         !['registry.npmjs.org', 'opencode.ai'].includes(parsed.hostname)) fail('url');
+    const operation = downloadOperation(parsed);
+    const accept = operation === 'package-index' ? 'application/vnd.npm.install-v1+json' : operation === 'artifact-download' ? 'application/octet-stream' : 'application/json';
     return new Promise((resolve, reject) => {
-        const request = https.get(url, {rejectUnauthorized: true, headers: {'User-Agent': 'curl/8.0', Accept: parsed.hostname === 'registry.npmjs.org' ? 'application/vnd.npm.install-v1+json' : 'application/json'}}, response => {
-            if (response.statusCode !== 200) { response.resume(); reject(new Error('download')); return; }
+        let status;
+        const request = https.get(url, {rejectUnauthorized: true, headers: {'User-Agent': 'curl/8.0', Accept: accept}}, response => {
+            status = response.statusCode;
+            if (status !== 200) { response.resume(); reject(new DownloadError(operation, status)); return; }
             const chunks = []; let length = 0;
             response.on('data', data => {
                 length += data.length;
@@ -1326,12 +1353,12 @@ function fetchBytes(url, limit = 32 * 1024 * 1024) {
                 else chunks.push(data);
             });
             response.on('end', () => resolve(Buffer.concat(chunks)));
-            response.on('error', () => reject(new Error('download')));
+            response.on('error', () => reject(new DownloadError(operation, status)));
         });
         const deadline = setTimeout(() => request.destroy(new Error('download-timeout')), 90000);
         request.on('close', () => clearTimeout(deadline));
         request.setTimeout(60000, () => request.destroy(new Error('download-timeout')));
-        request.on('error', () => reject(new Error('download')));
+        request.on('error', () => reject(new DownloadError(operation, status)));
     });
 }
 function unpack(bytes) {
@@ -1677,9 +1704,9 @@ async function install(options = {}) {
         if (locked) fs.rmdirSync(lock);
     }
 }
-module.exports = {version, compare, target, unpack, artifact, identify, install, commands, safePath, brewCopy, windowsNpmShims, probe, fetchBytes};
+module.exports = {version, compare, target, unpack, artifact, identify, install, commands, safePath, brewCopy, windowsNpmShims, probe, fetchBytes, failureResult};
 if (require.main === module || process.argv[1] === '-') install().then(result => console.log(`opencode-cli:${result}`)).catch(error => {
-    console.log(error?.message === 'recovery-required' ? 'opencode-cli:recovery-required' : 'opencode-cli:failed');
+    console.log(failureResult(error));
     process.exitCode = 1;
 });
 '@
@@ -1687,6 +1714,9 @@ if (require.main === module || process.argv[1] === '-') install().then(result =>
         if ($LASTEXITCODE -ne 0 -or $output.Count -ne 1) {
             if ($output.Count -eq 1 -and $output[0] -ceq 'opencode-cli:recovery-required') {
                 Write-Warning 'OpenCode CLI rollback needs manual recovery; preserve .setup-opencode-* backups, recovery.json and the lock. See README.'
+            } elseif ($LASTEXITCODE -ne 0 -and $output.Count -eq 1 -and
+                $output[0] -cmatch '\Aopencode-cli:download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)\z') {
+                Write-Warning "OpenCode CLI download failed (operation=$($Matches[1]), HTTP=$($Matches[2]))."
             }
             throw 'installation'
         }
@@ -7322,7 +7352,7 @@ function Invoke-WindowsSetupTasks {
     $infisicalRetirementFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 164 | Last changed: Install verified stable OpenCode v2 native commands"
+    Write-Host "Version 165 | Last changed: Fix OpenCode HTTP metadata and safe download diagnostics"
 
     Assert-HeadlessUnsupported
 

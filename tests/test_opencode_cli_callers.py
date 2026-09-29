@@ -1,4 +1,4 @@
-"""Contract v2: extracted OpenCode callers preserve generic headless rejection."""
+"""Contract v3: extracted OpenCode callers validate controlled HTTP diagnostics."""
 import os
 from pathlib import Path
 import re
@@ -10,6 +10,24 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 BASH = ('mac.sh', 'ubuntu.sh', 'wsl.sh', 'pi.sh', 'bazzite.sh')
 PWSH = os.environ.get('PWSH_BIN') or shutil.which('pwsh')
+
+DIAGNOSTICS = [(f'opencode-cli:download-failed:{operation}:http-{status}', 1,
+                f'OpenCode CLI download failed (operation={operation}, HTTP={status}).')
+               for operation in ('latest-release', 'package-index', 'package-version', 'artifact-download', 'download')
+               for status in ('406', 'unknown')]
+DIAGNOSTICS += [(result, status, None) for result, status in [
+    ('opencode-cli:download-failed:package-version:http-406', 0),
+    ('opencode-cli:download-failed:SECRET:http-406', 1),
+    ('opencode-cli:download-failed:package-version:http-099', 1),
+    ('opencode-cli:download-failed:package-version:http-600', 1),
+    ('opencode-cli:download-failed:package-version:http-0406', 1),
+    ('opencode-cli:download-failed:package-version:http-406 SECRET', 1),
+    ('opencode-cli:download-failed:package-version:http-406\r', 1),
+    ('opencode-cli:download-failed:package-version:http-406\nSECRET', 1),
+    ('SECRET\nopencode-cli:download-failed:package-version:http-406', 1),
+    ('OPENCODE-CLI:download-failed:package-version:http-406', 1),
+    ('opencode-cli:recovery-required', 1),
+]]
 
 
 def function(source, name):
@@ -26,6 +44,7 @@ class Callers(unittest.TestCase):
 if [[ "$1" == -e ]]; then exit "${MOCK_NODE_PREREQUISITE:-0}"; fi
 while IFS= read -r line; do :; done
 printf '%s\\n' "${MOCK_RESULT:-opencode-cli:installed}"
+printf 'SECRET stderr\\n' >&2
 exit "${MOCK_STATUS:-0}"
 ''')
             node.chmod(0o700)
@@ -50,6 +69,16 @@ exit "${MOCK_STATUS:-0}"
                                                                         'NODE_OPTIONS': '--invalid', 'NODE_PATH': '/invalid'})
                     self.assertEqual(run.returncode, int(bool(status or result.startswith('unexpected'))), run.stdout + run.stderr)
                     self.assertNotIn('unexpected-secret-output', run.stdout)
+            for result, status, diagnostic in DIAGNOSTICS:
+                with self.subTest(script=name, diagnostic=result):
+                    run = self.exercise(helper, 'install_opencode_cli', {'MOCK_RESULT': result, 'MOCK_STATUS': str(status)})
+                    self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+                    self.assertNotIn('SECRET', run.stdout + run.stderr)
+                    if diagnostic:
+                        self.assertIn(diagnostic, run.stdout)
+                    else:
+                        self.assertNotIn('OpenCode CLI download failed (', run.stdout)
+                    self.assertEqual('rollback needs manual recovery' in run.stdout, result == 'opencode-cli:recovery-required')
             for extra in [{'MOCK_NODE_PREREQUISITE': '1'}, {}]:
                 setup = 'macos_existing_prerequisites() { return 1; }\n' if not extra else ''
                 run = self.exercise(setup + helper, 'install_opencode_cli', extra)
@@ -142,11 +171,12 @@ opencode_apt_upgrade_safe() { return 1; }
         with tempfile.TemporaryDirectory() as home:
             fake = Path(home) / 'node-fixture.ps1'
             fake.write_text('if ($args[0] -eq "-e") { $global:LASTEXITCODE=0; return }\n'
-                            '$input | Out-Null\nWrite-Output $env:MOCK_RESULT\n$global:LASTEXITCODE=[int]$env:MOCK_STATUS\n')
+                            '$input | Out-Null\nWrite-Output ([regex]::Split($env:MOCK_RESULT, "`n"))\n'
+                            'Write-Error "SECRET stderr" -ErrorAction Continue\n$global:LASTEXITCODE=[int]$env:MOCK_STATUS\n')
             harness = Path(home) / 'wrapper.ps1'
             harness.write_text('''$ErrorActionPreference='Stop'
-function Write-Success { param($Message) }
-function Write-Warning { param($Message) }
+function Write-Success { param($Message) Write-Host $Message }
+function Write-Warning { param($Message) Write-Host $Message }
 function Get-Command { param($Name, $CommandType, $ErrorAction)
     if ($Name -eq 'node') { [pscustomobject]@{Source=$env:MOCK_NODE} }
 }
@@ -159,13 +189,21 @@ $result=Install-OpenCodeCli
 if ($env:NODE_OPTIONS -ne 'fixture-original') { throw 'environment not restored' }
 if ($result) { exit 0 } else { exit 1 }
 ''')
-            for result, status, expected in [('opencode-cli:installed', '0', 0), ('opencode-cli:newer', '0', 0),
-                                             ('opencode-cli:failed', '1', 1), ('unexpected-secret-output', '0', 1)]:
+            cases = [('opencode-cli:installed', '0', 0, None), ('opencode-cli:newer', '0', 0, None),
+                     ('opencode-cli:failed', '1', 1, None), ('unexpected-secret-output', '0', 1, None)]
+            cases += [(result, str(status), 1, diagnostic) for result, status, diagnostic in DIAGNOSTICS]
+            for result, status, expected, diagnostic in cases:
                 run = subprocess.run([PWSH, '-NoProfile', '-NonInteractive', '-File', str(harness)], cwd=home,
                                      env={'PATH': os.environ['PATH'], 'HOME': home, 'USERPROFILE': home, 'MOCK_NODE': str(fake),
                                           'MOCK_RESULT': result, 'MOCK_STATUS': status}, capture_output=True, text=True, timeout=20)
                 self.assertEqual(run.returncode, expected, run.stdout + run.stderr)
                 self.assertNotIn('unexpected-secret-output', run.stdout + run.stderr)
+                self.assertNotIn('SECRET', run.stdout + run.stderr)
+                if diagnostic:
+                    self.assertIn(diagnostic, run.stdout)
+                else:
+                    self.assertNotIn('OpenCode CLI download failed (', run.stdout)
+                self.assertEqual('rollback needs manual recovery' in run.stdout, result == 'opencode-cli:recovery-required')
 
     @unittest.skipUnless(PWSH, 'No existing PWSH_BIN/pwsh: native Windows/PowerShell execution not claimed')
     def test_powershell_caller_aggregation(self):

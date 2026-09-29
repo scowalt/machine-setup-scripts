@@ -1,4 +1,4 @@
-# Version 1 | Last changed: Install verified stable OpenCode v2 native commands
+# Version 2 | Last changed: Fix OpenCode HTTP metadata and safe download diagnostics
 function Test-OpenCodeCliAcl {
     param([string]$HomePath)
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -83,6 +83,9 @@ function Install-OpenCodeCli {
         if ($LASTEXITCODE -ne 0 -or $output.Count -ne 1) {
             if ($output.Count -eq 1 -and $output[0] -ceq 'opencode-cli:recovery-required') {
                 Write-Warning 'OpenCode CLI rollback needs manual recovery; preserve .setup-opencode-* backups, recovery.json and the lock. See README.'
+            } elseif ($LASTEXITCODE -ne 0 -and $output.Count -eq 1 -and
+                $output[0] -cmatch '\Aopencode-cli:download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)\z') {
+                Write-Warning "OpenCode CLI download failed (operation=$($Matches[1]), HTTP=$($Matches[2]))."
             }
             throw 'installation'
         }

@@ -1,4 +1,4 @@
-// Version 1 | Last changed: Exercise native OpenCode installation without application execution
+// Version 2 | Last changed: Cover HTTP negotiation and controlled download diagnostics
 'use strict';
 process.umask(0o077);
 const {test} = require('node:test');
@@ -260,7 +260,7 @@ test('modern npm postinstall native copy is proven by upstream bytes, not packag
     fs.symlinkSync(path.join(root, 'bin/opencode.exe'), f.dest); f.options.commands = [f.dest];
     assert.equal(await policy.install(f.options), 'migrated');
 });
-function virtualPolicy(f, overrides = {}, modules = {}) {
+function virtualPolicy(f, overrides = {}, modules = {}, log = () => assert.fail('unexpected output')) {
     const vm = require('node:vm');
     const mapped = value => typeof value === 'string' && (value === '/opt' || value.startsWith('/opt/')) ? path.join(f.home, 'virtual-opt', value.slice(4)) : value;
     const proxy = new Proxy(fs, {get(object, key) {
@@ -271,9 +271,9 @@ function virtualPolicy(f, overrides = {}, modules = {}) {
     const fakeProcess = {platform: 'linux', env: {}, getuid: process.getuid, report: process.report, argv: ['node', 'fixture'], ...overrides};
     vm.runInNewContext(fs.readFileSync(require.resolve('../lib/opencode-cli.cjs'), 'utf8'), {
         require: name => name === 'node:fs' ? proxy : modules[name] || require(name), module, process: fakeProcess,
-        Buffer, URL, setTimeout, clearTimeout, console: {log: () => assert.fail('unexpected output'), error: () => assert.fail('unexpected output')},
+        Buffer, URL, setTimeout, clearTimeout, console: {log, error: () => assert.fail('unexpected output')},
     });
-    return {api: module.exports, mapped};
+    return {api: module.exports, mapped, process: fakeProcess};
 }
 test('real HTTP helper requires verified TLS, rejects redirects/foreign URLs and bounds responses', async t => {
     const f = fixture(t), {EventEmitter} = require('node:events'); let observed, status = 200;
@@ -294,6 +294,130 @@ test('real HTTP helper requires verified TLS, rejects redirects/foreign URLs and
     }
     status = 302; await assert.rejects(api.fetchBytes('https://registry.npmjs.org/fixture'), /download/);
     status = 200; await assert.rejects(api.fetchBytes('https://registry.npmjs.org/fixture', 1), /download/);
+});
+// Model npm's content negotiation at the HTTPS boundary, not by replacing fetchBytes.
+function httpPolicy(f, replies = new Map(), overrides = {}, log) {
+    const {EventEmitter} = require('node:events'), requests = [];
+    const expected = new Map([
+        ['https://opencode.ai/update/api/latest/cli/npm', 'application/json'],
+        ['https://registry.npmjs.org/opencode-ai', 'application/vnd.npm.install-v1+json'],
+        ['https://registry.npmjs.org/@opencode/cli', 'application/vnd.npm.install-v1+json'],
+    ]);
+    for (const url of f.responses.keys()) {
+        if (!expected.has(url)) expected.set(url, url.endsWith('.tgz') ? 'application/octet-stream' : 'application/json');
+    }
+    const https = {get: (url, options, callback) => {
+        requests.push({url, options});
+        assert.equal(options.rejectUnauthorized, true);
+        assert.ok(expected.has(url), 'unexpected offline request');
+        const request = new EventEmitter();
+        request.setTimeout = () => request;
+        request.destroy = error => { request.emit('error', error); request.emit('close'); };
+        queueMicrotask(() => {
+            const reply = replies.get(url) || {};
+            if (reply.networkError) { request.destroy(new Error('SECRET transport detail')); return; }
+            const response = new EventEmitter(); response.resume = () => {};
+            response.statusCode = reply.status ?? (options.headers.Accept === expected.get(url) ? 200 : 406);
+            callback(response);
+            response.emit('data', reply.body || f.responses.get(url));
+            if (reply.streamError) response.emit('error', new Error('SECRET response detail'));
+            else response.emit('end');
+            request.emit('close');
+        });
+        return request;
+    }};
+    return {...virtualPolicy(f, overrides, {
+        'node:https': https,
+        'node:os': {...os, homedir: () => f.home, machine: () => 'x86_64'},
+        'node:child_process': {execFileSync: () => assert.fail('unexpected application execution')},
+    }, log), requests, expected};
+}
+for (const name of ['opencode-ai', '@opencode/cli', '@opencode%2fcli', '%40opencode%2Fcli']) {
+    test(`real HTTP helper negotiates index, version and tarball for ${name}`, async t => {
+        const f = fixture(t), base = `https://registry.npmjs.org/${name}`;
+        const endpoints = [[base, 'application/vnd.npm.install-v1+json'],
+            [base + '/2.0.18', 'application/json'], [base + '/-/cli-2.0.18.tgz', 'application/octet-stream']];
+        for (const [url] of endpoints) f.responses.set(url, Buffer.from('fixture'));
+        const h = httpPolicy(f);
+        for (const [url, accept] of endpoints) {
+            h.expected.set(url, accept);
+            assert.equal((await h.api.fetchBytes(url)).toString(), 'fixture');
+            assert.equal(h.requests.at(-1).options.headers.Accept, accept);
+        }
+    });
+}
+for (const migration of [false, true]) test(`real HTTP helper completes inert ${migration ? 'migration' : 'installation'}`, async t => {
+    const f = fixture(t);
+    if (migration) f.legacy();
+    const h = httpPolicy(f);
+    assert.equal(await h.api.install({...f.options, get: undefined}), migration ? 'migrated' : 'installed');
+    assert.deepEqual(fs.readFileSync(f.dest), f.binary);
+    assert.equal(f.probes.length, 2);
+    assert.ok(h.requests.some(r => r.url === 'https://opencode.ai/update/api/latest/cli/npm'));
+    if (migration) for (const url of ['https://registry.npmjs.org/opencode-ai', 'https://registry.npmjs.org/@opencode/cli']) {
+        assert.ok(h.requests.some(r => r.url === url));
+    }
+});
+test('real artifact helper retrieves unscoped package metadata and bytes', async t => {
+    const f = fixture(t); f.publish('opencode-ai', '1.2.3', 'INERT wrapper');
+    const {api} = httpPolicy(f);
+    const files = await api.artifact('opencode-ai', '1.2.3');
+    assert.equal(files.get('package/bin/opencode').toString(), 'INERT wrapper');
+    assert.equal(f.probes.length, 0);
+});
+for (const [operation, url] of [
+    ['latest-release', 'https://opencode.ai/update/api/latest/cli/npm'],
+    ['package-index', 'https://registry.npmjs.org/opencode-ai'],
+    ['package-version', 'https://registry.npmjs.org/@opencode/cli-linux-x64-baseline/2.0.18'],
+    ['artifact-download', 'https://registry.npmjs.org/@opencode/cli-linux-x64-baseline/-/cli-linux-x64-baseline-2.0.18.tgz'],
+]) test(`real HTTP ${operation} failures retain only controlled status and operation`, async t => {
+    const f = fixture(t);
+    // Force index discovery on the same actual installation path.
+    if (operation === 'package-index') f.legacy();
+    const replies = new Map(), h = httpPolicy(f, replies);
+    for (const reply of [{status: 406}, {status: 302}, {status: 503}, {networkError: true}, {streamError: true}]) {
+        replies.set(url, {...reply, body: Buffer.from('SECRET body https://private.invalid/token')});
+        await assert.rejects(h.api.install({...f.options, get: undefined}), error => {
+            assert.equal(h.api.failureResult(error), `opencode-cli:download-failed:${operation}:http-${reply.status || (reply.streamError ? 200 : 'unknown')}`);
+            return true;
+        });
+        assert.equal(fs.existsSync(f.dest), false);
+        assert.equal(f.probes.length, 0);
+        assert.deepEqual(fs.readdirSync(path.dirname(f.dest)), []);
+    }
+    for (const status of ['406 SECRET', '406', 99, 600, 406.5]) {
+        replies.set(url, {status});
+        await assert.rejects(h.api.fetchBytes(url), error => {
+            assert.equal(h.api.failureResult(error), `opencode-cli:download-failed:${operation}:http-unknown`);
+            return true;
+        });
+    }
+});
+test('actual core entry point emits the controlled failure and nonzero exit status', async t => {
+    const f = fixture(t), url = 'https://registry.npmjs.org/@opencode/cli-linux-x64-baseline/2.0.18';
+    let h;
+    const result = await new Promise(resolve => {
+        h = httpPolicy(f, new Map([[url, {status: 406, body: Buffer.from('SECRET response')}]]),
+            {argv: ['node', '-'], env: {PATH: path.dirname(f.dest)}}, resolve);
+    });
+    assert.equal(result, 'opencode-cli:download-failed:package-version:http-406');
+    assert.equal(h.process.exitCode, 1);
+    assert.equal(fs.existsSync(f.dest), false);
+    assert.equal(f.probes.length, 0);
+});
+test('failure serialization never echoes arbitrary exceptions or forged diagnostics', async t => {
+    const f = fixture(t), url = 'https://opencode.ai/update/api/latest/cli/npm';
+    const {api} = httpPolicy(f, new Map([[url, {status: 406}]]));
+    for (const error of [new Error('SECRET exception'), {operation: 'package-version', status: 406},
+        new Error('opencode-cli:download-failed:package-version:http-406'), null]) {
+        assert.equal(api.failureResult(error), 'opencode-cli:failed');
+    }
+    await assert.rejects(api.fetchBytes(url), error => {
+        error.operation = 'SECRET URL';
+        assert.equal(api.failureResult(error), 'opencode-cli:failed');
+        return true;
+    });
+    assert.equal(api.failureResult(new Error('recovery-required')), 'opencode-cli:recovery-required');
 });
 test('real version-probe helper isolates HOME, cwd and application credentials', t => {
     const f = fixture(t); let observed;

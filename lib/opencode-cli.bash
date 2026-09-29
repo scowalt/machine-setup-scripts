@@ -1,4 +1,4 @@
-# Version 1 | Last changed: Install verified stable OpenCode v2 native commands
+# Version 2 | Last changed: Fix OpenCode HTTP metadata and safe download diagnostics
 install_opencode_cli() {
     local result status=0 brew_ready=0 machine kind
     machine=$(uname -m) || return 1
@@ -26,6 +26,8 @@ OPENCODE_CLI_JS
     if [[ "${status}" -ne 0 ]]; then
         if [[ "${result}" == opencode-cli:recovery-required ]]; then
             print_error 'OpenCode CLI rollback needs manual recovery; preserve .setup-opencode-* backups, recovery.json and the lock. See README.'
+        elif [[ "${result}" =~ ^opencode-cli:download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)$ ]]; then
+            print_error "OpenCode CLI download failed (operation=${BASH_REMATCH[1]}, HTTP=${BASH_REMATCH[2]})."
         fi
         print_error 'OpenCode CLI installation incomplete; existing data preserved. Review command ownership, pins, metadata, prerequisites and PATH.'
         return 1
