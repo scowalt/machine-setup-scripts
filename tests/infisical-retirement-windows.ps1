@@ -1,15 +1,24 @@
 # Run the extracted native-record fixtures, then actual Windows caller/log seams.
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'infisical-retirement-native-windows.ps1')
-$callerSource = [regex]::Match($source, '(?s)function Invoke-WindowsSetupTasks \{(.*?)\n\}\s*\n# Main setup function')
-$initializer = [regex]::Match($source, '(?s)function Initialize-WindowsEnvironment \{.*?\n\}\s*\n# Run the main setup function')
-if (-not $callerSource.Success -or -not $initializer.Success) { throw 'Windows caller boundary missing' }
-$body = $callerSource.Groups[1].Value
+$tokens=$null; $parseErrors=$null
+$setupAst=[System.Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$parseErrors)
+if ($parseErrors.Count) { throw 'Setup source parse failed' }
+$definitions=@{}
+foreach ($statement in $setupAst.EndBlock.Statements) {
+    if ($statement -is [System.Management.Automation.Language.FunctionDefinitionAst]) { $definitions[$statement.Name]=$statement }
+}
+if (-not $definitions['Invoke-WindowsSetupTasks'] -or -not $definitions['Initialize-WindowsEnvironment']) { throw 'Windows caller boundary missing' }
+$body = $definitions['Invoke-WindowsSetupTasks'].Body.Extent.Text
+$body = $body.Substring(1,$body.Length-2)
 $entry = $body.Substring(0, $body.IndexOf('    Install-GcloudCli') + '    Install-GcloudCli'.Length)
 $tail = $body.Substring($body.IndexOf('    Write-Section "System Updates"'))
 $caller = "function Invoke-WindowsSetupTasks {`n$entry`nWrite-Host 'unrelated-stage'`n$tail`n}"
 . ([scriptblock]::Create($caller))
-. ([scriptblock]::Create($initializer.Value.Substring(0, $initializer.Value.LastIndexOf('# Run the main setup function'))))
+. ([scriptblock]::Create($definitions['Initialize-WindowsEnvironment'].Extent.Text))
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'lib/setup-policy.ps1')
+$env:BB_THREAD_ID=$null; $env:BB_ENVIRONMENT_ID=$null; $env:BB_TERMINAL_ID=$null
+function Assert-SetupSafeDirectory { param($Path) }
 function Get-SetupLogDirectory { [IO.Path]::GetTempPath() }
 function Assert-SetupLogPath { param($Path, [switch]$AllowMissing) }
 function New-Item { param($ItemType, [switch]$Force, $Path, $ErrorAction) }
@@ -22,9 +31,8 @@ function New-TokenPlaceholders { }
 function Install-BbDesktop { return $true }
 function Write-Section { param($Message) }
 function Install-WingetPackages { }
-$secretsManager = [regex]::Match($source, '(?s)function Install-SecretsManager \{.*?\n\}')
-if (-not $secretsManager.Success) { throw 'Native secrets-manager caller missing' }
-. ([scriptblock]::Create($secretsManager.Value))
+if (-not $definitions['Install-SecretsManager']) { throw 'Native secrets-manager caller missing' }
+. ([scriptblock]::Create($definitions['Install-SecretsManager'].Extent.Text))
 function Test-EnvLocalFlag { param($Name) $script:workMachine }
 function Install-GcloudCli { }
 function Install-WingetUpdates { Write-Host 'winget-updates' }
@@ -39,7 +47,7 @@ foreach ($work in @($false, $true)) {
     $script:workMachine = $work
     $script:deny = $true
     $script:records.Clear()
-    $output = & { try { Initialize-WindowsEnvironment } catch { Write-Host 'setup-failed' } } 6>&1 | Out-String
+    $output = & { try { Initialize-WindowsEnvironment -Maintenance } catch { Write-Host 'setup-failed' } } 6>&1 | Out-String
     if ($output -notmatch 'unrelated-stage' -or $output -notmatch 'log-finalized' -or
         $output -notmatch 'setup-failed' -or $output -match 'winget-updates|windows-updates') {
         throw 'Windows retirement failure did not reach log/final-result boundary'
@@ -50,7 +58,7 @@ $script:deny = $false
 foreach ($work in @($false, $true)) {
     $script:workMachine = $work
     $script:records.Clear(); $script:calls.Clear()
-    $output = & { Initialize-WindowsEnvironment } 6>&1 | Out-String
+    $output = & { Initialize-WindowsEnvironment -Maintenance } 6>&1 | Out-String
     if ($output -notmatch 'unrelated-stage' -or $output -notmatch 'log-finalized' -or $output -match 'setup-failed' -or
         $output -notmatch 'winget-updates' -or $script:calls.Count -gt 1) {
         throw 'Verified absent Windows run failed'

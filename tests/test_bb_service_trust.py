@@ -234,6 +234,19 @@ fs.readSync=function(fd,...args) {
         preload.write_text("""
 const cp=require('node:child_process'),fs=require('node:fs'),path=require('node:path');
 const spawn=cp.spawnSync,root=process.env.FIXTURE_ROOT;
+// Model a shared HOME without exposing the runner's genuinely private roots.
+// Otherwise an outer 0700 directory legitimately supplies the alternate proof
+// and this fixture never exercises the exclusive-group branch it asserts.
+const outer=new Set();
+for(let p=path.dirname(root);p!=='/';p=path.dirname(p)) outer.add(p);
+for(const name of ['lstatSync','statSync']) {
+  const original=fs[name];
+  fs[name]=function(file,...args) {
+    const metadata=original.call(fs,file,...args);
+    if(outer.has(String(file)) && metadata.uid===process.getuid()) metadata.mode=(metadata.mode & ~0o777)|0o755;
+    return metadata;
+  };
+}
 if(process.env.GROUP_DENY_DESCENT==='1') {
   const unsafe=path.join(process.env.HOME,'Code/project/deploy');
   for(const name of ['lstatSync','statSync','readFileSync','readlinkSync','readdirSync','openSync']) {

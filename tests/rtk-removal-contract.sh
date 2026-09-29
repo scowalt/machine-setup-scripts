@@ -4,6 +4,9 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
 
+# Never source production top-level code; keep static checks in the real cwd.
+repo_root=$(python3 tests/extract_setup_fixture.py "${repo_root}") || exit 1
+
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 all_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh win.ps1)
 source_without_main='s/^main "\$@"$/:/'

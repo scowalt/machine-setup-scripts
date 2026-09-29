@@ -12,6 +12,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from setup_policy_fixture import bash_maintenance
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = ["ubuntu", "mac", "pi", "bazzite", "wsl"]
@@ -69,7 +70,7 @@ class Preparation(unittest.TestCase):
         self.tools = self.root / "tools"
         self.tools.mkdir()
         (self.tools / "node").symlink_to(NODE)
-        (self.root / "helpers.sh").write_text(BLOCK)
+        (self.root / "helpers.sh").write_text(bash_maintenance() + BLOCK)
         self.prefix = self.home / ".local/share/setup-bb-machine/npm"
         self.pkg = self.prefix / "lib/node_modules/bb-app"
         self.events = self.root / "events"

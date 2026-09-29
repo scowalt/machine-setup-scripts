@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from setup_policy_fixture import bash_maintenance
 
 ROOT = Path(__file__).resolve().parents[1]
 BASH = ('mac.sh', 'ubuntu.sh', 'wsl.sh', 'pi.sh', 'bazzite.sh')
@@ -70,7 +71,7 @@ exit "${MOCK_STATUS:-0}"
                        'print_message() { :; }; print_debug() { :; }; print_section() { :; }\n'
                        'start_setup_log() { echo log-started; }; finish_setup_log() { echo "log-finalized:$1"; return "$1"; }\n'
                        'run_setup_tasks() { local _setup_had_errors=0;\n' + call + '\n' + tail + '\n' + function(source, 'main'))
-            run = self.exercise(fixture, 'main', {'GREEN': '', 'BOLD': '', 'NC': '', 'GRAY': ''})
+            run = self.exercise(bash_maintenance() + fixture, 'main --maintenance', {'GREEN': '', 'BOLD': '', 'NC': '', 'GRAY': ''})
             self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
             self.assertIn('independent-reboot', run.stdout)
             self.assertIn('log-finalized:1', run.stdout)

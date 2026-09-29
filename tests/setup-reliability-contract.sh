@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Version 3 | Last changed: Exercise macOS CLT compatibility and failure contracts
+# Version 4 | Last changed: Explicitly authorize inert maintenance fixtures
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
+
+# Never source production top-level code; keep static checks in the real cwd.
+repo_root=$(python3 tests/extract_setup_fixture.py "${repo_root}") || exit 1
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 linux_apt_scripts=(ubuntu.sh wsl.sh pi.sh)
@@ -32,7 +35,12 @@ assert_not_contains() {
     fi
 }
 
-source_without_main='s/^main "\$@"$/:/'
+# Rename only the extracted entry wrapper; its real body receives explicit authorization.
+# Keep the sed program and its emitted $@ literal for the fixture shell.
+# shellcheck disable=SC2016
+source_without_main='s/^main "\$@"$/:/
+s/^main() {/setup_fixture_main() {/
+$a unset BB_THREAD_ID BB_ENVIRONMENT_ID BB_TERMINAL_ID; setup_policy_init --maintenance; main() { setup_fixture_main --maintenance "$@"; }'
 
 python3 tests/test_macos_clt.py || fail 'macOS CLT readiness fixtures failed'
 

@@ -4,6 +4,7 @@ import pathlib
 import subprocess
 import tempfile
 import unittest
+from setup_policy_fixture import bash_maintenance
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -54,7 +55,7 @@ class BbDirectoryPreflightTests(unittest.TestCase):
         start = source.index("bb_server_platform_ready() {")
         end = source.index("\nrun_setup_tasks() {", start)
         self.helpers = self.root / "helpers.sh"
-        self.helpers.write_text(source[start:end])
+        self.helpers.write_text(bash_maintenance() + source[start:end])
 
     def snapshot(self):
         # lstat and non-following traversal also cover linked fixtures' targets.

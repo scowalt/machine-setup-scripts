@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import termios
 import unittest
+from setup_policy_fixture import bash_maintenance
 
 SOURCE = (Path(__file__).resolve().parents[1] / 'mac.sh').read_text()
 REQUIRED = ('check_for_installed_developer_tools', 'check_xcode_license_approved',
@@ -157,7 +158,7 @@ class CLT(unittest.TestCase):
                 # Avoid credential bootstrap, even when testing successful dotfiles prerequisites.
                 credential = home / '.local/bin/git-credential-github-multi'
                 credential.parent.mkdir(parents=True); credential.write_text('# fixture'); credential.chmod(0o700)
-                script += '\nmain\n'
+                script += '\n' + bash_maintenance() + '\nmain --maintenance\n'
             else:
                 script += '\n' + expression + '\n'
             master = slave = None

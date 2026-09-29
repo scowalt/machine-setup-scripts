@@ -1,4 +1,5 @@
 """Inert extracted-helper fixtures: no desktop code, network or host lifecycle runs."""
+import ast
 import copy
 import hashlib
 import io
@@ -10,6 +11,7 @@ import subprocess
 import tempfile
 import types
 import unittest
+from setup_policy_fixture import bash_maintenance
 from unittest.mock import Mock, patch
 import zipfile
 import plistlib
@@ -55,6 +57,46 @@ def mac_zip(number, identity='dev.bb.desktop'):
     return stream.getvalue()
 
 
+def import_helper_definitions(source):
+    """Do not rely on __name__ or entry-point text when importing an installer."""
+    tree = ast.parse(source)
+    selected = []
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            selected.append(node)
+        elif isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            if node.decorator_list:
+                raise AssertionError('Unexpected helper decorator')
+            definitions = [node] if isinstance(node, ast.FunctionDef) else [n for n in node.body if isinstance(n, ast.FunctionDef)]
+            if isinstance(node, ast.ClassDef):
+                if node.keywords or any(ast.unparse(base) not in ('Exception', 'urllib.request.HTTPRedirectHandler') for base in node.bases):
+                    raise AssertionError('Unexpected helper class construction')
+                if any(not isinstance(n, (ast.FunctionDef, ast.Pass)) for n in node.body):
+                    raise AssertionError('Unexpected class-body execution')
+            for definition in definitions:
+                arguments = [*definition.args.posonlyargs, *definition.args.args, *definition.args.kwonlyargs]
+                if definition.decorator_list or definition.returns or any(arg.annotation for arg in arguments):
+                    raise AssertionError('Unexpected definition-time annotation/decorator')
+                for default in [*definition.args.defaults, *(v for v in definition.args.kw_defaults if v)]:
+                    if any(not isinstance(value, (ast.Constant, ast.BinOp, ast.Mult)) for value in ast.walk(default)):
+                        raise AssertionError('Unexpected definition-time execution')
+            selected.append(node)
+        elif isinstance(node, ast.Assign):
+            if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id == 'UID':
+                node.value = ast.Constant(os.getuid())
+            else:
+                ast.literal_eval(node.value)
+            selected.append(node)
+        elif isinstance(node, ast.If) and ast.unparse(node.test) == "__name__ == '__main__'":
+            continue  # never execute the production entry path while importing
+        else:
+            raise AssertionError('Unexpected helper top-level execution')
+    namespace = {'__name__': 'fixture_only'}
+    exec(compile(ast.fix_missing_locations(ast.Module(body=selected, type_ignores=[])),
+                 'extracted-bb-desktop-definitions', 'exec'), namespace)
+    return namespace
+
+
 class DesktopTests(unittest.TestCase):
     def setUp(self):
         self.previous_umask = os.umask(0o077)
@@ -62,8 +104,7 @@ class DesktopTests(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.home = self.base / 'home'
         self.home.mkdir(mode=0o700)
-        self.ns = {'__name__': 'fixture_only'}
-        exec(compile(payload(), 'extracted-bb-desktop', 'exec'), self.ns)
+        self.ns = import_helper_definitions(payload())
         self.ns['UID'] = os.getuid()
         self.restriction = self.base / 'apparmor-restriction'
         self.restriction.write_text('0\n')
@@ -879,7 +920,7 @@ install_bb_desktop() { printf 'desktop-called\\n'; return 1; }
 check_pending_reboot() { printf 'unrelated-work-finished\\n'; }
 finish_setup_log() { printf 'log-result=%s\\n' "$1"; }
 '''
-                main = source[source.index('\nmain() {', start):].split('\n}\n', 1)[0] + '\n}\nmain\n'
+                main = source[source.index('\nmain() {', start):].split('\n}\n', 1)[0] + '\n}\n' + bash_maintenance() + '\nmain --maintenance\n'
                 result = subprocess.run(['bash', '-c', script + main], env={
                     'PATH': '/usr/bin:/bin', 'HOME': tmp, 'SHELL': '/bin/bash',
                     'BB_SERVER': '0', 'HEADLESS': '0'}, text=True, capture_output=True)

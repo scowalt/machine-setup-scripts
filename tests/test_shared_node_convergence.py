@@ -10,6 +10,7 @@ import unittest
 
 from test_shared_node_runtime import extract, executable, SCRIPTS, NODE, MISE, FISH
 from test_managed_skill_suite import functions, ROOT, KNOWN
+from native_runtime_fixture import copy_node_runtime
 
 DOTFILES = os.environ.get('PI_RUNTIME_DOTFILES_SOURCE')
 CHEZMOI = shutil.which('chezmoi')
@@ -37,7 +38,7 @@ class SharedNodeConvergence(unittest.TestCase):
                 data = home / 'mise-data'
                 install = data / 'installs/node' / version
                 install.parent.mkdir(parents=True)
-                install.symlink_to(real_node.parent.parent, target_is_directory=True)
+                copy_node_runtime(real_node, install)
                 local = home / '.local/bin'
                 local.mkdir(parents=True)
                 (local / 'mise').symlink_to(MISE)

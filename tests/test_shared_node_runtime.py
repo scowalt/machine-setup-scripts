@@ -10,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from setup_policy_fixture import bash_maintenance
+from native_runtime_fixture import copy_node_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ("mac.sh", "ubuntu.sh", "wsl.sh", "pi.sh", "bazzite.sh")
@@ -25,7 +27,7 @@ FUNCTIONS = (
 
 def extract(script):
     text = (ROOT / script).read_text()
-    return "\n\n".join(
+    return bash_maintenance() + "\n\n".join(
         match.group() for name in FUNCTIONS
         if (match := re.search(r"^" + name + r"\(\) \{\n.*?^\}", text, re.M | re.S))
     )
@@ -347,7 +349,8 @@ state.write_text(json.dumps(data))
 
     @unittest.skipUnless(MISE, "mise is required for the real activation fixture")
     def test_real_mise_and_fish_activate_shared_node_after_setup_exits(self):
-        # Only expose the already installed runtime read-only; never install a tool.
+        # Copy the trusted runtime into the fixture; never expose a writable directory
+        # symlink through which a failed repair could change the real installation.
         version = subprocess.check_output([NODE, "-p", "process.versions.node"], text=True).strip()
         real_node = Path(subprocess.check_output([NODE, "-p", "process.execPath"], text=True).strip()).resolve()
         if tuple(map(int, version.split(".")[:2])) < (22, 20):
@@ -360,7 +363,7 @@ state.write_text(json.dumps(data))
             data = home / "mise-data"
             install = data / "installs/node" / version
             install.parent.mkdir(parents=True)
-            install.symlink_to(real_node.parent.parent, target_is_directory=True)
+            fixture_node = copy_node_runtime(real_node, install)
             local_bin = home / ".local/bin"
             local_bin.mkdir(parents=True)
             (local_bin / "mise").symlink_to(MISE)
@@ -389,7 +392,7 @@ state.write_text(json.dumps(data))
             fresh = subprocess.run([FISH, "-l", "-c", 'node -p process.execPath'], cwd=home, env=env,
                                    capture_output=True, text=True, timeout=20)
             self.assertEqual(fresh.returncode, 0, fresh.stdout + fresh.stderr)
-            self.assertEqual(Path(fresh.stdout.strip()).resolve(), real_node)
+            self.assertEqual(Path(fresh.stdout.strip()).resolve(), fixture_node)
             # A minimal Pi-like module exercises the exact missing-export startup failure.
             cli = home / 'pi-fixture.mjs'
             cli.write_text('#!/usr/bin/env node\nimport { globSync } from "node:fs"; console.log(typeof globSync);\n')

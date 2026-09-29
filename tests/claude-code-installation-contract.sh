@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 1 | Retire the Claude Code installation opt-out
+# Version 2 | Explicitly authorize inert maintenance fixtures
 # Run only extracted functions with mocked installers. Never install or authenticate Claude Code.
 set -euo pipefail
 
@@ -66,6 +66,9 @@ for file in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh; do
         # Exercise the real create-only environment functions without sourcing user files.
         env_body=$(awk '/^(migrate_token_files|create_env_local)\(\) \{/ { printing=1 } printing { print } printing && /^}$/ { printing=0 }' "${file}")
         eval "${env_body}"
+        source "${repo_root}/lib/setup-policy.bash"
+        unset BB_THREAD_ID BB_ENVIRONMENT_ID BB_TERMINAL_ID
+        setup_policy_init --maintenance
         create_env_local
         if grep -q 'BAN_CLAUDE_CODE' "${HOME}/.env.local"; then
             fail "${file}: new environment template contains retired flag"
