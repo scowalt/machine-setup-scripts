@@ -4,18 +4,21 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $scriptPath = Join-Path $repoRoot "win.ps1"
 $tokens = $null
 $parseErrors = $null
-[System.Management.Automation.Language.Parser]::ParseFile(
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
     $scriptPath,
     [ref]$tokens,
     [ref]$parseErrors
-) | Out-Null
+)
 if ($parseErrors.Count -gt 0) {
     throw "win.ps1 parse errors:`n$($parseErrors -join "`n")"
 }
 
-$scriptText = Get-Content -Raw $scriptPath
-$scriptText = $scriptText -replace '(?m)^Initialize-WindowsEnvironment\r?$', ''
-. ([scriptblock]::Create($scriptText))
+# Functions only: never execute a changed top-level entry point or argument list.
+foreach ($definition in $ast.EndBlock.Statements) {
+    if ($definition -is [System.Management.Automation.Language.FunctionDefinitionAst]) {
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+}
 
 $script:Messages = [System.Collections.Generic.List[string]]::new()
 function global:Write-Message($message) { $script:Messages.Add("MESSAGE: $message") }

@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Version 5 | Last changed: Require bounded OpenCode v2 installation without agent integrations
+# Version 6 | Last changed: Load definitions-only isolated setup fixtures
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
+
+# Never source production top-level code; keep static checks in the real cwd.
+repo_root=$(python3 tests/extract_setup_fixture.py "${repo_root}") || exit 1
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 linux_codex_scripts=(ubuntu.sh wsl.sh pi.sh bazzite.sh)

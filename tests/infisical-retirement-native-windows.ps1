@@ -3,7 +3,15 @@ $ErrorActionPreference = 'Stop'
 $source = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../win.ps1') -Raw
 $match = [regex]::Match($source, '(?s)# BEGIN INFISICAL WINGET RETIREMENT\r?\n(.*?)# END INFISICAL WINGET RETIREMENT')
 if (-not $match.Success) { throw 'Missing retirement helper' }
-. ([scriptblock]::Create($match.Groups[1].Value))
+$tokens=$null; $parseErrors=$null
+$helpers=[System.Management.Automation.Language.Parser]::ParseInput($match.Groups[1].Value,[ref]$tokens,[ref]$parseErrors)
+if ($parseErrors.Count) { throw 'Retirement helper parse failed' }
+foreach ($statement in $helpers.EndBlock.Statements) {
+    if ($statement -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) {
+        throw 'Unexpected retirement helper top-level statement'
+    }
+    . ([scriptblock]::Create($statement.Extent.Text))
+}
 $script:records = @{}
 $script:calls = New-Object System.Collections.ArrayList
 $script:lookups = New-Object System.Collections.ArrayList

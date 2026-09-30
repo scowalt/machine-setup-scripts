@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
-# Contract version 23: keep header checks independent of later setup changes.
+# Contract version 24: explicitly authorize inert maintenance fixtures.
 # Historical filename retained for existing test runners.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
 
+# Never source production top-level code; keep static checks in the real cwd.
+repo_root=$(python3 tests/extract_setup_fixture.py "${repo_root}") || exit 1
+
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
-source_without_main='s/^main "\$@"$/:/'
+# Literal sed program, interpreted only against the definitions-only fixture.
+# shellcheck disable=SC2016
+source_without_main='s/^main "\$@"$/:/
+$a unset BB_THREAD_ID BB_ENVIRONMENT_ID BB_TERMINAL_ID; setup_policy_init --maintenance'
 
 fail() {
     printf '✗ %s\n' "$1" >&2

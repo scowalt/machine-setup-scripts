@@ -4,20 +4,24 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $scriptPath = Join-Path $repoRoot "win.ps1"
 $tokens = $null
 $parseErrors = $null
-[System.Management.Automation.Language.Parser]::ParseFile(
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
     $scriptPath,
     [ref]$tokens,
     [ref]$parseErrors
-) | Out-Null
+)
 
 if ($parseErrors.Count -gt 0) {
     throw "win.ps1 parse errors:`n$($parseErrors -join "`n")"
 }
 
-# Load definitions without running the full machine setup entry point.
-$scriptText = Get-Content -Raw $scriptPath
-$scriptText = $scriptText -replace '(?m)^Initialize-WindowsEnvironment\r?$', ''
-. ([scriptblock]::Create($scriptText))
+# Functions only: entry-point changes must never make this fixture run setup.
+foreach ($definition in $ast.EndBlock.Statements) {
+    if ($definition -is [System.Management.Automation.Language.FunctionDefinitionAst]) {
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+}
+$env:BB_THREAD_ID=$null; $env:BB_ENVIRONMENT_ID=$null; $env:BB_TERMINAL_ID=$null
+Initialize-SetupPolicy -Maintenance
 
 $script:Messages = [System.Collections.Generic.List[string]]::new()
 function global:Write-Message($message) { $script:Messages.Add("MESSAGE: $message") }

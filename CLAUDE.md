@@ -6,6 +6,12 @@ This file provides guidance to AI coding agents working with code in this reposi
 
 This repository contains idempotent machine setup scripts for automating the configuration of fresh development environments across different operating systems. The scripts are designed to be run multiple times safely and install a consistent set of development tools.
 
+## Non-disruptive scheduling and fixture containment
+
+All six entry points default to observation, narrowly scoped Code/log/lock writes and honest deferrals. Classify complete effects and dependencies; missing packages, idle processes or unknown consumers never authorize mutations. Only invocation arguments (`--maintenance` / `-Maintenance`) authorize disruptive work, outside known BB sessions, while preserving every existing trust/recovery/platform gate. Keep shared policy in `lib/setup-policy.{bash,ps1}` and regenerate with `tools/embed-setup-policy.py`. Read README's non-disruptive/maintenance section and `docs/plans/2026-09-29-non-disruptive-setup.md` before changing scheduling, defaults, health checks or indirect prerequisites. Preserve data-only dotenv parsing, literal credential characters and controlled unsupported-syntax failures. Read-only probes must not execute runtime shims, app CLIs or auto-updating package managers; native Windows platform decisions use trusted runtime detection, not environment flags. Continue independent safe work and log finalization after real failures; deferral is not readiness.
+
+For any behavioral fixture execution or source-loader change, read `docs/research/2026-09-29-fixture-execution-audit.md` and the linked incident record first. Use its sanitized `env -i` runner with explicit existing tools, mandatory kernel filter/self-test, private stdio/roots and sequential suites. Definitions-only imports and mocks precede intentional helper/caller execution; never source or evaluate a stripped whole setup file. Copy native fixture runtimes rather than link writable prefixes to real installations. If containment/preflight fails or a real effect appears, stop and report—no uncontained fallback. Run the non-disruptive and extraction/containment contracts plus the audited affected matrix. Keep incident uncertainty, optional skips and native-platform/continuity limitations explicit; passing offline fixtures is not rollout evidence.
+
 ## Key Scripts
 
 - **mac.sh** - macOS setup using Homebrew. For CLT/readiness changes, preserve the bounded repair and dependency policy in README's opening macOS section. Only a recognized public named Homebrew CLT finding, eligible standalone selection without overrides, one unambiguous Apple offer and scoped sudo authorization permit one in-place repair. Reverify readiness/selection; preserve actual operation failures. Gate actual callers and indirect prerequisites, not just core packages; readiness skips must still reach independent work, reboot reporting and log finalization. Keep shared helpers identical and secondary users verify-only. Use extracted helpers/real callers with inert commands and temporary paths; run `python3 tests/test_macos_clt.py`, Homebrew-result, reliability, reboot, weekly and affected caller contracts. Native Apple behavior requires separately authorized Mac evidence; never run live updates to validate a change.
@@ -21,6 +27,8 @@ This repository contains idempotent machine setup scripts for automating the con
 ## Common Development Tasks
 
 ### Running Setup Scripts Locally
+
+These commands use the non-disruptive default. For actual provisioning/updating, arrange maintenance outside BB and add `--maintenance` (Bash) or `-Maintenance` (PowerShell). Never run live setup to validate a code change.
 
 ```bash
 # macOS

@@ -1,6 +1,9 @@
 # Exercise only the placeholder function, never the full Windows setup script.
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
+. (Join-Path $repoRoot 'lib/setup-policy.ps1')
+$env:BB_THREAD_ID=$null; $env:BB_ENVIRONMENT_ID=$null; $env:BB_TERMINAL_ID=$null
+Initialize-SetupPolicy -Maintenance
 $source = Get-Content -Raw (Join-Path $repoRoot 'win.ps1')
 $tokens = $null
 $parseErrors = $null

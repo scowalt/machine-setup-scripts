@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from setup_policy_fixture import bash_maintenance, powershell_maintenance
 
 ROOT = Path(__file__).resolve().parents[1]
 BASH = ('mac.sh', 'ubuntu.sh', 'wsl.sh', 'pi.sh', 'bazzite.sh')
@@ -108,7 +109,7 @@ print_warning() { :; }
             for cmd in ('paseo', 'systemctl', 'launchctl', 'loginctl', 'pgrep', 'ps', 'curl',
                         'npm', 'bun', 'pi', 'bb', 'chezmoi', 'sudo', 'kill', 'pkill'):
                 code += f'\n{cmd}() {{ record FORBIDDEN:{cmd}; return 99; }}'
-            code += '\nmain\n'
+            code += '\n' + bash_maintenance() + '\nmain --maintenance\n'
             for failure in ('none', 'permissions', 'go', 'adapter'):
                 for headless in ('0', '1'):
                     with self.subTest(script=name, failure=failure, headless=headless), tempfile.TemporaryDirectory() as tmp:
@@ -136,7 +137,7 @@ print_warning() { :; }
         for name in BASH:
             source = (ROOT / name).read_text()
             code = 'print_message() { :; }; print_debug() { :; }; print_success() { :; }\n'
-            code += function(source, 'migrate_token_files') + '\n' + function(source, 'create_env_local') + '\ncreate_env_local\n'
+            code += bash_maintenance() + function(source, 'migrate_token_files') + '\n' + function(source, 'create_env_local') + '\ncreate_env_local\n'
             with self.subTest(script=name), tempfile.TemporaryDirectory() as tmp:
                 result = subprocess.run(['bash', '-c', code], cwd=tmp,
                                         env={'PATH': '/usr/bin:/bin', 'HOME': tmp}, capture_output=True, text=True, timeout=10)
@@ -154,7 +155,7 @@ print_warning() { :; }
         names = set(re.findall(r'^function ([\w-]+)(?=\s|\()', source, re.M))
         self.assertIn('Write-Section', names)
         code = "$ErrorActionPreference='Stop'\n" + '\n'.join(f'function {n} {{ return $true }}' for n in names)
-        code += '\n' + function(source, 'Invoke-WindowsSetupTasks', True)
+        code += '\n' + powershell_maintenance() + function(source, 'Invoke-WindowsSetupTasks', True)
         code += r'''
 function Prepare-PiProfilePermissions { $env:FAILURE -ne 'permissions' }
 function Set-PiOpenCodeGoProvider { $env:FAILURE -ne 'go' }

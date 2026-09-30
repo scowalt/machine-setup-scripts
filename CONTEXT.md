@@ -9,8 +9,20 @@ The set of tools and artifacts that must be present or absent after a setup run.
 _Avoid_: Target configuration, final setup
 
 **Incomplete setup run**:
-A setup run with a failed required operation or an unverified required result. Intentional user exclusions and verified managed-tool deferrals do not by themselves make the run incomplete.
+A setup run with a failed required operation, a failed safety inspection, or an unverified required result. Intentional user exclusions and policy-authorized deferrals do not by themselves make the run incomplete; a deferral does not verify the pending result.
 _Avoid_: Successful setup with errors, warning-only failure
+
+**Non-disruptive setup run**:
+The default setup run, which preserves ongoing work and connectivity while applying safe changes. Changes that would interrupt work are deferred rather than forced.
+_Avoid_: Safe mode, uninterrupted full upgrade
+
+**Deferred setup change**:
+A desired machine-state change postponed to preserve ongoing work. Deferral leaves the change pending; it does not establish that the desired state has been reached.
+_Avoid_: Completed update, ignored failure
+
+**Maintenance setup run**:
+A separately and explicitly authorized setup run permitting potentially disruptive changes during a user-chosen maintenance window. Authorization applies only to that run; it is not an automatic response to apparent inactivity.
+_Avoid_: Idle-time update, permanently enabled maintenance
 
 **macOS developer-tool readiness**:
 The verified compatibility of the selected developer tools with the running macOS. Installed tools, an available update, or a completed installation alone do not establish readiness.

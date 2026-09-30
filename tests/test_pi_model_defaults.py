@@ -119,7 +119,9 @@ class ModelDefaultsTests(unittest.TestCase):
                     env_before = env_file.read_bytes()
                     result = self.run_function(script, home, argument, "remove_pi_synthetic_models")
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertNotIn("fixture-", result.stdout + result.stderr)
+                    # The private runner path itself contains "fixture-". Remove
+                    # only this known non-secret path; retain the credential-prefix check.
+                    self.assertNotIn("fixture-", (result.stdout + result.stderr).replace(str(home), "<HOME>"))
                     del initial["providers"]["synthetic"]
                     self.assertEqual(json.loads(models.read_text()), initial)
                     before = models.read_bytes()

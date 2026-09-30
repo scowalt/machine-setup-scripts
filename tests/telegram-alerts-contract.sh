@@ -53,6 +53,9 @@ for file in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh; do
         # Only trusted functions from the repository are evaluated, never credential files.
         eval "${migrate_body}"
         eval "${create_body}"
+        source "${repo_root}/lib/setup-policy.bash"
+        unset BB_THREAD_ID BB_ENVIRONMENT_ID BB_TERMINAL_ID
+        setup_policy_init --maintenance
         create_env_local
         assert_placeholders "${HOME}/.env.local"
         permissions=$(stat -c '%a' "${HOME}/.env.local" 2>/dev/null || stat -f '%Lp' "${HOME}/.env.local")
