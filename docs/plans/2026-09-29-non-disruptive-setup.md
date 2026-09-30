@@ -1,6 +1,8 @@
 # Non-disruptive machine setup: agreed policy design
 
-Status: the user approved design questions Q1–Q9 and the TASK-56 implementation plan, including argument-only maintenance authorization, data-only environment loading and the narrow default safe-write set. Implementation and isolated inert testing are in progress. Native continuity is not yet verified. No live setup, service changes, incident reproduction or rollout is authorized.
+Status: the user approved design questions Q1–Q9 and the TASK-57 implementation plan, including argument-only maintenance authorization, data-only environment loading and the narrow default safe-write set. Parent accepted AC1–9 against the reviewed offline evidence; AC10 and completion remain held for the documented incident exception. Integration with updated main passes the affected contracts and refreshed 40-entry contained aggregate, pending parent integration review. Native continuity is not yet verified. No live setup, service changes, incident reproduction or rollout is authorized.
+
+Historical alias: this work was branch-local **TASK-56**, renumbered through Backlog CLI to **TASK-57** when upstream introduced an unrelated TASK-56. Historical artifact paths and incident chronology retain the former identifier.
 
 ## Problem and evidence
 
@@ -53,7 +55,7 @@ Maintenance authorization permits potentially disruptive setup changes for that 
 
 Maintenance must preserve existing data, recovery behavior and failure aggregation. It does not add automatic reboots. It is not permission to execute an unchecked list of stale commands: the implementation should reevaluate desired state and prerequisites when maintenance is actually requested.
 
-The approved command-line interface is `--maintenance` on Bash and `-Maintenance` on PowerShell: deliberate per-invocation authorization, never an environment-file bypass. Known BB context markers refuse it without a force override. Documentation directs maintenance to a separate terminal outside BB and warns that absent markers do not prove other work is absent. The implementation and offline validation evidence is tracked in [TASK-56 validation](../research/2026-09-29-non-disruptive-validation.md); native continuity remains separate rollout work.
+The approved command-line interface is `--maintenance` on Bash and `-Maintenance` on PowerShell: deliberate per-invocation authorization, never an environment-file bypass. Known BB context markers refuse it without a force override. Documentation directs maintenance to a separate terminal outside BB and warns that absent markers do not prove other work is absent. The implementation and offline validation evidence is tracked in [TASK-57 validation](../research/2026-09-29-non-disruptive-validation.md); native continuity remains separate rollout work.
 
 ## Results and diagnostics
 

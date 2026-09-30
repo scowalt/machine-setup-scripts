@@ -1,6 +1,8 @@
-# TASK-56 execution-boundary audit
+# TASK-57 execution-boundary audit
 
-Status: parent approved staged resumption after the synthetic retry. Actual-source selection, the repaired initial cohort and the refreshed post-review **40/40-entry** audited aggregate (`/tmp/setup-fixture-matrix-ptafh82r`) pass under unchanged kernel containment. The earlier `/tmp/setup-fixture-matrix-vghy85gm` aggregate predates the final logging fixes. Explicit skips, the trusted-Markdownlint blocker and criterion dispositions are in [final validation evidence](2026-09-29-non-disruptive-validation.md). Task completion remains held for parent review. Original [incident uncertainty](2026-09-29-fixture-containment-incident.md) is unchanged.
+Historical alias: this work was branch-local TASK-56 before the main integration. TASK-57 now tracks it; upstream's unrelated TASK-56 is unchanged. Historical artifact paths remain unchanged.
+
+Status: the integrated-source **40/40-entry** aggregate (`/tmp/setup-fixture-matrix-u3o1b6du`) passes under unchanged kernel containment after the additional upstream audit below. The post-review `/tmp/setup-fixture-matrix-ptafh82r` aggregate is pre-integration evidence; `/tmp/setup-fixture-matrix-vghy85gm` predates the final logging fixes. Explicit skips, the trusted-Markdownlint blocker and criterion dispositions are in [validation evidence](2026-09-29-non-disruptive-validation.md). Parent accepted AC1–9 against the reviewed pre-integration evidence; integrated-source review, AC10 and task completion remain with parent/user. Original [incident uncertainty](2026-09-29-fixture-containment-incident.md) is unchanged.
 
 ## Scope and findings
 
@@ -18,6 +20,16 @@ The audit enumerated 58 execution-bearing files reached by the contract matrix: 
 | Native tool fixtures | Git/Chezmoi operate on synthetic repositories/configuration/destinations with hooks and inherited Git controls isolated. Native npm fixtures use inert local bundles and fixture prefixes/config. Mise activation uses a disposable configuration/data root; Node/npm are now copied there, not exposed through a writable directory symlink to the real runtime. |
 | Optional installed-code/cross-repository probes | The sanitized runner does not inherit enabling variables for real Pi/extension registry loads, installed skill CLI probes, native Go catalog/lock probes, external dotfile sources or installed OpenCode shims. Those are skipped, not counted as covered. |
 | Node OpenCode tests | Import the policy library; use temporary artifacts, fake fetch/native probes and injected metadata. The optional installed command shim is not enabled. |
+
+## Upstream integration audit
+
+Before executing the integrated source, reviewed all of `tests/opencode-cli.test.cjs`, `tests/fixtures/opencode-homebrew-proof.py` and `tests/test_opencode_cli_callers.py`, including their changed policy/wrapper dependencies from upstream `4ece5ef` and `e169f8d`. This adds one Python fixture to the original 58-file inventory (59 execution-bearing files); no optional integration was enabled.
+
+- HTTP negotiation tests inject a header-sensitive HTTPS emitter before calling the real fetch/install helpers. Core-entry execution occurs only inside that injected VM with a temporary HOME/PATH and forbidden application execution. No socket or actual download is needed.
+- Homebrew proof tests map logical Homebrew, `/etc`, `/proc` and Python-tool metadata into a private temporary tree. Only command quarantine/restore is permitted by the Node filesystem proxy; app probes remain inert. The existing `/usr/bin/python3 -I -S` runs the fixture adapter, not an unmocked host proof. Before evaluating the extracted proof, the adapter replaces NSS enumeration/initgroups, open/lstat/fstat/listdir/ACL access, and refuses path-following stat/process signaling. Race mutations affect only fixture files. Native UID/GID values are scalar fixture inputs, not host membership inventory.
+- Bash diagnostic wrappers receive a temporary fake Node; PowerShell receives a fake Node script and inert Get-Command/ACL functions before invocation. Extracted real callers retain the local real-policy maintenance initialization, failure aggregation and finalization tests alongside upstream diagnostics. No whole setup source is evaluated.
+
+These are source-specific audited boundaries, not a general filesystem/process sandbox. The existing sanitized sequential runner, mandatory filter/self-test and FD rules remain unchanged. The integration runs passed 5/5 affected contracts and 40/40 aggregate entries without an observed new refusal or unexpected effect; exact commands, counts and retained artifacts are in the validation report. This is not a syscall-wide effects audit.
 
 ## Bash extraction boundary
 
