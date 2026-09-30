@@ -1979,7 +1979,7 @@ install_gemini_cli() {
 
 # Install/update Codex CLI with OpenAI's per-user standalone installer.
 # BEGIN GENERATED OPENCODE CLI
-# Version 3 | Last changed: Prove private Homebrew groups and report safe preflight failures
+# Version 4 | Last changed: Report bounded Homebrew process-race retries
 install_opencode_cli() {
     local result status=0 brew_ready=0 machine kind
     machine=$(uname -m) || return 1
@@ -2002,6 +2002,7 @@ install_opencode_cli() {
     fi
     result=$(SETUP_OPENCODE_BREW_READY="${brew_ready}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null <<'OPENCODE_CLI_JS'
 // Embedded in all six entry points by tools/embed-opencode-cli.py.
+// Version 2 | Last changed: Retry only transient procfs races within the complete Homebrew proof.
 // Installation only: never import application code or inherit its environment.
 'use strict';
 const fs = require('node:fs');
@@ -2012,7 +2013,7 @@ const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 const cp = require('node:child_process');
 const policyReasons = new Set(('archive archive-header archive-path archive-tail archive-truncated archive-type artifact-identity artifact-metadata ' +
-    'brew-command brew-origin brew-path brew-readiness brew-group-shared brew-identity-source brew-acl-present brew-acl-unverified brew-proof-unverified brew-proof-tool brew-snapshot-changed ' +
+    'brew-command brew-origin brew-path brew-readiness brew-group-shared brew-identity-source brew-acl-present brew-acl-unverified brew-proof-unverified brew-proof-tool brew-snapshot-changed brew-process-churn ' +
     'changed-copy changed-receipt custom-link custom-prefix custom-wrapper duplicate-metadata integrity libc metadata missing-binary outside-home package-conflict pinned receipt ' +
     'recovery-occupied relative-path release-metadata shadowed shadowed-newer unreachable unsafe-file unsafe-path unverified-copy url version version-probe windows-acl').split(' '));
 const nativeCodes = new Set('EACCES EPERM ENOENT EIO EEXIST ENOTDIR ELOOP ENOSPC EROFS ETIMEDOUT ENOBUFS'.split(' '));
@@ -2209,14 +2210,18 @@ function probe(file, release, workspace) {
 // Separate from BB's read-only service policy: only Linux Homebrew boundaries
 // may use this proof. No private-ancestor shortcut, permission repair or PATH tools.
 const brewGroupProgram = String.raw`
-import errno, grp, json, os, pwd, stat, sys
+import errno, grp, json, os, pwd, stat, sys, time
 class Blocked(Exception): pass
+class ProcChurn(Exception): pass
 def need(ok, reason='brew-proof-unverified'):
     if not ok: raise Blocked(reason)
 def fingerprint(s):
     return tuple(getattr(s, 'st_' + key) for key in ['dev', 'ino', 'uid', 'gid', 'mode', 'nlink', 'size', 'mtime_ns', 'ctime_ns'])
 flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
-configs = {}
+configs, baselines = {}, {}
+def stable(key, value):
+    # A retry must not adopt changed evidence from an earlier attempt.
+    need(baselines.setdefault(key, value) == value, 'brew-snapshot-changed')
 def read_file(file, limit, root=False):
     fd = os.open(file, flags)
     try:
@@ -2230,36 +2235,49 @@ def read_file(file, limit, root=False):
             data.extend(part)
         need(len(data) <= limit)
         need(fingerprint(before) == fingerprint(os.fstat(fd)) == fingerprint(os.lstat(file)), 'brew-snapshot-changed')
-        if root: configs[file] = before
+        if root:
+            stable(('config', file), fingerprint(before))
+            configs[file] = before
         return data.decode('utf-8')
     finally: os.close(fd)
 def numeric(value):
     need(value.isascii() and value.isdigit())
     result = int(value); need(0 <= result < 0xffffffff); return result
-def memberships():
+def proc_read(owner, operation, *args):
+    try: return operation(*args)
+    except OSError as error:
+        if error.errno not in [errno.ENOENT, errno.ESRCH]: raise
+        # Missing status/stat under a still-existing task is not proof of exit.
+        try: os.lstat(owner)
+        except FileNotFoundError: raise ProcChurn() from None
+        raise
+def memberships(uid, gid):
     result = {}
     pids = os.listdir('/proc'); need(len(pids) <= 32768)
     for pid in pids:
         if not pid.isascii() or not pid.isdigit(): continue
-        tasks = os.listdir('/proc/' + pid + '/task'); need(len(tasks) <= 8192)
+        owner = '/proc/' + pid
+        tasks = proc_read(owner, os.listdir, owner + '/task'); need(len(tasks) <= 8192)
         for tid in tasks:
             need(tid.isascii() and tid.isdigit() and len(result) < 32768)
             base = '/proc/' + pid + '/task/' + tid
-            text = read_file(base + '/status', 131072)
+            text = proc_read(base, read_file, base + '/status', 131072)
             def values(key, count=None):
                 rows = [line.split(':', 1)[1].split() for line in text.splitlines() if line.startswith(key + ':')]
                 need(len(rows) == 1 and (count is None or len(rows[0]) == count))
                 return tuple(numeric(v) for v in rows[0])
             ids, gids, groups = values('Uid', 4), values('Gid', 4), values('Groups')
-            # Include start time to reject PID/TID reuse between snapshots.
-            native = read_file(base + '/stat', 131072)
+            # Never discard observed foreign access just because another task exits.
+            need(not (gid in gids + groups and any(value not in [0, uid] for value in ids)), 'brew-group-shared')
+            # Include start time to reject PID/TID reuse between snapshots/retries.
+            native = proc_read(base, read_file, base + '/stat', 131072)
             fields = native[native.rfind(')') + 1:].split()
             need(native.startswith(tid + ' (') and len(fields) >= 20 and fields[19].isascii() and fields[19].isdigit())
             result[(pid, tid)] = (ids, gids, groups, fields[19])
+            stable(('task', pid, tid), result[(pid, tid)])
     need(bool(result))
     return result
-def main():
-    request = json.loads(sys.stdin.buffer.read(8193))
+def main(request):
     need(set(request) == {'uid', 'path', 'snapshot'})
     uid = request['uid']; need(type(uid) is int and uid > 0 and uid == os.getuid() == os.geteuid())
     gid = os.getgid(); need(gid > 0 and gid == os.getegid())
@@ -2290,6 +2308,7 @@ def main():
     mounts = read_file('/proc/self/mountinfo', 1048576)
     proc = [line for line in mounts.splitlines() if len(line.split()) > 5 and line.split()[4] == '/proc']
     need(len(proc) == 1 and ' - proc ' in proc[0] and 'hidepid=' not in proc[0] and 'subset=' not in proc[0])
+    stable('mounts', mounts)
     def native_accounts():
         # Verify effective NSS enumeration and initgroups, not just flat-file hints.
         native_users, native_groups = pwd.getpwall(), grp.getgrall()
@@ -2308,9 +2327,8 @@ def main():
             effective.append((entry.pw_name, tuple(sorted(member))))
         return user_rows, group_rows, sorted(effective)
     accounts = native_accounts()
-    first = memberships()
-    for ids, gids, extra, _ in first.values():
-        need(not (gid in gids + extra and any(value not in [0, uid] for value in ids)), 'brew-group-shared')
+    stable('accounts', accounts)
+    first = memberships(uid, gid)
     # Pin each ancestor before opening its descendant; no symlink traversal.
     opened = []
     try:
@@ -2318,6 +2336,7 @@ def main():
         parts = file.split('/')[1:]
         for index in range(len(parts) + 1):
             s = os.fstat(fd); opened.append((current, fd, s))
+            stable(('path', current), fingerprint(s))
             need(stat.S_ISDIR(s.st_mode) if index < len(parts) else (stat.S_ISDIR(s.st_mode) or stat.S_ISREG(s.st_mode) and s.st_nlink == 1))
             need(s.st_uid in [0, uid] and not s.st_mode & 0o002)
             if s.st_mode & 0o020:
@@ -2333,16 +2352,29 @@ def main():
             child = parts[index]
             fd = os.open(child, flags | (os.O_DIRECTORY if index + 1 < len(parts) else 0), dir_fd=fd)
             current = current.rstrip('/') + '/' + child
-        need(first == memberships(), 'brew-snapshot-changed')
+        # Changed credentials/start times fail in memberships; only additions or
+        # exits can request another attempt, never a partial-snapshot acceptance.
+        second = memberships(uid, gid)
         need(mounts == read_file('/proc/self/mountinfo', 1048576), 'brew-snapshot-changed')
         need(accounts == native_accounts(), 'brew-snapshot-changed')
         for file, before in configs.items(): need(fingerprint(before) == fingerprint(os.lstat(file)), 'brew-snapshot-changed')
         for file, fd, before in opened:
             need(fingerprint(before) == fingerprint(os.fstat(fd)) == fingerprint(os.lstat(file)), 'brew-snapshot-changed')
+        if first != second: raise ProcChurn()
     finally:
         for _, fd, _ in reversed(opened): os.close(fd)
     print('trusted')
-try: main()
+try:
+    request = json.loads(sys.stdin.buffer.read(8193))
+    # One native invocation, at most three complete attempts; the existing
+    # five-second parent timeout also bounds slow native NSS/procfs operations.
+    for attempt in range(3):
+        try:
+            main(request)
+            break
+        except ProcChurn:
+            if attempt == 2: raise Blocked('brew-process-churn') from None
+            time.sleep(0.05)
 except Blocked as error:
     print('blocked:' + str(error)); sys.exit(1)
 except Exception:
@@ -2380,7 +2412,7 @@ function verifyBrewGroup(file, info) {
     if (result.error) throw nativeFailure('homebrew-preflight', result.error);
     if (result.signal || result.stderr !== '') fail('brew-proof-unverified');
     if (result.status === 0 && result.stdout === 'trusted\n') return;
-    const blocked = /^blocked:(brew-group-shared|brew-identity-source|brew-acl-present|brew-acl-unverified|brew-proof-unverified|brew-snapshot-changed)\n$/.exec(result.stdout || '');
+    const blocked = /^blocked:(brew-group-shared|brew-identity-source|brew-acl-present|brew-acl-unverified|brew-proof-unverified|brew-snapshot-changed|brew-process-churn)\n$/.exec(result.stdout || '');
     if (result.status === 1 && blocked) fail(blocked[1]);
     fail('brew-proof-unverified');
 }
@@ -2701,8 +2733,11 @@ OPENCODE_CLI_JS
             print_error 'OpenCode CLI rollback needs manual recovery; preserve .setup-opencode-* backups, recovery.json and the lock. See README.'
         elif [[ "${result}" =~ ^opencode-cli:download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)$ ]]; then
             print_error "OpenCode CLI download failed (operation=${BASH_REMATCH[1]}, HTTP=${BASH_REMATCH[2]})."
-        elif [[ "${result}" =~ ^opencode-cli:policy-failed:(homebrew-preflight|installation):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-readiness|brew-group-shared|brew-identity-source|brew-acl-present|brew-acl-unverified|brew-proof-unverified|brew-proof-tool|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))$ ]]; then
+        elif [[ "${result}" =~ ^opencode-cli:policy-failed:(homebrew-preflight|installation):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-readiness|brew-group-shared|brew-identity-source|brew-acl-present|brew-acl-unverified|brew-proof-unverified|brew-proof-tool|brew-snapshot-changed|brew-process-churn|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))$ ]]; then
             print_error "OpenCode CLI blocked (operation=${BASH_REMATCH[1]}, reason=${BASH_REMATCH[2]})."
+            if [[ "${BASH_REMATCH[2]}" == brew-process-churn ]]; then
+                print_error 'Homebrew process evidence kept changing across three attempts; review README before retrying.'
+            fi
             print_error 'See README preflight guidance; do not bypass trust checks or change unrelated permissions.'
         fi
         print_error 'OpenCode CLI installation incomplete; existing data preserved. Review command ownership, pins, metadata, prerequisites and PATH.'
@@ -8488,7 +8523,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 236 | Last changed: Restore ordinary provisioning and retain literal dotenv parsing"
+    echo -e "${GRAY}Version 237 | Last changed: Retry transient OpenCode Homebrew process races"
 
     if ! acquire_setup_lock; then
         return 1

@@ -1,4 +1,4 @@
-"""Contract v5: ordinary extracted callers validate controlled Homebrew/policy diagnostics."""
+"""Contract v6: extracted callers expose bounded procfs churn without leaking native output."""
 import os
 from pathlib import Path
 import re
@@ -32,10 +32,12 @@ DIAGNOSTICS += [(result, status, None) for result, status in [
 DIAGNOSTICS += [(f'opencode-cli:policy-failed:{operation}:{reason}', 1,
                  f'OpenCode CLI blocked (operation={operation}, reason={reason}).')
                 for operation, reason in [('homebrew-preflight', 'brew-group-shared'), ('homebrew-preflight', 'brew-identity-source'),
-                                          ('homebrew-preflight', 'brew-acl-unverified'), ('homebrew-preflight', 'native-EACCES'),
+                                          ('homebrew-preflight', 'brew-acl-unverified'), ('homebrew-preflight', 'brew-process-churn'), ('homebrew-preflight', 'native-EACCES'),
                                           ('installation', 'pinned'), ('installation', 'unverified-copy'), ('installation', 'native-ENOENT')]]
 DIAGNOSTICS += [(result, status, None) for result, status in [
     ('opencode-cli:policy-failed:homebrew-preflight:brew-path', 0),
+    ('opencode-cli:policy-failed:homebrew-preflight:brew-process-churn', 0),
+    ('opencode-cli:policy-failed:homebrew-preflight:brew-process-churn\nSECRET', 1),
     ('opencode-cli:policy-failed:SECRET:brew-path', 1),
     ('opencode-cli:policy-failed:homebrew-preflight:SECRET', 1),
     ('opencode-cli:policy-failed:homebrew-preflight:native-SECRET', 1),
@@ -95,6 +97,8 @@ exit "${MOCK_STATUS:-0}"
                     else:
                         self.assertNotIn('OpenCode CLI download failed (', run.stdout)
                         self.assertNotIn('OpenCode CLI blocked (', run.stdout)
+                    self.assertEqual('process evidence kept changing across three attempts' in run.stdout,
+                                     bool(diagnostic and result.endswith(':brew-process-churn')))
                     self.assertEqual('rollback needs manual recovery' in run.stdout, result == 'opencode-cli:recovery-required')
             for extra in [{'MOCK_NODE_PREREQUISITE': '1'}, {}]:
                 setup = 'macos_existing_prerequisites() { return 1; }\n' if not extra else ''
@@ -221,6 +225,8 @@ if ($result) { exit 0 } else { exit 1 }
                 else:
                     self.assertNotIn('OpenCode CLI download failed (', run.stdout)
                     self.assertNotIn('OpenCode CLI blocked (', run.stdout)
+                self.assertEqual('process evidence kept changing across three attempts' in run.stdout,
+                                 bool(diagnostic and result.endswith(':brew-process-churn')))
                 self.assertEqual('rollback needs manual recovery' in run.stdout, result == 'opencode-cli:recovery-required')
 
     @unittest.skipUnless(PWSH, 'No existing PWSH_BIN/pwsh: native Windows/PowerShell execution not claimed')

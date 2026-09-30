@@ -1,4 +1,4 @@
-"""Version 1: run extracted native proof against temporary identity/procfs data only."""
+"""Version 2: model transient procfs races without host inventory or application execution."""
 import errno
 import grp
 import os
@@ -15,6 +15,7 @@ real_open, real_lstat, real_fstat = os.open, os.lstat, os.fstat
 real_listdir, real_getxattr = os.listdir, os.getxattr
 fds = {}
 reads = 0
+vanished = set()
 
 
 def mapped(file):
@@ -34,6 +35,11 @@ def modeled(s, file):
 def opened(file, flags, mode=0o777, *, dir_fd=None):
     assert not flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND), 'writes forbidden'
     logical = str(file) if dir_fd is None else posixpath.join(fds[dir_fd], str(file))
+    if reads == 1 and logical in ['/proc/123/task/123/status', '/proc/123/task/123/stat']:
+        leaf = logical.rsplit('/', 1)[1]
+        if exists('proc-' + leaf + '-exit'):
+            vanished.add('/proc/123/task/123')
+            raise FileNotFoundError(errno.ENOENT, 'SECRET exited task')
     target = mapped(file) if dir_fd is None else file
     fd = real_open(target, flags, mode, dir_fd=dir_fd)
     fds[fd] = logical
@@ -42,6 +48,7 @@ def opened(file, flags, mode=0o777, *, dir_fd=None):
 
 def lstat(file, *, dir_fd=None):
     logical = str(file) if dir_fd is None else posixpath.join(fds[dir_fd], str(file))
+    if logical in vanished: raise FileNotFoundError(errno.ENOENT, 'SECRET exited task')
     return modeled(real_lstat(mapped(file) if dir_fd is None else file, dir_fd=dir_fd), logical)
 
 
@@ -52,7 +59,7 @@ def exists(name):
 
 def xattr(fd, name):
     assert name in ['system.posix_acl_access', 'system.posix_acl_default']
-    if exists('acl-present') or (name == 'system.posix_acl_default' and exists('acl-default')): return b'untrusted named ACL'
+    if exists('acl-present') or (name == 'system.posix_acl_default' and exists('acl-default')) or (reads >= 3 and exists('retry-acl')): return b'untrusted named ACL'
     if exists('acl-unavailable'): raise OSError(errno.ENOTSUP, 'SECRET acl error')
     if exists('swap-path'):
         target = mapped(fds[fd])
@@ -67,8 +74,36 @@ def listing(file):
     global reads
     logical = fds[file] if isinstance(file, int) else str(file)
     result = real_listdir(file if isinstance(file, int) else mapped(file))
+    result = [name for name in result if logical.rstrip('/') + '/' + name not in vanished]
+    if logical == '/proc/123/task' and reads == 1 and exists('proc-task-exit'):
+        result.append('999')
     if logical == '/proc':
         reads += 1
+        (root / 'proc-scans').write_text(str(reads))
+        if exists('proc-denied'): raise PermissionError(errno.EACCES, 'SECRET procfs')
+        if exists('proc-io-error'): raise OSError(errno.EIO, 'SECRET procfs')
+        if exists('proc-exit-always') or (reads <= 2 and exists('proc-exit-twice')) or (reads == 1 and exists('proc-exit-once')) or (reads == 2 and exists('proc-exit-second')):
+            # Enumerated PID exits before its task directory can be opened.
+            result.append('999')
+        if (reads == 2 and exists('proc-churn-once')) or (reads % 2 == 0 and exists('proc-churn-always')):
+            result.remove('123')
+        if reads == 2 and exists('changed-task-credentials'):
+            status = root / 'system/proc/123/task/123/status'
+            status.write_text(status.read_text().replace(f'Groups:\t{os.getgid()+1}', f'Groups:\t{os.getgid()+2}'))
+        if reads == 2 and exists('reused-task'):
+            file = root / 'system/proc/123/task/123/stat'
+            file.write_text(file.read_text().replace('12345', '12346'))
+        if reads == 1 and exists('retry-config'):
+            file = root / 'system/etc/group'
+            file.write_text(file.read_text() + '# changed before retry\n')
+        if reads == 1 and exists('retry-mount'):
+            file = root / 'system/proc/self/mountinfo'
+            file.write_text(file.read_text() + '\n')
+        if reads == 2 and exists('retry-path'):
+            os.chmod(root / 'system/home/linuxbrew/.linuxbrew', 0o750)
+        if reads == 2 and exists('retry-foreign'):
+            status = root / 'system/proc/123/task/123/status'
+            status.write_text(status.read_text().replace('Groups:', f'Groups: {os.getgid()}'))
         if reads == 2 and exists('changed-membership'):
             status = root / 'system/proc/123/task/123/status'
             status.write_text(status.read_text().replace('Groups:', f'Groups: {os.getgid()}'))
@@ -97,7 +132,7 @@ def groups():
 def initgroups(name, gid):
     result = sorted({gid, *(entry.gr_gid for entry in groups() if name in entry.gr_mem)})
     if name == 'other' and exists('native-supplementary'): result.append(os.getgid())
-    if name == 'account' and reads >= 2 and exists('changed-native-membership'): result.append(os.getgid()+10)
+    if name == 'account' and ((reads >= 2 and exists('changed-native-membership')) or (reads >= 1 and exists('retry-native-membership'))): result.append(os.getgid()+10)
     return result
 
 

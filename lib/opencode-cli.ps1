@@ -1,4 +1,4 @@
-# Version 3 | Last changed: Prove private Homebrew groups and report safe preflight failures
+# Version 4 | Last changed: Report bounded Homebrew process-race retries
 function Test-OpenCodeCliAcl {
     param([string]$HomePath)
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -87,8 +87,11 @@ function Install-OpenCodeCli {
                 $output[0] -cmatch '\Aopencode-cli:download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)\z') {
                 Write-Warning "OpenCode CLI download failed (operation=$($Matches[1]), HTTP=$($Matches[2]))."
             } elseif ($LASTEXITCODE -ne 0 -and $output.Count -eq 1 -and
-                $output[0] -cmatch '\Aopencode-cli:policy-failed:(homebrew-preflight|installation):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-readiness|brew-group-shared|brew-identity-source|brew-acl-present|brew-acl-unverified|brew-proof-unverified|brew-proof-tool|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))\z') {
+                $output[0] -cmatch '\Aopencode-cli:policy-failed:(homebrew-preflight|installation):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-readiness|brew-group-shared|brew-identity-source|brew-acl-present|brew-acl-unverified|brew-proof-unverified|brew-proof-tool|brew-snapshot-changed|brew-process-churn|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))\z') {
                 Write-Warning "OpenCode CLI blocked (operation=$($Matches[1]), reason=$($Matches[2]))."
+                if ($Matches[2] -ceq 'brew-process-churn') {
+                    Write-Warning 'Homebrew process evidence kept changing across three attempts; review README before retrying.'
+                }
                 Write-Warning 'See README preflight guidance; do not bypass trust checks or change unrelated permissions.'
             }
             throw 'installation'
