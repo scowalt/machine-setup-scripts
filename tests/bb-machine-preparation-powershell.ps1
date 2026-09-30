@@ -14,8 +14,7 @@ foreach ($command in $commands) {
     if ($command -match '^bb' -or $command -eq 'wsl' -or $command -eq 'npm') { throw 'Unexpected native BB operation' }
     $stubs += "function $command { return `$true }"
 }
-$policy = Get-Content (Join-Path $PSScriptRoot '../lib/setup-policy.ps1') -Raw
-$code = '$ErrorActionPreference = "Stop"' + "`n" + ($stubs -join "`n") + "`n" + $policy + "`n" + $runner.Extent.Text + "`n" + $gate.Extent.Text + @'
+$code = '$ErrorActionPreference = "Stop"' + "`n" + ($stubs -join "`n") + "`n" + $runner.Extent.Text + "`n" + $gate.Extent.Text + @'
 function Write-Message { param($Message) $script:Messages += $Message }
 function Write-Host { }
 function Write-Section { }
@@ -24,8 +23,6 @@ function Write-Warning { }
 function Write-Error { }
 function Test-EnvLocalFlag { param($Name) return [Environment]::GetEnvironmentVariable($Name) -eq '1' }
 $script:Messages = @()
-$env:BB_THREAD_ID=$null; $env:BB_ENVIRONMENT_ID=$null; $env:BB_TERMINAL_ID=$null
-Initialize-SetupPolicy -Maintenance
 $env:HEADLESS = '0'
 $null = Invoke-WindowsSetupTasks
 if (-not ($script:Messages -match 'BB does not support native Windows.*WSL2.*manually enroll')) { throw 'Missing manual WSL2 guidance' }

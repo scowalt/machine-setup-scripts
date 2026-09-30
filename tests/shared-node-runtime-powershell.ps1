@@ -1,4 +1,4 @@
-# Version 4 | Last changed: Explicitly authorize inert maintenance fixtures
+# Version 5 | Last changed: Exercise ordinary setup without maintenance authorization
 # Offline only: AST-extracted setup functions, temporary homes, mocked tools and
 # persisted environment storage. Child probes run with -NoProfile and fixture
 # activation, never a user's profile. No real Pi, mise installs, or registry writes.
@@ -6,9 +6,6 @@ param([switch]$LegacyNativeArguments)
 if ($LegacyNativeArguments) { $PSNativeCommandArgumentPassing = 'Legacy' }
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
-. (Join-Path $repoRoot 'lib/setup-policy.ps1')
-$env:BB_THREAD_ID=$null; $env:BB_ENVIRONMENT_ID=$null; $env:BB_TERMINAL_ID=$null
-Initialize-SetupPolicy -Maintenance
 $tokens = $null
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'win.ps1'), [ref]$tokens, [ref]$parseErrors)

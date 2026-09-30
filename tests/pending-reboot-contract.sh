@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 2 | Last changed: Check maintenance and default reboot reporting separately
+# Version 3 | Last changed: Check ordinary setup reboot reporting
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -37,9 +37,8 @@ assert_order() {
     local description=$4
 
     local first_line second_line
-    # The earlier safe-policy block reports too; order the maintenance caller here.
-    first_line=$(awk '/^# BEGIN SETUP NON-DISRUPTION POLICY/ { policy=1 } /^# END SETUP NON-DISRUPTION POLICY/ { policy=0; next } !policy { print }' "${file}" | grep -En "${first}" | head -n 1 | cut -d: -f1)
-    second_line=$(awk '/^# BEGIN SETUP NON-DISRUPTION POLICY/ { policy=1 } /^# END SETUP NON-DISRUPTION POLICY/ { policy=0; next } !policy { print }' "${file}" | grep -En "${second}" | head -n 1 | cut -d: -f1)
+    first_line=$(grep -En "${first}" "${file}" | head -n 1 | cut -d: -f1)
+    second_line=$(grep -En "${second}" "${file}" | head -n 1 | cut -d: -f1)
     [[ -n "${first_line}" && -n "${second_line}" ]] || fail "${file}: could not verify ${description}"
     [[ "${first_line}" -lt "${second_line}" ]] || fail "${file}: ${description}"
 }

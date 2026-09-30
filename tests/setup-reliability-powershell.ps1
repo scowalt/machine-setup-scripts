@@ -20,8 +20,6 @@ foreach ($definition in $ast.EndBlock.Statements) {
         . ([scriptblock]::Create($definition.Extent.Text))
     }
 }
-$env:BB_THREAD_ID=$null; $env:BB_ENVIRONMENT_ID=$null; $env:BB_TERMINAL_ID=$null
-Initialize-SetupPolicy -Maintenance
 
 $script:Messages = [System.Collections.Generic.List[string]]::new()
 function global:Write-Message($message) { $script:Messages.Add("MESSAGE: $message") }

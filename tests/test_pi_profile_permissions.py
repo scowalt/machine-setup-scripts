@@ -5,7 +5,6 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from setup_policy_fixture import bash_maintenance, powershell_maintenance
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ('mac.sh', 'ubuntu.sh', 'wsl.sh', 'pi.sh', 'bazzite.sh', 'win.ps1')
@@ -604,7 +603,7 @@ if ((Get-ChildItem -LiteralPath $outside).Count) { throw 'Outside changed throug
                                            "function Write-Debug($Message) { [Console]::WriteLine($Message) }\n"
                                            'function Enable-SharedNodeRuntime { return $' + ('false' if outcome == 'runtime-failure' else 'true') + ' }\n' +
                                            ("function node { Write-Output 'PRIVATE-SENTINEL'; $global:LASTEXITCODE=1 }\n" if outcome == 'unknown-output' else '') +
-                                           powershell_maintenance() + body + "\n$ok=Prepare-PiProfilePermissions\n"
+                                           body + "\n$ok=Prepare-PiProfilePermissions\n"
                                            "if ($env:NODE_OPTIONS -ne '--PRIVATE-SENTINEL' -or $env:NODE_PATH -ne 'PRIVATE-SENTINEL' -or -not $PSNativeCommandUseErrorActionPreference) { throw 'environment changed' }\n"
                                            "if (-not $ok) { exit 1 }\n")
                         command = [PWSH, '-NoProfile', '-NonInteractive', '-File', str(fixture)]
@@ -618,7 +617,7 @@ if ((Get-ChildItem -LiteralPath $outside).Count) { throw 'Outside changed throug
                             binary.write_text("#!/bin/sh\nprintf 'PRIVATE-SENTINEL\\n'\nexit 1\n")
                             binary.chmod(0o755)
                             env['PATH'] = str(binary.parent) + os.pathsep + env['PATH']
-                        fixture.write_text(bash_maintenance() + prefix + body + '\nprepare_pi_profile_permissions\n')
+                        fixture.write_text(prefix + body + '\nprepare_pi_profile_permissions\n')
                         command = ['bash', str(fixture)]
                     result = subprocess.run(command, env=env, cwd=self.root, text=True, capture_output=True, timeout=30)
                     self.assertNotIn('PRIVATE-SENTINEL', result.stdout + result.stderr)

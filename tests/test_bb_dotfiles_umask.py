@@ -12,7 +12,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from setup_policy_fixture import bash_maintenance
 
 from test_bb_directory_preflight import RUN_PREFLIGHT
 from test_bb_machine_preparation import BLOCK, NODE, SCRIPTS
@@ -130,7 +129,7 @@ class BbDotfilesUmaskTests(unittest.TestCase):
     def configure_script(self, platform):
         self.platform = platform
         source = (ROOT / (platform + '.sh')).read_text()
-        helpers = [bash_maintenance(), BLOCK] + [function(source, name) for name in ("initialize_chezmoi", "update_chezmoi")]
+        helpers = [BLOCK] + [function(source, name) for name in ("initialize_chezmoi", "update_chezmoi")]
         # Allow the pre-fix version to reach the actual native regression, not
         # fail on a missing new symbol before it can reproduce the user's bug.
         if "with_bb_dotfiles_umask() {" in source:
@@ -542,7 +541,8 @@ setup_bb_machine "$2"
                     script += function(source, name)
             if platform == 'pi':
                 script += function(source, 'apply_chezmoi_config')
-            script += '\n' + bash_maintenance() + '\numask 0002\nrun_setup_tasks\nprintf "CALLER_MASK=%s\\n" "$(umask)"\n'
+            script += '\n' + (ROOT / 'lib/setup-policy.bash').read_text()
+            script += '\numask 0002\nrun_setup_tasks\nprintf "CALLER_MASK=%s\\n" "$(umask)"\n'
             for process, saved, expected in [({'BB_SERVER': '0'}, 'BB_SERVER=1', '0022'),
                                              ({'BB_SERVER': '1'}, 'BB_SERVER=0\nBB_DATA_DIR=/custom', '0022' if platform == 'ubuntu' else '0002'),
                                              ({'BB_SERVER': 'invalid'}, 'BB_SERVER=0', '0002' if platform == 'ubuntu' else '0022'),

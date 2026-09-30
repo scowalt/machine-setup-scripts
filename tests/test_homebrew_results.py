@@ -1,10 +1,9 @@
-"""Contract v2: Homebrew/OpenCode exclusion + final caller seams; no live setup/brew."""
+"""Contract v3: ordinary Homebrew/OpenCode caller seams; no live setup/brew."""
 from pathlib import Path
 import re
 import subprocess
 import tempfile
 import unittest
-from setup_policy_fixture import bash_maintenance
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / 'mac.sh').read_text()
@@ -50,7 +49,7 @@ brew() {
         script += '\n' + function('update_brew')
         script += '\nrun_setup_tasks() {\nlocal _setup_had_errors=${EARLIER}\nlocal _infisical_retirement_failed=${INFISICAL_FAILED}\n'
         script += 'if is_main_user; then\n print_section "Final Updates"' + tail
-        script += '\n' + bash_maintenance() + '\n' + function('main') + '\nmain --maintenance\n'
+        script += '\n' + function('main') + '\nmain\n'
         with tempfile.TemporaryDirectory() as home:
             result = subprocess.run(['bash', '-c', script], text=True, capture_output=True,
                                     env={'PATH': '/usr/bin:/bin', 'HOME': home,

@@ -1,5 +1,7 @@
 # Non-disruptive machine setup: agreed policy design
 
+**Historical design, superseded by the user-approved [2026-09-30 rollback](../research/2026-09-30-setup-rollback.md).** Ordinary setup provisions/updates again. The decisions and evidence below record the earlier implementation, not current scheduling policy.
+
 Status: the user approved design questions Q1–Q9 and the TASK-57 implementation plan, including argument-only maintenance authorization, data-only environment loading and the narrow default safe-write set. Parent accepted AC1–9 against the reviewed offline evidence; AC10 and completion remain held for the documented incident exception. Integration with updated main passes the affected contracts and refreshed 40-entry contained aggregate, pending parent integration review. Native continuity is not yet verified. No live setup, service changes, incident reproduction or rollout is authorized.
 
 Historical alias: this work was branch-local **TASK-56**, renumbered through Backlog CLI to **TASK-57** when upstream introduced an unrelated TASK-56. Historical artifact paths and incident chronology retain the former identifier.

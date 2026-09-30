@@ -16,51 +16,12 @@ print_success() { printf "${GREEN} %s${NC}\n" "$1"; }
 print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
 print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 
-# BEGIN SETUP NON-DISRUPTION POLICY
-# Non-disruptive scheduling. Embedded verbatim; no Node, package manager or app dependency.
-# Version 1 | Last changed: Separate ordinary setup from explicit maintenance
-SETUP_MAINTENANCE_AUTHORIZED=0
-SETUP_POLICY_READY=0
-SETUP_POLICY_FAILED=0
-SETUP_POLICY_DEFERRED=0
-export -n SETUP_MAINTENANCE_AUTHORIZED SETUP_POLICY_READY SETUP_POLICY_FAILED SETUP_POLICY_DEFERRED
-
-setup_policy_init() {
-    SETUP_MAINTENANCE_AUTHORIZED=0
-    SETUP_POLICY_READY=0
-    SETUP_POLICY_FAILED=0
-    SETUP_POLICY_DEFERRED=0
-    case "$#:$*" in
-        0:) ;;
-        1:--maintenance)
-            if [[ -n "${BB_THREAD_ID:-}${BB_ENVIRONMENT_ID:-}${BB_TERMINAL_ID:-}" ]]; then
-                print_error 'Maintenance refused in a BB session. Use a separate non-BB terminal.'
-                return 1
-            fi
-            SETUP_MAINTENANCE_AUTHORIZED=1 ;;
-        *) print_error 'Unknown setup arguments. Use no arguments, or --maintenance outside BB.'; return 1 ;;
-    esac
-    SETUP_POLICY_READY=1
-}
-
-setup_policy_failure() {
-    SETUP_POLICY_FAILED=1
-    print_error "Failed: $1. Existing state was preserved; no automatic repair."
+# BEGIN SETUP ENVIRONMENT POLICY
+# Data-only environment policy. Embedded verbatim; no scheduling or runtime dependency.
+# Version 2 | Last changed: Restore ordinary provisioning and retain literal dotenv parsing
+setup_environment_failure() {
+    print_error "Failed: $1. Environment file preserved."
     return 1
-}
-
-setup_policy_defer() {
-    SETUP_POLICY_DEFERRED=1
-    print_message "Deferred: $1; maintenance required to preserve ongoing work. ${2:-Update availability was not checked.}"
-}
-
-# 75 means policy deferral, never readiness, current, or a failed inspection.
-setup_require_maintenance() {
-    if [[ "${SETUP_POLICY_READY:-0}" == 1 && "${SETUP_MAINTENANCE_AUTHORIZED:-0}" == 1 ]]; then
-        return 0
-    fi
-    setup_policy_defer "$1"
-    return 75
 }
 
 setup_trim() {
@@ -99,389 +60,32 @@ setup_environment_value() {
 }
 
 # The documented dotenv format is data, not shell code. No eval/source or expansion.
-# Unknown keys (including any purported saved maintenance permission) are ignored.
+# Unknown keys are ignored.
 setup_load_environment() {
     local environment_file="${HOME}/.env.local" line key value
     [[ -e "${environment_file}" || -L "${environment_file}" ]] || return 0
-    [[ -f "${environment_file}" && ! -L "${environment_file}" && -r "${environment_file}" ]] || { setup_policy_failure 'environment-file inspection'; return 1; }
+    [[ -f "${environment_file}" && ! -L "${environment_file}" && -r "${environment_file}" ]] || { setup_environment_failure 'environment-file inspection'; return 1; }
     while IFS= read -r line || [[ -n "${line}" ]]; do
         setup_trim "${line%$'\r'}"; line="${SETUP_TRIMMED}"
         case "${line}" in ''|\#*) continue ;; *) ;; esac
         line="${line#export }"
-        [[ "${line}" == *=* ]] || { setup_policy_failure 'unsupported environment-file statement'; return 1; }
+        [[ "${line}" == *=* ]] || { setup_environment_failure 'unsupported environment-file statement'; return 1; }
         setup_trim "${line%%=*}"; key="${SETUP_TRIMMED}"
-        [[ "${key}" =~ ^[A-Za-z_][A-Za-z_0-9]*$ ]] || { setup_policy_failure 'unsupported environment-file key'; return 1; }
+        [[ "${key}" =~ ^[A-Za-z_][A-Za-z_0-9]*$ ]] || { setup_environment_failure 'unsupported environment-file key'; return 1; }
         case "${key}" in
             HEADLESS|HEADLESS_PASSWORDLESS_SUDO|BB_SERVER|BB_DATA_DIR|BB_APP_NPM_PREFIX|WORK_MACHINE|MACHINE_TYPE|BAN_PI_MCP_ADAPTER|BAN_PI_GOAL_AUTORESEARCH|BAN_MATT_POCOCK_SKILLS|BAN_MATT_POCKOCK_SKILLS|GH_TOKEN|GH_TOKEN_SCOWALT|OP_SERVICE_ACCOUNT_TOKEN|ZAI_API_KEY|OPENCODE_GO_API_KEY|CLAUDE_CONFIG_DIR|CODEX_HOME|PI_CODING_AGENT_DIR) ;;
             *) continue ;;
         esac
         setup_trim "${line#*=}"; value="${SETUP_TRIMMED}"
-        setup_environment_value "${value}" || { setup_policy_failure 'unsupported environment-file value'; return 1; }
+        setup_environment_value "${value}" || { setup_environment_failure 'unsupported environment-file value'; return 1; }
         value="${SETUP_ENV_VALUE}"
-        # BB_SERVER's explicit process value wins, including 0. HEADLESS's
-        # WSL/Windows OR gate is checked independently before loading this file.
+        # BB_SERVER's explicit process value wins on Ubuntu, including 0.
+        # WSL's exact-1 headless gate also checks the file before this loader.
         [[ "${key}" != BB_SERVER || "${SETUP_ENTRY_PLATFORM:-}" != ubuntu || -z "${BB_SERVER:-}" ]] || continue
         export "${key}=${value}"
     done < "${environment_file}"
 }
-
-# Refuse linked descendants and writable/foreign boundaries. Only the established
-# root-owned Linux /home -> /var/home alias is eligible; never normalize arbitrary links.
-setup_safe_home() {
-    local component path='' metadata owner mode uid kernel target
-    local -a _setup_components=()
-    [[ "${HOME}" == /* && "${HOME}" != / && "${HOME}" != *'/../'* && "${HOME}" != */.. ]] || return 1
-    uid=$(id -u) || return 1
-    local old_ifs="${IFS}"; IFS=/
-    read -r -a _setup_components <<< "${HOME#/}"
-    IFS="${old_ifs}"
-    for component in "${_setup_components[@]}"; do
-        [[ -n "${component}" && "${component}" != . ]] || return 1
-        path="${path}/${component}"
-        if [[ -L "${path}" ]]; then
-            kernel=$(uname -s) || return 1
-            target=$(readlink /home) || return 1
-            [[ "${path}" == /home && "${kernel}" == Linux && "${target}" == /var/home ]] || return 1
-            metadata=$(stat -c '%u %a' /home) || return 1
-            [[ "${metadata%% *}" == 0 ]] || return 1
-            for target in /var /var/home; do
-                [[ -d "${target}" && ! -L "${target}" ]] || return 1
-                metadata=$(stat -c '%u %a' "${target}") || return 1
-                read -r owner mode <<< "${metadata}"
-                [[ "${owner}" == 0 && "${mode}" =~ ^[0-7]{3,4}$ ]] || return 1
-                (( (8#${mode} & 8#022) == 0 )) || return 1
-            done
-        fi
-        [[ -d "${path}" ]] || return 1
-        metadata=$(stat -Lc '%u %a' "${path}" 2>/dev/null || stat -Lf '%u %Lp' "${path}" 2>/dev/null) || return 1
-        read -r owner mode <<< "${metadata}"
-        [[ ( "${owner}" == 0 || "${owner}" == "${uid}" ) && "${mode}" =~ ^[0-7]{3,4}$ ]] || return 1
-        if (( (8#${mode} & 8#022) != 0 )); then
-            # Root-owned sticky temporary roots protect account-owned fixture/HOME entries.
-            [[ "${owner}" == 0 ]] && (( (8#${mode} & 8#1000) != 0 )) || return 1
-        fi
-    done
-    metadata=$(stat -c '%u %a' "${HOME}" 2>/dev/null || stat -f '%u %Lp' "${HOME}" 2>/dev/null) || return 1
-    read -r owner mode <<< "${metadata}"
-    [[ "${owner}" == "${uid}" && "${mode}" =~ ^[0-7]{3,4}$ ]] || return 1
-    (( (8#${mode} & 8#022) == 0 ))
-}
-
-setup_safe_directory() {
-    local target="$1" path="${HOME}" component metadata owner mode uid
-    local -a _setup_components=()
-    setup_safe_home || return 1
-    [[ "${target}" == "${HOME}/"* ]] || return 1
-    uid=$(id -u) || return 1
-    local old_ifs="${IFS}"; IFS=/
-    read -r -a _setup_components <<< "${target#"${HOME}/"}"
-    IFS="${old_ifs}"
-    for component in "${_setup_components[@]}"; do
-        [[ -n "${component}" && "${component}" != . && "${component}" != .. ]] || return 1
-        path="${path}/${component}"
-        [[ ! -L "${path}" ]] || return 1
-        if [[ ! -e "${path}" ]]; then
-            (umask 077; mkdir -- "${path}") || return 1
-        fi
-        [[ -d "${path}" && ! -L "${path}" ]] || return 1
-        metadata=$(stat -c '%u %a' "${path}" 2>/dev/null || stat -f '%u %Lp' "${path}" 2>/dev/null) || return 1
-        read -r owner mode <<< "${metadata}"
-        [[ "${owner}" == "${uid}" && "${mode}" =~ ^[0-7]{3,4}$ ]] || return 1
-        (( (8#${mode} & 8#022) == 0 )) || return 1
-    done
-}
-
-setup_safe_lock() {
-    local XDG_RUNTIME_DIR="${HOME}/.local/state" lock_path metadata uid links mode
-    setup_safe_directory "${XDG_RUNTIME_DIR}" || return 1
-    for lock_path in "${XDG_RUNTIME_DIR}/machine-setup.lock" "${XDG_RUNTIME_DIR}/machine-setup.lock.d" "${XDG_RUNTIME_DIR}/machine-setup.lock.d.reclaim"; do
-        [[ ! -L "${lock_path}" ]] || return 1
-        [[ -e "${lock_path}" ]] || continue
-        metadata=$(stat -c '%u %h %a' "${lock_path}" 2>/dev/null || stat -f '%u %l %Lp' "${lock_path}" 2>/dev/null) || return 1
-        read -r uid links mode <<< "${metadata}"
-        [[ -O "${lock_path}" && "${mode}" =~ ^[0-7]{3,4}$ ]] || return 1
-        (( (8#${mode} & 8#022) == 0 )) || return 1
-        [[ -d "${lock_path}" || ( -f "${lock_path}" && "${links}" == 1 ) ]] || return 1
-    done
-    acquire_setup_lock
-}
-
-setup_safe_code_directory() {
-    local existed=0
-    [[ ! -e "${HOME}/Code" ]] || existed=1
-    setup_safe_directory "${HOME}/Code" || { setup_policy_failure 'Code directory safety/creation'; return 1; }
-    if [[ "${existed}" == 1 ]]; then
-        print_success 'Verified current: Code directory exists; contents unchanged.'
-    else
-        print_success 'Applied: created the missing Code directory; no existing files changed.'
-    fi
-}
-
-# Query only named services setup actually configures. Never inventory or operate
-# on unrelated services, never use enable/start/restart.
-setup_observe_systemd_service() {
-    local scope="$1" unit="$2" required="${3:-0}" state key value load='' active='' enabled='' result=''
-    local -a args=()
-    SETUP_SERVICE_EXPECTED_ACTIVE=0
-    [[ "${scope}" != user ]] || args+=(--user)
-    if ! state=$(systemctl "${args[@]}" show "${unit}" --property=LoadState,ActiveState,UnitFileState,Result 2>/dev/null); then
-        setup_policy_failure 'service health inspection unavailable'; return 1
-    fi
-    while IFS='=' read -r key value; do
-        case "${key}" in
-            LoadState) load="${value}" ;; ActiveState) active="${value}" ;;
-            UnitFileState) enabled="${value}" ;; Result) result="${value}" ;;
-            '') ;; *) setup_policy_failure 'unrecognized service health response'; return 1 ;;
-        esac
-    done <<< "${state}"
-    if [[ "${load}" == not-found ]]; then
-        [[ "${required}" != 1 ]] || { setup_policy_failure 'existing managed service absent'; return 1; }
-        return 0
-    fi
-    [[ "${load}" == loaded || "${load}" == masked ]] || { setup_policy_failure 'service load-state inspection'; return 1; }
-    if [[ "${enabled}" == enabled || "${active}" == active ]]; then SETUP_SERVICE_EXPECTED_ACTIVE=1; fi
-    if [[ "${active}" == failed || ( "${enabled}" == enabled && "${active}" != active ) || ( -n "${result}" && "${result}" != success ) ]]; then
-        setup_policy_failure "service health (${unit})"; return 1
-    fi
-    case "${active}" in
-        active) print_success "Verified current: ${unit} is active (not update freshness)." ;;
-        inactive) print_debug "${unit} is intentionally inactive/disabled; unchanged." ;;
-        *) setup_policy_failure 'unverified service activity'; return 1 ;;
-    esac
-}
-
-setup_systemd_available() {
-    [[ -d /run/systemd/system ]]
-}
-
-setup_readonly_python() {
-    # Never resolve an account PATH/shim or trigger interpreter installation.
-    local python path metadata owner mode magic
-    python=$(/usr/bin/readlink -f /usr/bin/python3) || return 1
-    [[ "${python}" =~ ^/usr/bin/python3\.[0-9]+$ && -f "${python}" && -x "${python}" ]] || return 1
-    for path in / /usr /usr/bin "${python}"; do
-        metadata=$(/usr/bin/stat -Lc '%u %a' -- "${path}") || return 1
-        read -r owner mode <<< "${metadata}"
-        [[ "${owner}" == 0 && "${mode}" =~ ^[0-7]{3,4}$ ]] || return 1
-        (( (8#${mode} & 8#022) == 0 )) || return 1
-    done
-    magic=$(/usr/bin/od -An -tx1 -N4 "${python}") || return 1
-    [[ "${magic//[[:space:]]/}" == 7f454c46 ]] || return 1
-    "${python}" -I -S "$@"
-}
-
-setup_observe_bb_readiness() {
-    setup_readonly_python - "${HOME}" >/dev/null 2>&1 <<'SETUP_READONLY_BB_PY'
-import http.client
-import json
-import os
-from pathlib import Path
-import re
-import stat
-import subprocess
-import sys
-
-
-def readiness(home):
-    uid = os.getuid()
-
-    def private_file(relative):
-        descriptors = []
-        try:
-            parent = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            descriptors.append(parent)
-            for component in Path(relative).parts[:-1]:
-                parent = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
-                descriptors.append(parent)
-            for descriptor in descriptors:
-                info = os.fstat(descriptor)
-                if info.st_uid != uid or info.st_mode & 0o022:
-                    raise ValueError('directory boundary')
-            descriptor = os.open(Path(relative).name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
-            descriptors.append(descriptor)
-            info = os.fstat(descriptor)
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != uid or info.st_nlink != 1 or info.st_mode & 0o077:
-                raise ValueError('metadata boundary')
-            with os.fdopen(os.dup(descriptor), 'rb') as stream:
-                content = stream.read(1048577)
-            after = os.fstat(descriptor)
-            if len(content) > 1048576 or (info.st_size, info.st_mtime_ns, info.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
-                raise ValueError('changed metadata')
-            return content.decode('utf-8').strip()
-        finally:
-            for descriptor in reversed(descriptors):
-                os.close(descriptor)
-
-    bins = []
-    root = str(home / '.local/share/mise/installs/node') + '/'
-    for name in ('package-owner', 'package-owner.next'):
-        try:
-            owner = private_file('.config/setup-bb-server/' + name)
-        except FileNotFoundError:
-            continue
-        if not owner.startswith(root) or not owner.endswith('/lib/node_modules/bb-app'):
-            raise ValueError('owner record')
-        version = owner[len(root):-len('/lib/node_modules/bb-app')]
-        if not re.fullmatch(r'[A-Za-z0-9._+-]+', version) or version in ('.', '..'):
-            raise ValueError('owner version')
-        bins.append(str(Path(owner).parents[2] / 'bin/bb-app'))
-    if not bins:
-        raise ValueError('missing owner')
-    result = subprocess.run(['/usr/bin/systemctl', '--user', 'show', 'setup-bb-app.service', '--property=MainPID', '--value'],
-                            env={'PATH': '/usr/bin:/bin', 'LANG': 'C', 'XDG_RUNTIME_DIR': '/run/user/' + str(uid)},
-                            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=3, check=True)
-    pid = result.stdout.strip()
-    if not re.fullmatch(r'[1-9][0-9]*', pid):
-        raise ValueError('process id')
-    process = Path('/proc') / pid
-    if process.stat().st_uid != uid:
-        raise ValueError('process owner')
-    arguments = (process / 'cmdline').read_bytes().decode().split('\0')
-    expected = {str(Path(binary).resolve(strict=True)) for binary in bins}
-    if not any(argument in bins or (argument and str(Path(argument).resolve()) in expected) for argument in arguments):
-        raise ValueError('process identity')
-    host_id = ''
-    for name in ('host-id', 'auth.json', 'env.json'):
-        try:
-            content = private_file('.bb/' + name)
-        except FileNotFoundError:
-            continue
-        if name == 'host-id':
-            host_id = content
-        else:
-            data = json.loads(content)
-            host_id = host_id or data.get('hostId') or data.get('env', {}).get('BB_HOST_ID', '')
-    if not isinstance(host_id, str) or not host_id:
-        raise ValueError('missing host identity')
-
-    def response(port, endpoint):
-        # Fixed numeric loopback, no proxy, redirects, authentication or app CLI.
-        connection = http.client.HTTPConnection('127.0.0.1', port, timeout=2)
-        try:
-            connection.request('GET', endpoint)
-            received = connection.getresponse()
-            body = received.read(65537)
-            if received.status != 200 or len(body) > 65536:
-                raise ValueError('health response')
-            return json.loads(body)
-        finally:
-            connection.close()
-
-    health = response(38886, '/health')
-    local = response(38887, '/status')
-    if (health.get('ok') is not True or not isinstance(health.get('launchId'), str) or not health['launchId']
-            or local.get('connected') is not True or local.get('hostId') != host_id
-            or local.get('serverUrl', '').rstrip('/') not in ('http://127.0.0.1:38886', 'http://localhost:38886')):
-        raise ValueError('unhealthy app or local execution')
-
-
-if __name__ == '__main__':
-    try:
-        readiness(Path(sys.argv[1]))
-    except Exception:
-        sys.exit(1)  # No arbitrary exceptions, metadata, credentials or paths.
-SETUP_READONLY_BB_PY
-}
-
-setup_observe_services() {
-    local platform="$1" unit status=0 app_expected=0 SETUP_SERVICE_EXPECTED_ACTIVE=0
-    case "${platform}" in
-        ubuntu|pi|bazzite|wsl)
-            # Non-systemd fresh/WSL systems have no manager to repair. An existing
-            # managed BB deployment still requires a readable health inspection.
-            if ! setup_systemd_available; then
-                if [[ -e "${HOME}/.config/setup-bb-server" ]]; then
-                    setup_policy_failure 'existing BB service manager unavailable'; return 1
-                fi
-                print_debug 'No systemd manager; service health not applicable.'
-                return 0
-            fi
-            for unit in ssh.service tailscaled.service fail2ban.service; do
-                setup_observe_systemd_service system "${unit}" || status=1
-            done
-            if [[ -e "${HOME}/.config/systemd/user/tmux.service" ]]; then
-                setup_observe_systemd_service user tmux.service || status=1
-            fi
-            if [[ -e "${HOME}/.config/setup-bb-server" ]]; then
-                for unit in setup-bb-app.service setup-bb-ingress.service; do
-                    setup_observe_systemd_service user "${unit}" 1 || status=1
-                    if [[ "${unit}" == setup-bb-app.service ]]; then app_expected="${SETUP_SERVICE_EXPECTED_ACTIVE}"; fi
-                done
-                # Do not execute Node, mise shims, app CLIs or package managers.
-                # Missing trusted system Python is a failed observation, not repair.
-                if [[ "${app_expected}" == 1 ]] && ! setup_observe_bb_readiness; then
-                    setup_policy_failure 'existing BB app/local execution health' || true
-                    status=1
-                fi
-            fi ;;
-        mac)
-            # No app launch and no sudo authorization just to observe launchd.
-            if [[ -f /Library/LaunchDaemons/com.tailscale.tailscaled.plist ]]; then
-                if ! launchctl print system/com.tailscale.tailscaled >/dev/null 2>&1; then
-                    setup_policy_failure 'configured Tailscale launchd health'; status=1
-                fi
-            fi ;;
-        *) setup_policy_failure 'unknown platform'; return 1 ;;
-    esac
-    return "${status}"
-}
-
-setup_safe_tasks() {
-    local platform="$1" status=0 user
-    print_section 'Non-disruptive setup'
-    case "${platform}" in
-        wsl) fail_unsupported_headless || return 1 ;;
-        *) ;;
-    esac
-    setup_load_environment || status=1
-    case "${platform}" in
-        ubuntu|pi|bazzite) headless_platform_gate || return 1 ;;
-        *) ;;
-    esac
-    case "${platform}" in
-        mac) ;;
-        *) ensure_not_root || return 1 ;;
-    esac
-    [[ "${platform}" != bazzite ]] || verify_bazzite_system || return 1
-    if [[ "${platform}" == ubuntu ]]; then
-        case "${BB_SERVER:-}" in ''|0|1) ;; *) setup_policy_failure 'invalid BB_SERVER selection' || true; status=1 ;; esac
-    fi
-    setup_safe_lock || { setup_policy_failure 'setup lock inspection/acquisition' || true; status=1; }
-    # Each group owns its entire transitive effect boundary, including bootstrap
-    # and verification commands that could load a shell hook or update a cache.
-    setup_policy_defer 'system packages, CLT, package-manager bootstrap and cleanup' 'Dependent tool installations are deferred; update availability was not checked.'
-    setup_policy_defer 'network, DNS, Tailscale, SSH, security, power and service changes'
-    setup_observe_services "${platform}" || status=1
-    setup_policy_defer 'dotfiles init/update/apply, credential bootstrap and token migration' 'Dependent shell activation and repair are deferred.'
-    setup_policy_defer 'shared runtimes, npm policy and runtime-dependent tools' 'BB/Pi/skills and targeted dotfile repairs are deferred.'
-    setup_policy_defer 'BB server, machine preparation and desktop installation' 'Existing sessions, endpoints, packages and configuration remain untouched.'
-    setup_policy_defer 'agent executables, Pi profiles/auth/packages, skills and retirements' 'Opt-outs/retirements remain desired state, not completed cleanup.'
-    setup_policy_defer 'terminal configuration, plugins, shell changes and user-service enablement'
-    setup_policy_defer 'new automatic-updater configuration' 'Existing independent updater policy remains unchanged.'
-    user=$(whoami) || { setup_policy_failure 'account inspection'; status=1; }
-    [[ -n "${user}" ]] || { setup_policy_failure 'account identity unavailable' || true; status=1; }
-    if [[ "${platform}" == mac ]]; then
-        if is_main_user; then setup_safe_code_directory || status=1; fi
-    elif [[ "${user}" == scowalt ]]; then
-        setup_safe_code_directory || status=1
-    fi
-    check_pending_reboot
-    return "${status}"
-}
-
-setup_policy_summary() {
-    local status="$1"
-    if [[ "${status}" != 0 || "${SETUP_POLICY_FAILED:-0}" != 0 ]]; then
-        print_warning 'Setup completed with errors; required work/inspection failed.'
-        [[ "${SETUP_POLICY_DEFERRED:-0}" != 1 ]] || print_warning 'Maintenance pending; deferred changes are not verified current.'
-        return 1
-    fi
-    if [[ "${SETUP_POLICY_DEFERRED:-0}" == 1 ]]; then
-        print_success 'Safe work completed; maintenance pending.'
-        print_warning 'Freshness, including security updates, may be delayed. Run --maintenance from a separate non-BB terminal.'
-    fi
-}
-# END SETUP NON-DISRUPTION POLICY
+# END SETUP ENVIRONMENT POLICY
 
 SETUP_ORIGINAL_PATH="${PATH}"
 SETUP_ORIGINAL_CLAUDE_COMMAND=$(command -v claude 2>/dev/null || true)
@@ -560,7 +164,6 @@ migrate_token_files() {
 
 # Create placeholder ~/.env.local if it doesn't exist
 create_env_local() {
-    setup_require_maintenance 'create_env_local' || return $?
     migrate_token_files
 
     if [[ ! -f "${HOME}/.env.local" ]]; then
@@ -2945,7 +2548,6 @@ verify_shared_node_shell() {
 
 # A compatible inherited Node is not evidence of a durable shared mise selection.
 ensure_shared_node_runtime() {
-    setup_require_maintenance 'ensure_shared_node_runtime' || return $?
     local _inventory="" _count="" _install_path="" _version="" _runtime="" _mise_env="" _attempt
     export PATH="${HOME}/.local/bin:${HOME}/.mise/bin:${PATH}"
     if ! command -v mise &> /dev/null || ! command -v jq &> /dev/null; then
@@ -3254,7 +2856,6 @@ ensure_skills_cli_node_runtime() {
 
 # Install/update one copied global skill for every supported AI coding harness.
 install_managed_agent_skill() {
-    setup_require_maintenance 'install_managed_agent_skill' || return $?
     local _repository=$1
     local _skill_name=$2
     local _display_name=$3
@@ -4306,7 +3907,6 @@ remove_pi_subagents() {
 
 # Retire Backlog MCP from global agent configuration. Keep this block identical in the Bash setup scripts.
 retire_global_backlog_mcp() {
-    setup_require_maintenance 'retire_global_backlog_mcp' || return $?
     local _result=""
     if ! ensure_shared_node_runtime; then
         print_error "Node.js is required to retire global Backlog MCP registrations."
@@ -4749,7 +4349,6 @@ BACKLOG_MCP_RETIREMENT_JS
 # Pi prose retirement. Keep this block identical in the Bash setup scripts.
 # Secure only managed Pi directory boundaries; metadata remains with its validators.
 prepare_pi_profile_permissions() {
-    setup_require_maintenance 'prepare_pi_profile_permissions' || return $?
     local _result="" _status=0
     if ! ensure_shared_node_runtime; then
         print_warning "Pi profile permissions failed: shared-runtime-unavailable."
@@ -6363,7 +5962,6 @@ remove_obsolete_matt_pocock_skills() {
 
 # Install all upstream categories, including experimental skills, for four agents.
 setup_matt_pocock_skills() {
-    setup_require_maintenance 'setup_matt_pocock_skills' || return $?
     local _stage="" _npm_userconfig="" _npm_globalconfig=""
     local _matt_failed=0
     if matt_pocock_skills_disabled; then
@@ -7217,7 +6815,6 @@ install_gcloud_cli() {
 
 # Install and configure unattended-upgrades for automatic security updates
 setup_unattended_upgrades() {
-    setup_require_maintenance 'setup_unattended_upgrades' || return $?
     if ! can_sudo; then
         print_debug "No sudo access - skipping unattended-upgrades setup."
         return
@@ -7634,26 +7231,15 @@ upload_log() {
 }
 
 start_setup_log() {
-    local log_dir="${HOME}/.local/log/machine-setup" log_time log_run_dir
-    SETUP_LOG_FILE=""
-    if ! setup_safe_directory "${log_dir}"; then
+    local log_dir="${HOME}/.local/log/machine-setup"
+    if ! mkdir -p "${log_dir}"; then
         print_warning "Could not create setup log directory at ${log_dir}; continuing without log upload."
         return 1
     fi
 
-    # BSD and GNU mktemp both accept trailing Xs. Reserve a private directory,
-    # then exclusively create the .log leaf; never rename over or hardlink a log.
-    if ! log_time=$(date +%Y-%m-%d-%H%M%S) || ! log_run_dir=$(mktemp -d "${log_dir}/${log_time}.XXXXXX"); then
-        print_warning 'Could not reserve a private setup log directory; continuing without log upload.'
-        return 1
-    fi
-    if [[ "${log_run_dir%/*}" != "${log_dir}" || ! -d "${log_run_dir}" || -L "${log_run_dir}" ]] || ! setup_safe_directory "${log_run_dir}"; then
-        print_warning 'Unsafe setup log reservation; continuing without log upload.'
-        return 1
-    fi
-    SETUP_LOG_FILE="${log_run_dir}/${log_run_dir##*/}.log"
-    if [[ -e "${SETUP_LOG_FILE}" || -L "${SETUP_LOG_FILE}" ]] || ! (umask 077; set -o noclobber; : > "${SETUP_LOG_FILE}"); then
-        print_warning 'Could not exclusively create the setup log; existing paths preserved, continuing without log upload.'
+    SETUP_LOG_FILE="${log_dir}/$(date +%Y-%m-%d-%H%M%S).log"
+    if ! touch "${SETUP_LOG_FILE}"; then
+        print_warning "Could not create setup log at ${SETUP_LOG_FILE}; continuing without log upload."
         SETUP_LOG_FILE=""
         return 1
     fi
@@ -8181,7 +7767,6 @@ bb_machine_platform_ready() {
 # Chezmoi alone owns target convergence. Keep native config precedence and the
 # caller's stricter mask; known roles receive no preparation-driven restriction.
 with_bb_dotfiles_umask() {
-    setup_require_maintenance 'with_bb_dotfiles_umask' || return $?
     (
         local _platform="$1" _selection=1 _protect=0
         shift
@@ -8201,7 +7786,6 @@ with_bb_dotfiles_umask() {
 }
 
 setup_bb_machine() {
-    setup_require_maintenance 'setup_bb_machine' || return $?
     local _platform="$1" _prefix="${HOME}/.local/share/setup-bb-machine/npm" _bin _found _version _policy
     local _npm_userconfig _npm_globalconfig
     local -a _npm_context
@@ -8327,14 +7911,13 @@ install_bb_desktop() {
 # END BB DESKTOP WRAPPER
 
 run_setup_tasks() {
-    setup_require_maintenance 'run_setup_tasks' || return $?
     local _setup_had_errors=0
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 218 | Last changed: Integrate non-disruptive setup with OpenCode safety fixes${NC}"
+    echo -e "${GRAY}Version 219 | Last changed: Restore ordinary provisioning and retain literal dotenv parsing${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -8345,13 +7928,8 @@ run_setup_tasks() {
     # Create ~/.env.local (migrating old token files if needed)
     create_env_local
 
-    # Source env vars early so optional setup flags are available
-    if [[ -f "${HOME}/.env.local" ]]; then
-        set -a
-        # shellcheck source=/dev/null
-        setup_load_environment || return 1
-        set +a
-    fi
+    # Read flags as literal data, never executable shell input.
+    setup_load_environment || return 1
 
 
     print_section "User & System Setup"
@@ -8539,16 +8117,9 @@ run_setup_tasks() {
 
 main() {
     local setup_status=0
-    local SETUP_MAINTENANCE_AUTHORIZED=0 SETUP_POLICY_READY=0 SETUP_POLICY_FAILED=0 SETUP_POLICY_DEFERRED=0
-    setup_policy_init "$@" || return 1
-    readonly SETUP_MAINTENANCE_AUTHORIZED SETUP_POLICY_READY
-    start_setup_log || setup_status=1
-    if [[ "${SETUP_MAINTENANCE_AUTHORIZED}" == 1 ]]; then
-        run_setup_tasks "$@" || setup_status=$?
-    else
-        setup_safe_tasks wsl || setup_status=$?
-    fi
-    setup_policy_summary "${setup_status}" || { [[ "${setup_status}" != 0 ]] || setup_status=1; }
+
+    start_setup_log || true
+    run_setup_tasks "$@" || setup_status=$?
     finish_setup_log "${setup_status}"
 }
 

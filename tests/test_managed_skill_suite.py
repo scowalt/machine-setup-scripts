@@ -9,7 +9,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from setup_policy_fixture import bash_maintenance, powershell_maintenance
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ['mac.sh', 'ubuntu.sh', 'wsl.sh', 'pi.sh', 'bazzite.sh', 'win.ps1']
@@ -38,8 +37,7 @@ def functions(script):
                  'configure_pi_skill_ownership', 'remove_pr_lens_skill', 'remove_simple_english_skill',
                  'remove_show_me_skill']
         pattern = lambda name: r'^' + name + r'\(\) \{.*?^\}'
-    policy = powershell_maintenance() if script == 'win.ps1' else bash_maintenance()
-    return policy + '\n\n'.join(re.search(pattern(name), text, re.M | re.S)[0] for name in names)
+    return '\n\n'.join(re.search(pattern(name), text, re.M | re.S)[0] for name in names)
 
 
 class ManagedSkills(unittest.TestCase):

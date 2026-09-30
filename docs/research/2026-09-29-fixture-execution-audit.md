@@ -1,5 +1,7 @@
 # TASK-57 execution-boundary audit
 
+Current-source update: [TASK-58 rollback evidence](2026-09-30-setup-rollback.md). The runner, extraction and kernel/FD containment requirements below remain active. The old maintenance preambles/default-policy tests were replaced by ordinary-setup and data-only environment contracts; counts and commands below are historical TASK-57 evidence.
+
 Historical alias: this work was branch-local TASK-56 before the main integration. TASK-57 now tracks it; upstream's unrelated TASK-56 is unchanged. Historical artifact paths remain unchanged.
 
 Status: the integrated-source **40/40-entry** aggregate (`/tmp/setup-fixture-matrix-u3o1b6du`) passes under unchanged kernel containment after the additional upstream audit below. The post-review `/tmp/setup-fixture-matrix-ptafh82r` aggregate is pre-integration evidence; `/tmp/setup-fixture-matrix-vghy85gm` predates the final logging fixes. Explicit skips, the trusted-Markdownlint blocker and criterion dispositions are in [validation evidence](2026-09-29-non-disruptive-validation.md). Parent accepted AC1–9 against the reviewed pre-integration evidence; integrated-source review, AC10 and task completion remain with parent/user. Original [incident uncertainty](2026-09-29-fixture-containment-incident.md) is unchanged.

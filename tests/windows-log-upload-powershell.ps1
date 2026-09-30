@@ -9,13 +9,9 @@ if ($parseErrors.Count) { throw 'win.ps1 does not parse' }
 foreach ($node in $ast.EndBlock.Statements) {
     if ($node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
         ($node.Name -match 'SetupLog' -or $node.Name -in @('Upload-Log', 'Initialize-WindowsEnvironment'))) {
-        . ([scriptblock]::Create($node.Extent.Text.Replace('function Initialize-WindowsEnvironment {', 'function Initialize-WindowsEnvironmentCore {')))
+        . ([scriptblock]::Create($node.Extent.Text))
     }
 }
-. (Join-Path (Split-Path -Parent $PSScriptRoot) 'lib/setup-policy.ps1')
-$env:BB_THREAD_ID=$null; $env:BB_ENVIRONMENT_ID=$null; $env:BB_TERMINAL_ID=$null
-# Execute the real extracted wrapper with explicit fixture-only authorization.
-function Initialize-WindowsEnvironment { Initialize-WindowsEnvironmentCore -Maintenance }
 Add-Type -AssemblyName System.Net.Http
 $compilerOptions = @{}
 if ($PSVersionTable.PSVersion.Major -le 5) { $compilerOptions.ReferencedAssemblies = @('System.Net.Http', 'System') }

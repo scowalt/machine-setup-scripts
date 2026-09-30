@@ -72,7 +72,7 @@ def main():
         script = (ROOT / name).resolve(strict=True)
         if script.parent != ROOT / 'tests' or script.suffix not in ('.sh', '.py'):
             parser.error('only repository fixture scripts are allowed')
-        if script.name in ('run-fixture-matrix.py', 'extract_setup_fixture.py', 'setup_policy_fixture.py'):
+        if script.name in ('run-fixture-matrix.py', 'extract_setup_fixture.py'):
             parser.error('helper is not a behavioral suite')
         scripts.append(script)
     tool_paths = args.tool_path.split(os.pathsep)

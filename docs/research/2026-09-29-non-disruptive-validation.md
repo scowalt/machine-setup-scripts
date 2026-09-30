@@ -1,5 +1,7 @@
 # TASK-57 implementation and offline validation
 
+Historical evidence: scheduling was subsequently reverted by the user-approved [TASK-58 rollback](2026-09-30-setup-rollback.md). This report does not describe current default behavior or validate the rollback. Original incident uncertainty and artifacts remain unchanged.
+
 Status: parent accepted AC1–9 against the post-review offline source/evidence and committed it as `df7918b`. Integration with upstream OpenCode fixes `4ece5ef` and `e169f8d` now passes the affected contracts and refreshed 40-entry contained aggregate; the resolved source is ready for parent integration review. TASK-57 remains **In Progress**; AC10 and completion remain held for the user's disposition of the incident exception. Native continuity is unverified. The earlier [fixture incident](2026-09-29-fixture-containment-incident.md) remains an explicit exception to the no-live-effects requirement, not something subsequent passing tests erase.
 
 Historical alias: this work was branch-local **TASK-56**, renumbered through Backlog CLI to **TASK-57** after upstream introduced an unrelated TASK-56. Historical `/tmp/task56-*` paths and incident chronology retain the original identifier. Parent exclusively owns Git authentication, merge completion and publication; this integration work changes source/evidence only.

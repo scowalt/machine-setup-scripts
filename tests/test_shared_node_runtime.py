@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract v3: bounded managed-shell repair in offline shared-Node fixtures."""
+"""Contract v4: ordinary bounded managed-shell repair in offline shared-Node fixtures."""
 
 import json
 import os
@@ -10,7 +10,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from setup_policy_fixture import bash_maintenance
 from native_runtime_fixture import copy_node_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,7 +26,7 @@ FUNCTIONS = (
 
 def extract(script):
     text = (ROOT / script).read_text()
-    return bash_maintenance() + "\n\n".join(
+    return "\n\n".join(
         match.group() for name in FUNCTIONS
         if (match := re.search(r"^" + name + r"\(\) \{\n.*?^\}", text, re.M | re.S))
     )

@@ -13,7 +13,7 @@ from extract_setup_fixture import definitions, materialize, SCRIPTS
 
 ROOT = Path(__file__).resolve().parents[1]
 PWSH = os.environ.get('PWSH_BIN') or shutil.which('pwsh')
-REQUIRED = '''setup_policy_init() {
+REQUIRED = '''setup_load_environment() {
     :
 }
 run_setup_tasks() {
@@ -124,7 +124,7 @@ $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($SourcePath,[ref]$tokens,[ref]$errors)
 if ($errors.Count) { throw 'Actual PowerShell source parse failed' }
 $definitions=@($ast.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] })
-foreach ($name in @('Initialize-WindowsEnvironment','Invoke-WindowsSetupTasks','Initialize-SetupPolicy','Invoke-SetupSafeTasks')) {
+foreach ($name in @('Initialize-WindowsEnvironment','Invoke-WindowsSetupTasks','Read-SetupEnvironment','ConvertFrom-SetupEnvironmentValue')) {
     if (@($definitions | Where-Object Name -eq $name).Count -ne 1) { throw 'Required function selection failed' }
 }
 foreach ($definition in $definitions) {

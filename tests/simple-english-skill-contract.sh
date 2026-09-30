@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract version 24: explicitly authorize inert maintenance fixtures.
+# Contract version 25: exercise ordinary setup through definitions-only fixtures.
 # Historical filename retained for existing test runners.
 set -euo pipefail
 
@@ -10,10 +10,8 @@ cd "${repo_root}"
 repo_root=$(python3 tests/extract_setup_fixture.py "${repo_root}") || exit 1
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
-# Literal sed program, interpreted only against the definitions-only fixture.
-# shellcheck disable=SC2016
-source_without_main='s/^main "\$@"$/:/
-$a unset BB_THREAD_ID BB_ENVIRONMENT_ID BB_TERMINAL_ID; setup_policy_init --maintenance'
+# Only applied to the definitions-only tree, never production source.
+source_without_main='s/^main "\$@"$/:/'
 
 fail() {
     printf '✗ %s\n' "$1" >&2

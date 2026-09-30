@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@thr_ieg3w47f2a'
 created_date: '2026-09-29 19:29'
-updated_date: '2026-09-30 00:18'
+updated_date: '2026-09-30 17:41'
 labels:
   - setup
   - safety
@@ -127,4 +127,6 @@ INTEGRATED SOURCE VALIDATION COMPLETE: affected OpenCode/non-disruptive/CLT/Home
 Integrated static/preservation checks pass: 21 Bash files syntax/ShellCheck, 25 Python AST parses, both embed --check tools, actual Windows AST through containment, whitespace and manual/local-link Markdown checks. The mutable Markdownlint cache remains untouched and lint blocked. 60-source manifest: /tmp/setup-fixture-matrix-u3o1b6du/integrated-source-sha256.json (SHA256 61616eb5781571f5e2d33e9f10ad724fe9ea48ae2492f1ca2fd9b9c14ef8c590); exact static inventories and preservation assertions in integration-static.json, empty shellcheck.log, documentation-links.json and seven-document hashes alongside it. Each entry point differs from df7918b only in upstream generated OpenCode block/requested version header; five upstream policy/Node/native-proof files match e169f8d bytes. Auto-merged caller retains all upstream tests plus real local maintenance initialization. Parent CONTEXT.md and unrelated upstream TASK-55/TASK-56 files remain unchanged. Current doc references identify TASK-57 with the historical branch-local TASK-56 alias; all original artifact paths/history remain preserved.
 
 Integration handoff: resolved source and CLI-managed task rename are staged for parent review, with MERGE_HEAD preserved. Parent exclusively owns merge commit, authentication, push/PR/publication; no such operation or legacy hook was executed by this child. No tool installs, live setup/rollout, service/package/auth changes or collector follow-up/cleanup. Parent-accepted AC1-9 remain unchanged; AC10 is still unchecked and TASK-57 remains In Progress because publication permission does not resolve the original incident exception. Native continuity and platform limitations are unchanged. No workspace Python cache exists.
+
+User reported that the observation-only default prevented ordinary provisioning and introduced Code/log path failures, then explicitly approved TASK-58 to roll it back. TASK-58 restores the pre-change scheduling/path behavior while retaining literal dotenv parsing, unrelated OpenCode fixes and fixture-containment repairs. Current policy and rollback validation are documented in docs/research/2026-09-30-setup-rollback.md. The original AC1-9 checks remain historical implementation evidence, not current behavior; AC10 and the incident exception remain unresolved. Rollback does not erase incident artifacts or establish native continuity.
 <!-- SECTION:NOTES:END -->

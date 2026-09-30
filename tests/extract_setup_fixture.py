@@ -20,8 +20,7 @@ INLINE = re.compile(r'^(print_(?:section|message|success|warning|error|debug))\(
 LITERAL = re.compile(r"""^(?P<name>[A-Z_][A-Z_0-9]*|_sudo_checked|_has_sudo)=(?:'[^']*'|"[^"$`]*"|[0-9]+)(?: #.*)?$""")
 SAFE_CONSTANTS = set('RED GREEN CYAN YELLOW GRAY BOLD NC SETUP_LOG_FILE SETUP_LOG_TEE_PID '
                      'SETUP_LOGGING_ACTIVE DOTFILES_ACCESS_METHOD _sudo_checked _has_sudo '
-                     'NPM_CONFIGURATION_COMMAND SETUP_MAINTENANCE_AUTHORIZED SETUP_POLICY_READY '
-                     'SETUP_POLICY_FAILED SETUP_POLICY_DEFERRED'.split())
+                     'NPM_CONFIGURATION_COMMAND'.split())
 HEREDOC = re.compile(r'''(?<!<)<<(-?)\s*['"]?([A-Za-z_][A-Za-z_0-9]*)''')
 
 
@@ -109,7 +108,7 @@ def definitions(source):
         block = ''.join(block)
         validate_function(block)
         output.append(block)
-    if not {'main', 'run_setup_tasks', 'setup_policy_init'} <= names:
+    if not {'main', 'run_setup_tasks', 'setup_load_environment'} <= names:
         raise ValueError('required caller definitions missing')
     # Only fixture-owned benign initialization. No live command discovery.
     output.append('SETUP_ORIGINAL_PATH="${PATH}"\nSETUP_ORIGINAL_CLAUDE_COMMAND=""\n')

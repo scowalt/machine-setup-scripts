@@ -6,11 +6,11 @@ This file provides guidance to AI coding agents working with code in this reposi
 
 This repository contains idempotent machine setup scripts for automating the configuration of fresh development environments across different operating systems. The scripts are designed to be run multiple times safely and install a consistent set of development tools.
 
-## Non-disruptive scheduling and fixture containment
+## Ordinary setup and fixture containment
 
-All six entry points default to observation, narrowly scoped Code/log/lock writes and honest deferrals. Classify complete effects and dependencies; missing packages, idle processes or unknown consumers never authorize mutations. Only invocation arguments (`--maintenance` / `-Maintenance`) authorize disruptive work, outside known BB sessions, while preserving every existing trust/recovery/platform gate. Keep shared policy in `lib/setup-policy.{bash,ps1}` and regenerate with `tools/embed-setup-policy.py`. Read README's non-disruptive/maintenance section and `docs/plans/2026-09-29-non-disruptive-setup.md` before changing scheduling, defaults, health checks or indirect prerequisites. Preserve data-only dotenv parsing, literal credential characters and controlled unsupported-syntax failures. Read-only probes must not execute runtime shims, app CLIs or auto-updating package managers; native Windows platform decisions use trusted runtime detection, not environment flags. Continue independent safe work and log finalization after real failures; deferral is not readiness.
+The non-disruptive default is rolled back: all six ordinary entry points provision/update without a maintenance switch and can interrupt ongoing work. Preserve pre-existing trust/recovery/platform gates and component-scoped deferrals. Keep data-only dotenv policy in `lib/setup-policy.{bash,ps1}` and regenerate with `tools/embed-setup-policy.py`; literal credentials and controlled unsupported-syntax failures remain required. For scheduling/default/log-path changes, read README's ordinary-setup section and `docs/research/2026-09-30-setup-rollback.md`. The earlier non-disruptive plan is historical, not current policy. Never run live setup to validate development changes.
 
-For any behavioral fixture execution or source-loader change, read `docs/research/2026-09-29-fixture-execution-audit.md` and the linked incident record first. Use its sanitized `env -i` runner with explicit existing tools, mandatory kernel filter/self-test, private stdio/roots and sequential suites. Definitions-only imports and mocks precede intentional helper/caller execution; never source or evaluate a stripped whole setup file. Copy native fixture runtimes rather than link writable prefixes to real installations. If containment/preflight fails or a real effect appears, stop and report—no uncontained fallback. Run the non-disruptive and extraction/containment contracts plus the audited affected matrix. Keep incident uncertainty, optional skips and native-platform/continuity limitations explicit; passing offline fixtures is not rollout evidence.
+For any behavioral fixture execution or source-loader change, read `docs/research/2026-09-29-fixture-execution-audit.md` and the linked incident record first. Use its sanitized `env -i` runner with explicit existing tools, mandatory kernel filter/self-test, private stdio/roots and sequential suites. Definitions-only imports and mocks precede intentional helper/caller execution; never source or evaluate a stripped whole setup file. Copy native fixture runtimes rather than link writable prefixes to real installations. If containment/preflight fails or a real effect appears, stop and report—no uncontained fallback. Run the setup-default and extraction/containment contracts plus the audited affected matrix. Keep incident uncertainty, optional skips and native-platform/continuity limitations explicit; passing offline fixtures is not rollout evidence.
 
 ## Key Scripts
 
@@ -28,7 +28,7 @@ For any behavioral fixture execution or source-loader change, read `docs/researc
 
 ### Running Setup Scripts Locally
 
-These commands use the non-disruptive default. For actual provisioning/updating, arrange maintenance outside BB and add `--maintenance` (Bash) or `-Maintenance` (PowerShell). Never run live setup to validate a code change.
+These commands provision/update normally and can interrupt active work. Arrange an appropriate window before running them. Never run live setup to validate a code change.
 
 ```bash
 # macOS

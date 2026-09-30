@@ -18,7 +18,6 @@ $caller = "function Invoke-WindowsSetupTasks {`n$entry`nWrite-Host 'unrelated-st
 . ([scriptblock]::Create($definitions['Initialize-WindowsEnvironment'].Extent.Text))
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'lib/setup-policy.ps1')
 $env:BB_THREAD_ID=$null; $env:BB_ENVIRONMENT_ID=$null; $env:BB_TERMINAL_ID=$null
-function Assert-SetupSafeDirectory { param($Path) }
 function Get-SetupLogDirectory { [IO.Path]::GetTempPath() }
 function Assert-SetupLogPath { param($Path, [switch]$AllowMissing) }
 function New-Item { param($ItemType, [switch]$Force, $Path, $ErrorAction) }
@@ -47,7 +46,7 @@ foreach ($work in @($false, $true)) {
     $script:workMachine = $work
     $script:deny = $true
     $script:records.Clear()
-    $output = & { try { Initialize-WindowsEnvironment -Maintenance } catch { Write-Host 'setup-failed' } } 6>&1 | Out-String
+    $output = & { try { Initialize-WindowsEnvironment } catch { Write-Host 'setup-failed' } } 6>&1 | Out-String
     if ($output -notmatch 'unrelated-stage' -or $output -notmatch 'log-finalized' -or
         $output -notmatch 'setup-failed' -or $output -match 'winget-updates|windows-updates') {
         throw 'Windows retirement failure did not reach log/final-result boundary'
@@ -58,7 +57,7 @@ $script:deny = $false
 foreach ($work in @($false, $true)) {
     $script:workMachine = $work
     $script:records.Clear(); $script:calls.Clear()
-    $output = & { Initialize-WindowsEnvironment -Maintenance } 6>&1 | Out-String
+    $output = & { Initialize-WindowsEnvironment } 6>&1 | Out-String
     if ($output -notmatch 'unrelated-stage' -or $output -notmatch 'log-finalized' -or $output -match 'setup-failed' -or
         $output -notmatch 'winget-updates' -or $script:calls.Count -gt 1) {
         throw 'Verified absent Windows run failed'

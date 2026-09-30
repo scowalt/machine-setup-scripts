@@ -3,7 +3,6 @@ from pathlib import Path
 import re
 import subprocess
 import unittest
-from tests.setup_policy_fixture import bash_maintenance
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -71,9 +70,8 @@ run_setup_tasks() {{
   {first}
   printf 'unrelated-stage\\n'
   {tail}
-{bash_maintenance()}
 {main}
-main --maintenance
+main
 '''
                 # The extracted seam must run only inert local functions.
                 for work in ('0', '1'):

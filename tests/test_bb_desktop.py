@@ -11,7 +11,6 @@ import subprocess
 import tempfile
 import types
 import unittest
-from setup_policy_fixture import bash_maintenance
 from unittest.mock import Mock, patch
 import zipfile
 import plistlib
@@ -920,7 +919,7 @@ install_bb_desktop() { printf 'desktop-called\\n'; return 1; }
 check_pending_reboot() { printf 'unrelated-work-finished\\n'; }
 finish_setup_log() { printf 'log-result=%s\\n' "$1"; }
 '''
-                main = source[source.index('\nmain() {', start):].split('\n}\n', 1)[0] + '\n}\n' + bash_maintenance() + '\nmain --maintenance\n'
+                main = source[source.index('\nmain() {', start):].split('\n}\n', 1)[0] + '\n}\nmain\n'
                 result = subprocess.run(['bash', '-c', script + main], env={
                     'PATH': '/usr/bin:/bin', 'HOME': tmp, 'SHELL': '/bin/bash',
                     'BB_SERVER': '0', 'HEADLESS': '0'}, text=True, capture_output=True)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract v5: safely refresh active-global Pi packages after managed maintenance."""
+"""Contract v6: safely refresh active-global Pi packages during ordinary setup."""
 import json
 import os
 from pathlib import Path
@@ -9,7 +9,6 @@ import shlex
 import subprocess
 import tempfile
 import unittest
-from setup_policy_fixture import bash_maintenance, powershell_maintenance
 
 ROOT = Path(__file__).resolve().parents[1]
 BASH = ('mac.sh', 'ubuntu.sh', 'wsl.sh', 'pi.sh', 'bazzite.sh')
@@ -155,7 +154,7 @@ function Start-Transcript { }
 function Complete-SetupLog { Write-Host 'LOG-FINALIZED' }
 '''
                         code += extract(script, 'Invoke-WindowsSetupTasks') + '\n' + extract(script, 'Initialize-WindowsEnvironment')
-                        code += '\n' + powershell_maintenance() + '\ntry { Initialize-WindowsEnvironment -Maintenance } catch { Write-Host "EXPECTED-SETUP-ERROR"; exit 1 }\n'
+                        code += '\ntry { Initialize-WindowsEnvironment } catch { Write-Host "EXPECTED-SETUP-ERROR"; exit 1 }\n'
                         fixture = self.root / 'main.ps1'; fixture.write_text(code)
                         command = [PWSH, '-NoProfile', '-NonInteractive', '-File', str(fixture)]
                     else:
@@ -182,7 +181,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                             for gate in ('macos_developer_tools_ready_for', 'macos_existing_prerequisites', 'macos_clt_summary'):
                                 code += '\n' + extract(script, gate)
                         code += '\nrun_setup_tasks() {\nlocal _setup_had_errors=0 _pi_go_ready=0 PI_PROFILE_MUTATIONS_BLOCKED=0\n' + tail
-                        code += '\n' + bash_maintenance() + '\n' + extract(script, 'main') + '\nmain --maintenance\n'
+                        code += '\n' + extract(script, 'main') + '\nmain\n'
                         command = ['bash', '--noprofile', '--norc']
                     result = subprocess.run(command, input=code, env=self.env, cwd=self.root, capture_output=True, text=True, timeout=15)
                     self.assertEqual(result.returncode, 0 if failure == 'none' else 1, result.stdout + result.stderr)

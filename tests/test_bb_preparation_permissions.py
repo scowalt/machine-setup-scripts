@@ -7,7 +7,6 @@ import re
 import subprocess
 import sys
 import unittest
-from setup_policy_fixture import bash_maintenance
 
 from test_bb_dotfiles_umask import CHEZMOI, CHEZMOI_FIXTURE, GIT_FIXTURE, function
 import test_bb_machine_preparation as preparation
@@ -29,7 +28,7 @@ class PreparationPermissions(unittest.TestCase):
             main = source[source.index('\nrun_setup_tasks() {'):]
             apply = re.search(r'^        if ! [^\n]*chezmoi apply --force; then\n.*?^        fi$', main, re.M | re.S).group()
             apply = '_setup_had_errors=0\n' + apply + '\nresult=$_setup_had_errors'
-        (case.root / 'dotfiles.sh').write_text(bash_maintenance() + '\n'.join(helpers))
+        (case.root / 'dotfiles.sh').write_text('\n'.join(helpers))
         # Reuse the shared argv-checking fixture, including Pi's verbose apply.
         # This suite uses native mode only for full apply, never init/update.
         for name, body in [('chezmoi', CHEZMOI_FIXTURE), ('git', GIT_FIXTURE)]:
