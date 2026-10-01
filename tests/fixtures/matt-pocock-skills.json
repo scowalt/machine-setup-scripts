@@ -1,10 +1,10 @@
 {
   "repository": "mattpocock/skills",
-  "commit": "3cca18b368ae95cdbdebbff572ccafa662551015",
+  "commit": "d81f3a183412e71a5b1e84ca21bc1a35eea03a60",
   "skills": [
     "ask-matt", "code-review", "codebase-design", "diagnosing-bugs", "domain-modeling",
     "grill-with-docs", "implement", "improve-codebase-architecture", "prototype", "research",
-    "resolving-merge-conflicts", "setup-matt-pocock-skills", "tdd", "to-spec", "to-tickets",
+    "pr", "setup-matt-pocock-skills", "tdd", "to-spec", "to-tickets",
     "triage", "wayfinder", "wizard", "claude-handoff", "implement-spec", "loop-me", "retro",
     "setup-ts-deep-modules", "writing-beats", "writing-fragments", "writing-shape",
     "git-guardrails-claude-code", "migrate-to-shoehorn", "scaffold-exercises", "setup-pre-commit",

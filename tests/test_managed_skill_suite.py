@@ -15,6 +15,7 @@ SCRIPTS = ['mac.sh', 'ubuntu.sh', 'wsl.sh', 'pi.sh', 'bazzite.sh', 'win.ps1']
 PWSH = os.environ.get('PWSH_BIN') or shutil.which('pwsh')
 NODE = shutil.which('node')
 KNOWN = json.loads((ROOT / 'tests/fixtures/matt-pocock-skills.json').read_text())['skills']
+HISTORICAL = ['resolving-merge-conflicts']
 
 
 def embedded(script):
@@ -206,13 +207,72 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
                     for _ in range(2):
                         self.wrapper(script)
                     inventory = json.loads((self.home / '.agents/.setup-matt-pocock-skills.json').read_text())
-                    self.assertEqual(set(inventory['skills']), set(KNOWN + ['new-upstream-skill']))
+                    self.assertEqual(set(inventory['skills']), set(KNOWN + HISTORICAL + ['new-upstream-skill']))
                     for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
-                        for name in inventory['skills']:
+                        self.assertFalse((base / HISTORICAL[0]).exists())
+                        for name in KNOWN + ['new-upstream-skill']:
                             self.assertGreater((base / name / 'SKILL.md').stat().st_size, 0)
                             self.assertEqual((base / name / 'references/guide.md').read_text(), 'Upstream fixture: do not execute.\n')
                     self.assertFalse((self.custom_pi / 'skills/tdd').exists())
                     self.assertFalse((Path(self.env['CODEX_HOME']) / 'skills/tdd').exists())
+
+    def test_reviewed_current_snapshot_promotes_without_recreating_retired_skill(self):
+        self.assertIn('pr', KNOWN)
+        self.assertNotIn(HISTORICAL[0], KNOWN)
+        self.env['SKILL_TEST_MODE'] = 'current-snapshot'
+        for script in ('mac.sh', 'win.ps1'):
+            if script == 'win.ps1' and not PWSH:
+                continue
+            self.wrapper(script)
+            for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
+                self.assertEqual({p.name for p in base.iterdir()}, set(KNOWN))
+            inventory = json.loads((self.home / '.agents/.setup-matt-pocock-skills.json').read_text())
+            self.assertEqual(set(inventory['skills']), set(KNOWN + HISTORICAL))
+
+    def test_each_required_skill_remains_required_despite_an_extra_name(self):
+        self.put(self.shared / 'pr/SKILL.md', 'previous')
+        before = self.snapshot()
+        for name in KNOWN:
+            with self.subTest(missing=name):
+                self.env['SKILL_TEST_OMIT'] = name
+                result = self.wrapper('mac.sh', success=False)
+                self.assertIn('incomplete-suite', result.stderr)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_historical_copies_survive_install_and_inventory_but_keep_duplicate_rules(self):
+        name = HISTORICAL[0]
+        for script in ('mac.sh', 'win.ps1'):
+            if script == 'win.ps1' and not PWSH:
+                continue
+            # No prior inventory or native lock may be necessary to own history.
+            for file in (self.home / '.agents/.setup-matt-pocock-skills.json', self.home / '.agents/.skill-lock.json'):
+                file.unlink(missing_ok=True)
+            for base in self.all_dirs():
+                self.put(base / name / 'SKILL.md', 'historical copy')
+            self.put(self.custom_pi / 'skills' / name / 'SKILL.md', 'modified historical copy')
+            self.wrapper(script)
+            for base in self.all_dirs():
+                expected = 'modified historical copy' if base == self.custom_pi / 'skills' else 'historical copy'
+                self.assertEqual((base / name / 'SKILL.md').read_text(), expected)
+            inventory = json.loads((self.home / '.agents/.setup-matt-pocock-skills.json').read_text())
+            self.assertIn(name, inventory['skills'])
+            # Also exercise exclusions on machines lacking inventory/lock records.
+            (self.home / '.agents/.setup-matt-pocock-skills.json').unlink()
+            self.wrapper(script, 'ownership')
+            self.assertFalse((self.default_pi / 'skills' / name).exists())
+            self.assertEqual((self.custom_pi / 'skills' / name / 'SKILL.md').read_text(), 'modified historical copy')
+            self.assertEqual((self.shared / name / 'SKILL.md').read_text(), 'historical copy')
+            for profile in (self.default_pi, self.custom_pi):
+                settings = json.loads((profile / 'settings.json').read_text())
+                self.assertIn('!' + str(profile / 'skills' / name) + '/**', settings['skills'])
+            for ban in ('BAN_MATT_POCOCK_SKILLS', 'BAN_MATT_POCKOCK_SKILLS'):
+                for base in self.all_dirs():
+                    self.put(base / name / 'SKILL.md', 'historical copy')
+                self.env[ban] = '1'
+                self.wrapper(script)
+                self.env.pop(ban)
+                for base in self.all_dirs():
+                    self.assertFalse((base / name).exists())
 
     def test_default_claude_and_xdg_state_paths(self):
         self.env.pop('CLAUDE_CONFIG_DIR')
@@ -233,7 +293,7 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
                 with self.subTest(script=script, ban=ban):
                     self.wrapper(script)
                     for base in self.all_dirs():
-                        for name in KNOWN + ['new-upstream-skill', 'diagnose', 'zoom-out']:
+                        for name in KNOWN + HISTORICAL + ['new-upstream-skill', 'diagnose', 'zoom-out']:
                             self.put(base / name / 'SKILL.md')
                         self.put(base / 'keep-me/SKILL.md')
                     calls = Path(self.env['SKILL_TEST_CALLS']).read_text()

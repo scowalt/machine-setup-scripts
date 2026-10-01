@@ -1,4 +1,4 @@
-"""Contract v3: independent Pi/Go/package orchestration and safety gates."""
+"""Contract v4: independent Pi/Go/package orchestration and catalog safety gates."""
 import json
 import os
 from pathlib import Path
@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+
+import test_pi_opencode_go_setup as go
 
 ROOT = Path(__file__).resolve().parents[1]
 BASH = ("mac.sh", "ubuntu.sh", "wsl.sh", "pi.sh", "bazzite.sh")
@@ -29,7 +31,7 @@ class WiringTests(unittest.TestCase):
             block = gates + '\nMACOS_DEVELOPER_TOOLS_STATE=${MACOS_DEVELOPER_TOOLS_STATE:-ready}\n' + block
         return block
 
-    def run_bash(self, name, scenario):
+    def run_bash(self, name, scenario, catalog_fixture=None):
         # Only the selected main block is executed, never a full setup script.
         inert = (
             "remove_rtk_resources", "remove_attention_span_resources", "setup_matt_pocock_skills",
@@ -53,16 +55,19 @@ remove_pi_prose() { record retirement; [[ "${SCENARIO}" != retirement-failure ]]
 install_pi_cli() { record pi-install; [[ "${SCENARIO}" != pi-failure ]]; }
 prepare_pi_mcp_adapter() { record packages; [[ "${SCENARIO}" != package-failure ]]; }
 configure_pi_opencode_go() { record go; [[ "${SCENARIO}" != go-failure ]]; }
-exercise() {
 '''
-        code += self.bash_block(name)
+        if catalog_fixture:
+            code += '\n' + go.wrapper(name) + '\n'
+            code += 'print_success() { :; }; print_debug() { :; }\n'
+        code += 'exercise() {\n' + self.bash_block(name)
         code += '\n}\nexercise\nprintf "result:%s:%s\\n" "${_setup_had_errors}" "${_pi_go_ready}"\n'
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp) / "wiring.sh"
             fixture.write_text(code)
             result = subprocess.run(
                 ["bash", str(fixture)], cwd=tmp,
-                env={"PATH": os.environ["PATH"], "HOME": tmp, "SCENARIO": scenario},
+                env={**(catalog_fixture.env if catalog_fixture else {"PATH": os.environ["PATH"], "HOME": tmp}),
+                     "SCENARIO": scenario},
                 text=True, capture_output=True, timeout=20,
             )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -98,6 +103,19 @@ exercise() {
                         self.assertIn("setup_matt_pocock_skills", calls)
                     self.assertEqual("packages" in calls, bool(ready))
 
+    def test_real_catalog_gate_controls_bash_package_work(self):
+        fixture = go.GoSetupTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        for name in BASH:
+            for compatible in (True, False):
+                with self.subTest(script=name, compatible=compatible):
+                    fixture.put(fixture.catalog, go.TYPED_CATALOG if compatible else {'openai-responses': {}})
+                    calls = self.run_bash(name, 'success', fixture)
+                    self.assertEqual(calls[-1], 'result:0:1' if compatible else 'result:1:0')
+                    self.assertEqual('refresh_pi_packages' in calls, compatible)
+                    self.assertEqual('packages' in calls, compatible)
+
     def test_macos_unverified_tools_block_packages(self):
         calls = self.run_bash('mac.sh', 'developer-tools-unverified')
         self.assertEqual(calls, ['result:1:0'])
@@ -123,25 +141,37 @@ function Install-PiCli { $script:calls += 'pi-install'; $env:SCENARIO -ne 'pi-fa
 function Prepare-PiMcpAdapter { $script:calls += 'packages'; $env:SCENARIO -ne 'package-failure' }
 function Set-PiOpenCodeGoProvider { $script:calls += 'go'; $env:SCENARIO -ne 'go-failure' }
 '''
-        code += block
-        code += "\n@{failed=$piSetupFailed;ready=$piOpenCodeGoReady;calls=$script:calls} | ConvertTo-Json -Compress\n"
+        # Real wrapper is installed only after all other effects are mocked.
+        real_code = code + '\nfunction Write-Success {}\nfunction Write-Debug {}\n' + go.wrapper('win.ps1')
+        finish = "\n@{failed=$piSetupFailed;ready=$piOpenCodeGoReady;calls=$script:calls} | ConvertTo-Json -Compress\n"
+        real_code += '\n' + block + finish
+        code += block + finish
+        catalog_fixture = go.GoSetupTests()
+        catalog_fixture.setUp()
+        self.addCleanup(catalog_fixture.doCleanups)
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp) / "wiring.ps1"
             fixture.write_text(code)
             for scenario in ("success", "permissions-failure", "askclaude-failure", "retirement-failure", "pi-failure", "go-failure",
-                             "package-failure"):
+                             "package-failure", "typed-catalog", "incompatible-catalog"):
                 with self.subTest(scenario=scenario):
+                    real_catalog = scenario.endswith('-catalog')
+                    fixture.write_text(real_code if real_catalog else code)
+                    catalog_fixture.put(catalog_fixture.catalog, go.TYPED_CATALOG if scenario == 'typed-catalog' else {})
                     result = subprocess.run(
                         [PWSH, "-NoProfile", "-NonInteractive", "-File", str(fixture)], cwd=tmp,
-                        env={"PATH": os.environ["PATH"], "HOME": tmp, "SCENARIO": scenario},
+                        env={**(catalog_fixture.env if real_catalog else {"PATH": os.environ["PATH"], "HOME": tmp}),
+                             "SCENARIO": scenario},
                         text=True, capture_output=True, timeout=20,
                     )
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     state = json.loads(result.stdout.splitlines()[-1])
-                    self.assertEqual(state["failed"], scenario != "success")
-                    ready = scenario in ("success", "package-failure")
+                    success = scenario in ('success', 'typed-catalog')
+                    self.assertEqual(state["failed"], not success)
+                    ready = scenario in ("success", "package-failure", "typed-catalog")
                     self.assertEqual(state["ready"], ready)
-                    if scenario != 'success':
+                    self.assertEqual('Update-PiPackages' in state['calls'], success)
+                    if not success:
                         self.assertNotIn('Setup-PiMcpAdapter', state['calls'])
                         self.assertNotIn('Update-PiPackages', state['calls'])
                     self.assertEqual("packages" in state["calls"], ready)

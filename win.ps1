@@ -1307,7 +1307,7 @@ function Install-OpenCodeCli {
         if ($LASTEXITCODE -ne 0) { throw 'prerequisite' }
         $code = @'
 // Embedded in all six entry points by tools/embed-opencode-cli.py.
-// Version 2 | Last changed: Retry only transient procfs races within the complete Homebrew proof.
+// Version 3 | Last changed: Accept exact official named version output after artifact verification.
 // Installation only: never import application code or inherit its environment.
 'use strict';
 const fs = require('node:fs');
@@ -1510,7 +1510,7 @@ function probe(file, release, workspace) {
     let output;
     try { output = cp.execFileSync(file, ['--version'], {cwd: isolated, env, timeout: 20000, maxBuffer: 1024,
         stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true}).toString().trim(); } catch { fail('version-probe'); }
-    if (output !== release) fail('version-probe');
+    if (output !== release && output !== `opencode v${release}`) fail('version-probe');
 }
 // Separate from BB's read-only service policy: only Linux Homebrew boundaries
 // may use this proof. No private-ancestor shortcut, permission repair or PATH tools.
@@ -3657,8 +3657,11 @@ function installedPackages(home) {
     const catalog = json(readText(path.join(ai.root, 'dist/providers/data/opencode-go.json'), false, true) || 'null');
     const id = 'muse-spark-1.3-contributor';
     const matches = Object.values(catalog).flatMap(group => object(group) ? Object.values(group).filter(model => model?.id === id) : []);
-    const model = catalog['openai-responses']?.[id];
-    if (matches.length !== 1 || matches[0] !== model || model.provider !== 'opencode-go' ||
+    const responses = catalog['openai-responses'];
+    const model = responses?.[id] ?? responses?.['chat:' + id];
+    const typed = model !== responses?.[id];
+    if (matches.length !== 1 || matches[0] !== model ||
+        ((typed || Object.hasOwn(model, 'type')) && model.type !== 'chat') || model.provider !== 'opencode-go' ||
         model.api !== 'openai-responses' || model.baseUrl !== 'https://opencode.ai/zen/go/v1' ||
         model.reasoning !== true || model.thinkingLevelMap?.xhigh !== 'xhigh') fail('catalog-incompatible');
     return {request, dependency, prefix};
@@ -6520,12 +6523,14 @@ function Invoke-MattPocockSkillPolicy {
     const known = [
         'ask-matt', 'code-review', 'codebase-design', 'diagnosing-bugs', 'domain-modeling',
         'grill-with-docs', 'implement', 'improve-codebase-architecture', 'prototype', 'research',
-        'resolving-merge-conflicts', 'setup-matt-pocock-skills', 'tdd', 'to-spec', 'to-tickets',
+        'pr', 'setup-matt-pocock-skills', 'tdd', 'to-spec', 'to-tickets',
         'triage', 'wayfinder', 'wizard', 'claude-handoff', 'implement-spec', 'loop-me', 'retro',
         'setup-ts-deep-modules', 'writing-beats', 'writing-fragments', 'writing-shape',
         'git-guardrails-claude-code', 'migrate-to-shoehorn', 'scaffold-exercises', 'setup-pre-commit',
         'grill-me', 'grilling', 'handoff', 'teach', 'to-questionnaire', 'wait-what', 'writing-for-agents'
     ];
+    // Upstream-retired names remain managed, but ordinary installs preserve copies.
+    const historical = ['resolving-merge-conflicts'];
     const obsolete = ['diagnose', 'zoom-out'];
     function stat(file) {
         try { return fs.lstatSync(file); }
@@ -6668,7 +6673,7 @@ function Invoke-MattPocockSkillPolicy {
         const tracked = locks.flatMap(({data}) => Object.entries(data?.skills || {})
             .filter(([, entry]) => entry.source === 'mattpocock/skills').map(([name]) => name));
         if (!tracked.every(nameOK)) fail('invalid-inventory');
-        const inventory = unique([...known, ...(manifest?.skills || []), ...tracked]);
+        const inventory = unique([...known, ...historical, ...(manifest?.skills || []), ...tracked]);
         const checkDirs = dirs => dirs.forEach(dir => { directory(dir); owned(dir); });
         const preflight = names => {
             checkDirs(installDirs);
@@ -7681,7 +7686,7 @@ function Invoke-WindowsSetupTasks {
     $infisicalRetirementFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 169 | Last changed: Retry transient OpenCode Homebrew process races"
+    Write-Host "Version 170 | Last changed: Support current Go catalog, skills baseline and OpenCode version output"
 
     Assert-HeadlessUnsupported
 

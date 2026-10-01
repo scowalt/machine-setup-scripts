@@ -35,7 +35,10 @@ if mode == 'failed-command':
     print('PRIVATE-SENTINEL simulated arbitrary command output', file=sys.stderr)
     sys.exit(1)
 skills = json.loads((Path(__file__).parent / 'fixtures/matt-pocock-skills.json').read_text())['skills']
-skills += ['new-upstream-skill']
+if mode != 'current-snapshot':
+    skills += ['new-upstream-skill']
+if os.environ.get('SKILL_TEST_OMIT'):
+    skills.remove(os.environ['SKILL_TEST_OMIT'])
 claude = Path(os.environ.get('CLAUDE_CONFIG_DIR') or home / '.claude')
 roots = [claude / 'skills', home / '.agents/skills']
 lock_file = Path(os.environ['XDG_STATE_HOME']) / 'skills/.skill-lock.json' if os.environ.get('XDG_STATE_HOME') else home / '.agents/.skill-lock.json'

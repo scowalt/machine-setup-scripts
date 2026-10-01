@@ -1,4 +1,4 @@
-// Version 4 | Last changed: Verify bounded procfs race recovery without weakening Homebrew trust
+// Version 5 | Last changed: Cover exact official version output and failed-probe recovery
 'use strict';
 process.umask(0o077);
 const {test} = require('node:test');
@@ -419,19 +419,79 @@ test('failure serialization never echoes arbitrary exceptions or forged diagnost
     });
     assert.equal(api.failureResult(new Error('recovery-required')), 'opencode-cli:recovery-required');
 });
-test('real version-probe helper isolates HOME, cwd and application credentials', t => {
-    const f = fixture(t); let observed;
+test('real version probe accepts exact bare and official named lines in isolation', t => {
+    const f = fixture(t); let observed, output;
     const {api} = virtualPolicy(f, {env: {OPENCODE_API_KEY: 'fixture-secret', OPENCODE_CONFIG: '/fixture/config', NODE_OPTIONS: '--invalid'}},
-        {'node:child_process': {execFileSync: (file, args, options) => { observed = {file, args, options}; return Buffer.from('2.0.18\n'); }}});
-    api.probe(f.dest, '2.0.18', f.home);
-    assert.deepEqual(Array.from(observed.args), ['--version']);
-    assert.ok(observed.options.cwd.startsWith(f.home));
-    assert.equal(observed.options.env.HOME, observed.options.cwd);
-    assert.equal(observed.options.env.OPENCODE_API_KEY, undefined);
-    assert.equal(observed.options.env.OPENCODE_CONFIG, undefined);
-    assert.equal(observed.options.env.NODE_OPTIONS, undefined);
-    assert.equal(observed.options.timeout, 20000);
+        {'node:child_process': {execFileSync: (file, args, options) => { observed = {file, args, options}; return Buffer.from(output); }}});
+    for (output of ['2.0.21', '2.0.21\n', '2.0.21\r\n', 'opencode v2.0.21', 'opencode v2.0.21\n', 'opencode v2.0.21\r\n', '  opencode v2.0.21  \n']) {
+        api.probe(f.dest, '2.0.21', f.home);
+        assert.deepEqual(Array.from(observed.args), ['--version']);
+        assert.ok(observed.options.cwd.startsWith(f.home));
+        for (const name of ['HOME', 'USERPROFILE', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME',
+            'APPDATA', 'LOCALAPPDATA', 'TMPDIR', 'TMP', 'TEMP']) assert.equal(observed.options.env[name], observed.options.cwd);
+        for (const name of ['OPENCODE_API_KEY', 'OPENCODE_CONFIG', 'NODE_OPTIONS']) assert.equal(observed.options.env[name], undefined);
+        assert.equal(observed.options.env.PATH, path.dirname(f.dest));
+        assert.equal(observed.options.env.NO_COLOR, '1');
+        assert.equal(observed.options.timeout, 20000);
+        assert.equal(observed.options.maxBuffer, 1024);
+        assert.deepEqual(Array.from(observed.options.stdio), ['ignore', 'pipe', 'ignore']);
+        assert.equal(observed.options.windowsHide, true);
+    }
 });
+test('real version probe rejects all extra output and failed processes without leaking it', t => {
+    const f = fixture(t); let output, failure;
+    const {api} = virtualPolicy(f, {}, {'node:child_process': {execFileSync: () => {
+        if (failure) throw Object.assign(new Error('PRIVATE-SENTINEL'), {stdout: Buffer.from('opencode v2.0.21\n'), ...failure});
+        return Buffer.from(output);
+    }}});
+    const rejected = () => assert.throws(() => api.probe(f.dest, '2.0.21', f.home), error => {
+        assert.equal(api.failureResult(error), 'opencode-cli:policy-failed:installation:version-probe'); return true;
+    });
+    for (output of ['', '2.0.20', 'opencode v2.0.20', '2.0.21-beta', '2.0.21+build', 'opencode v2.0.21-beta',
+        'opencode v2.0.21+build', 'other v2.0.21', 'opencode 2.0.21', 'v2.0.21', 'OpenCode v2.0.21',
+        'opencode v2.0.21\nPRIVATE-SENTINEL', 'PRIVATE-SENTINEL\n2.0.21', '2.0.21\n2.0.21',
+        '\u001b[1mopencode v2.0.21\u001b[0m', 'opencode  v2.0.21']) rejected();
+    for (failure of [{status: 1}, {code: 'ETIMEDOUT'}, {signal: 'SIGTERM'}, {code: 'ENOBUFS'}]) rejected();
+});
+for (const output of ['2.0.21\n', 'opencode v2.0.21\r\n']) test(`verified staged, promoted and current commands accept ${JSON.stringify(output)}`, async t => {
+    const f = fixture(t), bytes = f.publish('@opencode/cli-linux-x64-baseline', '2.0.21');
+    f.setLatest({version: '2.0.21'});
+    const probed = [];
+    const {api} = virtualPolicy(f, {}, {'node:child_process': {execFileSync: file => {
+        assert.deepEqual(fs.readFileSync(file), bytes); probed.push(file); return Buffer.from(output);
+    }}});
+    const options = {...f.options, probe: undefined};
+    assert.equal(await api.install(options), 'installed');
+    assert.equal(probed.length, 2);
+    assert.notEqual(probed[0], f.dest); assert.equal(probed[1], f.dest);
+    options.commands = [f.dest];
+    assert.equal(await api.install(options), 'current');
+    assert.equal(probed.length, 3); assert.equal(probed[2], f.dest);
+    // Receipt alone is insufficient: byte mismatch must fail before another probe.
+    fs.writeFileSync(f.dest, 'INERT custom bytes');
+    await assert.rejects(api.install(options));
+    assert.equal(probed.length, 3);
+});
+for (const phase of ['staged', 'promoted']) for (const failedProcess of [false, true]) {
+    test(`real ${phase} probe ${failedProcess ? 'process' : 'output'} failure preserves prior command and receipt`, async t => {
+        const f = fixture(t), previous = f.publish('@opencode/cli-linux-x64-baseline', '2.0.10');
+        f.receipt('2.0.10', previous);
+        const bytes = f.publish('@opencode/cli-linux-x64-baseline', '2.0.21'); f.setLatest({version: '2.0.21'});
+        const receipt = path.join(path.dirname(f.dest), '.setup-opencode-cli.json'), before = fs.readFileSync(receipt);
+        let calls = 0;
+        const {api} = virtualPolicy(f, {}, {'node:child_process': {execFileSync: file => {
+            assert.deepEqual(fs.readFileSync(file), bytes);
+            if (++calls === (phase === 'staged' ? 1 : 2)) {
+                if (failedProcess) throw Object.assign(new Error('PRIVATE-SENTINEL'), {status: 1, stdout: Buffer.from('opencode v2.0.21')});
+                return Buffer.from('opencode v2.0.20');
+            }
+            return Buffer.from('opencode v2.0.21');
+        }}});
+        await assert.rejects(api.install({...f.options, probe: undefined}), /version-probe/);
+        assert.equal(calls, phase === 'staged' ? 1 : 2);
+        assert.deepEqual(fs.readFileSync(f.dest), previous); assert.deepEqual(fs.readFileSync(receipt), before);
+    });
+}
 // Real native proof code runs with all filesystem/account/procfs access redirected
 // to fixtures. No host process inventory, native OpenCode or live Homebrew is read.
 function privateBrewFixture(t, platform = 'linux') {

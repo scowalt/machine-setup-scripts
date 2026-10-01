@@ -18,6 +18,7 @@ MODEL = "muse-spark-1.3-contributor"
 KEY = "fixture-go-key-not-a-real-credential"
 BEGIN = "// BEGIN PI_OPENCODE_GO_SETUP"
 END = "// END PI_OPENCODE_GO_SETUP"
+TYPED_CATALOG = json.loads((ROOT / 'tests/fixtures/pi-ai-0.99.2-muse.json').read_text())['catalog']
 
 
 def embedded(script):
@@ -245,17 +246,57 @@ class GoSetupTests(unittest.TestCase):
         self.assertEqual(self.run_helper().returncode, 0)
         self.assertEqual(models.read_bytes(), before)
 
+    def test_published_typed_catalog_succeeds_through_helper_and_all_wrappers(self):
+        self.put(self.catalog, TYPED_CATALOG)
+        for script, use_wrapper in [('ubuntu.sh', False)] + [(s, True) for s in SCRIPTS if s != 'win.ps1' or PWSH]:
+            with self.subTest(script=script, wrapper=use_wrapper):
+                self.put(self.auth, {'keep': {'type': 'api_key', 'key': 'unrelated'}})
+                result = self.run_helper(script, use_wrapper=use_wrapper)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(json.loads(self.auth.read_text()), {
+                    'keep': {'type': 'api_key', 'key': 'unrelated'},
+                    'opencode-go': {'type': 'api_key', 'key': KEY}})
+        self.put(self.catalog, {'openai-responses': {MODEL: {**self.model, 'type': 'chat'}}})
+        self.assertEqual(self.run_helper().returncode, 0)
+
+    def test_catalog_identity_and_type_ambiguities_fail_before_auth_mutation(self):
+        typed = {**self.model, 'type': 'chat'}
+        cases = [
+            {}, {'openai-responses': {}},
+            {'openai-responses': {'chat:' + MODEL: self.model}},
+            {'openai-responses': {MODEL: self.model, 'chat:' + MODEL: typed}},
+            {'openai-responses': {MODEL: self.model}, 'other': {MODEL: self.model}},
+            {'other': {'chat:' + MODEL: typed}},
+            {'openai-responses': {'arbitrary:' + MODEL: typed}},
+            {'openai-responses': {'chat:' + MODEL: {**typed, 'id': 'another-model'}}},
+        ]
+        for key in (MODEL, 'chat:' + MODEL):
+            for value in ('embedding', '', None):
+                cases.append({'openai-responses': {key: {**typed, 'type': value}}})
+        self.put(self.auth, {'keep': {'type': 'api_key', 'key': 'unchanged'}})
+        before = self.auth.read_bytes()
+        for catalog in cases:
+            with self.subTest(catalog=catalog):
+                self.put(self.auth, before.decode())
+                self.put(self.catalog, catalog)
+                result = self.run_helper()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('go-failure:go-catalog:catalog-incompatible', result.stdout)
+                self.assertEqual(self.auth.read_bytes(), before)
+                self.assertFalse(self.auth.with_suffix('.json.lock').exists())
+
     def test_incompatible_catalog_prevents_credential_mutation(self):
         for field, value in (("baseUrl", "https://opencode.ai/zen/v1"), ("provider", "opencode"),
                              ("api", "openai-completions"), ("reasoning", False),
                              ("thinkingLevelMap", {"xhigh": "high"})):
             with self.subTest(field=field):
                 model = {**self.model, field: value}
-                self.put(self.catalog, {"openai-responses": {MODEL: model}})
-                result = self.run_helper()
-                self.assertEqual(result.returncode, 1)
-                self.assertIn("go-failure:go-catalog:catalog-incompatible", result.stdout)
-                self.assertFalse(self.auth.exists())
+                for key, entry in ((MODEL, model), ('chat:' + MODEL, {**model, 'type': 'chat'})):
+                    self.put(self.catalog, {"openai-responses": {key: entry}})
+                    result = self.run_helper()
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("go-failure:go-catalog:catalog-incompatible", result.stdout)
+                    self.assertFalse(self.auth.exists())
 
     @unittest.skipIf(os.name == "nt", "POSIX link/permission fixture")
     def test_linked_and_public_metadata_are_rejected(self):
