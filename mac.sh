@@ -7772,6 +7772,623 @@ check_pending_reboot() {
     fi
 }
 
+# BEGIN BB PLUGIN REFRESH
+# Native main-server plugin refresh only; independent of preparation and Pi gates.
+# Version 1 | Last changed: Refresh verified local BB plugins through native APIs
+refresh_bb_plugins() {
+    local _bb_refresh_output _bb_refresh_status=0 _bb_refresh_line
+    print_section 'BB Plugin Refresh'
+    if [[ ! -x /usr/bin/python3 ]]; then
+        print_error 'BB plugin refresh unverified: native Python 3 is unavailable.'
+        return 1
+    fi
+    # No inherited CLI/server URL is used, and no BB executable is invoked.
+    _bb_refresh_output=$(bb_plugin_refresh_payload "${1:-ready}" 2>/dev/null) || _bb_refresh_status=$?
+    if [[ ${#_bb_refresh_output} -gt 16384 || -z "${_bb_refresh_output}" ]]; then
+        print_error 'BB plugin refresh failed: unverified helper result.'
+        return 1
+    fi
+    while IFS= read -r _bb_refresh_line; do
+        case "${_bb_refresh_line}" in
+            'BB_PLUGIN_REFRESH absent') print_debug 'No verified local BB main server requires plugin refresh.' ;;
+            'BB_PLUGIN_REFRESH readiness-deferred') print_warning 'Managed BB plugin refresh deferred because normal server readiness failed.' ;;
+            'BB_PLUGIN_REFRESH stopped') print_warning 'Stopped local BB main-server plugin refresh deferred; no server was started.' ;;
+            'BB_PLUGIN_REFRESH safe-mode') print_warning 'BB plugin refresh deliberately deferred: native safe mode remains enabled.' ;;
+            'BB_PLUGIN_REFRESH checked') print_message 'BB native plugin check completed; pinned, local and incompatible selections preserved.' ;;
+            'BB_PLUGIN_REFRESH updated') print_message 'BB native plugin updates processed; final verification determines success.' ;;
+            'BB_PLUGIN_REFRESH failed') print_error 'BB plugin refresh failed or remains unverified; no lifecycle recovery was attempted.'; _bb_refresh_status=1 ;;
+            *) print_error 'BB plugin refresh failed: unverified helper result.'; return 1 ;;
+        esac
+    done <<< "${_bb_refresh_output}"
+    if [[ "${_bb_refresh_status}" -ne 0 ]]; then
+        print_error 'BB plugin refresh incomplete; unrelated setup and log finalization will continue.'
+        return 1
+    fi
+    return 0
+}
+
+bb_plugin_refresh_payload() {
+    /usr/bin/python3 -I -S - "${HOME}" "${1:-ready}" <<'BB_PLUGIN_REFRESH_PY'
+"""BB native plugin refresh. Never import BB code, start a server, or select a CLI.
+
+The HTTP peer is proved against an account-owned main-server process before each
+request. Native API responses are data, not diagnostics. See the source contract
+in docs/research/2026-10-01-bb-plugin-refresh-api.md.
+"""
+import ctypes
+import http.client
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import socket
+import stat
+import subprocess
+import sys
+import time
+
+MAX_BYTES = 8388608
+MAX_PROCESSES = 32768
+MAX_PLUGINS = 1024
+
+
+class Refusal(Exception):
+    pass
+
+
+def need(value, reason):
+    if not value:
+        raise Refusal(reason)
+
+
+def object_json(raw):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            need(key not in result, 'malformed-result')
+            result[key] = value
+        return result
+    try:
+        return json.loads(raw, object_pairs_hook=pairs,
+                          parse_constant=lambda _: (_ for _ in ()).throw(Refusal('malformed-result')))
+    except (ValueError, UnicodeError):
+        raise Refusal('malformed-result') from None
+
+
+def bounded_read(path, limit=MAX_BYTES):
+    with open(path, 'rb') as stream:
+        raw = stream.read(limit + 1)
+    need(len(raw) <= limit, 'unverified-local-state')
+    return raw
+
+
+def fingerprint(info):
+    return (info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink)
+
+
+class LocalFiles:
+    """Read-only, parent-first checks. Only the account HOME alias is resolved."""
+    def __init__(self, home, uid):
+        self.original_home = Path(home)
+        self.home = self.original_home.resolve(strict=True)
+        self.uid = uid
+        self.seen = {}
+        need(self.home.is_absolute() and self.home != Path('/'), 'unverified-home')
+        need(self.home.stat().st_uid == uid, 'unverified-home')
+
+    def normalize(self, path):
+        path = Path(path)
+        try:
+            return self.home / path.relative_to(self.original_home)
+        except ValueError:
+            return path
+
+    def inspect(self, path, directory=False, optional=False, volatile=False):
+        path = self.normalize(path)
+        need(path.is_absolute() and '..' not in path.parts, 'unverified-local-state')
+        chain = list(reversed(path.parents)) + [path]
+        for current in chain:
+            try:
+                info = current.lstat()
+            except FileNotFoundError:
+                if optional:
+                    return None
+                raise Refusal('unverified-local-state') from None
+            need(not stat.S_ISLNK(info.st_mode), 'unverified-local-state')
+            is_dir = current != path or directory
+            need(stat.S_ISDIR(info.st_mode) if is_dir else stat.S_ISREG(info.st_mode),
+                 'unverified-local-state')
+            need(info.st_uid in (0, self.uid), 'foreign-local-state')
+            # Native AppImage extraction can sit below the system sticky /tmp.
+            # No other writable ancestor is accepted; descendants remain checked.
+            sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
+            need(not info.st_mode & 0o022 or sticky_tmp, 'writable-local-state')
+            if not is_dir:
+                need(info.st_nlink == 1, 'unverified-local-state')
+            previous = self.seen.get(str(current))
+            # Directory mtime changes with unrelated work; pin its identity/mode.
+            mark = fingerprint(info)[:5] if is_dir or volatile else fingerprint(info)
+            need(previous is None or previous == mark, 'changed-local-state')
+            self.seen[str(current)] = mark
+        return info
+
+    def read(self, path, optional=False, header=False):
+        path = self.normalize(path)
+        info = self.inspect(path, optional=optional, volatile=header)
+        if info is None:
+            return None
+        def stable(observed):
+            if header:
+                return fingerprint(observed)[:5] == fingerprint(info)[:5] and observed.st_nlink == 1
+            return fingerprint(observed) == fingerprint(info)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            need(stable(os.fstat(fd)), 'changed-local-state')
+            with os.fdopen(fd, 'rb', closefd=False) as stream:
+                raw = stream.read(16 if header else MAX_BYTES + 1)
+            need(len(raw) <= MAX_BYTES, 'unverified-local-state')
+            need(stable(os.fstat(fd)), 'changed-local-state')
+            need(stable(os.lstat(path)), 'changed-local-state')
+            return raw
+        finally:
+            os.close(fd)
+
+    def json(self, path, optional=False):
+        raw = self.read(path, optional)
+        return None if raw is None else object_json(raw)
+
+
+def command(args, allow_missing=False):
+    """Only native inspection tools, never a caller-selected executable."""
+    result = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, timeout=10, close_fds=True,
+                            env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL': 'C'})
+    if allow_missing and result.returncode == 1 and not result.stdout and not result.stderr:
+        return b''
+    need(result.returncode == 0 and not result.stderr and len(result.stdout) <= MAX_BYTES, 'process-proof-unavailable')
+    return result.stdout
+
+
+def parse_environment(raw):
+    result = {}
+    for item in raw.split(b'\0'):
+        key, separator, value = item.partition(b'=')
+        if separator and key in (b'HOME', b'BB_DATA_DIR', b'BB_SERVER_PORT', b'BB_SERVER_LAUNCH_ID'):
+            name = key.decode('ascii')
+            need(name not in result, 'ambiguous-process')
+            result[name] = value.decode('utf-8', 'strict')
+    return result
+
+
+class Processes:
+    def __init__(self, uid):
+        self.uid = uid
+        self.system = sys.platform
+        need(self.system in ('linux', 'darwin'), 'unsupported-platform')
+
+    def table(self):
+        rows = command(['/bin/ps', '-axo', 'uid=,pid=']).decode('ascii').splitlines()
+        need(len(rows) <= MAX_PROCESSES, 'process-proof-unavailable')
+        result = []
+        for row in rows:
+            parts = row.split()
+            need(len(parts) == 2 and all(p.isdecimal() for p in parts), 'process-proof-unavailable')
+            if int(parts[0]) == self.uid:
+                result.append(int(parts[1]))
+        return result
+
+    def read(self, pid):
+        if self.system == 'linux':
+            root = Path('/proc') / str(pid)
+            try:
+                need(root.stat().st_uid == self.uid, 'foreign-process')
+                stamp = bounded_read(root / 'stat', 65536).rsplit(b')', 1)[1].split()[19]
+                argv = [x.decode('utf-8', 'strict') for x in bounded_read(root / 'cmdline', 2097152).split(b'\0') if x]
+                # Do not inventory credentials of unrelated account processes.
+                env = bounded_read(root / 'environ', 2097152) if main_entry(argv) is not None else b''
+                again = bounded_read(root / 'stat', 65536).rsplit(b')', 1)[1].split()[19]
+            except (FileNotFoundError, ProcessLookupError):
+                return None
+            need(stamp == again, 'changed-process')
+            return (argv, parse_environment(env), stamp)
+        # KERN_PROCARGS2 preserves argv boundaries (ps eww does not). Values are
+        # kept in memory, never printed or put in command arguments.
+        raw_rows = command(['/bin/ps', '-p', str(pid), '-o', 'uid=,lstart='], allow_missing=True)
+        if not raw_rows:
+            return None
+        rows = raw_rows.decode('ascii').strip().split(None, 1)
+        need(len(rows) == 2 and rows[0] == str(self.uid), 'foreign-process')
+        libc = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
+        mib = (ctypes.c_int * 3)(1, 49, pid)
+        size = ctypes.c_size_t(2097152)
+        buffer = ctypes.create_string_buffer(size.value)
+        need(libc.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0) == 0, 'process-proof-unavailable')
+        raw = buffer.raw[:size.value]
+        argc = int.from_bytes(raw[:4], sys.byteorder, signed=True)
+        need(0 < argc <= 4096, 'ambiguous-process')
+        rest = raw[4:].split(b'\0', 1)
+        need(len(rest) == 2, 'ambiguous-process')
+        values = rest[1].lstrip(b'\0').split(b'\0')
+        need(len(values) >= argc, 'ambiguous-process')
+        argv = [value.decode('utf-8', 'strict') for value in values[:argc]]
+        return argv, parse_environment(b'\0'.join(values[argc:])), rows[1]
+
+    def database_open(self, path):
+        # A native main server holds its bb.db connection. A stopped-data
+        # deferral requires kernel evidence, not just absence of a known argv.
+        if self.system == 'darwin':
+            return bool(command(['/usr/sbin/lsof', '-nP', '-Fpu', '--', str(path)], allow_missing=True))
+        expected = path.stat()
+        for pid in self.table():
+            try:
+                entries = list((Path('/proc') / str(pid) / 'fd').iterdir())
+            except FileNotFoundError:
+                continue
+            need(len(entries) <= 65536, 'process-proof-unavailable')
+            for entry in entries:
+                try:
+                    observed = entry.stat()
+                except FileNotFoundError:
+                    continue
+                if (observed.st_dev, observed.st_ino) == (expected.st_dev, expected.st_ino):
+                    return True
+        return False
+
+    def peer_owned(self, pid, port, client_port):
+        if self.system == 'darwin':
+            raw = command(['/usr/sbin/lsof', '-nP', '-a', '-p', str(pid), '-iTCP', '-FpnT']).decode('utf-8')
+            expected = f'n127.0.0.1:{port}->127.0.0.1:{client_port}'
+            return f'p{pid}' in raw.splitlines() and expected + '\nTST=ESTABLISHED' in raw
+        # Match the accepted server-side socket, not merely a listening port.
+        # A same-account ssh tunnel cannot satisfy this proof for a BB process.
+        expected_local = f'0100007F:{port:04X}'
+        expected_peer = f'0100007F:{client_port:04X}'
+        matches = set()
+        for name, local, peer in (('tcp', expected_local, expected_peer),
+                                 ('tcp6', '0000000000000000FFFF0000' + expected_local,
+                                  '0000000000000000FFFF0000' + expected_peer)):
+            for line in bounded_read(Path('/proc/net') / name).decode('ascii').splitlines()[1:]:
+                values = line.split()
+                need(len(values) >= 10, 'process-proof-unavailable')
+                if values[1:4] == [local, peer, '01'] and values[7] == str(self.uid):
+                    matches.add(values[9])
+        descriptors = list((Path('/proc') / str(pid) / 'fd').iterdir())
+        need(len(descriptors) <= 65536, 'process-proof-unavailable')
+        for descriptor in descriptors:
+            try:
+                target = os.readlink(descriptor)
+            except FileNotFoundError:
+                continue
+            if target.startswith('socket:[') and target[8:-1] in matches:
+                return True
+        return False
+
+
+def main_entry(argv):
+    entries = [arg for arg in argv[1:] if arg.endswith('/server/dist/index.js')]
+    if not entries:
+        return None
+    if len(entries) != 1 or not Path(entries[0]).is_absolute():
+        return None
+    return Path(entries[0])
+
+
+def verify_package(files, entry):
+    root = entry.parents[2]
+    try:
+        metadata = files.json(root / 'package.json', optional=True)
+    except (Refusal, OSError):
+        if root.name != 'bb-app':
+            return False  # no positive BB evidence in an unrelated application
+        raise
+    if not isinstance(metadata, dict) or metadata.get('name') != 'bb-app':
+        need(root.name != 'bb-app', 'unverified-main-server')
+        # Recognize BB's source-workspace server without treating every unrelated
+        # project named server/dist/index.js as a BB installation.
+        workspace = files.json(entry.parents[1] / 'package.json', optional=True)
+        need(not isinstance(workspace, dict) or workspace.get('name') != '@bb/server', 'unsupported-native-contract')
+        return False
+    version = metadata.get('version')
+    # Native contract inspected at 0.44.0. Unknown versions must be reviewed,
+    # rather than silently assuming source/disabled-state semantics are stable.
+    need(version == '0.44.0', 'unsupported-native-contract')
+    need(metadata.get('bin', {}).get('bb-server') == 'dist/bb-server.js', 'unverified-main-server')
+    files.inspect(entry)
+    files.inspect(root / 'server/dist/start-server.js')
+    return True
+
+
+def discover(files, processes, configured_data=None, block_default=False):
+    servers = []
+    data_dirs = {files.home / '.bb'}
+    if configured_data:
+        need(Path(configured_data).is_absolute(), 'unverified-local-state')
+        data_dirs.add(files.normalize(configured_data))
+    for pid in processes.table():
+        record = processes.read(pid)
+        if record is None:
+            continue
+        argv, env, stamp = record
+        entry = main_entry(argv)
+        if entry is None:
+            continue
+        if not verify_package(files, entry):
+            continue
+        need(len(argv) == 2, 'ambiguous-process')
+        # UID is the account identity; a manual server can use a custom HOME.
+        home = env.get('HOME') or str(files.home)
+        need(Path(home).is_absolute(), 'unverified-home')
+        data = files.normalize(env.get('BB_DATA_DIR') or str(Path(home) / '.bb'))
+        if block_default and data == files.home / '.bb':
+            continue  # opted-in Ubuntu readiness failed; caller retains failure
+        files.inspect(data, directory=True)
+        need(data.stat().st_uid == files.uid, 'foreign-local-state')
+        need(files.read(data / 'bb.db', header=True) == b'SQLite format 3\0'
+             and (data / 'bb.db').stat().st_uid == files.uid, 'unverified-main-server')
+        need(files.read(data / 'server-moved.json', optional=True) is None
+             and files.read(data / 'server-import.json', optional=True) is None, 'server-move-in-progress')
+        port_text = env.get('BB_SERVER_PORT', '38886')
+        need(re.fullmatch(r'[0-9]{1,5}', port_text) is not None and 0 < int(port_text) < 65536,
+             'ambiguous-endpoint')
+        key = (data.stat().st_dev, data.stat().st_ino)
+        need(not any(s['key'] == key or s['port'] == int(port_text) for s in servers), 'ambiguous-main-server')
+        servers.append({'pid': pid, 'record': record, 'entry': entry, 'data': data,
+                        'key': key, 'port': int(port_text), 'launch': env.get('BB_SERVER_LAUNCH_ID')})
+        data_dirs.add(data)
+    stopped = 0
+    for data in data_dirs:
+        if block_default and data == files.home / '.bb':
+            continue
+        info = files.inspect(data, directory=True, optional=True)
+        if info is None or any(s['key'] == (info.st_dev, info.st_ino) for s in servers):
+            continue
+        db = files.read(data / 'bb.db', optional=True, header=True)
+        if db is None:
+            continue  # prepared CLI / machine daemon is not a main server
+        need(info.st_uid == files.uid and (data / 'bb.db').stat().st_uid == files.uid
+             and db[:16] == b'SQLite format 3\0', 'unverified-main-server')
+        moved = files.json(data / 'server-moved.json', optional=True)
+        if moved is not None:
+            need(isinstance(moved, dict) and moved.get('version') == 1
+                 and moved.get('mode') in ('connect', 'direct')
+                 and all(isinstance(moved.get(k), str) and moved[k]
+                         for k in ('moveId', 'fromHostId', 'toHostId', 'toHostName', 'serverUrl'))
+                 and type(moved.get('movedAt')) is int and moved['movedAt'] >= 0
+                 and isinstance(moved.get('oldCopyEntries'), list), 'unverified-local-state')
+            continue  # historical main data now belongs to a remote server
+        need(files.read(data / 'server-import.json', optional=True) is None, 'server-move-in-progress')
+        runtime = files.json(data / 'bb-app-runtime.json', optional=True)
+        if runtime is not None:
+            need(isinstance(runtime, dict) and type(runtime.get('pid')) is int, 'unverified-local-state')
+            need(processes.read(runtime['pid']) is None, 'unverified-main-server')
+        need(not processes.database_open(data / 'bb.db'), 'unverified-main-server')
+        stopped += 1
+    return servers, stopped
+
+
+class NativeApi:
+    def __init__(self, files, processes, server, deadline):
+        self.files, self.processes, self.server, self.deadline = files, processes, server, deadline
+
+    def request(self, method, path, payload=None):
+        need(time.monotonic() < self.deadline, 'operation-timeout')
+        s = self.server
+        need(self.processes.read(s['pid']) == s['record'], 'changed-process')
+        need(verify_package(self.files, s['entry']), 'unverified-main-server')
+        self.files.inspect(s['data'], directory=True)
+        connection = http.client.HTTPConnection('127.0.0.1', s['port'],
+                                               timeout=min(180, self.deadline - time.monotonic()))
+        try:
+            connection.connect()
+            connection.auto_open = 0  # never reconnect after proving a socket
+            client_port = connection.sock.getsockname()[1]
+            until = min(self.deadline, time.monotonic() + 2)
+            while not self.processes.peer_owned(s['pid'], s['port'], client_port):
+                need(time.monotonic() < until, 'unverified-peer')
+                time.sleep(0.025)
+            need(self.processes.read(s['pid']) == s['record'], 'changed-process')
+            body = None if payload is None else json.dumps(payload).encode('ascii')
+            connection.request(method, path, body, {'Content-Type': 'application/json', 'Accept-Encoding': 'identity'})
+            response = connection.getresponse()
+            need(response.getheader('Content-Encoding') in (None, 'identity'), 'malformed-result')
+            raw = response.read(MAX_BYTES + 1)
+            need(len(raw) <= MAX_BYTES, 'malformed-result')
+            need(self.processes.read(s['pid']) == s['record'], 'changed-process')
+            result = object_json(raw)
+            if response.status == 422 and method == 'POST' and path.endswith('/update'):
+                identity = path.split('/')[-2]
+                refusal = ('plugin safe mode is on; turn it off with `bb plugin safe-mode off` '
+                           'before you update "' + identity + '"')
+                if isinstance(result, dict) and result.get('error') == refusal:
+                    raise Refusal('safe-mode')
+            need(response.status == 200, 'native-request-failed')  # no redirects or remote fallback
+            return result
+        except (TimeoutError, socket.timeout):
+            raise Refusal('operation-timeout') from None
+        finally:
+            connection.close()
+
+    def verify(self):
+        health = self.request('GET', '/health')
+        need(isinstance(health, dict) and health.get('ok') is True and not health.get('serverMove'),
+             'unverified-main-server')
+        if self.server['launch']:
+            need(health.get('launchId') == self.server['launch'], 'unverified-main-server')
+        config = self.request('GET', '/api/v1/system/config')
+        need(isinstance(config, dict) and isinstance(config.get('dataDir'), str)
+             and self.files.normalize(config['dataDir']) == self.server['data'], 'unverified-main-server')
+
+
+def plugin_map(result):
+    need(isinstance(result, dict) and isinstance(result.get('plugins'), list), 'malformed-result')
+    need(len(result['plugins']) <= MAX_PLUGINS, 'malformed-result')
+    plugins = {}
+    for plugin in result['plugins']:
+        need(isinstance(plugin, dict), 'malformed-result')
+        identity = plugin.get('id')
+        need(isinstance(identity, str) and re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}', identity),
+             'malformed-result')
+        need(identity not in plugins and type(plugin.get('enabled')) is bool, 'malformed-result')
+        need(plugin.get('provenance') in ('builtin', 'direct', 'catalog'), 'malformed-result')
+        need(all(isinstance(plugin.get(key), str) and plugin[key] for key in ('source', 'version', 'status')),
+             'malformed-result')
+        need(isinstance(plugin.get('updateState'), dict), 'malformed-result')
+        plugins[identity] = plugin
+    return plugins
+
+
+def safe_mode(api):
+    state = api.request('GET', '/api/v1/plugins/safe-mode')
+    need(isinstance(state, dict) and type(state.get('enabled')) is bool, 'malformed-result')
+    return state['enabled']
+
+
+def resolution(value):
+    return (isinstance(value, dict) and isinstance(value.get('version'), str)
+            and bool(value['version']) and isinstance(value.get('display'), str))
+
+
+def refresh(api):
+    api.verify()
+    if safe_mode(api):
+        return 'safe-mode', False
+    before = plugin_map(api.request('GET', '/api/v1/plugins'))
+    sources = {}
+    for identity, plugin in before.items():
+        source = api.request('GET', '/api/v1/plugins/' + identity + '/source')
+        need(isinstance(source, dict) and source.get('requested') == plugin['source']
+             and isinstance(source.get('resolved'), str), 'unverified-source-intent')
+        sources[identity] = source
+    targets = {}
+    checks = api.request('POST', '/api/v1/plugins/updates/check', {})
+    need(isinstance(checks, dict) and isinstance(checks.get('results'), list), 'malformed-result')
+    need(len(checks['results']) == len(before), 'incomplete-results')
+    checked = {}
+    failed = False
+    updated = False
+    for entry in checks['results']:
+        need(isinstance(entry, dict) and entry.get('id') in before and entry['id'] not in checked,
+             'malformed-result')
+        need(resolution(entry.get('installed')), 'malformed-result')
+        need(entry.get('outcome') in ('current', 'update-available', 'pinned', 'incompatible', 'unavailable'),
+             'malformed-result')
+        need(not entry.get('devMode'), 'unverified-compatibility')
+        if entry['outcome'] == 'incompatible':
+            blocked = entry.get('blocked')
+            need(isinstance(blocked, dict) and isinstance(blocked.get('version'), str)
+                 and isinstance(blocked.get('reasons'), list) and bool(blocked['reasons'])
+                 and all(isinstance(r, str) and r for r in blocked['reasons']), 'malformed-result')
+        need(sources[entry['id']]['resolved'] == entry['installed']['display'], 'changed-source-resolution')
+        checked[entry['id']] = entry
+    for identity, entry in checked.items():
+        plugin = before[identity]
+        outcome = entry['outcome']
+        if outcome == 'unavailable':
+            failed = True
+            continue
+        if outcome != 'update-available':
+            continue
+        need(plugin['provenance'] != 'builtin' and not plugin['source'].startswith(('path:', 'builtin:')),
+             'unexpected-update-selection')
+        need(resolution(entry.get('candidate')), 'malformed-result')
+        if safe_mode(api):
+            return 'safe-mode', failed
+        try:
+            result = api.request('POST', '/api/v1/plugins/' + identity + '/update', {})
+            need(isinstance(result, dict) and type(result.get('applied')) is bool
+                 and resolution(result.get('from')), 'malformed-result')
+            need(result.get('outcome') in ('current', 'updated', 'rolled-back'), 'malformed-result')
+            if result['outcome'] == 'rolled-back':
+                failed = True
+            elif result['outcome'] == 'updated':
+                need(result['applied'] is True and resolution(result.get('to')), 'malformed-result')
+                updated = True
+                targets[identity] = result['to']
+            else:
+                need(result['applied'] is False, 'malformed-result')
+                targets[identity] = result['from']
+        except Refusal as error:
+            if str(error) == 'safe-mode':
+                return 'safe-mode', failed
+            # Unknown completion (including timeout) must not be retried or
+            # converted to success by a later current result.
+            failed = True
+    after = plugin_map(api.request('GET', '/api/v1/plugins'))
+    need(before.keys() == after.keys(), 'changed-plugin-inventory')
+    for identity, old in before.items():
+        new = after[identity]
+        source = api.request('GET', '/api/v1/plugins/' + identity + '/source')
+        need(isinstance(source, dict) and all(source.get(key) == sources[identity].get(key)
+             for key in ('requested', 'subdirectory', 'range', 'tagPrefix', 'registry')), 'changed-plugin-intent')
+        if identity in targets:
+            need(source.get('resolved') == targets[identity]['display'], 'update-unverified')
+        need(all(new[key] == old[key] for key in ('source', 'provenance', 'enabled')), 'changed-plugin-intent')
+        if checked[identity]['outcome'] in ('pinned', 'incompatible'):
+            need(new['version'] == old['version'], 'changed-preserved-plugin')
+        if checked[identity]['outcome'] == 'update-available':
+            need(new['status'] in (('running',) if new['enabled'] else ('disabled',)), 'activation-unverified')
+        failure = new['updateState'].get('lastFailure')
+        need(failure is None or failure == old['updateState'].get('lastFailure'), 'activation-failed')
+    # A fresh native check catches incomplete/rolled-back results and concurrent
+    # new candidates. Never treat unavailable/unknown as deliberate exclusion.
+    final = api.request('POST', '/api/v1/plugins/updates/check', {})
+    need(isinstance(final, dict) and isinstance(final.get('results'), list), 'malformed-result')
+    remaining = final['results']
+    need(len(remaining) == len(before) and {e.get('id') for e in remaining if isinstance(e, dict)} == set(before),
+         'incomplete-results')
+    for entry in remaining:
+        need(resolution(entry.get('installed')) and not entry.get('devMode'), 'malformed-result')
+        if entry['id'] in targets:
+            need(entry['installed'] == targets[entry['id']], 'update-unverified')
+        if entry.get('outcome') not in ('current', 'pinned', 'incompatible'):
+            failed = True
+    return ('updated' if updated else 'checked'), failed
+
+
+def run():
+    # Diagnostics are finite, controlled labels only. No paths, URLs, process
+    # arguments, native errors, plugin output, settings or credentials escape.
+    labels = {'safe-mode', 'checked', 'updated', 'stopped', 'absent', 'failed'}
+    try:
+        need(os.getuid() != 0, 'unsupported-account')
+        deadline = time.monotonic() + 1800
+        signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(Refusal('operation-timeout')))
+        signal.alarm(1800)  # include discovery and local filesystem inspection
+        files = LocalFiles(sys.argv[1], os.getuid())
+        processes = Processes(os.getuid())
+        policy = sys.argv[2] if len(sys.argv) > 2 else 'ready'
+        need(policy in ('ready', 'block-default'), 'unverified-policy')
+        servers, stopped = discover(files, processes, os.environ.get('BB_DATA_DIR'), policy == 'block-default')
+        failed = False
+        if policy == 'block-default':
+            print('BB_PLUGIN_REFRESH readiness-deferred')
+        if stopped:
+            print('BB_PLUGIN_REFRESH stopped')
+        if not stopped and not servers:
+            print('BB_PLUGIN_REFRESH absent')
+        for server in servers:
+            try:
+                state, error = refresh(NativeApi(files, processes, server, deadline))
+                need(state in labels, 'unverified-result')
+                print('BB_PLUGIN_REFRESH ' + state)
+                failed = failed or error
+            except Exception:
+                failed = True
+                print('BB_PLUGIN_REFRESH failed')
+        return int(failed)
+    except Exception:
+        print('BB_PLUGIN_REFRESH failed')
+        return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(run())
+BB_PLUGIN_REFRESH_PY
+}
+# END BB PLUGIN REFRESH
+
 # Installation only: keep this block identical in the five Bash scripts.
 # A private npm prefix avoids global BB bins and the enrollment installer's fallback.
 bb_machine_existing_role() {
@@ -8933,7 +9550,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 260 | Last changed: Support current Go catalog, skills baseline and OpenCode version output${NC}"
+    echo -e "${GRAY}Version 261 | Last changed: Refresh verified local BB plugins through native APIs${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9151,6 +9768,9 @@ HELPER_EOF
         install_gemini_cli
         install_portless_cli
         setup_bb_machine mac || { print_error 'BB machine preparation incomplete; existing BB state was preserved.'; _setup_had_errors=1; }
+    fi
+    if macos_developer_tools_ready_for "BB plugin refresh"; then
+        refresh_bb_plugins ready || _setup_had_errors=1
     fi
     if macos_existing_prerequisites "Claude and Notion native installers" curl; then
         install_claude_code

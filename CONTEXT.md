@@ -52,6 +52,18 @@ _Avoid_: BBEdit, bb browser shortcut
 An independent main application server for the bb agentic IDE published by get-bb/bb, with its own projects and sessions. It is distinct from BBEdit and from an execution machine enrolled with another bb server.
 _Avoid_: BBEdit server, bb execution machine
 
+**Local bb server**:
+A bb server hosted on the machine being configured and belonging to the account being configured. A connection to a remote server does not make that server local.
+_Avoid_: Any reachable bb server, enrolled execution machine
+
+**bb plugin**:
+An installed extension of a bb server's capabilities. Plugins belong to that server, not independently to each enrolled execution machine or connected desktop client.
+_Avoid_: BB installation, machine package
+
+**bb plugin refresh**:
+An update of a local bb server's installed plugins to compatible versions allowed by their existing source selections, preserving pins, local development sources and disabled status. It is distinct from updating bb itself or installing additional plugins.
+_Avoid_: BB self-update, marketplace refresh, plugin installation
+
 **bb execution machine**:
 A machine enrolled with a bb server to host project files and run agents. Enrollment does not make it an independent bb server.
 _Avoid_: Secondary bb server, browser client

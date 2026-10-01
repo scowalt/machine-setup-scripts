@@ -1,0 +1,590 @@
+#!/usr/bin/env python3
+"""Definitions-only refresh policy/callers, synthetic files and inert native APIs.
+
+No process inventory, socket, application, plugin, service or installed BB code
+is used. Run only through run-fixture-matrix.py and its mandatory kernel filter.
+"""
+import ast
+import copy
+import contextlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import types
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ('ubuntu', 'mac', 'pi', 'bazzite', 'wsl')
+
+
+def definitions_only(text=None):
+    path = ROOT / 'lib/bb-plugin-refresh.py'
+    tree = ast.parse(path.read_text() if text is None else text)
+    modules = {'ctypes', 'http.client', 'json', 'os', 're', 'signal', 'socket',
+               'stat', 'subprocess', 'sys', 'time'}
+    constants = {'MAX_BYTES', 'MAX_PROCESSES', 'MAX_PLUGINS'}
+
+    def check_function(node):
+        args = node.args
+        parameters = args.posonlyargs + args.args + args.kwonlyargs + [a for a in (args.vararg, args.kwarg) if a]
+        if node.name == 'Exception' or node.decorator_list or node.returns is not None or any(a.annotation is not None for a in parameters):
+            raise ValueError('Definition-time annotation/decorator refused')
+        for default in args.defaults + [v for v in args.kw_defaults if v is not None]:
+            if not (isinstance(default, ast.Name) and default.id in constants):
+                ast.literal_eval(default)
+
+    selected = []
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            if any(a.name not in modules or a.asname is not None for a in node.names):
+                raise ValueError('Only audited standard-library imports are permitted')
+            selected.append(node)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module != 'pathlib' or node.level or [(a.name, a.asname) for a in node.names] != [('Path', None)]:
+                raise ValueError('Unaudited import refused')
+            selected.append(node)
+        elif isinstance(node, ast.FunctionDef):
+            check_function(node)
+            selected.append(node)
+        elif isinstance(node, ast.ClassDef):
+            if node.name == 'Exception' or node.decorator_list or node.keywords or any(not isinstance(b, ast.Name) or b.id != 'Exception' for b in node.bases):
+                raise ValueError('Definition-time class expression refused')
+            for member in node.body:
+                if isinstance(member, ast.FunctionDef):
+                    check_function(member)
+                elif not (isinstance(member, ast.Pass) or isinstance(member, ast.Expr)
+                          and isinstance(member.value, ast.Constant) and isinstance(member.value.value, str)):
+                    raise ValueError('Executable class body refused')
+            selected.append(node)
+        elif isinstance(node, ast.Assign):
+            if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name) or node.targets[0].id not in constants:
+                raise ValueError('Unaudited initializer refused')
+            ast.literal_eval(node.value)
+            selected.append(node)
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            continue
+        elif isinstance(node, ast.If) and ast.unparse(node.test) == "__name__ == '__main__'":
+            continue
+        else:
+            raise ValueError('Unsupported policy import layout')
+    module = types.ModuleType('refresh_fixture')
+    exec(compile(ast.Module(body=selected, type_ignores=[]), str(path), 'exec'), module.__dict__)
+    return module
+
+
+P = definitions_only()
+spec = importlib.util.spec_from_file_location('fixture_extractor', ROOT / 'tests/extract_setup_fixture.py')
+EXTRACT = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(EXTRACT)
+
+
+def plugin(identity='tracking', source='npm:fixture@^1', enabled=True):
+    return {'id': identity, 'source': source, 'version': '1.0.0', 'provenance': 'direct',
+            'enabled': enabled, 'status': 'running' if enabled else 'disabled', 'updateState': {}}
+
+
+def resolved(version):
+    return {'version': version, 'display': 'npm:fixture@' + version}
+
+
+class FakeApi:
+    def __init__(self, plugins=None, outcomes=None):
+        self.plugins = {p['id']: copy.deepcopy(p) for p in (plugins or [plugin()])}
+        self.outcomes = outcomes or {identity: 'update-available' for identity in self.plugins}
+        self.calls = []
+        self.safe = False
+        self.results = {}
+        self.verified = False
+        self.after_update = lambda _: None
+
+    def verify(self):
+        self.verified = True
+
+    def request(self, method, path, payload=None):
+        assert self.verified
+        self.calls.append((method, path, payload))
+        if path == '/api/v1/plugins/safe-mode':
+            return {'enabled': self.safe}
+        if path == '/api/v1/plugins':
+            return {'plugins': copy.deepcopy(list(self.plugins.values()))}
+        if path.endswith('/source'):
+            row = self.plugins[path.split('/')[-2]]
+            return {'requested': row['source'], 'resolved': resolved(row['version'])['display'],
+                    'subdirectory': 'nested/plugin', 'range': '^1', 'tagPrefix': 'fixture/',
+                    'history': [], 'engines': {}}
+        if path.endswith('/updates/check'):
+            entries = []
+            for identity, row in self.plugins.items():
+                outcome = self.outcomes[identity]
+                entry = {'id': identity, 'installed': resolved(row['version']), 'outcome': outcome}
+                if outcome == 'update-available':
+                    entry['candidate'] = resolved('1.1.0')
+                if outcome == 'incompatible':
+                    entry['blocked'] = {'version': '9.0.0', 'reasons': ['bb-engine']}
+                entries.append(entry)
+            return {'results': entries}
+        assert method == 'POST' and path.endswith('/update'), (method, path)
+        identity = path.split('/')[-2]
+        result = self.results.get(identity, 'updated')
+        if isinstance(result, Exception):
+            raise result
+        row = self.plugins[identity]
+        answer = {'applied': result == 'updated', 'from': resolved(row['version']),
+                  'to': resolved('1.1.0'), 'outcome': result}
+        if result == 'updated':
+            row['version'] = '1.1.0'
+            self.outcomes[identity] = 'current'
+        self.after_update(identity)
+        return answer
+
+    def mutations(self):
+        return [call for call in self.calls if call[1].endswith('/update')]
+
+
+class Policy(unittest.TestCase):
+    def test_source_import_rejects_definition_time_effects_before_execution(self):
+        candidates = ['import nonexistent_application', 'print("BEFORE_MOCKS")',
+                      'class Unsafe:\n    print("BEFORE_MOCKS")',
+                      'class Unsafe:\n    def method(self, value=print("BEFORE_MOCKS")):\n        pass',
+                      '@print("BEFORE_MOCKS")\ndef unsafe():\n    pass',
+                      'def unsafe(value: print("BEFORE_MOCKS")):\n    pass',
+                      'class Unsafe(metaclass=print("BEFORE_MOCKS")):\n    pass',
+                      'class Exception:\n    def __init_subclass__(cls):\n        print("BEFORE_MOCKS")\nclass Unsafe(Exception):\n    pass']
+        for source in candidates:
+            output = io.StringIO()
+            with self.subTest(source=source), contextlib.redirect_stdout(output), self.assertRaises(ValueError):
+                definitions_only(source)
+            self.assertEqual(output.getvalue(), '')
+
+    def test_entire_helper_deadline_precedes_discovery_and_raw_errors_are_suppressed(self):
+        events = []
+        def discover(*_args):
+            self.assertEqual(events, ['signal', ('alarm', 1800)])
+            raise RuntimeError('secret-sentinel-must-not-escape')
+        output = io.StringIO()
+        with patch.object(P.os, 'getuid', return_value=1234), \
+                patch.object(P.sys, 'argv', ['fixture', '/inert-home', 'ready']), \
+                patch.object(P, 'LocalFiles', return_value=object()), \
+                patch.object(P, 'Processes', return_value=object()), \
+                patch.object(P, 'discover', side_effect=discover), \
+                patch.object(P.signal, 'signal', side_effect=lambda *_: events.append('signal')), \
+                patch.object(P.signal, 'alarm', side_effect=lambda value: events.append(('alarm', value))), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(P.run(), 1)
+        self.assertEqual(output.getvalue(), 'BB_PLUGIN_REFRESH failed\n')
+
+    def test_current_pinned_local_bundled_and_incompatible_are_preserved(self):
+        rows = [plugin('current'), plugin('pin', 'npm:fixture@1.0.0'),
+                plugin('local', 'path:/inert/development'), plugin('builtin', 'builtin:fixture'),
+                plugin('incompatible')]
+        rows[3]['provenance'] = 'builtin'
+        api = FakeApi(rows, dict(zip([r['id'] for r in rows], ['current', 'pinned', 'pinned', 'pinned', 'incompatible'])))
+        before = copy.deepcopy(api.plugins)
+        self.assertEqual(P.refresh(api), ('checked', False))
+        self.assertEqual(api.plugins, before)
+        self.assertFalse(api.mutations())
+
+    def test_update_preserves_disabled_status_and_source_intent(self):
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                api = FakeApi([plugin(enabled=enabled)])
+                self.assertEqual(P.refresh(api), ('updated', False))
+                row = api.plugins['tracking']
+                self.assertEqual(row['enabled'], enabled)
+                self.assertEqual(row['source'], 'npm:fixture@^1')
+                self.assertEqual(row['status'], 'running' if enabled else 'disabled')
+                self.assertEqual(len(api.mutations()), 1)
+
+    def test_safe_mode_does_not_check_update_sources(self):
+        api = FakeApi()
+        api.safe = True
+        self.assertEqual(P.refresh(api), ('safe-mode', False))
+        self.assertEqual(len(api.calls), 1)
+
+    def test_safe_mode_race_retains_prior_failures(self):
+        for unavailable in (False, True):
+            api = FakeApi([plugin('first'), plugin('second')],
+                          {'first': 'unavailable' if unavailable else 'current', 'second': 'update-available'})
+            api.results['second'] = P.Refusal('safe-mode')
+            self.assertEqual(P.refresh(api), ('safe-mode', unavailable))
+
+    def test_unavailable_rollback_and_partial_failure_are_not_success(self):
+        for failure in ('rolled-back', P.Refusal('native-request-failed'), P.Refusal('operation-timeout')):
+            api = FakeApi([plugin('first'), plugin('second')])
+            api.results['first'] = failure
+            self.assertEqual(P.refresh(api), ('updated', True))
+            self.assertEqual(len(api.mutations()), 2)
+        api = FakeApi(outcomes={'tracking': 'unavailable'})
+        self.assertEqual(P.refresh(api), ('checked', True))
+        self.assertFalse(api.mutations())
+
+    def test_zero_exit_equivalent_false_success_and_intent_changes_are_refused(self):
+        mutations = [lambda api: api.plugins['tracking'].update(enabled=False),
+                     lambda api: api.plugins['tracking'].update(source='npm:other'),
+                     lambda api: api.plugins['tracking'].update(status='degraded'),
+                     lambda api: api.plugins['tracking']['updateState'].update(lastFailure={'at': 42}),
+                     lambda api: api.plugins['tracking'].update(version='1.0.0')]
+        for mutation in mutations:
+            api = FakeApi()
+            api.after_update = lambda _, api=api, mutation=mutation: mutation(api)
+            with self.subTest(mutation=mutation), self.assertRaises(P.Refusal):
+                P.refresh(api)
+        api = FakeApi()
+        api.results['tracking'] = 'current'
+        self.assertEqual(P.refresh(api), ('checked', True))
+
+    def test_malformed_results_and_dev_mode_fail_before_updates(self):
+        for shape in (None, {}, {'results': []}, {'results': [None]},
+                      {'results': [{'id': 'tracking', 'installed': resolved('1.0.0'), 'outcome': 'skipped'}]},
+                      {'results': [{'id': 'tracking', 'installed': resolved('1.0.0'), 'outcome': 'current', 'devMode': True}]}):
+            api = FakeApi()
+            native = api.request
+            api.request = lambda method, path, payload=None: shape if path.endswith('/updates/check') else native(method, path, payload)
+            with self.subTest(shape=shape), self.assertRaises(P.Refusal):
+                P.refresh(api)
+            self.assertFalse(api.mutations())
+        for raw in ('{"ok":true,"ok":false}', '{', '{"x":NaN}'):
+            with self.assertRaises(P.Refusal):
+                P.object_json(raw)
+
+    def test_bundled_or_path_update_selection_is_not_applied(self):
+        for source in ('path:/inert', 'builtin:fixture'):
+            api = FakeApi([plugin(source=source)])
+            with self.assertRaises(P.Refusal):
+                P.refresh(api)
+            self.assertFalse(api.mutations())
+
+
+class Discovery(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='bb-refresh-fixture-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.home = self.root / 'home'
+        self.home.mkdir(mode=0o700)
+        self.package = self.home / 'npm/lib/node_modules/bb-app'
+        self.entry = self.package / 'server/dist/index.js'
+        self.entry.parent.mkdir(parents=True)
+        self.entry.write_text('throw Error("fixture must not execute BB");\n')
+        (self.entry.parent / 'start-server.js').write_text('throw Error("fixture must not execute BB");\n')
+        (self.package / 'package.json').write_text(json.dumps({'name': 'bb-app', 'version': '0.44.0', 'bin': {'bb-server': 'dist/bb-server.js'}}))
+        self.records = {}
+        self.proc = types.SimpleNamespace(table=lambda: list(self.records), read=lambda pid: self.records.get(pid),
+                                          peer_owned=lambda *_: True, database_open=lambda _: False)
+
+    def files(self):
+        return P.LocalFiles(self.home, os.getuid())
+
+    def data(self, path=None):
+        data = path or self.home / '.bb'
+        data.mkdir(parents=True, exist_ok=True)
+        (data / 'bb.db').write_bytes(b'SQLite format 3\0' + b'inert database placeholder')
+        return data
+
+    def server(self, pid=100, data=None, port='39001'):
+        data = self.data(data)
+        self.records[pid] = ([str(self.root / 'node'), str(self.entry)],
+                             {'HOME': str(self.home), 'BB_DATA_DIR': str(data),
+                              'BB_SERVER_PORT': port, 'BB_SERVER_LAUNCH_ID': 'fixture-launch'}, b'12345')
+        return data
+
+    def test_absent_prepared_and_enrolled_only_have_no_main_server(self):
+        for marker in ('.local/share/setup-bb-machine', '.bb-machines/remote', '.bb'):
+            (self.home / marker).mkdir(parents=True, exist_ok=True)
+        with patch.dict(os.environ, {'BB_CLI': '/must/not/execute', 'BB_SERVER_URL': 'https://remote.invalid'}):
+            self.assertEqual(P.discover(self.files(), self.proc), ([], 0))
+        self.records[100] = (['node', '/inert/host-daemon/dist/daemon-bundle.mjs'], {}, b'1')
+        self.assertEqual(P.discover(self.files(), self.proc), ([], 0))
+
+    def test_stopped_and_moved_server_data_never_become_live_targets(self):
+        data = self.data()
+        self.assertEqual(P.discover(self.files(), self.proc), ([], 1))
+        self.proc.database_open = lambda _: True
+        with self.assertRaises(P.Refusal):
+            P.discover(self.files(), self.proc)
+        self.proc.database_open = lambda _: False
+        moved = data / 'server-moved.json'
+        moved.write_text('{}')
+        with self.assertRaises(P.Refusal):
+            P.discover(self.files(), self.proc)
+        moved.write_text(json.dumps({'version': 1, 'moveId': 'fixture', 'movedAt': 1,
+                                     'fromHostId': 'old', 'toHostId': 'new', 'toHostName': 'remote',
+                                     'serverUrl': 'https://remote.invalid', 'mode': 'direct',
+                                     'connectHandle': None, 'oldCopyEntries': []}))
+        self.assertEqual(P.discover(self.files(), self.proc), ([], 0))
+
+    def test_manual_desktop_alias_and_custom_data_are_deduplicated(self):
+        data = self.server(data=self.home / 'custom/data')
+        servers, stopped = P.discover(self.files(), self.proc, str(data))
+        self.assertEqual((len(servers), stopped), (1, 0))
+        self.assertEqual(servers[0]['data'], data)
+        self.assertEqual(servers[0]['port'], 39001)
+        self.server(101, self.home / '.bb', '39002')
+        self.assertEqual(len(P.discover(self.files(), self.proc, str(data))[0]), 2)
+
+    def test_readiness_failure_excludes_only_managed_default_data(self):
+        self.server()
+        self.server(101, self.home / 'manual', '39002')
+        servers, stopped = P.discover(self.files(), self.proc, block_default=True)
+        self.assertEqual(([s['pid'] for s in servers], stopped), ([101], 0))
+
+    def test_ambiguous_foreign_changed_and_linked_evidence_fails_closed(self):
+        data = self.server()
+        self.records[101] = self.records[100]
+        with self.assertRaises(P.Refusal):
+            P.discover(self.files(), self.proc)
+        del self.records[101]
+        with patch.object(self.proc, 'read', side_effect=P.Refusal('foreign-process')):
+            with self.assertRaises(P.Refusal):
+                P.discover(self.files(), self.proc)
+        self.records[100][1]['HOME'] = str(self.root)  # same UID, custom HOME is not foreign
+        self.assertEqual(len(P.discover(self.files(), self.proc)[0]), 1)
+        (data / 'bb.db').unlink()
+        (data / 'bb.db').symlink_to(self.entry)
+        with self.assertRaises(P.Refusal):
+            P.discover(self.files(), self.proc)
+        (data / 'bb.db').unlink()
+        self.data(data)
+        files = self.files()
+        P.discover(files, self.proc)
+        (self.package / 'package.json').write_text('{}')
+        with self.assertRaises(P.Refusal):
+            P.discover(files, self.proc)
+
+    def test_unrelated_server_entries_are_ignored_but_unknown_bb_contract_is_not(self):
+        entry = self.home / 'unrelated/server/dist/index.js'
+        entry.parent.mkdir(parents=True)
+        entry.write_text('never execute')
+        (entry.parents[2] / 'package.json').write_text('{"name":"unrelated"}')
+        self.records[200] = (['node', '--some-node-option', str(entry)], {}, b'1')
+        self.assertEqual(P.discover(self.files(), self.proc), ([], 0))
+        self.server()
+        manifest = self.package / 'package.json'
+        metadata = json.loads(manifest.read_text())
+        metadata['version'] = '0.45.0'
+        manifest.write_text(json.dumps(metadata))
+        with self.assertRaisesRegex(P.Refusal, 'unsupported-native-contract'):
+            P.discover(self.files(), self.proc)
+
+    def test_live_launcher_without_verified_main_is_not_called_stopped(self):
+        data = self.data()
+        self.records[100] = (['node', str(self.package / 'dist/bb-app.js')], {}, b'12345')
+        (data / 'bb-app-runtime.json').write_text('{"pid":100}')
+        with self.assertRaises(P.Refusal):
+            P.discover(self.files(), self.proc)
+
+    def test_peer_proof_precedes_every_request_no_cli_proxy_redirect_or_reconnect(self):
+        self.server()
+        files = self.files()
+        server = P.discover(files, self.proc)[0][0]
+        events = []
+        response = types.SimpleNamespace(status=200, getheader=lambda _: None, read=lambda _: b'{"ok":true}')
+        connection = types.SimpleNamespace(sock=types.SimpleNamespace(getsockname=lambda: ('127.0.0.1', 49999)),
+                                            connect=lambda: events.append('connect'),
+                                            request=lambda *args: events.append(('request', args)),
+                                            getresponse=lambda: response, close=lambda: events.append('close'))
+        def proof(*args):
+            events.append(('proof', args))
+            return True
+        self.proc.peer_owned = proof
+        with patch.object(P.http.client, 'HTTPConnection', return_value=connection) as create:
+            api = P.NativeApi(files, self.proc, server, P.time.monotonic() + 10)
+            self.assertEqual(api.request('GET', '/health'), {'ok': True})
+            self.assertEqual(connection.auto_open, 0)
+            self.assertEqual(create.call_args.args, ('127.0.0.1', 39001))
+            self.assertEqual(events[0], 'connect')
+            self.assertEqual(events[1][0], 'proof')
+            self.assertEqual(events[2][0], 'request')
+            events.clear()
+            self.proc.peer_owned = lambda *_: False
+            with patch.object(P.time, 'monotonic', side_effect=range(50)), patch.object(P.time, 'sleep'):
+                with self.assertRaisesRegex(P.Refusal, 'unverified-peer'):
+                    P.NativeApi(files, self.proc, server, 100).request('POST', '/api/v1/plugins/id/update', {})
+            self.assertFalse(any(isinstance(e, tuple) and e[0] == 'request' for e in events))
+            self.proc.peer_owned = proof
+            response.status = 302
+            with self.assertRaisesRegex(P.Refusal, 'native-request-failed'):
+                api.request('GET', '/health')
+
+
+class NativeEvidence(unittest.TestCase):
+    def test_linux_foreign_uid_and_reused_pid_are_rejected_before_requests(self):
+        with patch.object(P.sys, 'platform', 'linux'):
+            processes = P.Processes(1234)
+        with patch.object(P.Path, 'stat', return_value=types.SimpleNamespace(st_uid=999)), \
+                patch.object(P, 'bounded_read', side_effect=AssertionError('must reject UID before reading')):
+            with self.assertRaisesRegex(P.Refusal, 'foreign-process'):
+                processes.read(99)
+        stamps = iter((b'old', b'new'))
+        def read(path, _limit):
+            if str(path).endswith('/stat'):
+                return b'99 (node) ' + b' '.join([b'S'] + [b'0'] * 18 + [next(stamps)])
+            if str(path).endswith('/cmdline'):
+                return b'/inert/node\0/inert/bb-app/server/dist/index.js\0'
+            if str(path).endswith('/environ'):
+                return b'HOME=/inert\0'
+            raise AssertionError('unexpected native read')
+        with patch.object(P.Path, 'stat', return_value=types.SimpleNamespace(st_uid=1234)), \
+                patch.object(P, 'bounded_read', side_effect=read):
+            with self.assertRaisesRegex(P.Refusal, 'changed-process'):
+                processes.read(99)
+
+    def test_linux_accepted_socket_is_matched_to_the_server_fd(self):
+        with patch.object(P.sys, 'platform', 'linux'):
+            processes = P.Processes(1234)
+        table = b'header\n 0: 0100007F:9859 0100007F:C34F 01 0:0 0:0 0 1234 0 777\n'
+        reads = lambda path, *args: table if str(path).endswith('/tcp') else b'header\n'
+        with patch.object(P, 'bounded_read', side_effect=reads), \
+                patch.object(P.Path, 'iterdir', return_value=iter([Path('/inert/fd/1')])), \
+                patch.object(P.os, 'readlink', return_value='socket:[777]'):
+            self.assertTrue(processes.peer_owned(999, 39001, 49999))
+        with patch.object(P, 'bounded_read', side_effect=reads), \
+                patch.object(P.Path, 'iterdir', return_value=iter([Path('/inert/fd/1')])), \
+                patch.object(P.os, 'readlink', return_value='socket:[888]'):
+            self.assertFalse(processes.peer_owned(999, 39001, 49999))
+
+    def test_macos_procargs_preserves_spaces_and_filters_secrets_without_execution(self):
+        argv = [b'/Applications/bb.app/Contents/MacOS/bb', b'/inert space/server/dist/index.js']
+        env = [b'HOME=/inert home', b'BB_DATA_DIR=/inert home/custom data', b'BB_SERVER_PORT=39001', b'SECRET=must-not-escape']
+        raw = (2).to_bytes(4, P.sys.byteorder) + argv[0] + b'\0\0' + b'\0'.join(argv + env) + b'\0'
+        def sysctl(_mib, _length, buffer, size, _new, _new_length):
+            P.ctypes.memmove(buffer, raw, len(raw))
+            size._obj.value = len(raw)
+            return 0
+        with patch.object(P.sys, 'platform', 'darwin'):
+            processes = P.Processes(1234)
+        with patch.object(P, 'command', return_value=b'1234 Thu Oct 1 00:00:00 2026'), \
+                patch.object(P.ctypes, 'CDLL', return_value=types.SimpleNamespace(sysctl=sysctl)):
+            args, selected, _ = processes.read(99)
+        self.assertEqual(args, [a.decode() for a in argv])
+        self.assertEqual(selected, {'HOME': '/inert home', 'BB_DATA_DIR': '/inert home/custom data', 'BB_SERVER_PORT': '39001'})
+        with patch.object(P, 'command', return_value=b''):
+            self.assertIsNone(processes.read(99))
+        with patch.object(P, 'command', return_value=b'p99\nn127.0.0.1:39001->127.0.0.1:49999\nTST=ESTABLISHED\n'):
+            self.assertTrue(processes.peer_owned(99, 39001, 49999))
+            self.assertFalse(processes.peer_owned(100, 39001, 49999))
+
+
+class Callers(unittest.TestCase):
+    def test_ubuntu_selection_readiness_and_preparation_failures_keep_boundaries(self):
+        source = EXTRACT.definitions((ROOT / 'ubuntu.sh').read_text())
+        caller = re.search(r'^run_setup_tasks\(\) \{\n.*?^\}', source, re.M | re.S).group()
+        start = caller.index('    if [[ "${_bb_selection_status}" -eq 0 ]]; then')
+        end = caller.index('    if ! prepare_pi_profile_permissions; then', start)
+        seam = caller[start:end]
+        cases = [
+            # selection, platform failure, server failure, prep failure, earlier, expected refresh
+            (0, 0, 0, 0, 0, 'ready'), (0, 0, 1, 0, 0, 'block-default'),
+            (0, 1, 0, 0, 0, None), (1, 0, 0, 0, 0, 'ready'),
+            (1, 0, 0, 1, 0, 'ready'), (1, 0, 0, 0, 1, 'ready'),
+            (2, 0, 0, 0, 1, None),
+        ]
+        for selection, platform, server, prep, earlier, refresh in cases:
+            code = '''
+print_error() { :; }
+bb_server_platform_ready() { return "$PLATFORM_FAIL"; }
+setup_bb_server() { echo normal-startup; return "$SERVER_FAIL"; }
+setup_bb_machine() { echo preparation; return "$PREP_FAIL"; }
+refresh_bb_plugins() { echo "refresh:$1"; }
+run_fixture() {
+local _bb_selection_status=$SELECTION _setup_had_errors=$EARLIER
+''' + seam + '''
+echo unrelated-and-finalization
+return "$_setup_had_errors"
+}
+run_fixture
+'''
+            with tempfile.TemporaryDirectory(prefix='bb-refresh-ubuntu-seam-') as home:
+                env = {'HOME': home, 'PATH': '/usr/bin:/bin', 'SELECTION': str(selection),
+                       'PLATFORM_FAIL': str(platform), 'SERVER_FAIL': str(server),
+                       'PREP_FAIL': str(prep), 'EARLIER': str(earlier)}
+                result = subprocess.run(['/bin/bash', '-c', code], env=env, cwd=home,
+                                        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, int(bool(platform or server or prep or earlier)), result.stderr)
+            self.assertIn('unrelated-and-finalization', result.stdout)
+            self.assertEqual('refresh:' in result.stdout, refresh is not None)
+            if refresh is not None:
+                self.assertIn('refresh:' + refresh, result.stdout)
+            if selection == 0 and platform == 0:
+                self.assertLess(result.stdout.index('normal-startup'), result.stdout.index('refresh:'))
+
+    def test_shared_embedding_windows_boundary_and_real_failure_aggregation(self):
+        wrapper = (ROOT / 'lib/bb-plugin-refresh.bash').read_text().replace('@@PYTHON@@', (ROOT / 'lib/bb-plugin-refresh.py').read_text().rstrip()).rstrip()
+        for script in SCRIPTS:
+            source = (ROOT / (script + '.sh')).read_text()
+            block = source.split('# BEGIN BB PLUGIN REFRESH\n', 1)[1].split('\n# END BB PLUGIN REFRESH', 1)[0]
+            self.assertEqual(block, wrapper)
+            selected = EXTRACT.definitions(source)
+            main = re.search(r'^run_setup_tasks\(\) \{\n.*?^\}', selected, re.M | re.S).group()
+            outer = re.search(r'^main\(\) \{\n.*?^\}', selected, re.M | re.S).group()
+            names = re.findall(r'^([A-Za-z_][A-Za-z_0-9]*)\(\) \{', selected, re.M)
+            stubs = '\n'.join(f'{name}() {{ :; }}' for name in names if name not in ('main', 'run_setup_tasks'))
+            with tempfile.TemporaryDirectory(prefix='bb-refresh-caller-') as temp:
+                home = Path(temp) / 'home'
+                home.mkdir()
+                code = stubs + '\n' + main + '\n' + outer + '''
+refresh_bb_plugins() { echo refresh; return "${REFRESH_STATUS}"; }
+prepare_pi_profile_permissions() { echo unrelated; return 1; }
+start_setup_log() { echo logging; }
+finish_setup_log() { echo finalized; return "$1"; }
+setup_load_environment() { :; }
+setup_dotfiles_access() { :; }
+determine_dotfiles_access() { :; }
+check_dotfiles_access() { return 1; }
+setup_dotfiles_deploy_key() { return 1; }
+is_main_user() { return 0; }
+bb_server_selection() { return 1; }
+whoami() { echo fixture; }
+brew() { :; }
+unzip() { :; }
+macos_developer_tools_ready_for() { return 0; }
+macos_existing_prerequisites() { return 0; }
+MACOS_DEVELOPER_TOOLS_STATE=ready
+MACOS_CLT_OPERATION_FAILED=0
+DOTFILES_ACCESS_METHOD=none
+'''
+                for cmd in ('systemctl', 'launchctl', 'loginctl', 'pgrep', 'ps', 'curl', 'npm',
+                            'bun', 'pi', 'bb', 'chezmoi', 'sudo', 'kill', 'pkill', 'tailscale'):
+                    code += f'\n{cmd}() {{ echo FORBIDDEN:{cmd}; return 99; }}'
+                code += '\nmain\n'
+                # Entire setup bodies remain inert: ALL helpers are replaced
+                # before intentionally invoking the extracted real callers.
+                env = {'HOME': str(home), 'PATH': '/usr/bin:/bin', 'REFRESH_STATUS': '1',
+                       'USER': 'fixture', 'LANG': 'C', 'TERM': 'dumb'}
+                result = subprocess.run(['/bin/bash', '-c', code], env=env, cwd=home,
+                                        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+                with self.subTest(script=script):
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn('refresh', result.stdout)
+                    self.assertIn('unrelated', result.stdout)
+                    self.assertIn('finalized', result.stdout)
+                    self.assertNotIn('FORBIDDEN:', result.stdout + result.stderr)
+        self.assertNotIn('refresh_bb_plugins', (ROOT / 'win.ps1').read_text())
+
+    def test_wrapper_suppresses_uncontrolled_output_and_retains_status(self):
+        source = (ROOT / 'lib/bb-plugin-refresh.bash').read_text().split('\nbb_plugin_refresh_payload()', 1)[0]
+        for text, status, expected in [('BB_PLUGIN_REFRESH checked', 0, 0),
+                                       ('BB_PLUGIN_REFRESH updated', 1, 1),
+                                       ('BB_PLUGIN_REFRESH safe-mode', 0, 0),
+                                       ('BB_PLUGIN_REFRESH stopped', 0, 0),
+                                       ('BB_PLUGIN_REFRESH failed', 0, 1),
+                                       ('raw-secret-sentinel', 0, 1)]:
+            code = source + '\n' + '\n'.join(f'{name}() {{ printf "%s\\n" "$1"; }}' for name in
+                                              ('print_section', 'print_message', 'print_error', 'print_warning', 'print_debug'))
+            code += '\nbb_plugin_refresh_payload() { printf "%s\\n" "$FIXTURE_OUTPUT"; return "$FIXTURE_STATUS"; }\nrefresh_bb_plugins\n'
+            with tempfile.TemporaryDirectory(prefix='bb-refresh-wrapper-') as home:
+                result = subprocess.run(['/bin/bash', '-c', code], cwd=home,
+                                        env={'HOME': home, 'PATH': '/usr/bin:/bin', 'FIXTURE_OUTPUT': text, 'FIXTURE_STATUS': str(status)},
+                                        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+            self.assertNotIn('raw-secret-sentinel', result.stdout + result.stderr)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)
