@@ -819,7 +819,7 @@ install_gemini_cli() {
 
 # Install/update Codex CLI with OpenAI's per-user standalone installer.
 # BEGIN GENERATED OPENCODE CLI
-# Version 4 | Last changed: Report bounded Homebrew process-race retries
+# Version 5 | Last changed: Keep literal helper input outside Bash 3.2 command substitution
 install_opencode_cli() {
     local result status=0 brew_ready=0 machine kind
     machine=$(uname -m) || return 1
@@ -840,7 +840,10 @@ install_opencode_cli() {
         print_error 'OpenCode CLI requires a working Node >=22 for verified native downloads/extraction (no npm execution).'
         return 1
     fi
-    result=$(SETUP_OPENCODE_BREW_READY="${brew_ready}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null <<'OPENCODE_CLI_JS'
+    # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
+    {
+        result=$(SETUP_OPENCODE_BREW_READY="${brew_ready}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null) || status=$?
+    } <<'OPENCODE_CLI_JS'
 // Embedded in all six entry points by tools/embed-opencode-cli.py.
 // Version 3 | Last changed: Accept exact official named version output after artifact verification.
 // Installation only: never import application code or inherit its environment.
@@ -1567,7 +1570,6 @@ if (require.main === module || process.argv[1] === '-') install().then(result =>
     process.exitCode = 1;
 });
 OPENCODE_CLI_JS
-    ) || status=$?
     if [[ "${status}" -ne 0 ]]; then
         if [[ "${result}" == opencode-cli:recovery-required ]]; then
             print_error 'OpenCode CLI rollback needs manual recovery; preserve .setup-opencode-* backups, recovery.json and the lock. See README.'
@@ -3127,7 +3129,10 @@ configure_pi_opencode_go() {
         print_warning "Pi Go setup failed: shared Node runtime unavailable."
         return 1
     fi
-    _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${HOME}" "${PI_CODING_AGENT_DIR:-}" sync 2>/dev/null <<'PI_OPENCODE_GO_JS'
+    # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
+    {
+        _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${HOME}" "${PI_CODING_AGENT_DIR:-}" sync 2>/dev/null) || _status=$?
+    } <<'PI_OPENCODE_GO_JS'
 // BEGIN PI_OPENCODE_GO_SETUP
 'use strict';
 const fs = require('node:fs');
@@ -3483,7 +3488,6 @@ main().then(result => console.log(result)).catch(error => {
 });
 // END PI_OPENCODE_GO_SETUP
 PI_OPENCODE_GO_JS
-    ) || _status=$?
     if [[ "${_status}" -ne 0 ]]; then
         if [[ "${_result}" =~ ^go-failure:(${_operations}):(${_reasons})$ ]]; then
             print_warning "Pi Go setup failed: ${BASH_REMATCH[1]}: ${BASH_REMATCH[2]}. Review this check locally, then rerun setup."
@@ -3950,7 +3954,10 @@ retire_global_backlog_mcp() {
         print_error "Node.js is required to retire global Backlog MCP registrations."
         return 1
     fi
-    if ! _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${HOME}" "${PI_CODING_AGENT_DIR:-}" "${CLAUDE_CONFIG_DIR:-}" "${CODEX_HOME:-}" "${GEMINI_CLI_HOME:-}" 2>/dev/null <<'BACKLOG_MCP_RETIREMENT_JS'
+    # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
+    if ! {
+        _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${HOME}" "${PI_CODING_AGENT_DIR:-}" "${CLAUDE_CONFIG_DIR:-}" "${CODEX_HOME:-}" "${GEMINI_CLI_HOME:-}" 2>/dev/null)
+    } <<'BACKLOG_MCP_RETIREMENT_JS'
 // BEGIN BACKLOG_MCP_RETIREMENT
 const fs = require('node:fs');
 const path = require('node:path');
@@ -4367,7 +4374,7 @@ try {
 }
 // END BACKLOG_MCP_RETIREMENT
 BACKLOG_MCP_RETIREMENT_JS
-    ); then
+    then
         case "${_result}" in
             write-failed) print_error "Global Backlog MCP retirement failed during a write; review the affected global metadata before retrying." ;;
             unsafe-path|unsafe-home|unsafe-profile|unsafe-boundary|unsafe-metadata|malformed-metadata|duplicate-key|unsupported-json-number|malformed-toml|unsupported-toml|toml-parser-failed|toml-parser-unavailable|unsafe-toml-edit|metadata-changed|boundary-changed|native-wrapper-required|filesystem-error)
@@ -4392,7 +4399,10 @@ prepare_pi_profile_permissions() {
         print_warning "Pi profile permissions failed: shared-runtime-unavailable."
         return 1
     fi
-    _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${HOME}" "${PI_CODING_AGENT_DIR:-}" 2>/dev/null <<'PI_PROFILE_PERMISSIONS_JS'
+    # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
+    {
+        _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${HOME}" "${PI_CODING_AGENT_DIR:-}" 2>/dev/null) || _status=$?
+    } <<'PI_PROFILE_PERMISSIONS_JS'
 // BEGIN PI_PROFILE_PERMISSIONS
 'use strict';
 const fs = require('node:fs');
@@ -4769,7 +4779,6 @@ try {
 }
 // END PI_PROFILE_PERMISSIONS
 PI_PROFILE_PERMISSIONS_JS
-    ) || _status=$?
     if [[ "${_status}" -eq 0 && "${_result}" == "prepared" ]]; then
         print_debug "Pi profile directories are private."
         return 0
@@ -4922,7 +4931,10 @@ remove_pi_prose() {
         print_error "Node.js is required to retire pi-prose from existing Pi profiles."
         return 1
     fi
-    if ! _result=$(node --input-type=commonjs - "${HOME}" "${_active_dir}" <<'PI_PROSE_RETIREMENT_JS'
+    # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
+    if ! {
+        _result=$(node --input-type=commonjs - "${HOME}" "${_active_dir}")
+    } <<'PI_PROSE_RETIREMENT_JS'
 // BEGIN PI_PROSE_RETIREMENT
 const fs = require('node:fs');
 const path = require('node:path');
@@ -5077,7 +5089,7 @@ try {
 }
 // END PI_PROSE_RETIREMENT
 PI_PROSE_RETIREMENT_JS
-    ); then
+    then
         print_error "Required pi-prose retirement failed. No npm security settings were changed."
         return 1
     fi
@@ -8574,7 +8586,7 @@ run_setup_tasks() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 222 | Last changed: Refresh verified local BB plugins through native APIs${NC}"
+    echo -e "${GRAY}Version 223 | Last changed: Fix literal helper input parsing on macOS Bash 3.2${NC}"
 
     if ! acquire_setup_lock; then
         return 1

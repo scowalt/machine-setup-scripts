@@ -1,4 +1,4 @@
-# Version 4 | Last changed: Report bounded Homebrew process-race retries
+# Version 5 | Last changed: Keep literal helper input outside Bash 3.2 command substitution
 install_opencode_cli() {
     local result status=0 brew_ready=0 machine kind
     machine=$(uname -m) || return 1
@@ -19,10 +19,12 @@ install_opencode_cli() {
         print_error 'OpenCode CLI requires a working Node >=22 for verified native downloads/extraction (no npm execution).'
         return 1
     fi
-    result=$(SETUP_OPENCODE_BREW_READY="${brew_ready}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null <<'OPENCODE_CLI_JS'
+    # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
+    {
+        result=$(SETUP_OPENCODE_BREW_READY="${brew_ready}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null) || status=$?
+    } <<'OPENCODE_CLI_JS'
 // @OPENCODE_CORE@
 OPENCODE_CLI_JS
-    ) || status=$?
     if [[ "${status}" -ne 0 ]]; then
         if [[ "${result}" == opencode-cli:recovery-required ]]; then
             print_error 'OpenCode CLI rollback needs manual recovery; preserve .setup-opencode-* backups, recovery.json and the lock. See README.'
