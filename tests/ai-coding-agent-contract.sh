@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 6 | Last changed: Load definitions-only isolated setup fixtures
+# Version 7 | Last changed: Keep README prose outside agent contracts
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -123,8 +123,6 @@ for file in "${bash_setup_scripts[@]}"; do
 done
 assert_contains win.ps1 '^function Install-OpenCodeCli' 'verified Windows OpenCode native installer'
 assert_not_contains win.ps1 'Validate-OpenCodeKeys|BAN_OPENCODE|--agent opencode|opencode\.ai/install' 'unapproved OpenCode integrations'
-assert_contains README.md 'OPENCODE_GO_API_KEY' 'dedicated Go setup credential documentation'
-assert_contains README.md 'opencode-go/muse-spark-1\.3-contributor' 'subscription Contributor model documentation'
 assert_contains win.ps1 'function Set-PiOpenCodeGoProvider' 'PowerShell Go credential helper'
 assert_order win.ps1 '^[[:space:]]+elseif \(Install-PiCli\) \{$' '^[[:space:]]+if \(Set-PiOpenCodeGoProvider\)' 'Pi installed before Go authentication'
 assert_order win.ps1 '^[[:space:]]+if \(Set-PiOpenCodeGoProvider\)' '^[[:space:]]+if \([$]piOpenCodeGoReady -and \(Prepare-PiMcpAdapter\)\)' 'Go validated before Pi package operations'
@@ -185,15 +183,6 @@ assert_order win.ps1 '^[[:space:]]+Remove-ImpeccableResources$' '^[[:space:]]+Re
 assert_contains win.ps1 '\|lfg\)' 'legacy Compound Engineering lfg skill in cleanup pattern'
 assert_contains win.ps1 'Join-Path [$]agentDir "compound-engineering"' 'legacy Compound Engineering install manifest cleanup path'
 
-assert_contains README.md 'macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows' 'all-machine AI coding agent statement'
-assert_contains README.md 'Claude Code CLI and Codex CLI' 'Claude/Codex README contract'
-assert_contains README.md "OpenAI's standalone installer" 'per-user Linux Codex installer documentation'
-assert_contains README.md '\.local/bin' 'per-user Codex path documentation'
-assert_contains README.md 'Pi Claude bridge' 'Pi Claude bridge README contract'
-assert_contains README.md 'retired .@juicesharp/rpiv-ask-user-question. and .@juicesharp/rpiv-todo. packages' 'retired RPIV packages README contract'
-assert_contains README.md 'pi-web-access' 'Pi Web Access README contract'
-assert_contains README.md 'removes legacy global Impeccable skill copies' 'legacy Impeccable cleanup documentation'
-assert_not_contains README.md 'Impeccable design skill|BAN_IMPECCABLE' 'retired Impeccable setup documentation'
 assert_not_contains CLAUDE.md 'BAN_IMPECCABLE' 'retired Impeccable setup guidance'
 
 source_without_main='s/^main "\$@"$/:/'

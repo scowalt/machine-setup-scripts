@@ -201,7 +201,6 @@ finally { Add-Content $env:EVENTS finalized }
                 continue
             with self.subTest(path=name):
                 self.assertNotIn('paseo', path.read_text(errors='replace').lower())
-        self.assertIn('no automatic uninstall', (root / 'README.md').read_text())
         self.assertNotIn('paseo', (root / '.chezmoiremove').read_text().lower())
 
 

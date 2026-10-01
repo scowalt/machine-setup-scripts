@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Version 1 | Last changed: Keep README prose outside installation contracts
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -296,14 +297,9 @@ for file in "${bash_setup_scripts[@]}" win.ps1; do
     assert_not_contains "${file}" 'tea[[:space:]]+login|tea[.]exe[[:space:]]+login' 'automated Tea authentication'
 done
 
-# User-facing setup metadata and authentication handoff stay consistent across
-# platforms.
+# User-facing setup version metadata stays consistent across platforms.
 for file in "${bash_setup_scripts[@]}" win.ps1; do
     assert_contains "${file}" 'Version [0-9]+ \| Last changed: .+' 'current version banner'
 done
-assert_contains README.md 'WORK_MACHINE=1.*Tea' 'work-machine Tea management documentation'
-# shellcheck disable=SC2016 # Match the literal command in Markdown.
-assert_contains README.md '`tea login add`' 'manual Tea authentication command'
-assert_contains README.md 'application token.*local configuration|local configuration.*application token' 'local Tea token warning'
 
 printf '✓ Gitea client installation contract passed\n'

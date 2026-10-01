@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 1 | Last changed: Recognize aggregated macOS Codex failures in ordering checks
+# Version 2 | Last changed: Keep README prose outside installation contracts
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -120,15 +120,8 @@ assert_order win.ps1 '^[[:space:]]+Install-WingetPackages$' '^[[:space:]]+Instal
 assert_not_contains win.ps1 'npm (install|i).*(--global|-g).*ntn' 'npm-based Notion CLI installation'
 assert_not_contains win.ps1 'ntn (login|completions)' 'Notion authentication or completion automation'
 
-assert_contains README.md 'macOS, Ubuntu, WSL, Raspberry Pi, Bazzite, and Windows' 'all-machine platform statement'
-# shellcheck disable=SC2016
-assert_contains README.md 'Notion CLI \(`ntn`\)' 'managed Notion CLI statement'
-# shellcheck disable=SC2016
-assert_contains README.md 'Run `ntn login` manually' 'manual authentication guidance'
-assert_contains README.md 'Windows package supports x64 only' 'Windows architecture limitation'
 # shellcheck disable=SC2016
 assert_contains CLAUDE.md 'Notion CLI \(`ntn`\)' 'Notion CLI repository guidance'
-assert_not_contains README.md 'BAN_NTN' 'unplanned Notion CLI opt-out'
 assert_not_contains CLAUDE.md 'BAN_NTN' 'unplanned Notion CLI opt-out'
 
 printf '✓ Notion CLI installation contract checks passed\n'

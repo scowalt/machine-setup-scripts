@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract version 25: exercise ordinary setup through definitions-only fixtures.
+# Contract version 26: keep README prose outside managed-skill contracts.
 # Historical filename retained for existing test runners.
 set -euo pipefail
 
@@ -386,11 +386,7 @@ for file in "${bash_setup_scripts[@]}"; do
     rm -rf "${failure_root}" "${test_root}"
 done
 
-assert_contains README.md 'Setup installs the full.*Matt Pocock skill suite' 'managed skill documentation'
-assert_contains README.md 'Removal applies to personal and work machines and has no opt-out' 'retired skill all-machine behavior'
 assert_contains CLAUDE.md 'full Matt Pocock suite is the managed global skill suite' 'repository guidance'
 assert_contains CONTEXT.md '^\*\*Managed agent skill\*\*:' 'managed agent skill glossary term'
 
-assert_contains README.md 'Setup removes PR Lens, Simple English, and HumanLayer' 'all retired skills documented'
-assert_contains README.md 'next setup run' 'next-run rollout'
 printf '✓ Managed and retired-skill contract checks passed\n'

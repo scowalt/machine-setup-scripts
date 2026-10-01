@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 3 | Exercise ordinary setup through definitions-only fixtures
+# Version 4 | Last changed: Keep README prose outside installation contracts
 # Run only extracted functions with mocked installers. Never install or authenticate Claude Code.
 set -euo pipefail
 
@@ -105,9 +105,7 @@ done
 grep -Fq 'if (-not (Test-ClaudeCodeSupportedPlatform))' win.ps1 || fail 'Windows: missing platform guard'
 printf '%s\n' 'PASS: Windows static installation contract (PowerShell execution not covered by this test)'
 
-for file in README.md CLAUDE.md; do
-    # Match literal Markdown code formatting.
-    # shellcheck disable=SC2016
-    grep -Fq 'Setup ignores `BAN_CLAUDE_CODE`' "${file}" || fail "${file}: missing retired-flag guidance"
-done
+# Match literal Markdown code formatting.
+# shellcheck disable=SC2016
+grep -Fq 'Setup ignores `BAN_CLAUDE_CODE`' CLAUDE.md || fail 'CLAUDE.md: missing retired-flag guidance'
 printf '%s\n' 'PASS: Claude Code installation contracts'

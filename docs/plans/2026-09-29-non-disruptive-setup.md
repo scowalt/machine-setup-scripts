@@ -8,7 +8,7 @@ Historical alias: this work was branch-local **TASK-56**, renumbered through Bac
 
 ## Problem and evidence
 
-Running setup can interrupt BB threads and other ongoing work. The current Ubuntu `setup_bb_server` function explicitly stops `setup-bb-ingress.service` and `setup-bb-app.service` before updating the package and starting the application again. The [current server documentation](../../README.md#opt-in-bb-server-on-native-ubuntu) acknowledges this disruption.
+Running setup can interrupt BB threads and other ongoing work. The current Ubuntu `setup_bb_server` function explicitly stops `setup-bb-ingress.service` and `setup-bb-app.service` before updating the package and starting the application again. The [server documentation retained in Git history](https://github.com/scowalt/machine-setup-scripts/blob/4bb7febcf926d819dbc3c3550534f4692fa112f8/README.md#opt-in-bb-server-on-native-ubuntu) acknowledges this disruption.
 
 Other mutation paths extend beyond BB itself: blanket package upgrades, agent CLI/package updates, shared Node selection changes, full Chezmoi application, macOS Tailscale migration and Bazzite DNS repair. Protecting only the BB service does not protect the tools, configuration and connectivity its agents use.
 
