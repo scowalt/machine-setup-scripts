@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 1 | Last changed: Cover controlled BB server failure diagnostics
+# Version 2 | Last changed: Cover managed-service drop-in refusals and caller preservation
 set -euo pipefail
 cd "$(dirname "$0")/.."
 tmp=$(mktemp -d)
@@ -22,6 +22,8 @@ PY
 python3 tests/test_bb_server_diagnostics.py
 # Report unsafe setup directories before any package or lifecycle operation.
 python3 tests/test_bb_directory_preflight.py
+# Existing local/loaded overrides refuse with controlled diagnostics and no mutation.
+python3 tests/test_bb_service_preflight.py
 # Exercise the earlier dotfile apply, including native Chezmoi when available.
 PYTHONDONTWRITEBYTECODE=1 python3 tests/test_bb_dotfiles_umask.py
 
@@ -40,6 +42,7 @@ HOME="/home/fixture" BB_TEST_HELPERS="${tmp}/helpers.sh" bash -c '
 '
 BB_TEST_HELPERS="${tmp}/helpers.sh" bash -c '
     source "$BB_TEST_HELPERS"
+    print_error() { :; }
     systemctl() { printf "FragmentPath=%s\nDropInPaths=%s\n" "${BB_TEST_FRAGMENT:-}" "${BB_TEST_DROPINS:-}"; }
     bb_unit_preflight bb-app.service /home/fixture/.config/systemd/user/bb-app.service
     BB_TEST_FRAGMENT=/etc/systemd/user/bb-app.service

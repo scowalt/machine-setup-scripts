@@ -9546,7 +9546,13 @@ bb_unit_preflight() {
             *) return 1 ;;
         esac
     done <<< "${_details}"
-    [[ "${_seen_fragment}" -eq 1 && "${_seen_dropins}" -eq 1 && -z "${_dropins}" && ( -z "${_fragment}" || "${_fragment}" == "${_file}" ) ]]
+    [[ "${_seen_fragment}" -eq 1 && "${_seen_dropins}" -eq 1 ]] || return 1
+    if [[ -n "${_dropins}" ]]; then
+        # Systemd paths can contain untrusted text; identify only the caller's unit.
+        print_error "BB service preflight: ${_name} has loaded systemd drop-ins. Review its overrides before rerunning setup; BB setup is blocked and overrides are left unchanged."
+        return 1
+    fi
+    [[ -z "${_fragment}" || "${_fragment}" == "${_file}" ]]
 }
 
 bb_write_owned_content() {
@@ -9903,7 +9909,14 @@ setup_bb_server() {
     [[ ! -e "${HOME}/.bb/server-moved.json" && ! -e "${HOME}/.bb/server-import.json" ]] || { bb_server_failure preflight.migration-state; return 1; }
     bb_owned_file "${_units}/setup-bb-app.service" '# setup-managed bb app v1' || { bb_server_failure preflight.app-unit-file; return 1; }
     bb_owned_file "${_units}/setup-bb-ingress.service" '# setup-managed bb ingress v1' || { bb_server_failure preflight.ingress-unit-file; return 1; }
-    [[ ! -e "${_units}/setup-bb-app.service.d" && ! -L "${_units}/setup-bb-app.service.d" && ! -e "${_units}/setup-bb-ingress.service.d" && ! -L "${_units}/setup-bb-ingress.service.d" ]] || { bb_server_failure preflight.unit-dropins; return 1; }
+    local _unit
+    for _unit in setup-bb-app.service setup-bb-ingress.service; do
+        if [[ -e "${_units}/${_unit}.d" || -L "${_units}/${_unit}.d" ]]; then
+            bb_server_failure preflight.unit-dropins
+            print_error "BB service preflight: ${_unit} has a drop-in path at \$HOME/.config/systemd/user/${_unit}.d. Review its overrides before rerunning setup; BB setup is blocked and overrides are left unchanged."
+            return 1
+        fi
+    done
     _app="${_units}/setup-bb-app.service" _serve="${_units}/setup-bb-ingress.service" _guard="${_dir}/bb-guard"
     if [[ -f "${_app}" ]]; then { _old_app=$(<"${_app}"); } 2>/dev/null; fi
     if [[ -f "${_serve}" ]]; then { _old_serve=$(<"${_serve}"); } 2>/dev/null; fi
@@ -10689,7 +10702,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 290 | Last changed: Explain BB server failures with controlled diagnostics"
+    echo -e "${GRAY}Version 291 | Last changed: Explain BB service drop-in preflight refusals"
 
     if ! acquire_setup_lock; then
         return 1
