@@ -1,11 +1,11 @@
 ---
 id: TASK-68
 title: Contain the pre-push contract suite through the audited fixture runner
-status: In Progress
+status: Done
 assignee:
   - '@pi'
 created_date: '2026-10-02 14:19'
-updated_date: '2026-10-02 14:58'
+updated_date: '2026-10-02 15:19'
 labels: []
 dependencies: []
 ---
@@ -49,4 +49,15 @@ Parent review required before retry. Proposed narrow correction: distinct privat
 
 Parent approved the safety repair and resumed publication. A single new private npm installation succeeded at /tmp/glossary-hook-trusted-co1kb45k with distinct configs, lifecycle scripts disabled and private HOME/cache/TMPDIR/TMP/TEMP. Before any tool execution, all 82 package tarballs were matched to official registry version/integrity metadata and installed file bytes; the sole npm bin-links transformation was the documented CRLF shebang normalization in run-con/cli.js. Static verifier corrections for that normalization and varying archive root names did not execute package code.
 Inspected Bun 1.3.11 primary resolver source: unversioned initial binary names resolve from configured PATH before temp cache fallback. Checked all enclosing node_modules/.bin and cwd candidates absent; private links select the verified markdownlint-cli JS and /usr/bin/shellcheck. A hash/path guard rejects missing preparation before subprocess execution. Exact unchanged bunx command probes then returned Markdownlint CLI 0.45.0 and ShellCheck 0.9.0; native Gitleaks is 8.30.1. No bunx cache was created in the new private temp root. Earlier untrusted shared-cache probe remains separately recorded and untraced. Actual commit/push hooks have not yet run.
+
+Actual Git pre-commit passed with Gitleaks 8.30.1, verified private Markdownlint CLI 0.45.0 and system ShellCheck 0.9.0; commit 2d13c25 contains the reviewed migration/repair. Formatter added only one blank line before a list in each of existing TASK-57 and TASK-64, both already in migration scope. Complete main-to-branch diff and commit list reviewed; all six production entry points, runner/filter and glossary bytes remain preserved relative to integrated origin/main edc524a.
+Actual git push pre-push hook passed all three commands: 42/42 contained contract entries at /tmp/setup-fixture-matrix-aikscm01 (37 shell + 5 direct suites), markdownlint-all and shellcheck-all. This includes the new upstream BB service preflight tests, reviewed for definitions-only imports, inert mocks, private roots and inherited socket denial before execution. No hook bypass or shared-cache resolution used for these successful runs. Topic branch pushed normally. No observed containment refusal/unexpected fixture effect; optional/native gaps and the earlier untraced version-probe incident remain unchanged.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Repaired normal pre-push contract dispatch to use the unchanged sanitized sequential kernel-contained runner, preserving every shell contract and adding direct hook/containment/CLT/Homebrew/managed-skill coverage. Explicit existing native tools are required; missing tools, shims and unsupported platforms fail closed. Credentials, Git overrides and optional live-probe inputs do not reach fixtures.
+Seven inert hook-dispatch regressions pass after a static red test caught the original unsafe loop without executing it. Actual Git pre-commit and pre-push hooks now pass, including all 42 contained entries, Gitleaks, Markdownlint and ShellCheck. The full source diff preserves production setup and glossary bytes. Parent safety review approved the repair.
+Private pinned lint preparation verified registry metadata, integrity and installed bytes before successful hooks. The earlier accidental shared-cache version probe remains explicitly recorded as untraced; later success does not prove it harmless. Native-platform rollout and optional integrations remain unverified. Implementation complete; PR publication/merge proceeds under separate authorization.
+<!-- SECTION:FINAL_SUMMARY:END -->
