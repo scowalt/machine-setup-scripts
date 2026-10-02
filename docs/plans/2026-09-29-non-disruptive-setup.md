@@ -20,7 +20,7 @@ Ordinary setup preserves ongoing work and connectivity across all six entry poin
 
 The protected work includes BB turns and connections, idle sessions, terminals, development servers and other ongoing work—not only processes whose names identify them as agents. Shared machine resources can affect other accounts as well as the account running setup. A main-server change can affect remote users even when no agent process is visible locally.
 
-“Non-disruptive” means avoiding setup-caused termination, session resets and connectivity loss. It does not promise zero CPU/disk contention or immunity from unrelated crashes, outages or independent updaters. Definitions live in [CONTEXT.md](../../CONTEXT.md).
+“Non-disruptive” means avoiding setup-caused termination, session resets and connectivity loss. It does not promise zero CPU/disk contention or immunity from unrelated crashes, outages or independent updaters. Definitions live in [GLOSSARY.md](../../GLOSSARY.md).
 
 ## Agreed decisions
 

@@ -8,6 +8,8 @@ This repository contains idempotent machine setup scripts for automating the con
 
 ## Documentation boundaries
 
+Domain vocabulary lives in [GLOSSARY.md](GLOSSARY.md). Skills now read and write only `GLOSSARY.md` / `GLOSSARY-MAP.md`. For older domain documents, migrate with `git mv CONTEXT.md GLOSSARY.md` and, if present, `git mv CONTEXT-MAP.md GLOSSARY-MAP.md`; likewise use `git mv CONTEXT-FORMAT.md GLOSSARY-FORMAT.md` for a convention-specific format helper.
+
 Keep `README.md` a short, first-person introduction for humans: Scott's motivation, representative capabilities, compact commands for all six platforms, and the opinionated-script/interruption warning. Prefer a few hundred words; it is not an operator manual, exhaustive inventory, implementation spec, or change log. Routine tool changes belong in code and behavioral tests, not new README sections or prose-enforcing assertions.
 
 Record only consequential, non-obvious trade-offs in concise [ADRs](docs/adr/), grounded in existing evidence; discard repetitive mechanics rather than relocating the README into replacement manuals. Preserve incident/research records and their uncertainty. When removing documentation, repair active agent pointers to current code, contracts, or decision records rather than leaving references to vanished sections.
@@ -568,6 +570,10 @@ This repository is configured for maximum error detection with shellcheck:
 - Use `read -r` to prevent backslash mangling
 - Separate command substitution for complex pipelines to avoid masking return values
 - Quote all variable expansions to prevent word splitting
+
+### Contained pre-push contracts
+
+The contract hook uses `tools/run-pre-push-contracts.py` and the audited fixture runner above. It requires Linux, `/usr/bin/python3`, a C compiler and existing native Node, PowerShell, mise, Chezmoi and Bun executables. Discovery is limited to `/usr/bin:/bin`; when needed, supply absolute native paths through `SETUP_TEST_NODE`, `PWSH_BIN`, `SETUP_TEST_MISE`, `SETUP_TEST_CHEZMOI` and `SETUP_TEST_BUN` to `git push`. Shims and missing tools fail closed; no tools are installed. The hook runs every `tests/*.sh` contract plus direct containment, hook-dispatch, CLT, Homebrew-result and managed-skill regressions. Optional live integrations remain disabled. Use `env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tools/run-pre-push-contracts.py --help` for the equivalent explicit-tool invocation.
 
 ### Commit Guidelines
 

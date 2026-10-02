@@ -5,14 +5,14 @@ status: Done
 assignee:
   - '@thr_yvgind9msw'
 created_date: '2026-09-28 15:26'
-updated_date: '2026-09-28 15:26'
+updated_date: '2026-10-02 03:59'
 labels: []
 dependencies: []
 references:
   - 'https://github.com/get-bb/bb#download-the-desktop-app'
   - 'https://github.com/get-bb/bb/releases/tag/desktop-v0.44.0'
   - README.md
-  - CONTEXT.md
+  - GLOSSARY.md
 documentation:
   - docs/plans/2026-09-28-001-feat-bb-desktop-headed-machines.md
   - docs/research/2026-09-28-bb-desktop-linux-sandbox.md
@@ -53,7 +53,7 @@ Detailed plan: docs/plans/2026-09-28-001-feat-bb-desktop-headed-machines.md. Use
 - User approved the initial four recommendations: exact HEADLESS gate, official supported targets including Linux alpha, stable install/update with newer/running protection, and installation-only behavior.
 - Confirmed official desktop-latest 0.44.0 assets and published SHA-256 digests; no native Windows, Intel macOS, or Linux ARM desktop artifact. macOS packaging minimum is 13.0.0.
 - Desktop bundles a local runtime and uses normal bb data by default; never launch it for setup verification. Existing server lifecycle/configuration remains outside scope.
-- Recorded headed-machine vocabulary in CONTEXT.md and prepared the detailed implementation plan. No setup script changes or live installations performed.
+- Recorded headed-machine vocabulary in GLOSSARY.md and prepared the detailed implementation plan. No setup script changes or live installations performed.
 - Bash, Python, Node, curl, ShellCheck, Homebrew, Bun, and Chezmoi are available. No pwsh/PWSH_BIN found; native macOS/Windows/GUI validation remains unproven.
 
 User requested implementation in a BB subagent. Delegating to one native child thread in the current worktree so it sees the uncommitted task/plan; child is sole implementation writer, parent reviews afterward.
@@ -63,7 +63,7 @@ Implementation owned by BB child thr_yvgind9msw in the shared worktree. Approved
 Implemented embedded shared Bash gating and supported-platform Python installer, plus inert desktop fixtures. Linux identifies installed bytes through official release digests (bounded immutable-release catalogue), uses extract-and-run menu integration without a bb CLI shim, and fails rather than weakening namespace/AppArmor policy. macOS verifies bundle identity, signing team and notarized Gatekeeper assessment without launch. Staged rollback preserves prior app/menu; uncertain inspection fails, verified running apps defer. Initial 31-case desktop suite passes; requested broader regressions and native-test availability checks pending.
 
 - Completed 40 inert extracted-helper fixtures, passing with both the default Python and native /usr/bin/python3. Coverage includes all entry-point/headless/work/architecture gates (including Rosetta), metadata/redirect/integrity checks, updates/idempotency/newer/self-updated bytes, process ownership/deferral, unsafe links/FIFOs/hardlinks/metadata, Bazzite HOME and XDG alias handling, rollback, menu integration, unchanged state sentinels, and actual extracted Bash caller aggregation/log finalization.
-- Passed: bash tests/bb-desktop-contract.sh; PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tests/test_bb_desktop.py; bash tests/bb-server-contract.sh; bash tests/setup-reliability-contract.sh; python3 tests/test_homebrew_results.py; PATH="/usr/bin:/bin:${PATH}" bash tests/headless-paseo-daemon-contract.sh; Bash syntax and ShellCheck on all five modified setup scripts plus the new contract; bunx --no-install markdownlint-cli README.md CLAUDE.md CONTEXT.md docs/plans/2026-09-28-001-feat-bb-desktop-headed-machines.md; git diff --check.
+- Passed: bash tests/bb-desktop-contract.sh; PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tests/test_bb_desktop.py; bash tests/bb-server-contract.sh; bash tests/setup-reliability-contract.sh; python3 tests/test_homebrew_results.py; PATH="/usr/bin:/bin:${PATH}" bash tests/headless-paseo-daemon-contract.sh; Bash syntax and ShellCheck on all five modified setup scripts plus the new contract; bunx --no-install markdownlint-cli README.md CLAUDE.md GLOSSARY.md docs/plans/2026-09-28-001-feat-bb-desktop-headed-machines.md; git diff --check.
 - The bare headless Paseo contract initially failed because inherited mise jq shim configuration is untrusted under a temporary HOME. Confirmed the cause and reran successfully with existing native /usr/bin tools first; no host configuration was changed.
 - PWSH_BIN/pwsh/powershell remain unavailable, including bounded executable discovery. Added Windows parsing/wrapper fixtures but did not execute them; static Windows wiring coverage passes. Native macOS signature/notarization/menu and Linux GUI/sandbox/server-coexistence checks remain rollout-only.
 - Safety decisions for review: Linux uses extract-and-run (no FUSE dependency), requires glibc 2.35+ and working user namespaces, and refuses restricted AppArmor policy rather than changing it. Unknown installed AppImage digests after the bounded 500-record catalogue fail closed. Root-owned/shared-writable system Applications copies are preserved and require manual reconciliation. Interrupted rollback retains a recovery lock/backup; ordinary failures clean staging.
@@ -86,7 +86,7 @@ Implementing the approved Q5/AC 7 install-only contract. Added red-capable inert
 - Approved install-only contract implemented: removed global AppArmor/sysctl inspection and the generic unshare command entirely from all supported desktop payloads. The glibc baseline and all existing artifact/identity/path/ownership/process/rollback checks remain intact.
 - Shared wrappers accept only exact installed/current/newer-preserved results with zero helper status before emitting the controlled Linux warning: installation is verified, GUI/sandbox launch compatibility is unverified, and no launch/security-policy change was performed. Running-app deferral remains a separate warning; macOS and headless/unsupported reporting remain accurate. Extra/multiple terminal helper output and inconsistent status still fail closed.
 - Inert suite now has 64 passing tests on both interpreters. Added regression evidence for flag=1 and opaque existing per-app policy without inspection/mutation, missing/failing unshare without invocation, unknown sandbox state, retained real integrity failure under restricted policy, all successful Linux outcomes, macOS/skip/deferral warning exclusions and strict extra-output rejection. All prior process-inventory and genuine failure regressions remain.
-- Passed exact commands: bash tests/bb-desktop-contract.sh; PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tests/test_bb_desktop.py; bash tests/bb-server-contract.sh; bash tests/setup-reliability-contract.sh; python3 tests/test_homebrew_results.py; PATH="/usr/bin:/bin:${PATH}" bash tests/headless-paseo-daemon-contract.sh; bash -n and shellcheck for mac.sh ubuntu.sh bazzite.sh wsl.sh pi.sh tests/bb-desktop-contract.sh; bunx --no-install markdownlint-cli README.md CLAUDE.md CONTEXT.md docs/plans/2026-09-28-001-feat-bb-desktop-headed-machines.md docs/research/2026-09-28-bb-desktop-linux-sandbox.md; git diff --check.
+- Passed exact commands: bash tests/bb-desktop-contract.sh; PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tests/test_bb_desktop.py; bash tests/bb-server-contract.sh; bash tests/setup-reliability-contract.sh; python3 tests/test_homebrew_results.py; PATH="/usr/bin:/bin:${PATH}" bash tests/headless-paseo-daemon-contract.sh; bash -n and shellcheck for mac.sh ubuntu.sh bazzite.sh wsl.sh pi.sh tests/bb-desktop-contract.sh; bunx --no-install markdownlint-cli README.md CLAUDE.md GLOSSARY.md docs/plans/2026-09-28-001-feat-bb-desktop-headed-machines.md docs/research/2026-09-28-bb-desktop-linux-sandbox.md; git diff --check.
 - Updated all shared copies and newly changed Bash versions (mac 247, Ubuntu 275, Bazzite 127, WSL 209, Pi 226). README, approved plan, primary-source research note and CLAUDE.md now consistently record the approved decision, with no unresolved-decision claim. Earlier notes describing the provisional blocker are historical and superseded by this approval/implementation.
 - PowerShell remains unavailable; its execution/parsing fixture was honestly skipped. Native macOS signature/menu and Linux GUI/sandbox/server-coexistence checks remain rollout-only. No real setup, desktop/native launch probe, live process inventory, policy/service mutation, fleet operation, additional agent, commit, push or PR was performed. All seven ACs are supported by implementation/fixture evidence; task intentionally remains In Progress for parent review.
 

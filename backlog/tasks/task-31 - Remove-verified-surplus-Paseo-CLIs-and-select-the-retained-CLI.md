@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-14 23:56'
-updated_date: '2026-09-15 01:59'
+updated_date: '2026-10-02 03:59'
 labels:
   - bug
   - setup
@@ -15,7 +15,7 @@ references:
   - ubuntu.sh
   - tests/test_paseo_plain_setup.py
   - tests/headless-paseo-daemon-contract.sh
-  - CONTEXT.md
+  - GLOSSARY.md
   - 'https://logs.scowalt.com/logs/arcane/2026-09-14-23-12-59-427.log'
 priority: high
 ---

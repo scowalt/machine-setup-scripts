@@ -8,7 +8,7 @@ The user approved the recommendations in design questions Q1–Q6 and the consol
 
 Ordinary machine setup refreshes the installed plugins of eligible local bb servers belonging to the account being configured. Refresh is separate from installing/updating bb itself, preparing an execution machine, or refreshing marketplace discovery metadata.
 
-See the terminology in [CONTEXT.md](../../CONTEXT.md).
+See the terminology in [GLOSSARY.md](../../GLOSSARY.md).
 
 ## Agreed decisions
 

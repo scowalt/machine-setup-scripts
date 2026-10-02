@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@codex'
 created_date: '2026-10-01 16:01'
-updated_date: '2026-10-01 17:00'
+updated_date: '2026-10-02 04:01'
 labels: []
 dependencies: []
 references:
@@ -36,6 +36,7 @@ Implement the user-approved BB plugin-refresh design in docs/plans/2026-10-01-bb
 
 <!-- SECTION:PLAN:BEGIN -->
 User approved the consolidated six-step plan and delegated implementation; no further plan approval required.
+
 1. Verify native BB identity/update APIs read-only, then add shared refresh policy and standalone wiring preserving existing platform/account/headless/readiness/trust/credential gates.
 2. Discover/deduplicate trusted account-owned local main servers using local installation/configuration evidence; never trust inherited CLI/URL or loopback alone.
 3. Refresh once after normal applicable installation/readiness, independently of Pi and preparation gates; defer stopped/safe-mode servers without startup.
@@ -48,7 +49,7 @@ Stop before unsafe implementation if native identity/state-preservation APIs can
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Read approved design, CONTEXT, ordinary setup/BB README sections, rollback record, full fixture audit and incident. No matching existing plugin-refresh task found. Preserving pre-existing CONTEXT.md and design document. Inspecting installed BB source only; no application or plugin requests.
+Read approved design, GLOSSARY, ordinary setup/BB README sections, rollback record, full fixture audit and incident. No matching existing plugin-refresh task found. Preserving pre-existing GLOSSARY.md and design document. Inspecting installed BB source only; no application or plugin requests.
 
 Added a shared embedded Python/Bash native-API policy and five supported-platform callers. Identity uses account process/package/data evidence plus accepted loopback socket ownership, not inherited CLI/URL; native Windows remains unsupported. Source inspection established structured rollback outcomes and enabled-state preservation in BB 0.44.0. Initial contained cohort passed extraction/containment, setup-default and 17 targeted methods at /tmp/setup-fixture-matrix-31psbqpi. Self-review is ongoing; no acceptance criteria or completion claimed yet. No live setup/plugin/lifecycle operation was executed.
 

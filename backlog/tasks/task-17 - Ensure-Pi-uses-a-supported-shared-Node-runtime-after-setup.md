@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-10 21:08'
-updated_date: '2026-09-11 18:47'
+updated_date: '2026-10-02 03:59'
 labels: []
 dependencies: []
 documentation:
@@ -62,7 +62,7 @@ Final design: docs/plans/2026-09-11-001-fix-pi-shared-node-runtime-plan.md. Deci
 - Awaiting Q1 (Pi runtime versus shell/project runtime) and Q2 (platform scope). Installation/update durability and runtime lifecycle questions follow once their prerequisites are settled.
 
 - Scott accepted both initial recommendations: separate Pi runtime from project runtime, without replacing system Node or changing project runtime selection; apply the same behavior across all six scripts, future setup runs only.
-- Added the agreed Pi runtime and Project runtime terms to CONTEXT.md. No installer code changed.
+- Added the agreed Pi runtime and Project runtime terms to GLOSSARY.md. No installer code changed.
 - Revised task scope and removed premature launcher/PATH assumptions. Next interview frontier: self-update/package-management guarantees and failed-update behavior.
 
 - Scott accepted Q3 and Q4 recommendations: retain normal Pi self-update/package commands with old caller Node, and stage/test replacements so failed setup updates preserve working Pi and report failure. This rollback guarantee covers setup-managed updates, not an unverified promise about upstream pi update internals.
@@ -77,7 +77,7 @@ Final design: docs/plans/2026-09-11-001-fix-pi-shared-node-runtime-plan.md. Deci
 - Q5 runtime-update cadence remains unanswered. Subsequent user decisions include dotfiles/npmCommand ownership and conflicts, and official Node22 fallback on ARMv7 with explicit unsupported-platform handling.
 
 - Scott explicitly dropped the requirement that Pi work while a project selects unsupported Node. Shared shell/project/Pi Node is the desired design; private runtime architecture was unnecessary for the reported bug.
-- Removed the provisional Pi runtime/Project runtime glossary distinction from CONTEXT.md. With that removal, the glossary has no changes from the original repository.
+- Removed the provisional Pi runtime/Project runtime glossary distinction from GLOSSARY.md. With that removal, the glossary has no changes from the original repository.
 - Withdrawn private-prefix/launcher/npmCommand architecture and its associated dotfiles setting change. All-six-platform scope remains accepted.
 - Requested read-only investigation of the smaller shared-runtime fix and current chezmoi activation templates. Runtime update cadence Q5 was not answered; do not treat it as accepted. Prior failed-setup retention requirement is retained pending an explicit scope clarification, not silently discarded.
 
@@ -94,7 +94,7 @@ Final design: docs/plans/2026-09-11-001-fix-pi-shared-node-runtime-plan.md. Deci
 
 - Scott accepted Q6-Q8: include chezmoi-owned PowerShell activation in dotfiles; narrow failure protection to runtime preparation/validation before Pi mutations (no full npm rollback); use official prebuilt Node22 on Linux ARMv7 and reject unsupported platforms without source compilation.
 - Final decision frontier is empty. Wrote the consolidated simplified plan and synchronized all acceptance criteria, superseding earlier private-runtime and transactional-update proposals.
-- Added only Shared Node runtime to CONTEXT.md as the accepted glossary term. No setup scripts or live dotfiles changed.
+- Added only Shared Node runtime to GLOSSARY.md as the accepted glossary term. No setup scripts or live dotfiles changed.
 - Verified Python, Node, fish, and ShellCheck availability; pwsh is absent. Confirmed the inspected dotfiles source belongs to scowalt/dotfiles. Final implementation confirmation remains pending.
 
 Scott approved the consolidated plan and explicitly requested implementation. Starting isolated regression tests and setup/dotfiles changes.

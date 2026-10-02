@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-28 15:44'
-updated_date: '2026-09-28 17:48'
+updated_date: '2026-10-02 04:01'
 labels:
   - macos
   - reliability
@@ -21,7 +21,7 @@ references:
   - CLAUDE.md
 documentation:
   - docs/brainstorms/2026-09-28-macos-clt-repair-requirements.md
-  - CONTEXT.md
+  - GLOSSARY.md
 priority: high
 ---
 
@@ -91,7 +91,7 @@ Implementation/results report for independent review:
 - Production: mac.sh v247. Added explicit ready/incompatible/unverified state, separate sticky operation failures, bounded/sanitized diagnostic excerpts and owner remediation/version reporting. Public named Homebrew checks (no private Ruby/hidden JSON or version matrix) establish eligibility; exactly one stable numeric Apple-offered label is accepted. Standalone real CLT only, no DEVELOPER_DIR override, main user only. Healthy/unverified/ineligible selections never query/install speculatively.
 - Repair: one scoped sudo authentication opportunity only with a controlling TTY and HEADLESS != 1; actual install always sudo -n with closed stdin. Selection checked around verification and immediately before/after repair. Successful fresh verification clears only the initial finding. Query/install/discovery/bootstrap-cleanup failures remain sticky; existing _setup_had_errors is never reset. First-time bootstrap uses its existing sentinel helper separately and cannot be followed by another install in that run. Homebrew bootstrap refuses the upstream implicit CLT-reselection case.
 - Dependency gate: all core/cask installs, Tailscale migration, Tea/Codex removal+install, final Homebrew updates, full dotfiles/run scripts, tmux plugin installation, Bun package installs, BB native rebuilds, Matt Pocock installs and Pi/package/Muse/daemon setup. Native binary downloads and metadata/shared-prebuilt-runtime work only proceed with verified existing prerequisites; preserve Pi permission/retirement gates. Infisical retirement, OS/SSH setup, filesystem-only cleanup, reboot reporting and exactly-once main log finalization remain reachable on readiness skips. Actual unrelated fatal-return behavior is preserved; readiness skips are outside those calls.
-- Shared helper audit: only install_xcode_cli_tools, verify_developer_tools_for_homebrew, install_homebrew and run_setup_tasks changed among existing Bash functions. can_sudo, sentinel ownership cleanup, npm policy, cross-platform embedded helpers and all other platform scripts are unchanged. Original CONTEXT.md edits and requirements document preserved. No commit/push/branch/worktree change, live setup, sudo update, real /Library mutation, live service, remote-host operation or skill/plugin execution.
+- Shared helper audit: only install_xcode_cli_tools, verify_developer_tools_for_homebrew, install_homebrew and run_setup_tasks changed among existing Bash functions. can_sudo, sentinel ownership cleanup, npm policy, cross-platform embedded helpers and all other platform scripts are unchanged. Original GLOSSARY.md edits and requirements document preserved. No commit/push/branch/worktree change, live setup, sudo update, real /Library mutation, live service, remote-host operation or skill/plugin execution.
 - Focused fixtures: python3 tests/test_macos_clt.py passes 22 tests (parameterized primary/secondary, full Xcode/overrides/links/selection races, ready+offer, unknown/unavailable diagnostics, no/malformed/ambiguous offers, TTY/HEADLESS/cached/auth refusal/expiry, failed query/install/discovery/cleanup, readiness not restored, prior failures, repeated runs, fresh bootstrap and Homebrew-absent ordering, complete actual caller suppression/independent continuation/exactly-once finalization). python3 tests/test_homebrew_results.py passes 9 tests, preserving pins and all preexisting failure assertions. Initial baseline and test-first red failures are recorded above.
 - Required final commands PASS: python3 tests/test_macos_clt.py; python3 tests/test_homebrew_results.py; bash tests/setup-reliability-contract.sh; bash tests/pending-reboot-contract.sh; bash tests/weekly-log-audit-regressions.sh; bash -n mac.sh tests/ai-coding-agent-contract.sh; shellcheck mac.sh tests/ai-coding-agent-contract.sh; git diff --check.
 - Affected suites PASS: bash tests/bb-machine-preparation-contract.sh (17); bash tests/shared-node-runtime-contract.sh (18 plus optional integration); bash tests/pi-package-maintenance-contract.sh (30); bash tests/opencode-go-wiring-contract.sh (4); bash tests/paseo-muse-profile-contract.sh (93); bash tests/paseo-plain-setup-contract.sh (44); bash tests/pi-profile-permissions-contract.sh (21); bash tests/ai-coding-agent-contract.sh; bash tests/infisical-retirement-contract.sh (29); bash tests/headless-paseo-daemon-contract.sh; bash tests/gitea-client-installation-contract.sh. Caller fixtures retain real macOS readiness gates with explicit ready preconditions; added independent unverified-CLT BB and Go/Muse cases rather than stubbing gates open. Final broader suite runs used PATH=/home/scowalt/.local/share/mise/installs/node/24/bin:/usr/bin:/bin to avoid inherited untrusted mise jq shims. Logs: /tmp/task50-final-*.log.

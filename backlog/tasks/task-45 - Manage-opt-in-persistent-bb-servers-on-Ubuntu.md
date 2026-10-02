@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi-luna'
 created_date: '2026-09-27 16:40'
-updated_date: '2026-09-27 21:54'
+updated_date: '2026-10-02 03:59'
 labels:
   - setup
   - bb
@@ -14,7 +14,7 @@ dependencies: []
 references:
   - ubuntu.sh
   - README.md
-  - CONTEXT.md
+  - GLOSSARY.md
   - tests/setup-reliability-contract.sh
   - tests/headless-paseo-daemon-contract.sh
   - tests/shared-node-runtime-contract.sh
@@ -63,7 +63,7 @@ Implementation and parent verification complete. No production install/service/S
 - User approved two independent stable servers, browser-only elsewhere, existing per-machine credentials, whole-tailnet access/no additional authentication, setup interruptions, unattended startup and failure reporting. Persistent production Tailscale Serve was approved after rejecting Portless URL churn.
 - Read-only research identifies devinabox as this Ubuntu x86-64 host. Tailnet/repository history identifies the Beelink as scott-beelink-ubuntu; its current OS details/account still require runtime validation.
 - Official bb-app start runs main server plus local execution daemon; ordinary installation does not install a boot service. Persistent Serve survives reboot but not the application itself. Portless development routes/shared proxy stay untouched.
-- Tools available: backlog, shellcheck, Python and shared Node. Reviewed Ubuntu main flow, existing Tailscale installer and extracted-helper contract style. Current changes are only CONTEXT.md glossary and this task metadata; no live services changed.
+- Tools available: backlog, shellcheck, Python and shared Node. Reviewed Ubuntu main flow, existing Tailscale installer and extracted-helper contract style. Current changes are only GLOSSARY.md glossary and this task metadata; no live services changed.
 
 - User challenged the proposed hard-coded host allowlist and requested a variable-based decision. Replaced hostname selection with proposed BB_SERVER=1 opt-in; initial target hostnames are deployment intentions only. Proposed unset/0 skip semantics, process precedence and invalid-value handling are awaiting confirmation. No implementation or live changes made.
 
