@@ -1,11 +1,11 @@
 ---
 id: TASK-67
 title: Accept account-owned Linux Homebrew group-write paths without process scanning
-status: In Progress
+status: Done
 assignee:
   - '@implement-spec-coordinator'
 created_date: '2026-10-02 13:49'
-updated_date: '2026-10-02 14:31'
+updated_date: '2026-10-02 16:45'
 labels:
   - ready-for-agent
 dependencies: []
@@ -132,15 +132,15 @@ Scott confirmed the proposed scope and the two existing test seams in this conve
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 On supported Linux runs, the real shared installer accepts otherwise eligible account-owned, group-writable Homebrew paths without requiring exclusive group membership, account/NSS/initgroups enumeration, process/thread inventory, an ACL privacy proof, or the retired native proof runtime; no opt-in or single-user detector is introduced.
-- [ ] #2 Busy-system and service-account fixture states no longer cause group-privacy or process-churn refusal. Existing recognized-prefix, ownership, root-owned group-write, world-write, link, metadata, and filesystem-change safeguards remain enforced without modifying permissions or account state.
-- [ ] #3 Official artifact verification before execution, stable-major/version behavior, pins, custom/unsupported/newer-copy preservation, staging, command-only migration, package-store/data preservation, and safe rollback/recovery outcomes remain covered through real installer fixtures.
-- [ ] #4 Proof-only implementation and obsolete diagnostic outcomes are removed; remaining Bash/PowerShell diagnostics stay strictly validated and secret-safe, no longer direct operators to nonexistent preflight guidance, and genuine failures still reach independent work and log finalization.
-- [ ] #5 All six generated entry points match the shared source, modified setup scripts have incremented versions, and macOS/Windows/headless/architecture/readiness and unrelated component permission policies retain their existing behavior.
-- [ ] #6 The approved primary installer/migration and secondary extracted-caller seams include red-before-change evidence for the new acceptance behavior, passing positive/negative/recovery regressions, and an assertion that the retired privacy-proof external operations are not invoked.
-- [ ] #7 Setup-default, extraction/containment, OpenCode, and the audited affected regression matrix pass under mandatory sanitized sequential containment; embedding, syntax, ShellCheck, and whitespace checks pass, with optional/native gaps and historical incident uncertainty explicitly recorded.
-- [ ] #8 A concise decision record and affected active agent guidance explain the scoped single-user trust model and residual service-account write-access risk; historical evidence is preserved and the README remains a short human introduction.
-- [ ] #9 Development performs no live setup, native host inventory, application/skill execution, fleet changes, permission/account/ACL repair, or changes to credentials and unrelated data.
+- [x] #1 On supported Linux runs, the real shared installer accepts otherwise eligible account-owned, group-writable Homebrew paths without requiring exclusive group membership, account/NSS/initgroups enumeration, process/thread inventory, an ACL privacy proof, or the retired native proof runtime; no opt-in or single-user detector is introduced.
+- [x] #2 Busy-system and service-account fixture states no longer cause group-privacy or process-churn refusal. Existing recognized-prefix, ownership, root-owned group-write, world-write, link, metadata, and filesystem-change safeguards remain enforced without modifying permissions or account state.
+- [x] #3 Official artifact verification before execution, stable-major/version behavior, pins, custom/unsupported/newer-copy preservation, staging, command-only migration, package-store/data preservation, and safe rollback/recovery outcomes remain covered through real installer fixtures.
+- [x] #4 Proof-only implementation and obsolete diagnostic outcomes are removed; remaining Bash/PowerShell diagnostics stay strictly validated and secret-safe, no longer direct operators to nonexistent preflight guidance, and genuine failures still reach independent work and log finalization.
+- [x] #5 All six generated entry points match the shared source, modified setup scripts have incremented versions, and macOS/Windows/headless/architecture/readiness and unrelated component permission policies retain their existing behavior.
+- [x] #6 The approved primary installer/migration and secondary extracted-caller seams include red-before-change evidence for the new acceptance behavior, passing positive/negative/recovery regressions, and an assertion that the retired privacy-proof external operations are not invoked.
+- [x] #7 Setup-default, extraction/containment, OpenCode, and the audited affected regression matrix pass under mandatory sanitized sequential containment; embedding, syntax, ShellCheck, and whitespace checks pass, with optional/native gaps and historical incident uncertainty explicitly recorded.
+- [x] #8 A concise decision record and affected active agent guidance explain the scoped single-user trust model and residual service-account write-access risk; historical evidence is preserved and the README remains a short human introduction.
+- [x] #9 Development performs no live setup, native host inventory, application/skill execution, fleet changes, permission/account/ACL repair, or changes to credentials and unrelated data.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -170,4 +170,45 @@ Planning review (2026-10-02): coordinator @thread:thr_4t8uv96kkj read the implem
 Tool prerequisites inspected without execution: existing Node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node; /usr/bin/python3, /usr/bin/cc, Bash, Git and ShellCheck; existing PowerShell /tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh under a private 0700 root (not on PATH). Existing mise, Chezmoi and Bun are available for a new private audited tool-link directory if required; do not reuse or broaden an inherited user PATH. Native execution/readiness and kernel self-test remain unverified until plan approval. Optional live integrations stay disabled. No trusted Markdownlint command found; report that omission/manual Markdown review, never fetch tooling. Repository hooks use bunx and a raw test loop, so any later local commit must avoid those uncontained/download hooks and cite equivalent permitted checks. docs/agents/issue-tracker.md is absent; the user explicitly supplies Backlog CLI and TASK-67, so tracker bootstrap is not added to scope. Awaiting user implementation-plan approval.
 
 User approved the recorded implementation plan via parent @thread:thr_k9q9k953pw. Proceeding with isolated local branches/worktrees and delegated implementation, merge and review; all prior scope and containment constraints remain active.
+
+Isolated workflow started: integration branch task-67/opencode-homebrew-integration at 04e01d4 (approved task-only checkpoint), implementer branch task-67/opencode-homebrew-implementation. Owned roots: /tmp/task67-coordination-OLSctD/{integration,implementation}. Implementer @thread:thr_fp5x6jbna2 is executing the approved TDD/containment plan. Shared checkout branch, HEAD, index and unrelated files remain untouched; task stays CLI-managed here.
+
+Paused at a static fixture-audit blocker before the affected matrix. tests/weekly-log-audit-regressions.sh:186,189,190 writes/reads/removes fixed /tmp/tailscale-unverified.out outside runner-private roots; coordinator confirmed the source. That suite was not executed and the path was not inspected or mutated. No observed real effect or failed compiler/kernel preflight. Request narrow authorization to relocate only this fixture output into a suite-owned private temporary directory and bump its fixture version; no runner/filter relaxation or new ticket proposed. Implementation report: /tmp/task67-coordination-OLSctD/implementation-report.md. Initial contained red reproduced brew-process-churn; latest targeted green has 115 passing Node tests, 1 optional shim skip, and 7 caller methods including Linux PowerShell. Setup-default/extraction passed. Implementation remains uncommitted; docs, setup-version bumps, full matrix, static checks, merger/reviews and completion are pending.
+
+User explicitly approved the bounded weekly fixture-safety repair via parent @thread:thr_k9q9k953pw: relocate only /tmp/tailscale-unverified.out into a fixture-owned private temporary directory, update references/cleanup and fixture version, then resume the previously approved implementation and validation. Reason: prevent overwriting/following an unreserved shared /tmp path. Runner/kernel filter and all prior constraints remain unchanged; no new ticket or broader fixture repair authorized.
+
+Implementer completed 707139ebce7c746e1721632218deab3da93d14fb on task-67/opencode-homebrew-implementation with a clean retained worktree. Final sanitized sequential matrix /tmp/setup-fixture-matrix-s_zheaxb: 15/15 entries pass; 180 unittest executions (8 skips), 116 Node cases (115 pass, 1 optional skip). Static checks and source-preservation manifest pass. Approved weekly output relocation is included; runner/filter/extractor unchanged. Full report: /tmp/task67-coordination-OLSctD/implementation-report.md. Separate merger and two-axis review now pending; no Done claim yet.
+
+Final acceptance review: separate merger @thread:thr_jmvv3uukej fast-forwarded integration to the exact tested 707139e, independently matched the 15-file tested manifest, and confirmed both worktrees clean. Parallel Standards @thread:thr_4ssa7ger7c and Spec @thread:thr_2rgpser53m reviews against 3dc99ea each report zero findings; no corrective implementer needed. Review aggregate: /tmp/task67-coordination-OLSctD/code-review.md; merge evidence: merge-report.md in the same root.
+AC1–3 and AC6: real installer fixtures cover realistic group-write migration/current, forbidden privacy operations, busy/service/dependency states, independent negatives, 24 filesystem-change transaction/recovery scenarios and retained safe restoration; red policy/diagnostic artifacts and final green recorded in implementation-report.md. AC4–5: strict all-six caller diagnostics/orchestration, canonical embedding, six version increments and normalized non-OpenCode preservation independently verified. AC7: 15/15 sequential contained matrix entries plus static evidence pass; 8 unittest skips and 1 Node skip explicitly retained. AC8: concise ADR 0005/active guidance reviewed; README/history unchanged. AC9: source-audited inert/extracted fixtures, private roots/stdio and mandatory unchanged kernel preflights; no live setup/inventory/application/skill/fleet/account/service/credential operation or unexpected real effect observed. This is not a syscall-wide effects proof and does not resolve historical incident uncertainty.
+Optional/native limits: installed cmd-shim, skill CLI/Go catalog/native-lock and cross-dotfiles probes skipped; native Bash 3.2, Apple/macOS, Windows ACL/PowerShell 5.1/WinGet, ARM/WSL/Bazzite and rollout unverified. Markdownlint unavailable; no downloaded or untrusted tool used. No remaining implementation/review blocker. No per-task DoD checklist exists.
+
+Owned-worktree cleanup completed: stopped all four delegated worker runtimes; removed only the clean implementation worktree /tmp/task67-coordination-OLSctD/implementation after checking exact 707139e HEAD and empty status. No force/reset/discard. Integration worktree /tmp/task67-coordination-OLSctD/integration and both local branches retained, along with private validation/review artifacts and audited tool links. No review-fix worktree was needed. Shared checkout remains on its original branch at 3dc99ea with only the preserved CLI-managed TASK-67 untracked. Final task bookkeeping will be synchronized through Backlog CLI and committed only on integration; no source changes follow review.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+## Summary
+
+```diff
+ OpenCode Linux Homebrew migration
+- require exclusive-group/NSS/procfs/ACL/native-runtime privacy proof
++ accept account-owned group write inside the recognized prefix
+  retain independent ownership/world-write/artifact/filesystem/recovery checks
+```
+
+Updated canonical policy and strict wrappers, regenerated/versioned all six entry points, preserved command-only migration and application data, added behavior/recovery regressions and concise ADR/agent guidance. Included the separately authorized weekly fixture private-output repair; containment guards remain unchanged.
+
+## Evidence
+
+- Before: contained observed-layout migration failed with brew-process-churn; old wrappers failed obsolete-reason rejection.
+- After: integration implementation 707139e passes 15/15 contained sequential matrix entries; 115 Node cases pass with 1 optional skip, 172 unittest executions pass with 8 explicit skips. Syntax, ShellCheck, embedding/version/source-preservation and whitespace checks pass.
+- Separate merger and independent Standards/Spec reviews: zero findings on both axes. Reports, exact commands and red/green artifacts: /tmp/task67-coordination-OLSctD/implementation-report.md and code-review.md.
+
+## Merge Danger
+
+**Door:** two-way (local code-policy change; no rollout performed).
+
+**Blast Radius:** scoped. Linux OpenCode Homebrew group-write acceptance deliberately retains service-account tampering risk; other policies remain unchanged. Native platforms/Bash 3.2, optional installed integrations and Markdownlint are not claimed verified. Historical incident uncertainty remains. No push, PR, main merge or live machine changes.
+<!-- SECTION:FINAL_SUMMARY:END -->
