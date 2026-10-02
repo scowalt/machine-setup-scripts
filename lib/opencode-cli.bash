@@ -1,4 +1,4 @@
-# Version 5 | Last changed: Keep literal helper input outside Bash 3.2 command substitution
+# Version 6 | Last changed: Retire OpenCode Homebrew privacy-proof diagnostics
 install_opencode_cli() {
     local result status=0 brew_ready=0 machine kind
     machine=$(uname -m) || return 1
@@ -27,15 +27,12 @@ install_opencode_cli() {
 OPENCODE_CLI_JS
     if [[ "${status}" -ne 0 ]]; then
         if [[ "${result}" == opencode-cli:recovery-required ]]; then
-            print_error 'OpenCode CLI rollback needs manual recovery; preserve .setup-opencode-* backups, recovery.json and the lock. See README.'
+            print_error 'OpenCode CLI rollback needs manual recovery; preserve .setup-opencode-* directories, .opencode-setup-recovery-* commands and the lock. Inspect recovery.json before restoring identified commands.'
         elif [[ "${result}" =~ ^opencode-cli:download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)$ ]]; then
             print_error "OpenCode CLI download failed (operation=${BASH_REMATCH[1]}, HTTP=${BASH_REMATCH[2]})."
-        elif [[ "${result}" =~ ^opencode-cli:policy-failed:(homebrew-preflight|installation):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-readiness|brew-group-shared|brew-identity-source|brew-acl-present|brew-acl-unverified|brew-proof-unverified|brew-proof-tool|brew-snapshot-changed|brew-process-churn|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))$ ]]; then
+        elif [[ "${result}" =~ ^opencode-cli:policy-failed:(homebrew-preflight|installation):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-readiness|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))$ ]]; then
             print_error "OpenCode CLI blocked (operation=${BASH_REMATCH[1]}, reason=${BASH_REMATCH[2]})."
-            if [[ "${BASH_REMATCH[2]}" == brew-process-churn ]]; then
-                print_error 'Homebrew process evidence kept changing across three attempts; review README before retrying.'
-            fi
-            print_error 'See README preflight guidance; do not bypass trust checks or change unrelated permissions.'
+            print_error 'Inspect the identified command and filesystem evidence; preserve conflicts and recovery artifacts. Do not change unrelated permissions.'
         fi
         print_error 'OpenCode CLI installation incomplete; existing data preserved. Review command ownership, pins, metadata, prerequisites and PATH.'
         return 1

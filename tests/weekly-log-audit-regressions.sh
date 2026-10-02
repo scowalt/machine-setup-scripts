@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 3 | Last changed: Exercise ordinary setup through definitions-only fixtures
+# Version 4 | Last changed: Keep failed Tailscale fixture output in a private temporary root
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -173,7 +173,10 @@ for file in ubuntu.sh pi.sh; do
 done
 
 # A successful `tailscale set` is still a failure if the preference does not
-# actually change.
+# actually change. Reserve private output before redirection; never use a shared
+# fixed /tmp filename that could belong to another fixture or follow a link.
+unverified_tmp=$(mktemp -d)
+trap 'rm -rf "${unverified_tmp}"' EXIT
 if SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
     source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
     can_sudo() { return 0; }
@@ -183,11 +186,12 @@ if SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${source_without_m
     }
     sudo() { shift; tailscale "$@"; }
     setup_tailscale_ssh
-' > /tmp/tailscale-unverified.out 2>&1; then
+' > "${unverified_tmp}/output" 2>&1; then
     fail 'ubuntu.sh: unverified Tailscale SSH mutation returned success'
 fi
-grep -q 'RunSSH is still disabled' /tmp/tailscale-unverified.out || fail 'ubuntu.sh: unverified Tailscale SSH mutation lacked diagnosis'
-rm -f /tmp/tailscale-unverified.out
+grep -q 'RunSSH is still disabled' "${unverified_tmp}/output" || fail 'ubuntu.sh: unverified Tailscale SSH mutation lacked diagnosis'
+rm -rf "${unverified_tmp}"
+trap - EXIT
 
 # Reconcile the chezmoi remote in both directions and restore the deploy-key
 # alias after the final apply that can overwrite ~/.ssh/config.
