@@ -9227,12 +9227,67 @@ bb_server_platform_ready() {
     [[ "${_os_id}" == ubuntu ]]
 }
 
+# Only fixed check names cross this diagnostic boundary. Never echo a command's
+# output, exception, config value or path; stderr also survives $(...) callers.
+bb_server_failure() {
+    local _check="$1" _reason
+    case "${_check}" in
+        preflight.tailscale-command|preflight.required-commands) _reason='required command unavailable' ;;
+        preflight.tailscale-path|update.tailscale-path) _reason='unsupported Tailscale command location' ;;
+        preflight.metadata-link) _reason='linked BB metadata is not supported' ;;
+        preflight.migration-state) _reason='existing server move or import marker blocks setup' ;;
+        preflight.app-unit-file|preflight.ingress-unit-file|preflight.guard-file|preflight.endpoint-file|preflight.config-file|preflight.env-file|npm.owner-file|npm.pending-file) _reason='ownership, type, permissions or managed identity is unsafe or unverified' ;;
+        preflight.unit-dropins) _reason='service drop-in path exists' ;;
+        preflight.endpoint-read) _reason='saved endpoint could not be read' ;;
+        preflight.endpoint-port|preflight.endpoint-origin) _reason='saved endpoint value is invalid or inconsistent' ;;
+        preflight.app-unit|preflight.ingress-unit) _reason='service fragment or drop-in ownership is unverified' ;;
+        preflight.active-app-state|preflight.active-ingress-state) _reason='active service lacks verified managed files or endpoint state' ;;
+        preflight.ingress-route) _reason='active ingress route ownership is unverified' ;;
+        preflight.local-ports|update.local-ports) _reason='local listener ports are occupied or could not be verified free' ;;
+        preflight.tailnet-version) _reason='Tailscale CLI and daemon >=1.102.4 could not be verified' ;;
+        preflight.tailnet-identity) _reason='authenticated running Tailscale node and DNS identity could not be verified' ;;
+        preflight.tailnet-name) _reason='saved tailnet DNS identity differs; manual migration required' ;;
+        preflight.https-port-selection|preflight.saved-https-port) _reason='HTTPS port is occupied or could not be verified free; saved endpoint will not move' ;;
+        preflight.host-identity) _reason='BB host identity metadata is unsafe, malformed, conflicting or unverified' ;;
+        preflight.config-json|preflight.env-json) _reason='metadata is not a readable JSON object with unique keys' ;;
+        preflight.runtime-overrides) _reason='managed listener or data-directory settings conflict or could not be verified' ;;
+        preflight.account-name|preflight.linger-query|preflight.linger-recheck) _reason='account or lingering query failed' ;;
+        preflight.linger-enable) _reason='lingering authorization or enable operation failed' ;;
+        preflight.linger-state) _reason='lingering was not verified enabled' ;;
+        npm.shared-runtime) _reason='shared Node runtime prerequisite failed' ;;
+        npm.version-query|npm.ignore-scripts-query|npm.dangerous-scripts-query|npm.allow-scripts-query|npm.strict-policy-query|npm.scoped-policy-query|npm.prefix-query|update.prefix-query|update.tailscale-command) _reason='required command query failed' ;;
+        npm.version-format|npm.version-floor) _reason='npm >=11.19 with a supported version format is required' ;;
+        npm.lifecycle-policy) _reason='existing lifecycle policy is incompatible; it was not overridden' ;;
+        npm.allow-scripts-policy) _reason='existing allow-scripts policy is nonempty; it was not overridden' ;;
+        npm.strict-policy|npm.scoped-policy) _reason='required scoped npm policy could not be verified' ;;
+        npm.prefix|npm.owner-path|npm.pending-owner|npm.owner-conflict) _reason='package destination or ownership record is incompatible or unverified' ;;
+        npm.prefix-directory|npm.previous-target|npm.current-target) _reason='package path safety could not be verified' ;;
+        npm.owner-link) _reason='linked package ownership record is not supported' ;;
+        npm.unowned-package) _reason='existing package is not owned by setup' ;;
+        npm.pending-write) _reason='pending package ownership record could not be written' ;;
+        npm.install) _reason='stable npm installation failed' ;;
+        npm.artifacts|restore.artifacts) _reason='package identity, native dependencies or bundled artifacts could not be verified' ;;
+        update.directories|update.state-mode|update.endpoint-write|update.guard-write|update.app-unit-render|update.ingress-unit-render|update.app-unit-write|update.ingress-unit-write|update.owner-promotion) _reason='managed state or service file operation failed' ;;
+        update.stop-ingress|update.stop-app|restore.stop-ingress|restore.stop-app|restore.start-app|restore.start-ingress|restore.ingress-state|update.daemon-reload|update.enable-app|restore.daemon-reload|restore.disable-app) _reason='service operation failed' ;;
+        update.ingress-stopped|update.app-stopped) _reason='service was still reported active during the stopped update window' ;;
+        update.prefix-changed) _reason='npm destination changed after installation' ;;
+        config.native-helper|config.locks|config.read|config.validate|config.write|config.unlock) _reason='native-locked configuration operation failed or could not be verified; partial changes may have occurred' ;;
+        update.start-app) _reason='app startup or its readiness hook failed' ;;
+        readiness.app-active|readiness.ingress-active|readiness.route|readiness.https|readiness.native|readiness.process|readiness.health|readiness.host-status|restore.readiness) _reason='required readiness check failed or remained unverified' ;;
+        restore.prerequisites) _reason='prior active deployment could not be verified for restoration' ;;
+        restore.app-unit|restore.ingress-unit|restore.guard|restore.guard-remove) _reason='prior service files could not be restored' ;;
+        *) _check='diagnostic.unknown'; _reason='failure detail unavailable' ;;
+    esac
+    print_error "BB server [${_check}]: ${_reason}." >&2
+    return 0
+}
+
 bb_owned_safe_directory() {
     local _directory="$1" _metadata _owner _mode _uid
     [[ -d "${_directory}" && ! -L "${_directory}" ]] || return 1
-    _metadata=$(stat -c '%u %a' -- "${_directory}") || return 1
+    _metadata=$(stat -c '%u %a' -- "${_directory}" 2>/dev/null) || return 1
     read -r _owner _mode <<< "${_metadata}"
-    _uid=$(id -u) || return 1
+    _uid=$(id -u 2>/dev/null) || return 1
     [[ "${_owner}" == "${_uid}" && "${_mode}" =~ ^[0-7]{3,4}$ ]] && (( (8#${_mode} & 8#022) == 0 ))
 }
 
@@ -9285,9 +9340,9 @@ bb_setup_directory_preflight() {
 bb_owned_metadata_file() {
     local _file="$1" _private="${2:-0}" _metadata _owner _links _mode _uid
     [[ -f "${_file}" && ! -L "${_file}" ]] || return 1
-    _metadata=$(stat -c '%u %h %a' -- "${_file}") || return 1
+    _metadata=$(stat -c '%u %h %a' -- "${_file}" 2>/dev/null) || return 1
     read -r _owner _links _mode <<< "${_metadata}"
-    _uid=$(id -u) || return 1
+    _uid=$(id -u 2>/dev/null) || return 1
     [[ "${_owner}" == "${_uid}" && "${_links}" == 1 && "${_mode}" =~ ^[0-7]{3,4}$ ]] || return 1
     if [[ "${_private}" == 1 ]]; then
         (( (8#${_mode} & 8#077) == 0 ))
@@ -9369,50 +9424,51 @@ BB_PACKAGE_SAFE
 # Resolve npm destination and policy before changing any BB package or service.
 bb_package_preflight() {
     local _npm_major _npm_minor _npm_version _ignore_scripts _dangerous_scripts _allow_scripts _probe _marker _pending _owner='' _directory
-    ensure_shared_node_runtime || return 1
-    _npm_version=$(npm --version 2>/dev/null) || return 1
-    [[ "${_npm_version}" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]] || return 1
+    ensure_shared_node_runtime || { bb_server_failure npm.shared-runtime; return 1; }
+    _npm_version=$(npm --version 2>/dev/null) || { bb_server_failure npm.version-query; return 1; }
+    [[ "${_npm_version}" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]] || { bb_server_failure npm.version-format; return 1; }
     _npm_major="${BASH_REMATCH[1]}" _npm_minor="${BASH_REMATCH[2]}"
-    (( _npm_major > 11 || (_npm_major == 11 && _npm_minor >= 19) )) || return 1
-    _ignore_scripts=$(npm config get ignore-scripts 2>/dev/null) || return 1
-    _dangerous_scripts=$(npm config get dangerously-allow-all-scripts 2>/dev/null) || return 1
-    [[ "${_ignore_scripts}" == false && "${_dangerous_scripts}" == false ]] || return 1
-    _allow_scripts=$(npm config get allow-scripts 2>/dev/null) || return 1
-    [[ -z "${_allow_scripts}" ]] || return 1
-    _probe=$(npm config get strict-allow-scripts --strict-allow-scripts 2>/dev/null) || return 1
-    [[ "${_probe}" == true ]] || return 1
-    _probe=$(npm config get allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher 2>/dev/null) || return 1
-    [[ "${_probe}" == 'better-sqlite3,node-pty,@parcel/watcher' ]] || return 1
-    BB_PACKAGE_PREFIX=$(npm prefix -g 2>/dev/null) || return 1
-    [[ -n "${BB_PACKAGE_PREFIX}" && "${BB_PACKAGE_PREFIX}" == "${HOME}/.local/share/mise/installs/node/"* ]] || return 1
+    (( _npm_major > 11 || (_npm_major == 11 && _npm_minor >= 19) )) || { bb_server_failure npm.version-floor; return 1; }
+    _ignore_scripts=$(npm config get ignore-scripts 2>/dev/null) || { bb_server_failure npm.ignore-scripts-query; return 1; }
+    _dangerous_scripts=$(npm config get dangerously-allow-all-scripts 2>/dev/null) || { bb_server_failure npm.dangerous-scripts-query; return 1; }
+    [[ "${_ignore_scripts}" == false && "${_dangerous_scripts}" == false ]] || { bb_server_failure npm.lifecycle-policy; return 1; }
+    _allow_scripts=$(npm config get allow-scripts 2>/dev/null) || { bb_server_failure npm.allow-scripts-query; return 1; }
+    [[ -z "${_allow_scripts}" ]] || { bb_server_failure npm.allow-scripts-policy; return 1; }
+    _probe=$(npm config get strict-allow-scripts --strict-allow-scripts 2>/dev/null) || { bb_server_failure npm.strict-policy-query; return 1; }
+    [[ "${_probe}" == true ]] || { bb_server_failure npm.strict-policy; return 1; }
+    _probe=$(npm config get allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher 2>/dev/null) || { bb_server_failure npm.scoped-policy-query; return 1; }
+    [[ "${_probe}" == 'better-sqlite3,node-pty,@parcel/watcher' ]] || { bb_server_failure npm.scoped-policy; return 1; }
+    BB_PACKAGE_PREFIX=$(npm prefix -g 2>/dev/null) || { bb_server_failure npm.prefix-query; return 1; }
+    [[ -n "${BB_PACKAGE_PREFIX}" && "${BB_PACKAGE_PREFIX}" == "${HOME}/.local/share/mise/installs/node/"* ]] || { bb_server_failure npm.prefix; return 1; }
     BB_PACKAGE_PATH="${BB_PACKAGE_PREFIX}/lib/node_modules/bb-app"
-    bb_package_owner_path_valid "${BB_PACKAGE_PATH}" || return 1
+    bb_package_owner_path_valid "${BB_PACKAGE_PATH}" || { bb_server_failure npm.owner-path; return 1; }
     for _directory in "${HOME}/.local" "${HOME}/.local/share" "${HOME}/.local/share/mise" "${HOME}/.local/share/mise/installs" "${HOME}/.local/share/mise/installs/node" "${BB_PACKAGE_PREFIX}" "${BB_PACKAGE_PREFIX}/bin" "${BB_PACKAGE_PREFIX}/lib" "${BB_PACKAGE_PREFIX}/lib/node_modules"; do
-        [[ ! -e "${_directory}" && ! -L "${_directory}" ]] || bb_owned_safe_directory "${_directory}" || return 1
+        [[ ! -e "${_directory}" && ! -L "${_directory}" ]] || bb_owned_safe_directory "${_directory}" || { bb_server_failure npm.prefix-directory; return 1; }
     done
     _marker="${HOME}/.config/setup-bb-server/package-owner"
     _pending="${HOME}/.config/setup-bb-server/package-owner.next"
-    [[ ! -L "${_marker}" && ! -L "${_pending}" ]] || return 1
+    [[ ! -L "${_marker}" && ! -L "${_pending}" ]] || { bb_server_failure npm.owner-link; return 1; }
     if [[ -e "${_marker}" ]]; then
-        bb_owned_metadata_file "${_marker}" 1 || return 1
-        _owner=$(<"${_marker}")
-        bb_package_owner_path_valid "${_owner}" || return 1
+        bb_owned_metadata_file "${_marker}" 1 || { bb_server_failure npm.owner-file; return 1; }
+        { _owner=$(<"${_marker}"); } 2>/dev/null
+        bb_package_owner_path_valid "${_owner}" || { bb_server_failure npm.owner-path; return 1; }
     fi
     if [[ "${_owner}" != "${BB_PACKAGE_PATH}" ]]; then
         if [[ -e "${_pending}" ]]; then
-            bb_owned_metadata_file "${_pending}" 1 || return 1
-            [[ "$(<"${_pending}")" == "${BB_PACKAGE_PATH}" ]] || return 1
+            bb_owned_metadata_file "${_pending}" 1 || { bb_server_failure npm.pending-file; return 1; }
+            [[ "$(<"${_pending}")" == "${BB_PACKAGE_PATH}" ]] 2>/dev/null || { bb_server_failure npm.pending-owner; return 1; }
         else
-            [[ ! -e "${BB_PACKAGE_PATH}" && ! -L "${BB_PACKAGE_PATH}" ]] || return 1
+            [[ ! -e "${BB_PACKAGE_PATH}" && ! -L "${BB_PACKAGE_PATH}" ]] || { bb_server_failure npm.unowned-package; return 1; }
         fi
     elif [[ -e "${_pending}" ]]; then
+        bb_server_failure npm.owner-conflict
         return 1
     fi
     if [[ -n "${_owner}" ]]; then
         local _owner_prefix="${_owner%/lib/node_modules/bb-app}"
-        bb_package_owned_target_safe "${_owner_prefix}" "${_owner}" || return 1
+        bb_package_owned_target_safe "${_owner_prefix}" "${_owner}" || { bb_server_failure npm.previous-target; return 1; }
     fi
-    bb_package_owned_target_safe "${BB_PACKAGE_PREFIX}" "${BB_PACKAGE_PATH}" || return 1
+    bb_package_owned_target_safe "${BB_PACKAGE_PREFIX}" "${BB_PACKAGE_PATH}" || { bb_server_failure npm.current-target; return 1; }
     BB_PACKAGE_OWNER="${_owner}"
 }
 
@@ -9427,10 +9483,10 @@ bb_install_package() {
     local _pending="${HOME}/.config/setup-bb-server/package-owner.next"
     bb_package_preflight || return 1
     if [[ "${BB_PACKAGE_OWNER}" != "${BB_PACKAGE_PATH}" && ! -e "${_pending}" ]]; then
-        ( umask 077; set -C; printf '%s\n' "${BB_PACKAGE_PATH}" > "${_pending}" ) || return 1
+        ( umask 077; set -C; printf '%s\n' "${BB_PACKAGE_PATH}" > "${_pending}" ) 2>/dev/null || { bb_server_failure npm.pending-write; return 1; }
     fi
-    ( umask 077; npm install -g --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher bb-app@latest < /dev/null >/dev/null 2>&1 ) || return 1
-    bb_package_artifacts_ready "${BB_PACKAGE_PREFIX}" "${BB_PACKAGE_PATH}"
+    ( umask 077; npm install -g --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher bb-app@latest < /dev/null >/dev/null 2>&1 ) || { bb_server_failure npm.install; return 1; }
+    bb_package_artifacts_ready "${BB_PACKAGE_PREFIX}" "${BB_PACKAGE_PATH}" || { bb_server_failure npm.artifacts; return 1; }
 }
 
 # Foreground Serve is session-scoped: the native daemon rejects an occupied
@@ -9465,7 +9521,7 @@ bb_owned_file() {
     [[ ! -L "${_file}" ]] || return 1
     if [[ -e "${_file}" ]]; then
         bb_owned_metadata_file "${_file}" || return 1
-        IFS= read -r _first < "${_file}" || return 1
+        IFS= read -r _first 2>/dev/null < "${_file}" || return 1
         [[ "${_first}" == "${_marker}" ]] || return 1
     fi
 }
@@ -9475,7 +9531,7 @@ bb_owned_script() {
     [[ ! -L "${_file}" ]] || return 1
     if [[ -e "${_file}" ]]; then
         bb_owned_metadata_file "${_file}" || return 1
-        { IFS= read -r _first && IFS= read -r _second; } < "${_file}" || return 1
+        { IFS= read -r _first && IFS= read -r _second; } 2>/dev/null < "${_file}" || return 1
         [[ "${_first}" == '#!/usr/bin/env bash' && "${_second}" == "${_marker}" ]] || return 1
     fi
 }
@@ -9495,9 +9551,9 @@ bb_unit_preflight() {
 
 bb_write_owned_content() {
     local _file="$1" _content="$2" _mode="$3" _temporary
-    _temporary=$(mktemp "${_file}.XXXXXX") || return 1
-    if ! chmod "${_mode}" "${_temporary}" || ! printf '%s\n' "${_content}" > "${_temporary}" || ! mv -f -- "${_temporary}" "${_file}"; then
-        rm -f -- "${_temporary}"
+    _temporary=$(mktemp "${_file}.XXXXXX" 2>/dev/null) || return 1
+    if ! { chmod "${_mode}" "${_temporary}" && printf '%s\n' "${_content}" > "${_temporary}" && mv -f -- "${_temporary}" "${_file}"; } 2>/dev/null; then
+        rm -f -- "${_temporary}" 2>/dev/null
         return 1
     fi
 }
@@ -9509,36 +9565,40 @@ bb_write_owned_unit() {
 bb_restore_bb_services() {
     local _app="$1" _serve="$2" _guard="$3" _old_app="$4" _old_serve="$5" _old_guard="$6"
     local _app_was_active="$7" _ingress_was_active="$8" _owner="$9" _app_was_enabled="${10}" _prefix _i
-    [[ "${_app_was_active}" == 1 && -n "${_owner}" && -n "${_old_app}" && -n "${_old_serve}" ]] || return 1
-    systemctl --user stop setup-bb-ingress.service >/dev/null 2>&1 || true
-    systemctl --user stop setup-bb-app.service >/dev/null 2>&1 || true
-    bb_write_owned_unit "${_app}" "${_old_app}" && bb_write_owned_unit "${_serve}" "${_old_serve}" || return 1
+    [[ "${_app_was_active}" == 1 && -n "${_owner}" && -n "${_old_app}" && -n "${_old_serve}" ]] || { bb_server_failure restore.prerequisites; return 1; }
+    # Keep best-effort stop semantics, but do not hide restoration failures.
+    systemctl --user stop setup-bb-ingress.service >/dev/null 2>&1 || bb_server_failure restore.stop-ingress
+    systemctl --user stop setup-bb-app.service >/dev/null 2>&1 || bb_server_failure restore.stop-app
+    bb_write_owned_unit "${_app}" "${_old_app}" || { bb_server_failure restore.app-unit; return 1; }
+    bb_write_owned_unit "${_serve}" "${_old_serve}" || { bb_server_failure restore.ingress-unit; return 1; }
     if [[ -n "${_old_guard}" ]]; then
-        bb_write_owned_content "${_guard}" "${_old_guard}" 700 || return 1
+        bb_write_owned_content "${_guard}" "${_old_guard}" 700 || { bb_server_failure restore.guard; return 1; }
     elif bb_owned_script "${_guard}" '# setup-managed bb lifecycle guard v1'; then
-        rm -f -- "${_guard}" || return 1
+        rm -f -- "${_guard}" 2>/dev/null || { bb_server_failure restore.guard-remove; return 1; }
     fi
-    systemctl --user daemon-reload >/dev/null 2>&1 || return 1
-    if [[ "${_app_was_enabled}" != 1 ]]; then systemctl --user disable setup-bb-app.service >/dev/null 2>&1 || return 1; fi
+    systemctl --user daemon-reload >/dev/null 2>&1 || { bb_server_failure restore.daemon-reload; return 1; }
+    if [[ "${_app_was_enabled}" != 1 ]]; then systemctl --user disable setup-bb-app.service >/dev/null 2>&1 || { bb_server_failure restore.disable-app; return 1; }; fi
     _prefix="${_owner%/lib/node_modules/bb-app}"
-    bb_package_artifacts_ready "${_prefix}" "${_owner}" || return 1
-    systemctl --user start setup-bb-app.service >/dev/null 2>&1 || return 1
+    bb_package_artifacts_ready "${_prefix}" "${_owner}" || { bb_server_failure restore.artifacts; return 1; }
+    systemctl --user start setup-bb-app.service >/dev/null 2>&1 || { bb_server_failure restore.start-app; return 1; }
     for ((_i=0; _i<30; _i++)); do
         if bb_native_app_ready; then
             if [[ "${_ingress_was_active}" == 1 ]]; then
-                systemctl --user start setup-bb-ingress.service >/dev/null 2>&1 || return 1
+                systemctl --user start setup-bb-ingress.service >/dev/null 2>&1 || { bb_server_failure restore.start-ingress; return 1; }
             else
-                systemctl --user stop setup-bb-ingress.service >/dev/null 2>&1 || return 1
+                systemctl --user stop setup-bb-ingress.service >/dev/null 2>&1 || { bb_server_failure restore.ingress-state; return 1; }
             fi
             return 0
         fi
         sleep 2
     done
+    bb_server_failure "${BB_SERVER_READY_CHECK:-readiness.native}"
+    bb_server_failure restore.readiness
     return 1
 }
 
 bb_local_ports_free() {
-    python3 - "$@" <<'PY'
+    python3 - "$@" 2>/dev/null <<'PY'
 import os, sys
 ports = {int(value) for value in sys.argv[1:]}
 root = os.environ.get("BB_PROC_NET_ROOT", "/proc/net")
@@ -9598,7 +9658,7 @@ bb_managed_app_process() {
         for _file in "${_owner_file}" "${_pending_file}"; do
             [[ -e "${_file}" ]] || continue
             bb_owned_metadata_file "${_file}" 1 || return 1
-            _owner=$(<"${_file}")
+            { _owner=$(<"${_file}"); } 2>/dev/null
             bb_package_owner_path_valid "${_owner}" || return 1
             _candidate="${_owner%/lib/node_modules/bb-app}/bin/bb-app"
             _expected_bins+=("${_candidate}")
@@ -9611,16 +9671,21 @@ bb_managed_app_process() {
 
 bb_native_app_ready() {
     local _health _status
+    # Callers report the last failed check only after their existing bounded wait.
+    BB_SERVER_READY_CHECK=readiness.process
     bb_managed_app_process "${1:-}" || return 1
+    BB_SERVER_READY_CHECK=readiness.health
     _health=$(curl --noproxy '*' --fail --silent --show-error --max-time 2 http://127.0.0.1:38886/health 2>/dev/null) || return 1
+    BB_SERVER_READY_CHECK=readiness.host-status
     _status=$(curl --noproxy '*' --fail --silent --show-error --max-time 2 http://127.0.0.1:38887/status 2>/dev/null) || return 1
+    BB_SERVER_READY_CHECK=readiness.native
     node -e 'const fs=require("node:fs"),home=process.argv[3];let expected="";for(const p of [home+"/.bb/host-id",home+"/.bb/auth.json",home+"/.bb/env.json"]){try{const s=fs.lstatSync(p);if(!s.isFile()||s.isSymbolicLink()||s.nlink!==1||s.uid!==process.getuid()||(s.mode&0o077)!==0)process.exit(1);const v=fs.readFileSync(p,"utf8");if(p.endsWith("host-id"))expected=v.trim();else{const j=JSON.parse(v);expected ||= j.hostId||j.env?.BB_HOST_ID||""}}catch(e){if(e.code!=="ENOENT")process.exit(1)}}const h=JSON.parse(process.argv[1]),d=JSON.parse(process.argv[2]),norm=x=>{try{const u=new URL(x);if(u.hostname==="localhost")u.hostname="127.0.0.1";return u.href.replace(/\/$/,"")}catch{return ""}};process.exit(h?.ok===true&&typeof h.launchId==="string"&&h.launchId.length>0&&typeof expected==="string"&&expected.length>0&&d?.connected===true&&d.hostId===expected&&norm(d.serverUrl)==="http://127.0.0.1:38886"?0:1)' "${_health}" "${_status}" "${HOME}" >/dev/null 2>&1
 }
 
 bb_write_bb_guard() {
     local _target="$1" _temporary
-    _temporary=$(mktemp "${_target}.XXXXXX") || return 1
-    if ! cat > "${_temporary}" <<'BB_GUARD'
+    _temporary=$(mktemp "${_target}.XXXXXX" 2>/dev/null) || return 1
+    if ! cat 2>/dev/null > "${_temporary}" <<'BB_GUARD'
 #!/usr/bin/env bash
 # setup-managed bb lifecycle guard v1
 set -euo pipefail
@@ -9713,17 +9778,18 @@ case "${mode}" in
 esac
 BB_GUARD
     then
-        rm -f -- "${_temporary}"
+        rm -f -- "${_temporary}" 2>/dev/null
         return 1
     fi
-    if ! chmod 700 "${_temporary}" || ! mv -f -- "${_temporary}" "${_target}"; then
-        rm -f -- "${_temporary}"
+    if ! chmod 700 "${_temporary}" 2>/dev/null || ! mv -f -- "${_temporary}" "${_target}" 2>/dev/null; then
+        rm -f -- "${_temporary}" 2>/dev/null
         return 1
     fi
 }
 
 bb_config_merge_native() {
-    node - "${BB_PACKAGE_PATH}/package.json" "${HOME}/.bb" "$1" 2>/dev/null <<'BB_CONFIG'
+    local _diagnostic _status=0
+    _diagnostic=$(node - "${BB_PACKAGE_PATH}/package.json" "${HOME}/.bb" "$1" 2>/dev/null <<'BB_CONFIG'
 const fs = require("node:fs");
 const path = require("node:path");
 const { constants } = require("node:fs");
@@ -9775,13 +9841,17 @@ async function writeJson(target, value) {
     await fs.promises.rename(temporary, target);
   } finally { await fs.promises.unlink(temporary).catch(() => undefined); }
 }
+let check = "config.locks", failure = "";
+function failed(operation) { failure ||= operation; process.exitCode = 1; }
 (async () => {
   const configPath = path.join(root, "config.json"), envPath = path.join(root, "env.json");
   const targets = [configPath, envPath].sort();
   const locks = [];
   try {
     for (const target of targets) locks.push(await lockFile(target));
+    check = "config.read";
     const config = await readJson(configPath), envFile = await readJson(envPath);
+    check = "config.validate";
     if (!plainObject(config) || !plainObject(envFile) || (config.config !== undefined && !plainObject(config.config)) || (envFile.env !== undefined && !plainObject(envFile.env))) throw new Error("invalid JSON metadata");
     for (const layer of [config, config.config, envFile, envFile.env]) {
       if (!plainObject(layer)) continue;
@@ -9792,86 +9862,101 @@ async function writeJson(target, value) {
     if (configChanged) config.config.BB_APP_URL = origin;
     const envChanged = plainObject(envFile.env) && Object.hasOwn(envFile.env, "BB_APP_URL");
     if (envChanged) delete envFile.env.BB_APP_URL;
+    check = "config.write";
     if (configChanged) await writeJson(configPath, config);
     if (envChanged) await writeJson(envPath, envFile);
-  } catch { process.exitCode = 1; }
-  finally { for (const lock of locks.reverse()) { try { await lock.release(); } catch { process.exitCode = 1; } } }
-})().catch(() => { process.exitCode = 1; });
+  } catch { failed(check); }
+  finally { for (const lock of locks.reverse()) { try { await lock.release(); } catch { failed("config.unlock"); } } }
+})().catch(() => { failed(check); }).finally(() => { if (failure) process.stdout.write(failure); });
 BB_CONFIG
+    ) || _status=$?
+    if [[ "${_status}" -ne 0 ]]; then
+        # Validate the whole result. Unexpected native-module output is never logged.
+        case "${_diagnostic}" in
+            config.locks|config.read|config.validate|config.write|config.unlock) ;;
+            *) _diagnostic=config.native-helper ;;
+        esac
+        bb_server_failure "${_diagnostic}"
+        return "${_status}"
+    fi
 }
 
 # The direct Serve session only starts after the native launcher reports its
 # own server launch ID and connected local host daemon ready.
 setup_bb_server() {
     local _dir="${HOME}/.config/setup-bb-server" _units="${HOME}/.config/systemd/user"
-    local _state="${HOME}/.config/setup-bb-server/endpoint" _app _serve _guard _dns='' _port='' _origin='' _current_dns _i _root _mode _user _linger _tailscale_bin _app_active=0 _ingress_active=0 _app_enabled=0 _new_state=0 _old_app='' _old_serve='' _old_guard='' _app_unit _serve_unit
+    local _state="${HOME}/.config/setup-bb-server/endpoint" _app _serve _guard _dns='' _port='' _origin='' _current_dns _i _root _mode _user _linger _tailscale_bin _app_active=0 _ingress_active=0 _app_enabled=0 _new_state=0 _old_app='' _old_serve='' _old_guard='' _app_unit _serve_unit _ready_check
+    local BB_SERVER_READY_CHECK=readiness.native
     if [[ ! "${HOME}" =~ ^/[a-zA-Z0-9_./-]+$ ]]; then
         print_error "BB directory preflight: \$HOME must be an absolute supported path."
         return 1
     fi
     bb_setup_directory_preflight "${HOME}" || return 1
-    _tailscale_bin=$(command -v tailscale) || return 1
-    [[ "${_tailscale_bin}" == /usr/bin/tailscale || "${_tailscale_bin}" == /usr/local/bin/tailscale ]] || return 1
+    _tailscale_bin=$(command -v tailscale 2>/dev/null) || { bb_server_failure preflight.tailscale-command; return 1; }
+    [[ "${_tailscale_bin}" == /usr/bin/tailscale || "${_tailscale_bin}" == /usr/local/bin/tailscale ]] || { bb_server_failure preflight.tailscale-path; return 1; }
     for _root in "${HOME}/.config" "${HOME}/.config/systemd" "${_dir}" "${_units}" "${HOME}/.bb"; do
         bb_setup_directory_preflight "${_root}" || return 1
     done
     for _root in "${HOME}/.bb/config.json" "${HOME}/.bb/env.json" "${HOME}/.bb/host-id" "${HOME}/.bb/auth.json" "${HOME}/.bb/server-moved.json" "${HOME}/.bb/server-import.json"; do
-        [[ ! -L "${_root}" ]] || return 1
+        [[ ! -L "${_root}" ]] || { bb_server_failure preflight.metadata-link; return 1; }
     done
-    [[ ! -e "${HOME}/.bb/server-moved.json" && ! -e "${HOME}/.bb/server-import.json" ]] || return 1
-    bb_owned_file "${_units}/setup-bb-app.service" '# setup-managed bb app v1' || return 1
-    bb_owned_file "${_units}/setup-bb-ingress.service" '# setup-managed bb ingress v1' || return 1
-    [[ ! -e "${_units}/setup-bb-app.service.d" && ! -L "${_units}/setup-bb-app.service.d" && ! -e "${_units}/setup-bb-ingress.service.d" && ! -L "${_units}/setup-bb-ingress.service.d" ]] || return 1
+    [[ ! -e "${HOME}/.bb/server-moved.json" && ! -e "${HOME}/.bb/server-import.json" ]] || { bb_server_failure preflight.migration-state; return 1; }
+    bb_owned_file "${_units}/setup-bb-app.service" '# setup-managed bb app v1' || { bb_server_failure preflight.app-unit-file; return 1; }
+    bb_owned_file "${_units}/setup-bb-ingress.service" '# setup-managed bb ingress v1' || { bb_server_failure preflight.ingress-unit-file; return 1; }
+    [[ ! -e "${_units}/setup-bb-app.service.d" && ! -L "${_units}/setup-bb-app.service.d" && ! -e "${_units}/setup-bb-ingress.service.d" && ! -L "${_units}/setup-bb-ingress.service.d" ]] || { bb_server_failure preflight.unit-dropins; return 1; }
     _app="${_units}/setup-bb-app.service" _serve="${_units}/setup-bb-ingress.service" _guard="${_dir}/bb-guard"
-    if [[ -f "${_app}" ]]; then _old_app=$(<"${_app}"); fi
-    if [[ -f "${_serve}" ]]; then _old_serve=$(<"${_serve}"); fi
-    if [[ -f "${_guard}" ]]; then _old_guard=$(<"${_guard}"); fi
-    [[ ! -L "${_state}" && ! -L "${_guard}" ]] || return 1
-    bb_owned_script "${_guard}" '# setup-managed bb lifecycle guard v1' || return 1
+    if [[ -f "${_app}" ]]; then { _old_app=$(<"${_app}"); } 2>/dev/null; fi
+    if [[ -f "${_serve}" ]]; then { _old_serve=$(<"${_serve}"); } 2>/dev/null; fi
+    if [[ -f "${_guard}" ]]; then { _old_guard=$(<"${_guard}"); } 2>/dev/null; fi
+    [[ ! -L "${_state}" ]] || { bb_server_failure preflight.endpoint-file; return 1; }
+    [[ ! -L "${_guard}" ]] || { bb_server_failure preflight.guard-file; return 1; }
+    bb_owned_script "${_guard}" '# setup-managed bb lifecycle guard v1' || { bb_server_failure preflight.guard-file; return 1; }
     if [[ -e "${_state}" ]]; then
-        bb_owned_metadata_file "${_state}" 1 || return 1
-        IFS=' ' read -r _dns _port _origin < "${_state}" || return 1
-        [[ "${_port}" =~ ^[0-9]+$ ]] && (( _port >= 1 && _port <= 65535 )) || return 1
+        bb_owned_metadata_file "${_state}" 1 || { bb_server_failure preflight.endpoint-file; return 1; }
+        IFS=' ' read -r _dns _port _origin 2>/dev/null < "${_state}" || { bb_server_failure preflight.endpoint-read; return 1; }
+        { [[ "${_port}" =~ ^[0-9]+$ ]] && (( _port >= 1 && _port <= 65535 )); } 2>/dev/null || { bb_server_failure preflight.endpoint-port; return 1; }
         if [[ "${_port}" == 443 ]]; then _mode="https://${_dns}"; else _mode="https://${_dns}:${_port}"; fi
-        [[ "${_origin}" == "${_mode}" ]] || return 1
+        [[ "${_origin}" == "${_mode}" ]] || { bb_server_failure preflight.endpoint-origin; return 1; }
     fi
-    bb_unit_preflight setup-bb-app.service "${_app}" || return 1
-    bb_unit_preflight setup-bb-ingress.service "${_serve}" || return 1
-    if systemctl --user is-active --quiet setup-bb-app.service; then _app_active=1; fi
-    if systemctl --user is-active --quiet setup-bb-ingress.service; then _ingress_active=1; fi
+    bb_unit_preflight setup-bb-app.service "${_app}" || { bb_server_failure preflight.app-unit; return 1; }
+    bb_unit_preflight setup-bb-ingress.service "${_serve}" || { bb_server_failure preflight.ingress-unit; return 1; }
+    if systemctl --user is-active --quiet setup-bb-app.service >/dev/null 2>&1; then _app_active=1; fi
+    if systemctl --user is-active --quiet setup-bb-ingress.service >/dev/null 2>&1; then _ingress_active=1; fi
     _mode=$(systemctl --user is-enabled setup-bb-app.service 2>/dev/null) || _mode=''
     if [[ "${_mode}" == enabled || "${_mode}" == enabled-runtime ]]; then _app_enabled=1; fi
     if [[ "${_app_active}" -eq 1 ]]; then
-        [[ -f "${_app}" && -f "${_state}" ]] || return 1
-        bb_native_app_ready || { print_error 'BB app is not natively ready; ingress and package updates are blocked.'; return 1; }
+        [[ -f "${_app}" && -f "${_state}" ]] || { bb_server_failure preflight.active-app-state; return 1; }
+        bb_native_app_ready || { bb_server_failure "${BB_SERVER_READY_CHECK}"; return 1; }
     else
-        bb_local_ports_free 38886 38887 || { print_error 'BB local listener port is occupied by another process.'; return 1; }
+        bb_local_ports_free 38886 38887 || { bb_server_failure preflight.local-ports; return 1; }
     fi
     if [[ "${_ingress_active}" -eq 1 ]]; then
-        [[ -f "${_serve}" && -f "${_state}" ]] && bb_route_owned "${_port}" "${_dns}" || return 1
+        [[ -f "${_serve}" && -f "${_state}" ]] || { bb_server_failure preflight.active-ingress-state; return 1; }
+        bb_route_owned "${_port}" "${_dns}" || { bb_server_failure preflight.ingress-route; return 1; }
     fi
-    command -v tailscale >/dev/null && command -v systemctl >/dev/null && command -v loginctl >/dev/null || return 1
-    bb_tailnet_version_ready || { print_error 'BB needs connected Tailscale CLI and daemon >=1.102.4 with foreground port protection.'; return 1; }
-    _current_dns=$(bb_tailnet_identity) || { print_error 'BB needs an authenticated running Tailscale node with DNS name.'; return 1; }
-    [[ -z "${_dns}" || "${_dns}" == "${_current_dns}" ]] || { print_error 'BB saved tailnet DNS name changed; manual migration required.'; return 1; }
+    { command -v tailscale && command -v systemctl && command -v loginctl; } >/dev/null 2>&1 || { bb_server_failure preflight.required-commands; return 1; }
+    bb_tailnet_version_ready || { bb_server_failure preflight.tailnet-version; return 1; }
+    _current_dns=$(bb_tailnet_identity) || { bb_server_failure preflight.tailnet-identity; return 1; }
+    [[ -z "${_dns}" || "${_dns}" == "${_current_dns}" ]] || { bb_server_failure preflight.tailnet-name; return 1; }
     _dns="${_current_dns}"
     if [[ -z "${_port}" ]]; then
         for _i in 443 38443 38444 38445; do
             if bb_route_port_free "${_i}"; then _port="${_i}"; break; fi
         done
-        [[ -n "${_port}" ]] || return 1
+        [[ -n "${_port}" ]] || { bb_server_failure preflight.https-port-selection; return 1; }
         if [[ "${_port}" == 443 ]]; then _origin="https://${_dns}"; else _origin="https://${_dns}:${_port}"; fi
     else
         if [[ "${_port}" == 443 ]]; then _origin="https://${_dns}"; else _origin="https://${_dns}:${_port}"; fi
     fi
     if [[ "${_ingress_active}" -eq 0 ]]; then
-        bb_route_port_free "${_port}" || { print_error 'BB fixed HTTPS port is occupied; the published address will not move.'; return 1; }
+        bb_route_port_free "${_port}" || { bb_server_failure preflight.saved-https-port; return 1; }
     fi
-    bb_host_identity_ready || { print_error 'Existing BB host identity metadata is unsafe, malformed, or conflicting; repair it before setup.'; return 1; }
-    bb_package_preflight || { print_error 'BB npm version, policy, runtime or package ownership preflight failed.'; return 1; }
+    bb_host_identity_ready || { bb_server_failure preflight.host-identity; return 1; }
+    bb_package_preflight || return 1
     for _root in "${HOME}/.bb/config.json" "${HOME}/.bb/env.json"; do
         if [[ -e "${_root}" ]]; then
-            bb_owned_metadata_file "${_root}" || return 1
+            if [[ "${_root}" == "${HOME}/.bb/config.json" ]]; then _mode=config; else _mode='env'; fi
+            bb_owned_metadata_file "${_root}" || { bb_server_failure "preflight.${_mode}-file"; return 1; }
             python3 -c 'import json,sys
 
 def unique(pairs):
@@ -9881,94 +9966,106 @@ def unique(pairs):
         value[key]=item
     return value
 with open(sys.argv[1],encoding="utf-8") as source: obj=json.load(source,object_pairs_hook=unique)
-if not isinstance(obj,dict): raise ValueError("invalid metadata")' "${_root}" >/dev/null 2>&1 || return 1
+if not isinstance(obj,dict): raise ValueError("invalid metadata")' "${_root}" >/dev/null 2>&1 || { bb_server_failure "preflight.${_mode}-json"; return 1; }
         fi
     done
-    node -e 'const fs=require("node:fs"),path=require("node:path"),home=process.argv[1],expected={BB_DATA_DIR:path.join(home,".bb"),BB_SERVER_PORT:"38886",BB_HOST_DAEMON_PORT:"38887",BB_SERVER_BIND_HOST:"127.0.0.1"};for(const file of [path.join(home,".bb/config.json"),path.join(home,".bb/env.json")]){if(!fs.existsSync(file))continue;const v=JSON.parse(fs.readFileSync(file,"utf8"));for(const layer of [v?.config,v?.env,v]){if(!layer||typeof layer!=="object")continue;for(const [key,value] of Object.entries(expected))if(Object.hasOwn(layer,key)&&String(layer[key])!==value)process.exit(1)}}for(const [key,value] of Object.entries(expected))if(process.env[key]!==undefined&&process.env[key]!==value)process.exit(1)' "${HOME}" >/dev/null 2>&1 || { print_error 'BB persisted listener/data-directory override conflicts with the managed endpoint.'; return 1; }
-    _user=$(id -un) || return 1
-    _linger=$(loginctl show-user "${_user}" --property=Linger --value 2>/dev/null) || return 1
+    node -e 'const fs=require("node:fs"),path=require("node:path"),home=process.argv[1],expected={BB_DATA_DIR:path.join(home,".bb"),BB_SERVER_PORT:"38886",BB_HOST_DAEMON_PORT:"38887",BB_SERVER_BIND_HOST:"127.0.0.1"};for(const file of [path.join(home,".bb/config.json"),path.join(home,".bb/env.json")]){if(!fs.existsSync(file))continue;const v=JSON.parse(fs.readFileSync(file,"utf8"));for(const layer of [v?.config,v?.env,v]){if(!layer||typeof layer!=="object")continue;for(const [key,value] of Object.entries(expected))if(Object.hasOwn(layer,key)&&String(layer[key])!==value)process.exit(1)}}for(const [key,value] of Object.entries(expected))if(process.env[key]!==undefined&&process.env[key]!==value)process.exit(1)' "${HOME}" >/dev/null 2>&1 || { bb_server_failure preflight.runtime-overrides; return 1; }
+    _user=$(id -un 2>/dev/null) || { bb_server_failure preflight.account-name; return 1; }
+    _linger=$(loginctl show-user "${_user}" --property=Linger --value 2>/dev/null) || { bb_server_failure preflight.linger-query; return 1; }
     if [[ "${_linger}" != yes ]]; then
-        can_sudo && sudo loginctl enable-linger "${_user}" >/dev/null 2>&1 || return 1
-        _linger=$(loginctl show-user "${_user}" --property=Linger --value 2>/dev/null) || return 1
-        [[ "${_linger}" == yes ]] || return 1
+        { can_sudo && sudo loginctl enable-linger "${_user}" >/dev/null 2>&1; } || { bb_server_failure preflight.linger-enable; return 1; }
+        _linger=$(loginctl show-user "${_user}" --property=Linger --value 2>/dev/null) || { bb_server_failure preflight.linger-recheck; return 1; }
+        [[ "${_linger}" == yes ]] || { bb_server_failure preflight.linger-state; return 1; }
     fi
     # All foreign-port, ownership, auth, policy and metadata checks precede
     # any package/config/unit mutation.
-    ( umask 077; mkdir -p -- "${_dir}" "${_units}" "${HOME}/.bb" ) || return 1
-    chmod 700 "${_dir}" || return 1
+    ( umask 077; mkdir -p -- "${_dir}" "${_units}" "${HOME}/.bb" ) 2>/dev/null || { bb_server_failure update.directories; return 1; }
+    chmod 700 "${_dir}" 2>/dev/null || { bb_server_failure update.state-mode; return 1; }
     if [[ ! -e "${_state}" ]]; then
-        ( umask 077; set -C; printf '%s %s %s\n' "${_dns}" "${_port}" "${_origin}" > "${_state}" ) || return 1
+        ( umask 077; set -C; printf '%s %s %s\n' "${_dns}" "${_port}" "${_origin}" > "${_state}" ) 2>/dev/null || { bb_server_failure update.endpoint-write; return 1; }
         _new_state=1
     fi
     if [[ "${_ingress_active}" -eq 1 ]]; then
-        systemctl --user stop setup-bb-ingress.service >/dev/null || return 1
-        ! systemctl --user is-active --quiet setup-bb-ingress.service || return 1
+        systemctl --user stop setup-bb-ingress.service >/dev/null 2>&1 || { bb_server_failure update.stop-ingress; return 1; }
+        ! systemctl --user is-active --quiet setup-bb-ingress.service >/dev/null 2>&1 || { bb_server_failure update.ingress-stopped; return 1; }
     fi
     if [[ "${_app_active}" -eq 1 ]]; then
-        systemctl --user stop setup-bb-app.service >/dev/null || return 1
-        ! systemctl --user is-active --quiet setup-bb-app.service || return 1
+        systemctl --user stop setup-bb-app.service >/dev/null 2>&1 || { bb_server_failure update.stop-app; return 1; }
+        ! systemctl --user is-active --quiet setup-bb-app.service >/dev/null 2>&1 || { bb_server_failure update.app-stopped; return 1; }
     fi
-    ! systemctl --user is-active --quiet setup-bb-ingress.service || return 1
-    ! systemctl --user is-active --quiet setup-bb-app.service || return 1
-    bb_local_ports_free 38886 38887 || { print_error 'A local BB listener appeared during the stopped update window; setup leaves it untouched.'; return 1; }
+    ! systemctl --user is-active --quiet setup-bb-ingress.service >/dev/null 2>&1 || { bb_server_failure update.ingress-stopped; return 1; }
+    ! systemctl --user is-active --quiet setup-bb-app.service >/dev/null 2>&1 || { bb_server_failure update.app-stopped; return 1; }
+    bb_local_ports_free 38886 38887 || { bb_server_failure update.local-ports; return 1; }
     if ! bb_install_package; then
         print_error 'BB stable npm installation or native-artifact verification failed.'
         if [[ "${_app_active}" -eq 1 ]] && ! bb_restore_bb_services "${_app}" "${_serve}" "${_guard}" "${_old_app}" "${_old_serve}" "${_old_guard}" "${_app_active}" "${_ingress_active}" "${BB_PACKAGE_OWNER:-}" "${_app_enabled}"; then
-            print_error 'The prior BB service could not be restored; its ingress remains stopped for manual review.'
+            print_error 'Prior BB service restoration incomplete; service and ingress state require manual review.'
         fi
         return 1
     fi
     _mode="${BB_PACKAGE_PREFIX}"
-    _root=$(npm prefix -g 2>/dev/null) || return 1
+    _root=$(npm prefix -g 2>/dev/null) || { bb_server_failure update.prefix-query; return 1; }
     if [[ "${_root}" != "${_mode}" ]]; then
+        bb_server_failure update.prefix-changed
         if [[ "${_app_active}" -eq 1 ]]; then bb_restore_bb_services "${_app}" "${_serve}" "${_guard}" "${_old_app}" "${_old_serve}" "${_old_guard}" "${_app_active}" "${_ingress_active}" "${BB_PACKAGE_OWNER:-}" "${_app_enabled}" || true; fi
         return 1
     fi
     BB_PACKAGE_PREFIX="${_root}"
     BB_PACKAGE_PATH="${BB_PACKAGE_PREFIX}/lib/node_modules/bb-app"
-    _tailscale_bin=$(command -v tailscale) || return 1
+    _tailscale_bin=$(command -v tailscale 2>/dev/null) || { bb_server_failure update.tailscale-command; return 1; }
     if [[ "${_tailscale_bin}" != /usr/bin/tailscale && "${_tailscale_bin}" != /usr/local/bin/tailscale ]]; then
+        bb_server_failure update.tailscale-path
         if [[ "${_app_active}" -eq 1 ]]; then bb_restore_bb_services "${_app}" "${_serve}" "${_guard}" "${_old_app}" "${_old_serve}" "${_old_guard}" "${_app_active}" "${_ingress_active}" "${BB_PACKAGE_OWNER:-}" "${_app_enabled}" || true; fi
         return 1
     fi
     if ! bb_config_merge_native "${_origin}"; then
-        print_error 'BB native-locked configuration merge failed; preserving configuration files and restoring the prior service when one was active.'
+        print_error 'BB configuration merge incomplete; attempting prior-service restoration when one was active.'
         if [[ "${_app_active}" -eq 1 ]] && ! bb_restore_bb_services "${_app}" "${_serve}" "${_guard}" "${_old_app}" "${_old_serve}" "${_old_guard}" "${_app_active}" "${_ingress_active}" "${BB_PACKAGE_OWNER:-}" "${_app_enabled}"; then
-            print_error 'The prior BB service could not be restored; its ingress remains stopped for manual review.'
+            print_error 'Prior BB service restoration incomplete; service and ingress state require manual review.'
         fi
         return 1
     fi
     if ! bb_write_bb_guard "${_guard}"; then
+        bb_server_failure update.guard-write
         if [[ "${_app_active}" -eq 1 ]]; then bb_restore_bb_services "${_app}" "${_serve}" "${_guard}" "${_old_app}" "${_old_serve}" "${_old_guard}" "${_app_active}" "${_ingress_active}" "${BB_PACKAGE_OWNER:-}" "${_app_enabled}" || true; fi
         return 1
     fi
     local _path="${HOME}/.local/share/mise/shims:${BB_PACKAGE_PREFIX}/bin:${HOME}/.local/bin:${HOME}/.bun/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin"
-    _app_unit=$(printf '%s\n' '# setup-managed bb app v1' '[Unit]' 'Description=Setup-managed bb main server and local execution daemon' 'StartLimitIntervalSec=0' '[Service]' 'Type=simple' 'TimeoutStartSec=180' "Environment=HOME=${HOME}" "Environment=PATH=${_path}" "Environment=BB_PACKAGE_BINARY=${BB_PACKAGE_PREFIX}/bin/bb-app" "Environment=BB_TAILSCALE_BIN=${_tailscale_bin}" "Environment=BB_APP_URL=${_origin}" "ExecStart=${_guard} app-start" "ExecStartPost=${_guard} app-ready" 'Restart=always' 'RestartSec=10' '[Install]' 'WantedBy=default.target') || return 1
-    _serve_unit=$(printf '%s\n' '# setup-managed bb ingress v1' '[Unit]' 'Description=Setup-managed bb private HTTPS ingress' 'BindsTo=setup-bb-app.service' 'After=setup-bb-app.service' 'StartLimitIntervalSec=0' '[Service]' 'Type=simple' "Environment=HOME=${HOME}" "Environment=PATH=${_path}" "Environment=BB_PACKAGE_BINARY=${BB_PACKAGE_PREFIX}/bin/bb-app" "Environment=BB_TAILSCALE_BIN=${_tailscale_bin}" "ExecStart=${_guard} ingress-start" 'Restart=always' 'RestartSec=15') || return 1
-    if ! bb_write_owned_unit "${_app}" "${_app_unit}" || ! bb_write_owned_unit "${_serve}" "${_serve_unit}"; then
+    _app_unit=$(printf '%s\n' '# setup-managed bb app v1' '[Unit]' 'Description=Setup-managed bb main server and local execution daemon' 'StartLimitIntervalSec=0' '[Service]' 'Type=simple' 'TimeoutStartSec=180' "Environment=HOME=${HOME}" "Environment=PATH=${_path}" "Environment=BB_PACKAGE_BINARY=${BB_PACKAGE_PREFIX}/bin/bb-app" "Environment=BB_TAILSCALE_BIN=${_tailscale_bin}" "Environment=BB_APP_URL=${_origin}" "ExecStart=${_guard} app-start" "ExecStartPost=${_guard} app-ready" 'Restart=always' 'RestartSec=10' '[Install]' 'WantedBy=default.target') || { bb_server_failure update.app-unit-render; return 1; }
+    _serve_unit=$(printf '%s\n' '# setup-managed bb ingress v1' '[Unit]' 'Description=Setup-managed bb private HTTPS ingress' 'BindsTo=setup-bb-app.service' 'After=setup-bb-app.service' 'StartLimitIntervalSec=0' '[Service]' 'Type=simple' "Environment=HOME=${HOME}" "Environment=PATH=${_path}" "Environment=BB_PACKAGE_BINARY=${BB_PACKAGE_PREFIX}/bin/bb-app" "Environment=BB_TAILSCALE_BIN=${_tailscale_bin}" "ExecStart=${_guard} ingress-start" 'Restart=always' 'RestartSec=15') || { bb_server_failure update.ingress-unit-render; return 1; }
+    _mode=update.app-unit-write
+    if ! { bb_write_owned_unit "${_app}" "${_app_unit}" && { _mode=update.ingress-unit-write; bb_write_owned_unit "${_serve}" "${_serve_unit}"; }; }; then
+        bb_server_failure "${_mode}"
         if [[ "${_app_active}" -eq 1 ]]; then bb_restore_bb_services "${_app}" "${_serve}" "${_guard}" "${_old_app}" "${_old_serve}" "${_old_guard}" "${_app_active}" "${_ingress_active}" "${BB_PACKAGE_OWNER:-}" "${_app_enabled}" || true; fi
         return 1
     fi
-    if ! systemctl --user daemon-reload || ! systemctl --user enable setup-bb-app.service >/dev/null; then
+    _mode=update.daemon-reload
+    if ! { systemctl --user daemon-reload >/dev/null 2>&1 && { _mode=update.enable-app; systemctl --user enable setup-bb-app.service >/dev/null 2>&1; }; }; then
+        bb_server_failure "${_mode}"
         if [[ "${_app_active}" -eq 1 ]]; then bb_restore_bb_services "${_app}" "${_serve}" "${_guard}" "${_old_app}" "${_old_serve}" "${_old_guard}" "${_app_active}" "${_ingress_active}" "${BB_PACKAGE_OWNER:-}" "${_app_enabled}" || true; fi
         return 1
     fi
-    if ! systemctl --user start setup-bb-app.service; then
-        print_error 'BB full-stack startup or readiness failed; ingress was not enabled.'
+    if ! systemctl --user start setup-bb-app.service >/dev/null 2>&1; then
+        bb_server_failure update.start-app
         if [[ "${_app_active}" -eq 1 ]]; then bb_restore_bb_services "${_app}" "${_serve}" "${_guard}" "${_old_app}" "${_old_serve}" "${_old_guard}" "${_app_active}" "${_ingress_active}" "${BB_PACKAGE_OWNER:-}" "${_app_enabled}" || true; fi
         return 1
     fi
     for ((_i=0; _i<30; _i++)); do
-        if systemctl --user is-active --quiet setup-bb-app.service && systemctl --user is-active --quiet setup-bb-ingress.service && bb_native_app_ready "${BB_PACKAGE_PREFIX}/bin/bb-app" && bb_route_owned "${_port}" "${_dns}" && curl --noproxy '*' --fail --silent --max-time 3 "${_origin}/" -o /dev/null 2>/dev/null; then
-            if [[ -f "${_dir}/package-owner.next" ]]; then mv -f -- "${_dir}/package-owner.next" "${_dir}/package-owner" || return 1; fi
+        if _ready_check=readiness.app-active && systemctl --user is-active --quiet setup-bb-app.service >/dev/null 2>&1 &&
+            _ready_check=readiness.ingress-active && systemctl --user is-active --quiet setup-bb-ingress.service >/dev/null 2>&1 &&
+            _ready_check=readiness.native && bb_native_app_ready "${BB_PACKAGE_PREFIX}/bin/bb-app" &&
+            _ready_check=readiness.route && bb_route_owned "${_port}" "${_dns}" &&
+            _ready_check=readiness.https && curl --noproxy '*' --fail --silent --max-time 3 "${_origin}/" -o /dev/null 2>/dev/null; then
+            if [[ -f "${_dir}/package-owner.next" ]]; then mv -f -- "${_dir}/package-owner.next" "${_dir}/package-owner" 2>/dev/null || { bb_server_failure update.owner-promotion; return 1; }; fi
             print_success "BB available privately at ${_origin}"
             return 0
         fi
         sleep 2
     done
-    print_error 'BB local server, host daemon, or private HTTPS endpoint did not become healthy in time.'
+    if [[ "${_ready_check}" == readiness.native ]]; then _ready_check="${BB_SERVER_READY_CHECK}"; fi
+    bb_server_failure "${_ready_check}"
     if [[ "${_app_active}" -eq 1 ]] && ! bb_restore_bb_services "${_app}" "${_serve}" "${_guard}" "${_old_app}" "${_old_serve}" "${_old_guard}" "${_app_active}" "${_ingress_active}" "${BB_PACKAGE_OWNER:-}" "${_app_enabled}"; then
-        print_error 'The prior BB service could not be restored; its ingress remains stopped for manual review.'
+        print_error 'Prior BB service restoration incomplete; service and ingress state require manual review.'
     fi
     return 1
 }
@@ -10592,7 +10689,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 289 | Last changed: Fix literal helper input parsing on macOS Bash 3.2"
+    echo -e "${GRAY}Version 290 | Last changed: Explain BB server failures with controlled diagnostics"
 
     if ! acquire_setup_lock; then
         return 1
@@ -10769,7 +10866,7 @@ HELPER_EOF
             print_error "BB_SERVER requires a non-root native Ubuntu account."
             _setup_had_errors=1
         elif ! setup_bb_server; then
-            print_error "BB server setup incomplete; existing bb data was preserved."
+            print_error "BB server setup incomplete; review the BB server diagnostics above."
             _setup_had_errors=1
             refresh_bb_plugins block-default || _setup_had_errors=1
         else

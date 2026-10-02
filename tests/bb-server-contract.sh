@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Version 1 | Last changed: Cover controlled BB server failure diagnostics
 set -euo pipefail
 cd "$(dirname "$0")/.."
 tmp=$(mktemp -d)
@@ -17,6 +18,8 @@ end = source.index('\nrun_setup_tasks() {', start)
 pathlib.Path(sys.argv[1], 'helpers.sh').write_text(source[start:end])
 PY
 
+# Controlled failures through extracted helpers and the real aggregate caller.
+python3 tests/test_bb_server_diagnostics.py
 # Report unsafe setup directories before any package or lifecycle operation.
 python3 tests/test_bb_directory_preflight.py
 # Exercise the earlier dotfile apply, including native Chezmoi when available.
@@ -568,6 +571,7 @@ FRESH_SETUP_FIXTURE
 BB_TEST_ROOT="${tmp}" BB_TEST_HELPERS="${tmp}/helpers.sh" PATH="${tmp}/bin:${PATH}" bash <<'NATIVE_CONFIG_FIXTURE'
 set -euo pipefail
 source "$BB_TEST_HELPERS"
+print_error() { printf 'ERROR: %s\n' "$1"; }
 export HOME="$BB_TEST_ROOT/native-home"
 prefix="$HOME/.local/share/mise/installs/node/24.20.0"
 package="$prefix/lib/node_modules/bb-app"
@@ -610,6 +614,7 @@ NATIVE_CONFIG_FIXTURE
 BB_TEST_ROOT="${tmp}" BB_TEST_HELPERS="${tmp}/helpers.sh" PATH="${tmp}/bin:${PATH}" bash <<'PACKAGE_FIXTURE'
 set -euo pipefail
 source "$BB_TEST_HELPERS"
+print_error() { printf 'ERROR: %s\n' "$1"; }
 export HOME="$BB_TEST_ROOT/package-home"
 prefix="$HOME/.local/share/mise/installs/node/24.20.0"
 package="$prefix/lib/node_modules/bb-app"

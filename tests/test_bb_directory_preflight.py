@@ -1,4 +1,4 @@
-"""Exercise the real BB directory preflight without installation or live services."""
+"""Version 2: stop after the real directory preflight without later failure handling."""
 import os
 import pathlib
 import subprocess
@@ -31,7 +31,7 @@ stat() {
     builtin command stat "$@"
 }
 # The first gate after directory validation deliberately stops the fixture.
-bb_owned_file() { printf 'DIRECTORY_PREFLIGHT_PASSED\n'; return 1; }
+bb_owned_file() { printf 'DIRECTORY_PREFLIGHT_PASSED\n'; exit 1; }
 # A regression must not run package/service/configuration mutations.
 for name in systemctl loginctl tailscale npm sudo curl mkdir chmod node python3 mv; do
     eval "$name() { printf 'UNEXPECTED_COMMAND: $name\\n' >&2; return 97; }"
@@ -75,9 +75,9 @@ class BbDirectoryPreflightTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 1, result)
         self.assertEqual(result.stderr, "", result)
-        self.assertNotIn("UNEXPECTED_COMMAND", result.stdout)
-        self.assertNotIn("fixture-secret", result.stdout)
-        self.assertNotIn(str(self.home), result.stdout)
+        self.assertNotIn("UNEXPECTED_COMMAND", result.stdout + result.stderr)
+        self.assertNotIn("fixture-secret", result.stdout + result.stderr)
+        self.assertNotIn(str(self.home), result.stdout + result.stderr)
         self.assertEqual(self.snapshot(), before, "Preflight changed fixture state")
         return result.stdout
 
