@@ -4,7 +4,7 @@
 
 Implemented in the current worktree and tracked as Backlog TASK-43. The user approved the retirement scope, safety policy, and implementation plan on September 23, 2026. After Windows research, the user also approved including the actual official WinGet identity `infisical.infisical` alongside the former setup literal `Infisical.CLI`, using verified native installation records and WinGet removal without adding PowerShell 7 or another module. See [Windows inventory research](2026-09-23-002-winget-retirement-inventory.md) for historical evidence. Offline fixtures pass; native Windows registry redirection, ACLs, and WinGet removal remain unverified on a Windows host.
 
-This uses the existing **retired managed tool**, **managed footprint**, and **incomplete setup run** vocabulary in `CONTEXT.md`. It follows the preservation boundary in [Keep cleanup for retired managed tools](../adr/0001-keep-cleanup-for-retired-managed-tools.md). No new domain term or ADR is needed.
+This uses the existing **retired managed tool**, **managed footprint**, and **incomplete setup run** vocabulary in `GLOSSARY.md`. It follows the preservation boundary in [Keep cleanup for retired managed tools](../adr/0001-keep-cleanup-for-retired-managed-tools.md). No new domain term or ADR is needed.
 
 ## Why
 

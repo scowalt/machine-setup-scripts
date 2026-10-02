@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@openai-codex'
 created_date: '2026-09-30 17:04'
-updated_date: '2026-09-30 18:08'
+updated_date: '2026-10-02 04:02'
 labels: []
 dependencies: []
 references:
@@ -49,7 +49,7 @@ User approved the rollback plan. Implementing source-only rollback with retained
 Approved rollback implemented. Contained red regressions: /tmp/setup-fixture-matrix-kl92cu9d. After source rollback, extraction/containment and setup-default pass at /tmp/setup-fixture-matrix-_7vlbvsx. Full audited sequential matrix: /tmp/setup-fixture-matrix-fz7qu0cp, 40/40 entries pass, 475 reported unittest methods including 15 skipped executions; Node OpenCode 97 passes/one optional skip. Native Windows ACL/handle diagnostic omission remains. No optional live integrations enabled. No unexpected real effect or containment refusal observed (not a syscall-wide audit).
 Static evidence: changed Bash files pass syntax/ShellCheck, changed Python ASTs parse, both embeds match, whitespace clean. Baseline normalization proves all six production scripts match e169f8d apart from retained data-only readers/call sites and version headers. OpenCode policy/native proof, kernel filter and copied-runtime helper are unchanged. Markdownlint is unavailable; manual/link checks pending. Documentation and final review in progress; no live setup or publication.
 
-Final review complete. All 40 suites passed; four affected suites rerun after test-version docstring bumps also passed at /tmp/setup-fixture-matrix-asp5n8kk. All 42 reviewed source hashes remain unchanged. README/CLAUDE/CONTEXT now describe ordinary provisioning; historical design/audit/validation are explicitly marked superseded without deleting incident evidence. Local Markdown links/anchors and balanced fences checked; Markdownlint remains unavailable, not a claimed pass. No live operations, commit, push or deployment performed.
+Final review complete. All 40 suites passed; four affected suites rerun after test-version docstring bumps also passed at /tmp/setup-fixture-matrix-asp5n8kk. All 42 reviewed source hashes remain unchanged. README/CLAUDE/GLOSSARY now describe ordinary provisioning; historical design/audit/validation are explicitly marked superseded without deleting incident evidence. Local Markdown links/anchors and balanced fences checked; Markdownlint remains unavailable, not a claimed pass. No live operations, commit, push or deployment performed.
 
 User explicitly authorized publishing these changes to remote main. Fetched origin/main and confirmed it still equals the validated starting commit daa420c; no integration changes are required. Reverified the 42-file source manifest and both passing result sets before publication. Git hooks run uncontained behavioral suites and bunx tooling, so publication uses per-invocation core.hooksPath=/dev/null with direct native ShellCheck and redacted staged secret scanning instead; no global hook configuration is changed. This publication authorization does not authorize executing live setup.
 <!-- SECTION:NOTES:END -->

@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@bb-logging-thr_r53w3qjamd'
 created_date: '2026-10-01 17:03'
-updated_date: '2026-10-02 00:51'
+updated_date: '2026-10-02 03:59'
 labels:
   - setup
   - bb
@@ -55,7 +55,7 @@ Approval gate: planning only. Do not edit production/tests or execute behavioral
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Read CONTEXT.md, repository guidance, Ubuntu BB server helper/caller code and complete BB server contract; reviewed directory fixtures, definitions-only extractor, sanitized runner, fixture audit/incident and rollback evidence. Existing related tasks TASK-45/TASK-46/TASK-51 are Done and narrower/different, so created focused TASK-65.
+Read GLOSSARY.md, repository guidance, Ubuntu BB server helper/caller code and complete BB server contract; reviewed directory fixtures, definitions-only extractor, sanitized runner, fixture audit/incident and rollback evidence. Existing related tasks TASK-45/TASK-46/TASK-51 are Done and narrower/different, so created focused TASK-65.
 Source findings: many silent direct failure exits; npm preflight collapses multiple checks into one broad error; several restore failures are ignored; current config/aggregate failure wording overstates preservation and ingress state. This is source evidence, not a diagnosis of the reported machine.
 Existing tools found without executing fixtures: /usr/bin/python3, /usr/bin/cc, /usr/bin/bash, /usr/bin/shellcheck, /usr/bin/git, /usr/bin/fish, /usr/bin/jq, /home/scowalt/.local/share/mise/installs/node/24/bin/node, /home/scowalt/.local/bin/mise, /home/scowalt/.local/bin/chezmoi, /tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh. Tool selection still requires the mandatory contained preflight after approval.
 No production/test edits or behavioral execution performed. Waiting for parent to obtain and relay USER plan approval.

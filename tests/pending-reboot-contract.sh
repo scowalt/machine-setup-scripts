@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 3 | Last changed: Check ordinary setup reboot reporting
+# Version 4 | Last changed: Check reboot terminology in GLOSSARY.md
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -92,6 +92,6 @@ assert_order win.ps1 '^[[:space:]]+Install-WindowsUpdates([[:space:]]+#.*)?$' '^
 assert_not_contains win.ps1 'Test-PendingReboot.*throw' 'fatal pending-reboot wiring'
 
 # The check documents a known machine state in the shared vocabulary.
-assert_contains CONTEXT.md '\*\*Pending reboot\*\*' 'glossary entry'
+assert_contains GLOSSARY.md '\*\*Pending reboot\*\*' 'glossary entry'
 
 printf '✓ Pending reboot contract passed\n'

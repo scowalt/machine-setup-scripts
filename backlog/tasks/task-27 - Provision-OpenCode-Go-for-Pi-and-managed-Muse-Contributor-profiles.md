@@ -5,11 +5,11 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-13 18:37'
-updated_date: '2026-09-13 23:12'
+updated_date: '2026-10-02 03:59'
 labels: []
 dependencies: []
 references:
-  - CONTEXT.md
+  - GLOSSARY.md
   - README.md
   - tests/ai-coding-agent-contract.sh
   - tests/headless-paseo-daemon-contract.sh

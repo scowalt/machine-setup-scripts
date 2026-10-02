@@ -80,7 +80,7 @@ The desired outcome is a bounded, non-destructive repair opportunity followed by
 
 ## References
 
-- [Domain vocabulary](../../CONTEXT.md)
+- [Domain vocabulary](../../GLOSSARY.md)
 - [macOS setup script](../../mac.sh)
 - [CLT helper and caller fixtures](../../tests/test_macos_clt.py)
 - [Homebrew result fixtures](../../tests/test_homebrew_results.py)

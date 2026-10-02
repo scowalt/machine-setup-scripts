@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@codex'
 created_date: '2026-10-01 13:54'
-updated_date: '2026-10-01 14:43'
+updated_date: '2026-10-02 04:01'
 labels: []
 dependencies: []
 references:
@@ -52,8 +52,8 @@ User approved the consolidated plan and explicitly requested implementation in a
 
 - Replaced README with a 266-word human introduction (10,330 words before), preserving all six exact remote command lines. Verified representative tool/runtime/dotfiles claims against setup sources.
 - Added three concise ADRs (86/96/97 words): Chezmoi shell ownership avoids competing installer edits; separate BB preparation protects enrollment ownership and avoids global CLI fallback/shadowing; verified command-only OpenCode migration preserves recovery/data without uninstall hooks. No ADR for the reversible README editorial policy.
-- CLAUDE.md now enforces the human README boundary and routes removed-section pointers to code/contracts or existing records. Repaired one historical plan link with a commit-pinned README permalink; all research/incident records and CONTEXT.md remain unchanged.
-- Removed 26 README prose assertion cases across seven test files, including the optional dotfiles README check. Kept source-scan exclusions and existing CLAUDE/CONTEXT checks. Shell contract version comments updated; all six setup entry points and implementation libraries remain unchanged.
+- CLAUDE.md now enforces the human README boundary and routes removed-section pointers to code/contracts or existing records. Repaired one historical plan link with a commit-pinned README permalink; all research/incident records and GLOSSARY.md remain unchanged.
+- Removed 26 README prose assertion cases across seven test files, including the optional dotfiles README check. Kept source-scan exclusions and existing CLAUDE/GLOSSARY checks. Shell contract version comments updated; all six setup entry points and implementation libraries remain unchanged.
 - Static checks passed: bash --noprofile --norc -n and /usr/bin/shellcheck on all six modified shell contracts; /usr/bin/python3 -I ast.parse on tests/test_paseo_non_management.py; CommonMark parsing/closed fences/local links for all six changed/new documentation files (17 local links); exact comparison of all six README commands to HEAD; historical permalink object/heading checked locally.
 - One-off static preservation checks passed: shell statements identical after removing README checks/comments and unrolling the documentation-only CLAUDE loop; Python AST identical except its one README assertion; 22 protected files byte-identical to HEAD (entry points, lib, tools, fixture extractor/runner, research, glossary, existing ADR). git diff --check passed.
 - Limitations: no behavioral fixtures, setup helpers, source loaders, apps/extensions/skills, native rollout, external URL requests, secrets/log retrieval or system changes executed. markdownlint was unavailable; used existing system markdown-it parsing, link checks and manual formatting review instead, not a claimed markdownlint pass. Existing BB/OpenCode executable diagnostics still say See README; untouched per approved code boundary, flagged for parent review.

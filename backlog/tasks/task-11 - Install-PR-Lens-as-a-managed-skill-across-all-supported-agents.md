@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-09-08 17:23'
-updated_date: '2026-09-08 17:49'
+updated_date: '2026-10-02 04:01'
 labels: []
 dependencies: []
 references:
@@ -16,7 +16,7 @@ references:
   - tests/pi-skill-ownership-contract.sh
   - tests/setup-reliability-powershell.ps1
 documentation:
-  - CONTEXT.md
+  - GLOSSARY.md
 ---
 
 ## Description
@@ -57,7 +57,7 @@ Make PR Lens available beside show-me in every supported coding agent on persona
 
 Scott approved the implementation plan and requested implementation in a subagent in this Paseo workspace. Proceed with code changes under the recorded scope. Hosted uploads remain allowed by default, including on work machines.
 
-Implementation started in the approved shared workspace. Confirmed the existing shared installer, custom Claude path handling, and byte-identical Bash ownership pattern. Parent CONTEXT.md glossary change will remain untouched. No setup entry points or upstream CLI workflows will run.
+Implementation started in the approved shared workspace. Confirmed the existing shared installer, custom Claude path handling, and byte-identical Bash ownership pattern. Parent GLOSSARY.md glossary change will remain untouched. No setup entry points or upstream CLI workflows will run.
 
 - Added required PR Lens wrappers and main wiring to all six scripts, plus canonical Pi ownership entries. All six version banners increased by one. The shared installer now validates required nonempty regular files and every path component inside each skill copy without changing file contents.
 - Extended offline Bash and PowerShell fixtures for exact targets, repeated personal/work runs, custom/default Claude paths, missing/empty/directory/linked artifacts, linked references directories, failure propagation, and obsolete Pi copies with user-modified references. Targeted Bash contracts pass.
@@ -67,7 +67,7 @@ Implementation started in the approved shared workspace. Confirmed the existing 
 - Final verification passed: `for test in tests/*.sh; do bash "${test}" || exit 1; done` (all 20 offline Bash suites, including the four Python model-default cases). Full final output is at /tmp/task-11-contracts.3S52Q9.log. `bunx markdownlint-cli *.md` and `git diff --check` also pass. Markdownlint required a temporary Bun cache download; no repository dependency files changed.
 - Windows gap: `command -v pwsh || command -v powershell` found neither runtime. `tests/setup-reliability-powershell.ps1` was extended and self-reviewed but not executed or parsed by PowerShell. Static Windows target/artifact/wiring contracts pass in the Bash suite. Native Windows symlinks/junctions and runtime behavior remain unverified; file-symlink tests require Windows symlink privileges. No host setup changes were made to obtain a runtime.
 - Self-review found only intended installer, ownership-list, version, documentation, and test changes. Added drift checks prove the helper, PR Lens wrapper, and ownership function remain byte-identical across the five Bash scripts. Failure-wiring checks cover each required setup call. Default hosted uploads remain unchanged. No PR Lens CLI was installed/executed, no live skill installation or remote rollout ran, and no diagrams or PR content were uploaded/posted.
-- Parent CONTEXT.md glossary edit remains unchanged. All implementation changes remain uncommitted for parent review. Versions: macOS 219, Ubuntu 241, WSL 183, Raspberry Pi 200, Bazzite 100, Windows 136.
+- Parent GLOSSARY.md glossary edit remains unchanged. All implementation changes remain uncommitted for parent review. Versions: macOS 219, Ubuntu 241, WSL 183, Raspberry Pi 200, Bazzite 100, Windows 136.
 
 - Parent review found no implementation blockers. Independently reran Bash syntax checks, ShellCheck, both targeted skill suites, and all 20 Bash suites successfully. Full parent suite log: /tmp/task-11-parent-review.7R6DH3.log.
 - Reviewed the entire diff and upstream skills installer copy behavior. LICENSE and bundled references are not excluded from ordinary skill copies. Hosted behavior remains unchanged.

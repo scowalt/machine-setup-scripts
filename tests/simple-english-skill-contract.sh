@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract version 26: keep README prose outside managed-skill contracts.
+# Contract version 27: check managed-skill terminology in GLOSSARY.md.
 # Historical filename retained for existing test runners.
 set -euo pipefail
 
@@ -387,6 +387,6 @@ for file in "${bash_setup_scripts[@]}"; do
 done
 
 assert_contains CLAUDE.md 'full Matt Pocock suite is the managed global skill suite' 'repository guidance'
-assert_contains CONTEXT.md '^\*\*Managed agent skill\*\*:' 'managed agent skill glossary term'
+assert_contains GLOSSARY.md '^\*\*Managed agent skill\*\*:' 'managed agent skill glossary term'
 
 printf '✓ Managed and retired-skill contract checks passed\n'

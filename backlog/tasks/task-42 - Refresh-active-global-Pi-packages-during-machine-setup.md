@@ -5,13 +5,13 @@ status: Done
 assignee:
   - '@pi-implementor'
 created_date: '2026-09-22 22:20'
-updated_date: '2026-09-22 23:36'
+updated_date: '2026-10-02 03:59'
 labels: []
 dependencies: []
 references:
   - tests/test_pi_package_maintenance.py
   - tests/pi-package-maintenance-contract.sh
-  - CONTEXT.md
+  - GLOSSARY.md
   - README.md
 ---
 
@@ -41,7 +41,7 @@ Design interview decisions: all six platforms, personal and work machines; keep 
 1. Extend the existing package-maintenance fixtures with temporary profiles and inert Pi/npm/Git commands covering active-global scope, trusted-project exclusion, custom profiles/npm commands, pins/resource filters, retirements, offline mode, modified Git checkouts, malformed/linked metadata, and failures. Never invoke live setup or installed extensions.
 2. Add identical shared package-refresh preflight logic across the six standalone scripts, with Bash and PowerShell wrappers. Inspect only the active profile and registered managed Git checkouts; fail closed on unsafe/unverified state and protect local edits without changing npm policy.
 3. Invoke pi update --extensions --no-approve once after successful existing guarded package maintenance. Track package-block success separately from unrelated setup errors, block refresh after failed maintenance, and aggregate refresh failures without bypassing unrelated work or log finalization.
-4. Update README guidance and all six script version/change headers. Preserve the glossary distinctions already recorded in CONTEXT.md.
+4. Update README guidance and all six script version/change headers. Preserve the glossary distinctions already recorded in GLOSSARY.md.
 5. Run package-maintenance and affected permission/runtime/retirement/Go/companion/AskClaude regressions plus shellcheck. Use PWSH_BIN if available; otherwise disclose the PowerShell/native Windows coverage gap. Review the diff and verify every acceptance criterion before marking complete.
 <!-- SECTION:PLAN:END -->
 
@@ -52,7 +52,7 @@ Design interview complete: user approved active-global/all-six scope, incomplete
 Read-only investigation verified installed Pi 0.85.1 semantics. --no-approve excludes trusted project settings; Git ref reconciliation can reset/clean clones; failures propagate but malformed settings/offline no-ops need independent handling. Existing managed installs and adapter pin recovery must remain.
 Available: backlog, shellcheck, python3, Node, Bun. pwsh was not found on PATH; alternate PWSH_BIN availability has not yet been established.
 
-User approved implementation with: "implement this in the current workspace" and requested a Paseo handoff. The consolidated plan is approved; the receiving Implementor agent should proceed without another plan-approval round. Preserve the existing CONTEXT.md changes and continue on branch add-pi-update-extensions-to-setup-scripts in the same workspace. No setup code or tests have been changed/run yet.
+User approved implementation with: "implement this in the current workspace" and requested a Paseo handoff. The consolidated plan is approved; the receiving Implementor agent should proceed without another plan-approval round. Preserve the existing GLOSSARY.md changes and continue on branch add-pi-update-extensions-to-setup-scripts in the same workspace. No setup code or tests have been changed/run yet.
 
 - Implemented an identical active-profile refresh preflight across five Bash scripts and an aligned PowerShell wrapper. The helper rejects offline mode, malformed/linked metadata, and tracked, untracked, ignored, or unverifiable registered Git checkouts before invoking `pi update --extensions --no-approve`.
 - Added a package-maintenance success gate so every managed install/retirement failure blocks bulk refresh while unrelated setup and log finalization continue.

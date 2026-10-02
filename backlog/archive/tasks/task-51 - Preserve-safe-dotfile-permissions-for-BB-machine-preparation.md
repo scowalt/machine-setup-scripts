@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi-task51'
 created_date: '2026-09-28 17:32'
-updated_date: '2026-09-28 20:55'
+updated_date: '2026-10-02 04:00'
 labels:
   - bb
   - setup
@@ -67,7 +67,7 @@ User authorized implementation in one subagent after approving the complete desi
 <!-- SECTION:NOTES:BEGIN -->
 User explicitly requested implementation in a subagent. Earlier design-only/no-implementation wording is historical and superseded for repository implementation only. Live setup, real permission repair, package changes, enrollment, lifecycle changes, commits and pushes remain unauthorized. One implementation worker will share the current worktree; parent will avoid concurrent source edits and review afterward.
 
-- Started authorized implementation; read CLAUDE.md, CONTEXT.md, approved design and task. Preserving parent edits and live-rollout prohibition.
+- Started authorized implementation; read CLAUDE.md, GLOSSARY.md, approved design and task. Preserving parent edits and live-rollout prohibition.
 - Added actual native-Chezmoi-to-preparation regression: BB_SERVER=0 under 0002 fails real preparation preflight (red). Added writable-directory diagnostic regression; existing generic-only output cannot identify the blocker. All fixtures are disposable/inert.
 
 - Implemented one shared preparation platform gate and subprocess-only Chezmoi mask wrapper across all five scripts; Ubuntu uses its existing server selection after actual flag resolution. Known role deferrals reuse the existing role helper; no Node/npm or lifecycle work at the dotfile boundary. Shared Node files-only repair unchanged.
@@ -76,7 +76,7 @@ User explicitly requested implementation in a subagent. Earlier design-only/no-i
 
 - BB preparation/server, setup reliability, shared Node runtime and weekly regressions passed. Discovered existing PowerShell 7.6.6 under /tmp and used it for BB Windows guidance, shared runtime (1409 assertions in each argument mode) and direct setup-reliability fixtures; no tooling installed.
 - Headless contract initially failed at the unchanged configured-listener fixture because inherited mise jq shim could not resolve under its disposable HOME. Rerunning with native /usr/bin:/bin first passed; no production/headless code changed.
-- Final self-review added binary/unterminated-output regressions, ancestor-first service-link traversal tests, and explicit proof the earlier dotfile boundary never calls Node/npm/process inventory. Baseline HEAD helper fails both directory and unrelated 0664 service diagnostic regressions; current helper passes both with no mutation. Parent CONTEXT.md and design content preserved; only obsolete design authorization sentences updated.
+- Final self-review added binary/unterminated-output regressions, ancestor-first service-link traversal tests, and explicit proof the earlier dotfile boundary never calls Node/npm/process inventory. Baseline HEAD helper fails both directory and unrelated 0664 service diagnostic regressions; current helper passes both with no mutation. Parent GLOSSARY.md and design content preserved; only obsolete design authorization sentences updated.
 
 - Final BB preparation contract: 24 preparation tests + 15 dotfile tests + PowerShell Windows guidance passed. BB server contract: 10 directory checks + 15 dotfile tests + generated-command/lifecycle/npm/native-lock fixtures passed. Final Bash syntax, ShellCheck, markdownlint and git diff --check passed.
 - Self-review caught POSIX symlink/.. ordering while adding ancestor-first service resolution. Added a red test with a Homebrew-style opt link and benign lexical-path decoy; fixed resolution to process .. only after links, and reran it green. Trusted links, empty registrations and /dev/null masks still pass without mutation. Shared five-script blocks are identical; shared Node files-only helper and win.ps1 are byte-for-byte unchanged.

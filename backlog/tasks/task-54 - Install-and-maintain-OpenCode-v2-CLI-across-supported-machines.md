@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi-agent'
 created_date: '2026-09-28 21:18'
-updated_date: '2026-09-29 00:00'
+updated_date: '2026-10-02 03:59'
 labels: []
 dependencies: []
 ---
@@ -41,7 +41,7 @@ Reintroduce the OpenCode CLI as a managed tool distinct from the existing Pi Ope
 
 <!-- SECTION:NOTES:BEGIN -->
 - User confirmed all five scope recommendations: CLI only, all six personal/work/headless entry points where supported, latest stable 2.x without downgrades/automatic v3, verified official v1 migration, and no new authentication/configuration/integrations.
-- Recorded the resolved OpenCode CLI versus Go subscription terminology in CONTEXT.md; no ADR is needed for this reversible managed-tool addition.
+- Recorded the resolved OpenCode CLI versus Go subscription terminology in GLOSSARY.md; no ADR is needed for this reversible managed-tool addition.
 - Official sources checked: <https://opencode.ai/v2/docs> , <https://opencode.ai/v2/docs/migrate-v1> , <https://opencode.ai/v2/install> . V1 and v2 share the opencode command and config locations; package-managed v1 needs migration, plugins/server APIs have breaking changes.
 - The official latest CLI metadata endpoint <https://opencode.ai/update/api/latest/cli/npm> currently advertises @opencode/cli 2.0.18. Documentation examples still link 2.0.6; do not hard-code their displayed version. Installer supports --no-modify-path but otherwise writes shell configuration and installs legacy opencode2 shims; avoid blindly executing it against the live account.
 - Prior TASK-7 used passive abandonment, leaving official Homebrew, Bun opencode-ai and ~/.opencode/bin copies potentially present. ai-coding-agent-contract.sh currently forbids reinstalling the CLI, so replace that assertion with the newly approved bounded policy.
@@ -54,7 +54,7 @@ User approved implementation on the recorded plan and explicitly requested execu
 
 - BLOCKED before implementation on a consequential headless-policy conflict: AC #1 requires OpenCode installation on all six entry points with HEADLESS=1, while the repository explicitly preserves Windows/WSL early HEADLESS=1 rejection. wsl.sh:8290 returns before env placeholders, account checks, prerequisites, and tool installation; win.ps1:8256 throws before placeholders and package installation. README.md:346 documents that whole-setup early failure, and tests/headless-paseo-daemon-contract.sh:876-882 asserts the pre-placeholder ordering. The approved plan does not resolve whether an OpenCode-only provisioning exception may run before this rejection. Moving/reinterpreting the guard silently would change existing headless provisioning semantics; leaving it unchanged prevents the new all-headless requirement from being reached.
 - Smallest input needed: explicitly choose either (A) permit only OpenCode CLI installation before the existing Windows/WSL rejection, with no Paseo service support and an overall unsupported setup result, or (B) exempt rejected Windows/WSL HEADLESS=1 runs from AC #1. Option A also requires independent account/prerequisite preflight because WSL currently rejects before ensure_not_root/core tools. No change to the plan approval process is requested; this is one policy exception.
-- Isolated evidence: extracted the actual WSL environment guard and entrypoint prefix into an inert temporary-HOME Bash fixture; HEADLESS=1 returned 1 before a sentinel mutation. Static inspection confirms the equivalent Windows throw/order. git diff --check passed. No pwsh/PWSH_BIN is available, so Windows execution was not claimed. No production code/docs/tests were changed, no acceptance criteria checked, and no full regression suite run because implementation stopped at the policy boundary. The original CONTEXT.md edit and TASK-52 record are preserved. No real setup, native application, authentication, model request, package manager mutation, commit, or push was performed.
+- Isolated evidence: extracted the actual WSL environment guard and entrypoint prefix into an inert temporary-HOME Bash fixture; HEADLESS=1 returned 1 before a sentinel mutation. Static inspection confirms the equivalent Windows throw/order. git diff --check passed. No pwsh/PWSH_BIN is available, so Windows execution was not claimed. No production code/docs/tests were changed, no acceptance criteria checked, and no full regression suite run because implementation stopped at the policy boundary. The original GLOSSARY.md edit and TASK-52 record are preserved. No real setup, native application, authentication, model request, package manager mutation, commit, or push was performed.
 
 - BLOCKER RESOLVED by explicit user confirmation: preserve Windows/WSL whole-setup early HEADLESS=1 rejection and exempt these rejected runs from OpenCode installation. All six scripts still install on supported runs, including supported native Linux/macOS headless runs. No OpenCode-only pre-rejection provisioning and no change to Paseo headless policy.
 - Updated description, acceptance criteria and plan with the approved exception; the replaced platform criterion is now AC #6 (other criteria renumbered). Cleared the stale blocked final summary; restarting one implementation worker under the existing approval.
