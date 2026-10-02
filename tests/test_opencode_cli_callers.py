@@ -1,4 +1,4 @@
-"""Contract v6: extracted callers expose bounded procfs churn without leaking native output."""
+"""Contract v7: extracted callers reject retired privacy outcomes and preserve controlled failures."""
 import os
 from pathlib import Path
 import re
@@ -31,8 +31,9 @@ DIAGNOSTICS += [(result, status, None) for result, status in [
 
 DIAGNOSTICS += [(f'opencode-cli:policy-failed:{operation}:{reason}', 1,
                  f'OpenCode CLI blocked (operation={operation}, reason={reason}).')
-                for operation, reason in [('homebrew-preflight', 'brew-group-shared'), ('homebrew-preflight', 'brew-identity-source'),
-                                          ('homebrew-preflight', 'brew-acl-unverified'), ('homebrew-preflight', 'brew-process-churn'), ('homebrew-preflight', 'native-EACCES'),
+                for operation, reason in [('homebrew-preflight', 'brew-path'), ('homebrew-preflight', 'brew-snapshot-changed'),
+                                          ('homebrew-preflight', 'brew-command'), ('homebrew-preflight', 'brew-origin'),
+                                          ('homebrew-preflight', 'brew-readiness'), ('homebrew-preflight', 'native-EACCES'),
                                           ('installation', 'pinned'), ('installation', 'unverified-copy'), ('installation', 'native-ENOENT')]]
 DIAGNOSTICS += [(result, status, None) for result, status in [
     ('opencode-cli:policy-failed:homebrew-preflight:brew-path', 0),
@@ -46,6 +47,12 @@ DIAGNOSTICS += [(result, status, None) for result, status in [
     ('opencode-cli:policy-failed:homebrew-preflight:brew-path SECRET', 1),
     ('opencode-cli:policy-failed:homebrew-preflight:BREW-PATH', 1),
 ]]
+
+# Obsolete helper replies are unrecognized failures, even with a nonzero status.
+DIAGNOSTICS += [(f'opencode-cli:policy-failed:homebrew-preflight:{reason}', status, None)
+                for reason in ('brew-group-shared', 'brew-identity-source', 'brew-acl-present', 'brew-acl-unverified',
+                               'brew-proof-unverified', 'brew-proof-tool', 'brew-process-churn')
+                for status in (0, 1)]
 
 
 def function(source, name):
@@ -97,8 +104,6 @@ exit "${MOCK_STATUS:-0}"
                     else:
                         self.assertNotIn('OpenCode CLI download failed (', run.stdout)
                         self.assertNotIn('OpenCode CLI blocked (', run.stdout)
-                    self.assertEqual('process evidence kept changing across three attempts' in run.stdout,
-                                     bool(diagnostic and result.endswith(':brew-process-churn')))
                     self.assertEqual('rollback needs manual recovery' in run.stdout, result == 'opencode-cli:recovery-required')
             for extra in [{'MOCK_NODE_PREREQUISITE': '1'}, {}]:
                 setup = 'macos_existing_prerequisites() { return 1; }\n' if not extra else ''
@@ -225,27 +230,58 @@ if ($result) { exit 0 } else { exit 1 }
                 else:
                     self.assertNotIn('OpenCode CLI download failed (', run.stdout)
                     self.assertNotIn('OpenCode CLI blocked (', run.stdout)
-                self.assertEqual('process evidence kept changing across three attempts' in run.stdout,
-                                 bool(diagnostic and result.endswith(':brew-process-churn')))
                 self.assertEqual('rollback needs manual recovery' in run.stdout, result == 'opencode-cli:recovery-required')
 
     @unittest.skipUnless(PWSH, 'No existing PWSH_BIN/pwsh: native Windows/PowerShell execution not claimed')
     def test_powershell_caller_aggregation(self):
-        source = (ROOT / 'win.ps1').read_text()
-        main = source.split('function Invoke-WindowsSetupTasks {')[1]
-        call = re.search(r'^    if \(-not \(Install-OpenCodeCli\)\).*$', main, re.M)[0]
-        check = re.search(r'^    if \(\$openCodeSetupFailed -or \$script:OpenCodeWingetConflict\) \{.*?^    \}', main, re.M | re.S)[0]
-        script = ('$ErrorActionPreference="Stop"\nfunction Install-OpenCodeCli { $false }\n'
-                  '$openCodeSetupFailed=$false; $script:OpenCodeWingetConflict=$false\n' + call +
-                  '\nWrite-Output independent\ntry {\n' + check + '\n} catch { Write-Output finalized; exit 1 }\n')
+        # Select the real task caller and logging wrapper by AST, replacing all
+        # other setup definitions before either caller can run. No whole-file eval.
+        script = '''param([string]$SourcePath)
+$ErrorActionPreference='Stop'
+$tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile($SourcePath,[ref]$tokens,[ref]$errors)
+if ($errors.Count) { throw 'Fixture source parse failed' }
+$definitions=@($ast.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] })
+$callers=@('Invoke-WindowsSetupTasks','Initialize-WindowsEnvironment')
+foreach ($definition in $definitions) {
+    if ($definition.Name -notin $callers) {
+        Set-Item -Path ('function:' + $definition.Name) -Value { $true }
+    }
+}
+foreach ($name in $callers) {
+    $selected=@($definitions | Where-Object Name -eq $name)
+    if ($selected.Count -ne 1) { throw 'Fixture caller selection failed' }
+    . ([scriptblock]::Create($selected[0].Extent.Text))
+}
+function Write-Host { }
+function Write-Warning { }
+function Write-Debug { }
+function Get-SetupLogDirectory { Join-Path $env:USERPROFILE 'logs' }
+function Assert-SetupLogPath { param($Path,[switch]$AllowMissing) }
+function Invoke-PendingSetupLogUploads { }
+function Start-Transcript { param($Path,[switch]$NoClobber,$ErrorAction) }
+function Complete-SetupLog { Write-Output finalized }
+function Install-OpenCodeCli { $false }
+function Install-GiteaClient { Write-Output independent }
+function Test-PendingReboot { Write-Output reboot }
+function Install-WingetUpdates { throw 'Blanket upgrade was not deferred' }
+try { Initialize-WindowsEnvironment } catch {
+    if ($_.Exception.Message -ne 'OpenCode CLI setup or upgrade preservation was incomplete.') { throw }
+    Write-Output original-opencode-failure
+    exit 1
+}
+'''
         with tempfile.TemporaryDirectory() as home:
             file = Path(home) / 'caller.ps1'
             file.write_text(script)
-            run = subprocess.run([PWSH, '-NoProfile', '-NonInteractive', '-File', str(file)], cwd=home,
-                                 env={'PATH': os.environ['PATH'], 'HOME': home}, capture_output=True, text=True, timeout=20)
-        self.assertEqual(run.returncode, 1)
+            run = subprocess.run([PWSH, '-NoProfile', '-NonInteractive', '-File', str(file), str(ROOT / 'win.ps1')], cwd=home,
+                                 env={'PATH': os.environ['PATH'], 'HOME': home, 'USERPROFILE': home,
+                                      'POWERSHELL_TELEMETRY_OPTOUT': '1'}, capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
         self.assertIn('independent', run.stdout)
-        self.assertIn('finalized', run.stdout)
+        self.assertIn('reboot', run.stdout)
+        self.assertEqual(run.stdout.splitlines().count('finalized'), 1)
+        self.assertIn('original-opencode-failure', run.stdout)
 
 
 if __name__ == '__main__':
