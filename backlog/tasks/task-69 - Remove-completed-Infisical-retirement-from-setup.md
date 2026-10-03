@@ -1,11 +1,11 @@
 ---
 id: TASK-69
 title: Remove completed Infisical retirement from setup
-status: In Progress
+status: Done
 assignee:
   - '@pi'
 created_date: '2026-10-03 03:49'
-updated_date: '2026-10-03 14:24'
+updated_date: '2026-10-03 14:32'
 labels: []
 dependencies: []
 references:
@@ -139,4 +139,16 @@ Single implementer started on bb/implement-task-69-infisical-non-management-thr_
 Vertical contained TDD slices complete: APT/WSL red /tmp/setup-fixture-matrix-gckwty5n then green /tmp/setup-fixture-matrix-ayo2nwy8; Homebrew red /tmp/setup-fixture-matrix-v_e3jnkw then green /tmp/setup-fixture-matrix-st5kkpal; Windows red /tmp/setup-fixture-matrix-hdgn5ypq then all-platform green /tmp/setup-fixture-matrix-id37g7g5. Added independent failure/logging, Doppler presence/trust, account/readiness and exact-headless preservation checks; all 9 targeted methods pass at /tmp/setup-fixture-matrix-tipxfuye. Every run used the unchanged sanitized mandatory-filter runner and existing native tools; no containment refusal or unexpected real effect observed. Removed retirement-only fixtures, reviewed dispatcher/extractor required-name lists, and adapted CLT/Homebrew/reliability contracts; aggregate validation next.
 
 Implementation verification complete; parent retains independent review and final closure (status remains In Progress). All 42 aggregate entries passed at /tmp/setup-fixture-matrix-mbwoo4od; 493 reported unittest executions include 16 explicit skips, plus OpenCode 115/116 with one optional skip. Separate reviewed BB plugin-refresh suite passed 24/24 at /tmp/setup-fixture-matrix-0bjtsst1. Bash syntax/ShellCheck on seven files, changed Python AST, Windows parsing/AST fixtures, whitespace and source-preservation checks passed. Full commands, red/green history, scope, skips, native limits and hook limitation: docs/research/2026-10-03-infisical-non-management-validation.md. No trusted installed Markdownlint; no bunx cache/tool fetch. Commit will exclude only bunx shellcheck/markdownlint hooks, using already-passing standalone ShellCheck and native Gitleaks. No containment refusal/unexpected real effect; historical incident uncertainty unchanged.
+
+Integrated aaaa222 by fast-forward onto integration/task-69-infisical-non-management; merger verified clean identical tree. Parent verified 42/42 aggregate statuses, separate plugin-refresh result and 17 source/containment hashes. Independent standards review (@thread:thr_jbey7n7ki2): 0 hard violations, 0 actionable smells. Independent spec review (@thread:thr_d9mijxqpzy): 0 findings. All four AC accepted with recorded optional/native and offline Markdownlint limitations. No review fixes needed; no PR/push or rollout.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Removed completed Infisical retirement across macOS, Ubuntu, WSL, Raspberry Pi, Bazzite and Windows. Infisical is now unmanaged; setup neither installs nor specifically inventories/removes it. Removed obsolete update gates while preserving independent trust/readiness/OpenCode/account/headless safeguards, personal Doppler, failure aggregation and log finalization. Bumped all six versions and marked historical policy superseded.
+
+Replaced retirement-only fixtures with extracted real caller/logging-wrapper non-management coverage and adapted shared regressions. Validation: 42/42 contained aggregate entries; 24/24 additional BB plugin-refresh methods; 9/9 targeted methods; Bash syntax, ShellCheck, PowerShell parsing/AST fixtures, Python AST, whitespace and Gitleaks passed. Standards/spec reviews each found zero issues.
+
+Evidence: docs/research/2026-10-03-infisical-non-management-validation.md. Optional integrations were skipped and native platform/continuity behavior remains unverified. Trusted offline Markdownlint was unavailable; this is recorded, not a claimed pass. No live setup or fleet changes. Integration branch: integration/task-69-infisical-non-management; implementation commit: aaaa222.
+<!-- SECTION:FINAL_SUMMARY:END -->
