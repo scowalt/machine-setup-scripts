@@ -826,27 +826,6 @@ setup_tailscale() {
     fi
 }
 
-# Retire only the formula with the exact managed Homebrew identity.
-retire_infisical_brew() {
-    local installed=""
-    installed=$(brew list --formula --full-name) || { print_error "Infisical Homebrew inventory unavailable."; return 1; }
-    if grep -Fxq 'infisical/get-cli/infisical' <<< "${installed}"; then
-        if ! brew uninstall --formula infisical/get-cli/infisical; then
-            print_error "Infisical Homebrew removal failed."
-            return 1
-        fi
-        installed=$(brew list --formula --full-name) || { print_error "Infisical Homebrew postcheck unavailable."; return 1; }
-        if grep -Fxq 'infisical/get-cli/infisical' <<< "${installed}"; then
-            print_error "Infisical Homebrew removal could not be verified."
-            return 1
-        fi
-    fi
-    # The tap may be user-added or have other consumers; preserve it.
-    if command -v infisical >/dev/null 2>&1; then
-        print_warning "An Infisical executable remains; check custom installations manually."
-    fi
-}
-
 # Personal machines retain Doppler; work machines have no replacement.
 install_secrets_manager() {
     if [[ "${WORK_MACHINE:-}" != "1" ]]; then
@@ -9345,7 +9324,6 @@ BB_DESKTOP_PY
 
 run_setup_tasks() {
     local _setup_had_errors=0
-    local _infisical_retirement_failed=0
     local MACOS_DEVELOPER_TOOLS_STATE=unverified MACOS_CLT_OPERATION_FAILED=0
     local MACOS_CLT_REPAIR_ATTEMPTED=0 MACOS_CLT_BOOTSTRAP_ATTEMPTED=0 MACOS_CLT_REPAIR_STATE=not-attempted MACOS_CLT_SKIPPED=""
     local _pi_go_ready=0
@@ -9354,7 +9332,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 263 | Last changed: Accept account-owned Linux Homebrew group write for OpenCode${NC}"
+    echo -e "${GRAY}Version 264 | Last changed: Drop completed secrets-manager retirement${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9373,31 +9351,12 @@ run_setup_tasks() {
     print_section "bb Desktop"
     install_bb_desktop macos || _setup_had_errors=1
 
-    if ! is_main_user; then
-        if command -v brew >/dev/null 2>&1; then
-            retire_infisical_brew || { _infisical_retirement_failed=1; _setup_had_errors=1; }
-        elif command -v infisical >/dev/null 2>&1; then
-            print_warning "An Infisical executable remains but Homebrew inventory is unavailable; check manually."
-            _infisical_retirement_failed=1
-            _setup_had_errors=1
-        fi
-    fi
     if is_main_user; then
         echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"
 
         print_section "Package Manager Setup"
         install_homebrew || _setup_had_errors=1
         ensure_macos_developer_tools_ready || _setup_had_errors=1
-        if command -v brew >/dev/null 2>&1; then
-            if ! retire_infisical_brew; then
-                _infisical_retirement_failed=1
-                _setup_had_errors=1
-            fi
-        else
-            print_warning "Infisical retirement unverified: Homebrew inventory unavailable."
-            _infisical_retirement_failed=1
-            _setup_had_errors=1
-        fi
 
         print_section "Core Packages"
         if macos_developer_tools_ready_for "core packages, SessionWatcher, secrets manager, Google Cloud CLI"; then
@@ -9664,10 +9623,8 @@ HELPER_EOF
         print_section "Final Updates"
         if ! macos_developer_tools_ready_for "final Homebrew upgrades"; then
             _setup_had_errors=1
-        elif [[ "${_infisical_retirement_failed}" -eq 0 ]]; then
-            update_brew || _setup_had_errors=1
         else
-            print_warning "Skipping Homebrew upgrades until Infisical retirement is verified."
+            update_brew || _setup_had_errors=1
         fi
     fi
 

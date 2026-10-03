@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@pi'
 created_date: '2026-10-03 03:49'
-updated_date: '2026-10-03 13:37'
+updated_date: '2026-10-03 14:24'
 labels: []
 dependencies: []
 references:
@@ -111,10 +111,10 @@ Remove only Infisical-specific operations and the update gates that depend on th
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 All six entry points contain no Infisical-specific retirement, inventory, repository cleanup, warnings, or failure gates; Infisical installation is not reintroduced.
-- [ ] #2 Normal APT, Homebrew, WinGet and Windows updates retain unrelated trust/readiness/OpenCode gates, error aggregation and log finalization; personal Doppler and work-machine behavior remain unchanged.
-- [ ] #3 Obsolete retirement fixtures are removed or replaced with non-management coverage; affected shared contracts and script versions are updated, while historical evidence is preserved and superseded policy is clearly marked.
-- [ ] #4 ShellCheck, syntax and affected audited contracts pass using mandatory contained offline fixtures, with explicit optional/native coverage limitations; no live setup or fleet changes occur.
+- [x] #1 All six entry points contain no Infisical-specific retirement, inventory, repository cleanup, warnings, or failure gates; Infisical installation is not reintroduced.
+- [x] #2 Normal APT, Homebrew, WinGet and Windows updates retain unrelated trust/readiness/OpenCode gates, error aggregation and log finalization; personal Doppler and work-machine behavior remain unchanged.
+- [x] #3 Obsolete retirement fixtures are removed or replaced with non-management coverage; affected shared contracts and script versions are updated, while historical evidence is preserved and superseded policy is clearly marked.
+- [x] #4 ShellCheck, syntax and affected audited contracts pass using mandatory contained offline fixtures, with explicit optional/native coverage limitations; no live setup or fleet changes occur.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -133,4 +133,10 @@ Inspected all-platform retirement references, original TASK-43 plan and cleanup 
 The user approved the existing extracted real caller/logging-wrapper testing boundary. Published the full seven-section specification in this task and applied ready-for-agent. Returned the planning task to To Do for implementation; existing acceptance criteria remain unchecked. Infisical is an unmanaged legacy tool under this bounded change; other retirement policies and ordinary generic updates remain unchanged. This turn publishes the spec only, with no setup code changes or fixture execution.
 
 Implementation requested via implement-spec. TASK-69 is the sole unblocked ticket; use one implementation worktree, a dedicated integration branch, a merger worker, and independent standards/spec review. The published plan and approved test seam remain the implementation contract. No live setup or fleet activity is authorized.
+
+Single implementer started on bb/implement-task-69-infisical-non-management-thr_99vn7c7irm; clean HEAD c1470dd descends from current integration tip and approved spec checkpoint. Using approved caller/logging seams and vertical TDD; parent retains closure. Existing candidate PowerShell is executable; native tool verification and fixture-boundary review precede execution.
+
+Vertical contained TDD slices complete: APT/WSL red /tmp/setup-fixture-matrix-gckwty5n then green /tmp/setup-fixture-matrix-ayo2nwy8; Homebrew red /tmp/setup-fixture-matrix-v_e3jnkw then green /tmp/setup-fixture-matrix-st5kkpal; Windows red /tmp/setup-fixture-matrix-hdgn5ypq then all-platform green /tmp/setup-fixture-matrix-id37g7g5. Added independent failure/logging, Doppler presence/trust, account/readiness and exact-headless preservation checks; all 9 targeted methods pass at /tmp/setup-fixture-matrix-tipxfuye. Every run used the unchanged sanitized mandatory-filter runner and existing native tools; no containment refusal or unexpected real effect observed. Removed retirement-only fixtures, reviewed dispatcher/extractor required-name lists, and adapted CLT/Homebrew/reliability contracts; aggregate validation next.
+
+Implementation verification complete; parent retains independent review and final closure (status remains In Progress). All 42 aggregate entries passed at /tmp/setup-fixture-matrix-mbwoo4od; 493 reported unittest executions include 16 explicit skips, plus OpenCode 115/116 with one optional skip. Separate reviewed BB plugin-refresh suite passed 24/24 at /tmp/setup-fixture-matrix-0bjtsst1. Bash syntax/ShellCheck on seven files, changed Python AST, Windows parsing/AST fixtures, whitespace and source-preservation checks passed. Full commands, red/green history, scope, skips, native limits and hook limitation: docs/research/2026-10-03-infisical-non-management-validation.md. No trusted installed Markdownlint; no bunx cache/tool fetch. Commit will exclude only bunx shellcheck/markdownlint hooks, using already-passing standalone ShellCheck and native Gitleaks. No containment refusal/unexpected real effect; historical incident uncertainty unchanged.
 <!-- SECTION:NOTES:END -->
