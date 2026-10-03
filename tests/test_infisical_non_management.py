@@ -62,9 +62,7 @@ def bash_fixture(name):
         retained.append('install_doppler')
     if name == 'wsl.sh':
         retained.append('fail_unsupported_headless')
-    elif name == 'mac.sh':
-        retained.append('macos_developer_tools_ready_for')
-    else:
+    elif name != 'mac.sh':
         retained.append('headless_platform_gate')
     code += '\n' + '\n'.join(function(source, n) for n in retained)
     code += r'''
@@ -94,7 +92,6 @@ env_local_flag_is_one() { [[ "${!1}" == 1 ]]; }
 uname() { printf 'Linux\n'; }
 is_wsl_environment() { return 1; }
 is_container_environment() { [[ "$CONTAINER" == 1 ]]; }
-ensure_macos_developer_tools_ready() { MACOS_DEVELOPER_TOOLS_STATE="$READINESS"; [[ "$READINESS" == ready ]]; }
 ensure_brew_item_trusted() { record doppler-trust; [[ "$TRUST" == 1 ]]; }
 ensure_brew_formula_trusted() { record doppler-trust; [[ "$TRUST" == 1 ]]; }
 install_opencode_cli() { record opencode; [[ "$FAILURE" != opencode ]]; }
@@ -135,9 +132,9 @@ class NonManagement(unittest.TestCase):
                    'WORK_MACHINE': work, 'RESIDUAL': str(int(residual)),
                    'DOPPLER_PRESENT': present, 'FAILURE': failure,
                    'PERSONA': persona, 'SHELL': '/bin/bash', 'HEADLESS': headless,
-                   'CONTAINER': container, 'READINESS': readiness, 'TRUST': trust}
+                   'CONTAINER': container, 'MACOS_DEVELOPER_TOOLS_STATE': readiness, 'TRUST': trust}
             gated = headless == '1' and (name == 'wsl.sh' or container == '1')
-            failed = (failure != 'none' or gated or readiness != 'ready'
+            failed = (failure != 'none' or gated
                       or (name == 'bazzite.sh' and work == '0' and trust == '0'))
             # Repeat against the same preserved state; absence must stay a no-op.
             for repeat in range(2):
@@ -245,10 +242,10 @@ class NonManagement(unittest.TestCase):
                 self.assertLess(calls.index('windows-update'), calls.index('pending-reboot'))
                 self.assertEqual(calls[-2:], ['finalized', 'failed'])
 
-    def test_bash_readiness_and_exact_headless_gates_still_own_their_work(self):
+    def test_mac_work_ignores_legacy_readiness_but_exact_headless_gates_remain(self):
         calls = self.run_bash('mac.sh', '0', True, readiness='unverified')
-        self.assertNotIn('brew-update', calls)
-        self.assertFalse(any(c.startswith('brew:install') for c in calls))
+        self.assertIn('brew-update', calls)
+        self.assertTrue(any(c.startswith('brew:install') for c in calls))
         for name in (*APT, 'bazzite.sh'):
             for headless in ('1', 'true'):
                 with self.subTest(platform=name, headless=headless):

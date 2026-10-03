@@ -1065,7 +1065,7 @@ test('typed policy/native diagnostics do not accept forged exceptions or malform
         return true;
     });
 });
-test('Homebrew receipt, official native identity, pin and macOS readiness gates', async t => {
+test('Homebrew migration retains receipt/identity/pin checks but ignores compiler readiness', async t => {
     for (const mode of ['migrate', 'pinned', 'unready', 'custom-tap']) {
         const f = fixture(t), {api, mapped} = virtualPolicy(f, {platform: 'darwin', env: {SETUP_OPENCODE_BREW_READY: mode === 'unready' ? '0' : '1'}});
         const command = '/opt/homebrew/bin/opencode';
@@ -1079,7 +1079,7 @@ test('Homebrew receipt, official native identity, pin and macOS readiness gates'
             fs.symlinkSync('/ignored', mapped('/opt/homebrew/var/homebrew/pinned/opencode'));
         }
         f.options.commands = [command];
-        if (mode === 'migrate') {
+        if (mode === 'migrate' || mode === 'unready') {
             assert.equal(await api.install(f.options), 'migrated');
             assert.equal(fs.existsSync(mapped(command)), false);
             assert.ok(fs.existsSync(mapped('/opt/homebrew/Cellar/opencode/1.2.3/bin/opencode')));

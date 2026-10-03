@@ -36,7 +36,7 @@ DIAGNOSTICS += [(f'opencode-cli:policy-failed:{operation}:{reason}', 1,
                  f'OpenCode CLI blocked (operation={operation}, reason={reason}).')
                 for operation, reason in [('homebrew-preflight', 'brew-path'), ('homebrew-preflight', 'brew-snapshot-changed'),
                                           ('homebrew-preflight', 'brew-command'), ('homebrew-preflight', 'brew-origin'),
-                                          ('homebrew-preflight', 'brew-readiness'), ('homebrew-preflight', 'native-EACCES'),
+                                          ('homebrew-preflight', 'native-EACCES'),
                                           ('installation', 'pinned'), ('installation', 'unverified-copy'), ('installation', 'native-ENOENT'),
                                           ('setup-selection', 'foreign-command'), ('setup-selection', 'command-conflict'),
                                           ('fresh-shell-selection', 'command-conflict'), ('fresh-shell-selection', 'selection-unverified')]]
@@ -66,7 +66,7 @@ DIAGNOSTICS += [
 # Obsolete helper replies are unrecognized failures, even with a nonzero status.
 DIAGNOSTICS += [(f'opencode-cli:policy-failed:homebrew-preflight:{reason}', status, None)
                 for reason in ('brew-group-shared', 'brew-identity-source', 'brew-acl-present', 'brew-acl-unverified',
-                               'brew-proof-unverified', 'brew-proof-tool', 'brew-process-churn')
+                               'brew-proof-unverified', 'brew-proof-tool', 'brew-process-churn', 'brew-readiness')
                 for status in (0, 1)]
 
 
@@ -123,10 +123,12 @@ exit "${MOCK_STATUS:-0}"
                         self.assertNotIn('OpenCode CLI download failed (', run.stdout)
                         self.assertNotIn('OpenCode CLI blocked (', run.stdout)
                     self.assertEqual('rollback needs manual recovery' in run.stdout, result in RECOVERY_RESULTS)
-            for extra in [{'MOCK_NODE_PREREQUISITE': '1'}, {}]:
-                setup = 'macos_existing_prerequisites() { return 1; }\n' if not extra else ''
-                run = self.exercise(setup + helper, 'install_opencode_cli', extra)
-                self.assertEqual(run.returncode, 1, run.stdout)
+            run = self.exercise(helper, 'install_opencode_cli', {'MOCK_NODE_PREREQUISITE': '1'})
+            self.assertEqual(run.returncode, 1, run.stdout)
+            # Legacy readiness state/helper cannot block the native operation.
+            run = self.exercise('macos_existing_prerequisites() { return 1; }\n' + helper,
+                                'install_opencode_cli', {'MACOS_DEVELOPER_TOOLS_STATE': 'incompatible'})
+            self.assertEqual(run.returncode, 0, run.stdout)
         self.assertTrue(all(block == blocks[0] for block in blocks))
 
     def test_setup_wrapper_supplies_native_shell_and_actual_cached_selection(self):

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 2 | Last changed: Keep README prose outside installation contracts
+# Version 3 | Last changed: Verify macOS Notion failure aggregation wiring
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -89,7 +89,11 @@ assert_order() {
 for file in "${bash_setup_scripts[@]}"; do
     bash -n "${file}"
     assert_contains "${file}" '^install_ntn_cli\(\)' 'Notion CLI installer function'
-    assert_contains "${file}" '^[[:space:]]+install_ntn_cli$' 'Notion CLI main wiring'
+    ntn_call='^[[:space:]]+install_ntn_cli$'
+    if [[ "${file}" == mac.sh ]]; then
+        ntn_call='^[[:space:]]+install_ntn_cli \|\| _setup_had_errors=1$'
+    fi
+    assert_contains "${file}" "${ntn_call}" 'Notion CLI main wiring'
     assert_function_contains "${file}" install_ntn_cli 'Darwin:x86_64.*Linux:aarch64' 'x64 and ARM64 support matrix'
     assert_function_contains "${file}" install_ntn_cli 'Notion CLI does not support.*skipping' 'unsupported-architecture warning'
     assert_function_contains "${file}" install_ntn_cli 'mktemp.*ntn-install' 'temporary installer file'
@@ -107,8 +111,8 @@ for file in "${bash_setup_scripts[@]}"; do
     if [[ "${file}" == mac.sh ]]; then
         codex_call='^[[:space:]]+install_codex_cli \|\| _setup_had_errors=1$'
     fi
-    assert_order "${file}" "${codex_call}" '^[[:space:]]+install_ntn_cli$' 'Codex before Notion CLI'
-    assert_order "${file}" '^[[:space:]]+install_ntn_cli$' '^[[:space:]]+remove_rtk_resources[[:space:]]+\|\|[[:space:]]+return 1$' 'Notion CLI before retired RTK cleanup'
+    assert_order "${file}" "${codex_call}" "${ntn_call}" 'Codex before Notion CLI'
+    assert_order "${file}" "${ntn_call}" '^[[:space:]]+remove_rtk_resources[[:space:]]+\|\|[[:space:]]+return 1$' 'Notion CLI before retired RTK cleanup'
 done
 
 assert_contains win.ps1 '"Notion\.ntn"' 'official Notion CLI WinGet package'

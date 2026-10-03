@@ -7,6 +7,8 @@ topic: macos-clt-repair
 
 ## Status
 
+Historical policy, superseded by [operation-result-based setup](../adr/0007-use-operation-results-instead-of-clt-compatibility-gates.md). The original requirements below are retained as design history, not current gating or repair instructions.
+
 The user approved the policy recommendations in two design rounds. This document records the agreed requirements, not an implemented feature or approval to run updates on a real Mac. Implementation planning remains next.
 
 ## Problem

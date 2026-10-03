@@ -1170,12 +1170,12 @@ setup_ssh_key() {
 # xcode-select --install opens a GUI prompt that hangs on headless machines.
 # Instead, we create the /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress
 # sentinel file and use softwareupdate to find and install the CLT package directly.
-# Bootstrap only when no developer directory exists. Never replace an existing
-# toolchain: Homebrew's targeted diagnostics below decide compatibility.
+# Bootstrap only when no developer directory exists. Preserve existing tools and
+# selection; installers report their own compatibility failures.
 install_xcode_cli_tools() {
     local selected
     if selected=$(xcode-select -p 2>/dev/null) && [[ -n "${selected}" ]]; then
-        print_debug "Developer tools selected; Homebrew compatibility checks pending."
+        print_debug "Developer tools already selected; preserving the existing toolchain."
         return 0
     fi
     if ! is_main_user; then
@@ -1187,7 +1187,6 @@ install_xcode_cli_tools() {
         return 1
     fi
     print_message "Installing Xcode Command Line Tools..."
-    MACOS_CLT_BOOTSTRAP_ATTEMPTED=1
     if ! _install_clt_via_softwareupdate; then
         print_error "Command Line Tools installation failed; check Apple Software Update manually."
         return 1
@@ -1196,229 +1195,7 @@ install_xcode_cli_tools() {
         print_error "Command Line Tools installation did not produce a usable selected compiler."
         return 1
     fi
-    print_message "Command Line Tools installed; Homebrew compatibility checks pending."
-}
-
-# Public named diagnostics own the OS/SDK rules. A command failure is NOT a
-# compatibility finding. Recognize only these public CLT warning headlines;
-# changed/unknown output fails closed (no private Ruby API or version matrix).
-verify_developer_tools_for_homebrew() {
-    local checks check output status selected unknown=0 incompatible=0
-    local required=(check_for_installed_developer_tools check_xcode_license_approved
-        check_xcode_minimum_version check_clt_minimum_version
-        check_if_xcode_needs_clt_installed check_if_supported_sdk_available
-        check_xcode_select_path check_xcode_prefix_exists)
-    MACOS_DEVELOPER_TOOLS_STATE=unverified
-    if ! selected=$(xcode-select -p 2>/dev/null) || [[ -z "${selected}" ]] ||
-        ! xcrun --find clang >/dev/null 2>&1; then
-        print_error "Selected developer tools or compiler unavailable; readiness unverified."
-        return 1
-    fi
-    if ! command -v brew >/dev/null 2>&1; then
-        print_error "Homebrew unavailable; cannot verify developer tools compatibility."
-        return 1
-    fi
-    if ! checks=$(LC_ALL=C HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_COLOR=1 brew doctor --list-checks 2>&1); then
-        MACOS_CLT_OPERATION_FAILED=1
-        print_error "Homebrew diagnostic discovery failed; developer tools compatibility unverified."
-        macos_clt_diagnostic_excerpt "${checks}"
-        return 1
-    fi
-    for check in "${required[@]}"; do
-        if ! grep -Fxq "${check}" <<< "${checks}"; then
-            print_error "Required Homebrew developer tools diagnostic unavailable: ${check}. Compatibility unverified."
-            return 1
-        fi
-    done
-    for check in "${required[@]}"; do
-        status=0
-        output=$(LC_ALL=C HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_COLOR=1 brew doctor "${check}" 2>&1) || status=$?
-        if [[ "${status}" -ne 0 ]]; then
-            print_warning "Homebrew ${check} returned ${status}:"
-            macos_clt_diagnostic_excerpt "${output}"
-            if [[ "${status}" -eq 1 ]] &&
-                ! grep -Eiq 'error:|exception|traceback|undefined method' <<< "${output}" &&
-                { { [[ "${check}" == check_clt_minimum_version ]] && grep -Fxq 'Warning: Your Command Line Tools are too outdated.' <<< "${output}"; } ||
-                  { [[ "${check}" == check_if_supported_sdk_available ]] && grep -Eq '^Warning: Your Command Line Tools \(CLT\) does not support macOS [0-9]+(\.[0-9]+)*\.( It is either outdated or was modified\.)?$' <<< "${output}"; }; }; then
-                incompatible=1
-            else
-                unknown=1
-                MACOS_CLT_OPERATION_FAILED=1
-            fi
-        fi
-    done
-    if [[ "${unknown}" -eq 1 ]]; then
-        print_error "Developer-tool checks failed without verified CLT repair evidence; readiness unverified."
-        return 1
-    fi
-    if [[ "${incompatible}" -eq 1 ]]; then
-        MACOS_DEVELOPER_TOOLS_STATE=incompatible
-        return 1
-    fi
-    MACOS_DEVELOPER_TOOLS_STATE=ready
-    print_success "Selected developer tools passed Homebrew's targeted compatibility checks."
-}
-
-# Bound diagnostic rendering, including raw terminal controls. The separate
-# manual guidance preserves tools even if upstream diagnostics suggest deletion.
-macos_clt_diagnostic_excerpt() {
-    printf '%s\n' "$1" | LC_ALL=C tr -cd '\11\12\40-\176' | awk 'NR <= 12 { print substr($0, 1, 300) }' || true
-}
-
-macos_clt_manual_guidance() {
-    local value
-    print_warning "Developer tools: ${MACOS_DEVELOPER_TOOLS_STATE:-unverified}; CLT repair: ${MACOS_CLT_REPAIR_STATE:-not-attempted}."
-    value=$(xcode-select -p 2>/dev/null) || value=unavailable
-    print_warning "Selected developer directory (xcode-select -p):"
-    macos_clt_diagnostic_excerpt "${value}"
-    print_warning "DEVELOPER_DIR override:"
-    macos_clt_diagnostic_excerpt "${DEVELOPER_DIR-<unset>}"
-    value=$(sw_vers -productVersion 2>/dev/null) || value=unavailable
-    print_warning "macOS version: ${value}"
-    value=$(pkgutil --pkg-info=com.apple.pkg.CLTools_Executables 2>/dev/null) || value='CLT receipt unavailable'
-    macos_clt_diagnostic_excerpt "${value}"
-    value=$(xcrun clang --version 2>/dev/null) || value='Selected compiler version unavailable'
-    macos_clt_diagnostic_excerpt "${value}"
-    value=$(xcrun xcodebuild -version 2>/dev/null) || value='Selected Xcode version unavailable (expected with standalone CLT)'
-    macos_clt_diagnostic_excerpt "${value}"
-    print_warning "Machine owner: review the checks above and Apple Software Update, or https://developer.apple.com/download/all/ . Preserve existing tools/selection; resolve manually and rerun setup. If Apple requires a restart, restart manually before rerunning."
-}
-
-macos_clt_selection_eligible() {
-    [[ -z ${DEVELOPER_DIR+x} && "$1" == /Library/Developer/CommandLineTools &&
-        -d /Library/Developer/CommandLineTools && ! -L /Library &&
-        ! -L /Library/Developer && ! -L /Library/Developer/CommandLineTools ]]
-}
-
-# Separate from can_sudo: that helper's broader prompting policy is unchanged.
-macos_clt_authorize_repair() {
-    if sudo -n true </dev/null 2>/dev/null; then
-        return 0
-    fi
-    [[ "${HEADLESS:-}" != 1 ]] || return 1
-    # A controlling terminal may exist even with piped stdin. Opening and checking
-    # it in a subshell avoids leaked descriptors and terminal-less prompts.
-    ( [[ -t 0 ]] && sudo -v ) 2>/dev/null </dev/tty
-}
-
-# Accept exactly one stable numeric CLT label from Apple's ordinary listing.
-# Multiple CLT records, beta/unknown formats or duplicate labels are ambiguous;
-# never guess the newest, use a discovery sentinel, or install an update group.
-macos_clt_offered_label() {
-    LC_ALL=C awk '
-        /Command Line Tools/ {
-            if ($0 ~ /^[ \t]*Title:/) next
-            count++
-            line=$0
-            if (!sub(/^[ \t]*\* (Label: )?/, "", line)) bad=1
-            if (line !~ /^Command Line Tools for Xcode[- ][0-9]+(\.[0-9]+)*$/) bad=1
-            label=line
-        }
-        END { if (count == 1 && !bad) print label; else exit 1 }
-    '
-}
-
-ensure_macos_developer_tools_ready() {
-    local selected after override="${DEVELOPER_DIR-}" override_set="${DEVELOPER_DIR+x}"
-    local listing label
-    MACOS_CLT_REPAIR_STATE=not-needed
-    selected=$(xcode-select -p 2>/dev/null) || selected=""
-    if ! verify_developer_tools_for_homebrew; then
-        MACOS_CLT_REPAIR_STATE=manual
-        if ! after=$(xcode-select -p 2>/dev/null) || [[ "${after}" != "${selected}" ]]; then
-            MACOS_DEVELOPER_TOOLS_STATE=unverified
-            MACOS_CLT_REPAIR_STATE=selection-changed
-        elif ! is_main_user; then
-            print_warning "Secondary users verify only; ask the machine owner to repair shared developer tools."
-        elif [[ "${MACOS_CLT_BOOTSTRAP_ATTEMPTED:-0}" -eq 1 ]]; then
-            print_warning "First-time CLT bootstrap did not establish readiness; review manually rather than installing again."
-        elif [[ "${MACOS_DEVELOPER_TOOLS_STATE}" == incompatible ]] && macos_clt_selection_eligible "${selected}"; then
-            if [[ "${MACOS_CLT_REPAIR_ATTEMPTED:-0}" -eq 1 ]]; then
-                MACOS_CLT_REPAIR_STATE='attempt-exhausted'
-            elif ! listing=$(LC_ALL=C softwareupdate --list 2>&1); then
-                MACOS_CLT_OPERATION_FAILED=1
-                MACOS_CLT_REPAIR_STATE=query-failed
-                print_error "Apple CLT update query failed (not an empty offer)."
-                macos_clt_diagnostic_excerpt "${listing}"
-            elif ! label=$(macos_clt_offered_label <<< "${listing}"); then
-                MACOS_CLT_REPAIR_STATE=no-safe-offer
-                print_warning "No single safely identified stable Apple CLT update offered."
-                macos_clt_diagnostic_excerpt "${listing}"
-            elif ! macos_clt_authorize_repair; then
-                MACOS_CLT_REPAIR_STATE=privilege-blocked
-                print_warning "CLT repair privilege unavailable; no further authentication attempts."
-            elif ! after=$(xcode-select -p 2>/dev/null) || [[ "${after}" != "${selected}" ]] ||
-                ! macos_clt_selection_eligible "${after}"; then
-                MACOS_CLT_REPAIR_STATE=selection-changed
-                MACOS_DEVELOPER_TOOLS_STATE=unverified
-            else
-                MACOS_CLT_REPAIR_ATTEMPTED=1
-                MACOS_CLT_REPAIR_STATE=installed
-                print_message "Attempting one in-place Apple CLT update: ${label}"
-                # Noninteractive even if the credential obtained above expires.
-                if ! sudo -n softwareupdate --install "${label}" --verbose </dev/null; then
-                    MACOS_CLT_OPERATION_FAILED=1
-                    MACOS_CLT_REPAIR_STATE=install-failed
-                    print_error "Apple CLT installation failed; no retry."
-                fi
-                verify_developer_tools_for_homebrew || true
-            fi
-        fi
-    fi
-    after=$(xcode-select -p 2>/dev/null) || after=""
-    if [[ "${after}" != "${selected}" || "${DEVELOPER_DIR-}" != "${override}" || "${DEVELOPER_DIR+x}" != "${override_set}" ]]; then
-        MACOS_DEVELOPER_TOOLS_STATE=unverified
-        MACOS_CLT_REPAIR_STATE=selection-changed
-        print_error "Developer selection changed during verification/repair; preserved without switching it back."
-    fi
-    if [[ "${MACOS_DEVELOPER_TOOLS_STATE}" != ready ]]; then
-        macos_clt_manual_guidance
-        return 1
-    fi
-    if [[ "${MACOS_CLT_REPAIR_STATE}" == installed ]]; then
-        MACOS_CLT_REPAIR_STATE=repaired
-    fi
-    [[ "${MACOS_CLT_OPERATION_FAILED:-0}" -eq 0 ]]
-}
-
-# Caller-only policy keeps cross-platform shared helpers identical. Native
-# addon/package/plugin installers may compile even with an existing runtime.
-macos_developer_tools_ready_for() {
-    [[ "${MACOS_DEVELOPER_TOOLS_STATE:-unverified}" == ready ]] && return 0
-    MACOS_CLT_SKIPPED="${MACOS_CLT_SKIPPED:-} $*;"
-    print_warning "Skipping $*: developer-tool readiness is ${MACOS_DEVELOPER_TOOLS_STATE:-unverified}."
-    return 1
-}
-
-# Independent operations may use already-working binaries, not just PATH hits
-# (Apple's /usr/bin/git can be an unusable developer-tools shim). Do not install
-# prerequisites here. Normal ready-tool flows retain their existing preflights.
-macos_existing_prerequisites() {
-    local scope="$1" tool resolved
-    shift
-    [[ "${MACOS_DEVELOPER_TOOLS_STATE:-unverified}" == ready ]] && return 0
-    for tool in "$@"; do
-        resolved=$(command -v "${tool}" 2>/dev/null) || resolved=""
-        # Apple's git shim may open installation UI when no tools are selected.
-        if [[ "${resolved}" == /usr/bin/git ]] && ! xcrun --find git >/dev/null 2>&1; then
-            resolved=""
-        fi
-        if [[ -z "${resolved}" ]] || ! "${tool}" --version </dev/null >/dev/null 2>&1; then
-            MACOS_CLT_SKIPPED="${MACOS_CLT_SKIPPED:-} ${scope} (missing ${tool});"
-            print_warning "Skipping ${scope}: existing ${tool} prerequisite is unverified."
-            return 1
-        fi
-    done
-}
-
-macos_clt_summary() {
-    print_message "Developer-tool readiness: ${MACOS_DEVELOPER_TOOLS_STATE:-unverified}; CLT repair: ${MACOS_CLT_REPAIR_STATE:-not-attempted}; failed operations: ${MACOS_CLT_OPERATION_FAILED:-0}."
-    if [[ -n "${MACOS_CLT_SKIPPED:-}" ]]; then
-        print_warning "Skipped dependent work:${MACOS_CLT_SKIPPED}"
-    fi
-    if [[ "${MACOS_DEVELOPER_TOOLS_STATE:-unverified}" != ready ]]; then
-        print_warning "Setup incomplete. Machine owner: resolve developer tools using Apple Software Update or https://developer.apple.com/download/all/ and rerun. Restart manually if required; setup never reboots."
-    fi
+    print_message "Command Line Tools installed and selected compiler available."
 }
 
 # Helper: install CLT non-interactively using softwareupdate
@@ -1464,8 +1241,8 @@ _install_clt_via_softwareupdate() {
 # Install Homebrew if not installed
 install_homebrew() {
     if ! command -v brew &> /dev/null && [[ ! -x "/opt/homebrew/bin/brew" ]]; then
-        # Homebrew bootstrap precedes its diagnostics. Its public installer
-        # installs/reselects CLT when this standalone Git artifact is absent,
+        # Homebrew's public installer installs/reselects CLT when this
+        # standalone Git artifact is absent,
         # even with full Xcode selected. Never delegate toolchain changes to it.
         if ! xcode-select -p >/dev/null 2>&1 || ! xcrun --find clang >/dev/null 2>&1 ||
             [[ ! -x /Library/Developer/CommandLineTools/usr/bin/git ]]; then
@@ -1700,9 +1477,9 @@ install_gemini_cli() {
 
 # Install/update Codex CLI using Homebrew's native, zero-Node-dependency cask.
 # BEGIN GENERATED OPENCODE CLI
-# Version 7 | Last changed: Verify account-local OpenCode command selection
+# Version 8 | Last changed: Attempt native installation without a compiler readiness gate
 install_opencode_cli() {
-    local result status=0 brew_ready=0 machine kind native_shell cached_command recovery=0
+    local result status=0 machine kind native_shell cached_command recovery=0
     machine=$(uname -m) || return 1
     case "${machine}" in
         x86_64|arm64|aarch64) ;;
@@ -1714,13 +1491,6 @@ install_opencode_cli() {
         print_error 'Preserving the shell function/alias without execution.'
         return 1
     fi
-    if declare -F macos_existing_prerequisites >/dev/null; then
-        if ! macos_existing_prerequisites 'OpenCode native download/extraction' node; then
-            print_error 'OpenCode CLI blocked (operation=prerequisites, reason=unverified).'
-            return 1
-        fi
-        if [[ "${MACOS_DEVELOPER_TOOLS_STATE:-unverified}" == ready ]]; then brew_ready=1; fi
-    fi
     if ! command -v node >/dev/null || ! env -u NODE_OPTIONS -u NODE_PATH node -e 'require("node:https"); require("node:zlib"); require("node:crypto"); if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)' </dev/null >/dev/null 2>&1; then
         print_error 'OpenCode CLI blocked (operation=prerequisites, reason=unverified).'
         print_error 'OpenCode CLI requires a working Node >=22 for verified native downloads/extraction (no npm execution).'
@@ -1730,10 +1500,10 @@ install_opencode_cli() {
     cached_command=$(hash -t opencode 2>/dev/null) || cached_command=''
     # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
     {
-        result=$(SETUP_OPENCODE_BREW_READY="${brew_ready}" SETUP_OPENCODE_SHELL="${native_shell}" SETUP_OPENCODE_HASHED="${cached_command}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null) || status=$?
+        result=$(SETUP_OPENCODE_SHELL="${native_shell}" SETUP_OPENCODE_HASHED="${cached_command}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null) || status=$?
     } <<'OPENCODE_CLI_JS'
 // Embedded in all six entry points by tools/embed-opencode-cli.py.
-// Version 6 | Last changed: Verify interactive selection and preserve recoverable native commands.
+// Version 7 | Last changed: Preserve native migration trust without compiler readiness gating.
 // Installation only: never import application code or inherit its environment.
 'use strict';
 const fs = require('node:fs');
@@ -1744,7 +1514,7 @@ const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 const cp = require('node:child_process');
 const policyReasons = new Set(('archive archive-header archive-path archive-tail archive-truncated archive-type artifact-identity artifact-metadata ' +
-    'brew-command brew-origin brew-path brew-readiness brew-snapshot-changed ' +
+    'brew-command brew-origin brew-path brew-snapshot-changed ' +
     'changed-copy changed-receipt custom-link custom-prefix custom-wrapper duplicate-metadata integrity libc metadata missing-binary outside-home package-conflict pinned receipt ' +
     'recovery-occupied relative-path release-metadata shadowed shadowed-newer unreachable unsafe-file unsafe-path unverified-copy url version version-probe windows-acl foreign-command command-conflict selection-unverified').split(' '));
 const nativeCodes = new Set('EACCES EPERM ENOENT EIO EEXIST ENOTDIR ELOOP ENOSPC EROFS ETIMEDOUT ENOBUFS'.split(' '));
@@ -2095,7 +1865,6 @@ function inspectBrewCopy(file) {
     const receipt = json(boundedRead(receiptPath));
     if (receipt?.source?.tap !== 'anomalyco/tap') fail('brew-origin');
     inspect(path.join(prefix, 'var/homebrew/pinned/opencode'), 'pin', true);
-    if (process.platform === 'darwin' && process.env.SETUP_OPENCODE_BREW_READY !== '1') fail('brew-readiness');
     const trust = {command: file, link, snapshots};
     checkBrewTrust(trust);
     return {binary, release: match[1], route: 'homebrew', trust};
@@ -2384,7 +2153,7 @@ OPENCODE_CLI_JS
         elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)$ ]]; then
             [[ -z "${BASH_REMATCH[1]}" ]] || recovery=1
             print_error "OpenCode CLI download failed (operation=${BASH_REMATCH[2]}, HTTP=${BASH_REMATCH[3]})."
-        elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?policy-failed:(homebrew-preflight|installation|setup-selection|fresh-shell-selection):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-readiness|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|foreign-command|command-conflict|selection-unverified|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))$ ]]; then
+        elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?policy-failed:(homebrew-preflight|installation|setup-selection|fresh-shell-selection):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|foreign-command|command-conflict|selection-unverified|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))$ ]]; then
             [[ -z "${BASH_REMATCH[1]}" ]] || recovery=1
             print_error "OpenCode CLI blocked (operation=${BASH_REMATCH[2]}, reason=${BASH_REMATCH[3]})."
             print_error 'Inspect the identified command and filesystem evidence; preserve conflicts and recovery artifacts. Do not change unrelated permissions.'
@@ -9640,15 +9409,13 @@ BB_DESKTOP_PY
 
 run_setup_tasks() {
     local _setup_had_errors=0
-    local MACOS_DEVELOPER_TOOLS_STATE=unverified MACOS_CLT_OPERATION_FAILED=0
-    local MACOS_CLT_REPAIR_ATTEMPTED=0 MACOS_CLT_BOOTSTRAP_ATTEMPTED=0 MACOS_CLT_REPAIR_STATE=not-attempted MACOS_CLT_SKIPPED=""
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 268 | Last changed: Safely maintain account-owned bb in native macOS Applications${NC}"
+    echo -e "${GRAY}Version 269 | Last changed: Let actual operations decide success instead of CLT compatibility${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9662,7 +9429,7 @@ run_setup_tasks() {
 
 
     print_section "Xcode Command Line Tools"
-    install_xcode_cli_tools || { MACOS_CLT_OPERATION_FAILED=1; _setup_had_errors=1; }
+    install_xcode_cli_tools || _setup_had_errors=1
 
     print_section "bb Desktop"
     install_bb_desktop macos || _setup_had_errors=1
@@ -9672,15 +9439,14 @@ run_setup_tasks() {
 
         print_section "Package Manager Setup"
         install_homebrew || _setup_had_errors=1
-        ensure_macos_developer_tools_ready || _setup_had_errors=1
 
+        # Attempt ordinary work. Actual installer failures and result checks,
+        # not a separate compiler/SDK prediction, determine the setup result.
         print_section "Core Packages"
-        if macos_developer_tools_ready_for "core packages, SessionWatcher, secrets manager, Google Cloud CLI"; then
-            install_core_packages
-            install_sessionwatcher
-            install_secrets_manager
-            install_gcloud_cli
-        fi
+        install_core_packages || _setup_had_errors=1
+        install_sessionwatcher || _setup_had_errors=1
+        install_secrets_manager || _setup_had_errors=1
+        install_gcloud_cli || _setup_had_errors=1
 
         # Block public upload services on work machines
         block_public_upload_services
@@ -9689,11 +9455,9 @@ run_setup_tasks() {
         enable_ssh
 
         # Install Tailscale as cask (GUI app) and start daemon
-        if macos_developer_tools_ready_for "Tailscale, Nerd Font, BetterDisplay"; then
-            setup_tailscale || return 1
-            install_nerd_font
-            install_betterdisplay
-        fi
+        setup_tailscale || _setup_had_errors=1
+        install_nerd_font || _setup_had_errors=1
+        install_betterdisplay || _setup_had_errors=1
 
         # Prevent sleep on headless machines
         configure_power_settings
@@ -9716,9 +9480,8 @@ run_setup_tasks() {
 
         # Ensure Homebrew is in PATH (already installed by main user)
         local brew_env
-        brew_env=$(/opt/homebrew/bin/brew shellenv) || true
+        brew_env=$(/opt/homebrew/bin/brew shellenv) || _setup_had_errors=1
         eval "${brew_env}"
-        ensure_macos_developer_tools_ready || _setup_had_errors=1
 
         # Fix zsh permissions early (before any tool might invoke zsh)
         fix_zsh_compaudit
@@ -9733,11 +9496,7 @@ run_setup_tasks() {
 
     # Check if we have access (via SSH, token, or deploy key)
     # If not, try interactive deploy key setup
-    # Full apply also executes dotfiles run scripts; installed git/chezmoi alone
-    # cannot establish that those downstream installations are independent.
-    if ! macos_developer_tools_ready_for "dotfiles application and run scripts"; then
-        _setup_had_errors=1
-    elif check_dotfiles_access || setup_dotfiles_deploy_key; then
+    if check_dotfiles_access || setup_dotfiles_deploy_key; then
         # We have access, proceed with chezmoi setup
 
         # Bootstrap the credential helper before chezmoi (chicken-and-egg problem)
@@ -9806,15 +9565,11 @@ HELPER_EOF
         print_warning "Skipping dotfiles management - no access to repository."
     fi
 
-    if ! macos_existing_prerequisites "Backlog MCP retirement/shared runtime" mise jq fish chezmoi git || ! retire_global_backlog_mcp; then
-        _setup_had_errors=1
-    fi
+    retire_global_backlog_mcp || _setup_had_errors=1
 
     print_section "Shell Configuration"
     if is_main_user; then
-        if macos_existing_prerequisites "default fish shell" /opt/homebrew/bin/fish; then
-            set_fish_as_default_shell
-        fi
+        set_fish_as_default_shell || _setup_had_errors=1
     else
         # Secondary users have locked passwords, can't use chsh
         # Their shell must be set by main user with: sudo chsh -s /opt/homebrew/bin/fish <username>
@@ -9824,55 +9579,29 @@ HELPER_EOF
             print_debug "Fish shell is already the default shell."
         fi
     fi
-    if macos_developer_tools_ready_for "tmux plugin installation"; then
-        install_tmux_plugins
-    fi
+    install_tmux_plugins || _setup_had_errors=1
 
     print_section "Development Tools"
     install_opencode_cli || _setup_had_errors=1
-    if macos_developer_tools_ready_for "Tea and Codex Homebrew migrations"; then
-        install_gitea_client || return 1
-        install_codex_cli || _setup_had_errors=1
-    fi
-    if macos_existing_prerequisites "Bun binary installation" curl; then
-        # Bun's binary installer additionally needs the system unzip utility.
-        if [[ "${MACOS_DEVELOPER_TOOLS_STATE}" == ready ]] || unzip -v </dev/null >/dev/null 2>&1; then
-            install_bun
-        else
-            MACOS_CLT_SKIPPED="${MACOS_CLT_SKIPPED} Bun (missing unzip);"
-        fi
-    fi
-    if macos_developer_tools_ready_for "Bun package installs (SFW, Gemini, Portless), BB native addons"; then
-        install_sfw
-        install_gemini_cli
-        install_portless_cli
-        setup_bb_machine mac || { print_error 'BB machine preparation incomplete; existing BB state was preserved.'; _setup_had_errors=1; }
-    fi
-    if macos_developer_tools_ready_for "BB plugin refresh"; then
-        refresh_bb_plugins ready || _setup_had_errors=1
-    fi
-    if macos_existing_prerequisites "Claude and Notion native installers" curl; then
-        install_claude_code
-        install_ntn_cli
-    fi
-    if ! macos_existing_prerequisites "Pi profile permissions/shared runtime" mise jq fish chezmoi git || ! prepare_pi_profile_permissions; then
+    install_gitea_client || _setup_had_errors=1
+    install_codex_cli || _setup_had_errors=1
+    install_bun || _setup_had_errors=1
+    install_sfw || _setup_had_errors=1
+    install_gemini_cli || _setup_had_errors=1
+    install_portless_cli || _setup_had_errors=1
+    setup_bb_machine mac || { print_error 'BB machine preparation incomplete; existing BB state was preserved.'; _setup_had_errors=1; }
+    refresh_bb_plugins ready || _setup_had_errors=1
+    install_claude_code || _setup_had_errors=1
+    install_ntn_cli || _setup_had_errors=1
+    if ! prepare_pi_profile_permissions; then
         PI_PROFILE_MUTATIONS_BLOCKED=1
         _setup_had_errors=1
     fi
-    if macos_existing_prerequisites "RTK/Attention retirement" jq; then
-        remove_rtk_resources || return 1
-        remove_attention_span_resources || return 1
-    fi
-    if macos_developer_tools_ready_for "Matt Pocock skill installation"; then
-        setup_matt_pocock_skills || _setup_had_errors=1
-    elif matt_pocock_skills_disabled && macos_existing_prerequisites "Matt Pocock opt-out cleanup" node mise jq fish chezmoi git; then
-        remove_matt_pocock_skills || _setup_had_errors=1
-    fi
-    if ! macos_developer_tools_ready_for "Pi and Pi package installation"; then
-        PI_PROFILE_MUTATIONS_BLOCKED=1
-    fi
+    remove_rtk_resources || return 1
+    remove_attention_span_resources || return 1
+    setup_matt_pocock_skills || _setup_had_errors=1
     if [[ "${PI_PROFILE_MUTATIONS_BLOCKED}" -eq 1 ]]; then
-        print_warning "Skipping Pi setup because profile permissions or developer-tool readiness could not be verified."
+        print_warning "Skipping Pi setup because profile permissions could not be verified."
     elif ! disable_pi_askclaude; then
         PI_PROFILE_MUTATIONS_BLOCKED=1
         print_warning "Skipping Pi package setup because the AskClaude policy failed."
@@ -9924,12 +9653,10 @@ HELPER_EOF
         _setup_had_errors=1
     fi
 
-    if macos_existing_prerequisites "retired skills and ownership/shared runtime" node mise jq fish chezmoi git; then
-        remove_simple_english_skill || _setup_had_errors=1
-        remove_show_me_skill || _setup_had_errors=1
-        remove_pr_lens_skill || _setup_had_errors=1
-        configure_pi_skill_ownership || _setup_had_errors=1
-    fi
+    remove_simple_english_skill || _setup_had_errors=1
+    remove_show_me_skill || _setup_had_errors=1
+    remove_pr_lens_skill || _setup_had_errors=1
+    configure_pi_skill_ownership || _setup_had_errors=1
 
     remove_impeccable_resources
 
@@ -9937,15 +9664,10 @@ HELPER_EOF
 
     if is_main_user; then
         print_section "Final Updates"
-        if ! macos_developer_tools_ready_for "final Homebrew upgrades"; then
-            _setup_had_errors=1
-        else
-            update_brew || _setup_had_errors=1
-        fi
+        update_brew || _setup_had_errors=1
     fi
 
     check_pending_reboot
-    macos_clt_summary
 
     if [[ "${_setup_had_errors}" -eq 0 ]]; then
         printf '\n%b%b✨ Setup complete!%b\n\n' "${GREEN}" "${BOLD}" "${NC}"

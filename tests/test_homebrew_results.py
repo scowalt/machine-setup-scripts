@@ -34,6 +34,9 @@ start_setup_log() { printf 'log-started\n'; }
 finish_setup_log() { printf 'log-finalized=%s\n' "$1"; return "$1"; }
 brew() {
     printf '%s\n' "$*" >> "${HOME}/brew-calls"
+    if [[ "$*" == upgrade && "${WARN_CLT}" == 1 ]]; then
+        printf 'Warning: Your Command Line Tools (CLT) does not support macOS 27.\n' >&2
+    fi
     if [[ "$*" == "${FAIL_PHASE}" ]]; then return 7; fi
     if [[ "${FAIL_PHASE}" == pinned-postcheck && "$*" == 'list --pinned' ]] && grep -qx upgrade "${HOME}/brew-calls"; then return 7; fi
     case "$*" in
@@ -42,8 +45,6 @@ brew() {
     esac
 }
 '''
-        script += '\n' + function('macos_developer_tools_ready_for')
-        script += '\n' + function('macos_clt_summary')
         script += '\n' + function('list_unresolved_brew_outdated_items')
         script += '\n' + re.search(r'^opencode_guarded_brew_upgrade\(\) \(\n.*?^\)', SOURCE, re.M | re.S)[0]
         script += '\n' + function('update_brew')
@@ -55,10 +56,13 @@ brew() {
                                     env={'PATH': '/usr/bin:/bin', 'HOME': home,
                                          'FAIL_PHASE': phase, 'EARLIER': str(earlier),
                                          'OUTDATED': outdated, 'PINNED': pinned, 'TRUST': str(trust),
-                                         'MACOS_DEVELOPER_TOOLS_STATE': readiness})
+                                         'MACOS_DEVELOPER_TOOLS_STATE': readiness, 'WARN_CLT': str(int(readiness != 'ready'))})
             calls_file = Path(home) / 'brew-calls'
             calls = calls_file.read_text().splitlines() if calls_file.exists() else []
-        self.assertEqual(result.stderr, '')
+        if readiness == 'ready':
+            self.assertEqual(result.stderr, '')
+        else:
+            self.assertEqual(result.stderr, 'Warning: Your Command Line Tools (CLT) does not support macOS 27.\n')
         self.assertIn('reboot-checked', result.stdout)
         return result, calls
 
@@ -69,10 +73,11 @@ brew() {
         self.assertNotIn('✨ Setup complete!', result.stdout)
 
     def test_failed_upgrade_reaches_final_result_and_log(self):
-        result, calls = self.run_setup('upgrade')
-        self.assert_incomplete(result)
-        self.assertIn('unpin tmux', calls)
-        self.assertIn('upgrade=7', result.stdout)
+        for readiness in ('ready', 'incompatible'):
+            result, calls = self.run_setup('upgrade', readiness=readiness)
+            self.assert_incomplete(result)
+            self.assertIn('unpin tmux', calls)
+            self.assertIn('upgrade=7', result.stdout)
 
     def test_unverified_postcheck_is_incomplete(self):
         for phase in ('outdated --quiet', 'list --pinned', 'pinned-postcheck'):
@@ -112,13 +117,16 @@ brew() {
         self.assertNotIn('unpin tmux', calls)
         self.assertNotIn('cleanup-armed', result.stdout)
 
-    def test_unready_skips_all_final_brew_mutations_and_finalizes(self):
+    def test_clt_warning_does_not_block_successful_upgrade_or_poison_final_result(self):
         for state in ('incompatible', 'unverified'):
             result, calls = self.run_setup(readiness=state)
-            self.assert_incomplete(result)
-            self.assertEqual(calls, [])
-            self.assertIn('final Homebrew upgrades', result.stdout)
-            self.assertEqual(result.stdout.count('log-finalized=1'), 1)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertIn('update', calls)
+            self.assertIn('upgrade', calls)
+            self.assertIn('outdated --quiet', calls)
+            self.assertIn('Warning: Your Command Line Tools', result.stderr)
+            self.assertIn('Homebrew updated.', result.stdout)
+            self.assertEqual(result.stdout.count('log-finalized=0'), 1)
 
     def test_success_does_not_erase_an_earlier_failure(self):
         result, _ = self.run_setup(earlier=1)

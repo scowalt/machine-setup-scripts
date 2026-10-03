@@ -1,6 +1,6 @@
-# Version 7 | Last changed: Verify account-local OpenCode command selection
+# Version 8 | Last changed: Attempt native installation without a compiler readiness gate
 install_opencode_cli() {
-    local result status=0 brew_ready=0 machine kind native_shell cached_command recovery=0
+    local result status=0 machine kind native_shell cached_command recovery=0
     machine=$(uname -m) || return 1
     case "${machine}" in
         x86_64|arm64|aarch64) ;;
@@ -12,13 +12,6 @@ install_opencode_cli() {
         print_error 'Preserving the shell function/alias without execution.'
         return 1
     fi
-    if declare -F macos_existing_prerequisites >/dev/null; then
-        if ! macos_existing_prerequisites 'OpenCode native download/extraction' node; then
-            print_error 'OpenCode CLI blocked (operation=prerequisites, reason=unverified).'
-            return 1
-        fi
-        if [[ "${MACOS_DEVELOPER_TOOLS_STATE:-unverified}" == ready ]]; then brew_ready=1; fi
-    fi
     if ! command -v node >/dev/null || ! env -u NODE_OPTIONS -u NODE_PATH node -e 'require("node:https"); require("node:zlib"); require("node:crypto"); if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)' </dev/null >/dev/null 2>&1; then
         print_error 'OpenCode CLI blocked (operation=prerequisites, reason=unverified).'
         print_error 'OpenCode CLI requires a working Node >=22 for verified native downloads/extraction (no npm execution).'
@@ -28,7 +21,7 @@ install_opencode_cli() {
     cached_command=$(hash -t opencode 2>/dev/null) || cached_command=''
     # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
     {
-        result=$(SETUP_OPENCODE_BREW_READY="${brew_ready}" SETUP_OPENCODE_SHELL="${native_shell}" SETUP_OPENCODE_HASHED="${cached_command}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null) || status=$?
+        result=$(SETUP_OPENCODE_SHELL="${native_shell}" SETUP_OPENCODE_HASHED="${cached_command}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null) || status=$?
     } <<'OPENCODE_CLI_JS'
 // @OPENCODE_CORE@
 OPENCODE_CLI_JS
@@ -38,7 +31,7 @@ OPENCODE_CLI_JS
         elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)$ ]]; then
             [[ -z "${BASH_REMATCH[1]}" ]] || recovery=1
             print_error "OpenCode CLI download failed (operation=${BASH_REMATCH[2]}, HTTP=${BASH_REMATCH[3]})."
-        elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?policy-failed:(homebrew-preflight|installation|setup-selection|fresh-shell-selection):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-readiness|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|foreign-command|command-conflict|selection-unverified|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))$ ]]; then
+        elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?policy-failed:(homebrew-preflight|installation|setup-selection|fresh-shell-selection):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|foreign-command|command-conflict|selection-unverified|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))$ ]]; then
             [[ -z "${BASH_REMATCH[1]}" ]] || recovery=1
             print_error "OpenCode CLI blocked (operation=${BASH_REMATCH[2]}, reason=${BASH_REMATCH[3]})."
             print_error 'Inspect the identified command and filesystem evidence; preserve conflicts and recovery artifacts. Do not change unrelated permissions.'

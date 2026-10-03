@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 1 | Last changed: Keep README prose outside installation contracts
+# Version 2 | Last changed: Keep macOS Tea failures fatal through final aggregation
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -37,7 +37,11 @@ assert_not_contains() {
 # treat its failure as fatal.
 for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '^install_gitea_client\(\)' 'Gitea client installer'
-    assert_contains "${file}" '^[[:space:]]*install_gitea_client \|\| return 1$' 'fatal Gitea client setup call'
+    if [[ "${file}" == mac.sh ]]; then
+        assert_contains "${file}" '^[[:space:]]*install_gitea_client \|\| _setup_had_errors=1$' 'aggregated Gitea client setup failure'
+    else
+        assert_contains "${file}" '^[[:space:]]*install_gitea_client \|\| return 1$' 'fatal Gitea client setup call'
+    fi
 done
 
 assert_contains win.ps1 '^function Install-GiteaClient \{' 'Windows Gitea client installer'

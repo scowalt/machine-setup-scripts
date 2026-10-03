@@ -174,12 +174,6 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
 '''
                         tail = extract(script, 'run_setup_tasks')
                         tail = tail[re.search(r'^    if ! [^\n]*prepare_pi_profile_permissions', tail, re.M).start():]
-                        if script == 'mac.sh':
-                            # CLT verification precedes this slice. Preserve the
-                            # actual gate with explicitly verified readiness.
-                            code += '\nMACOS_DEVELOPER_TOOLS_STATE=ready\n'
-                            for gate in ('macos_developer_tools_ready_for', 'macos_existing_prerequisites', 'macos_clt_summary'):
-                                code += '\n' + extract(script, gate)
                         code += '\nrun_setup_tasks() {\nlocal _setup_had_errors=0 _pi_go_ready=0 PI_PROFILE_MUTATIONS_BLOCKED=0\n' + tail
                         code += '\n' + extract(script, 'main') + '\nmain\n'
                         command = ['bash', '--noprofile', '--norc']

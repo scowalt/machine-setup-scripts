@@ -1117,7 +1117,7 @@ function Install-GeminiCli {
 # Function to install/update Codex CLI from OpenAI's native GitHub release
 # binary, so codex does not depend on Node.js/Bun being present at runtime.
 # BEGIN GENERATED OPENCODE CLI
-# Version 7 | Last changed: Verify same-session selection before OpenCode commit
+# Version 8 | Last changed: Retire compiler readiness diagnostics from native installation
 function Test-OpenCodeCliAcl {
     param([string]$HomePath)
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -1289,7 +1289,7 @@ function Install-OpenCodeCli {
         if ($LASTEXITCODE -ne 0) { throw 'prerequisite' }
         $code = @'
 // Embedded in all six entry points by tools/embed-opencode-cli.py.
-// Version 6 | Last changed: Verify interactive selection and preserve recoverable native commands.
+// Version 7 | Last changed: Preserve native migration trust without compiler readiness gating.
 // Installation only: never import application code or inherit its environment.
 'use strict';
 const fs = require('node:fs');
@@ -1300,7 +1300,7 @@ const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 const cp = require('node:child_process');
 const policyReasons = new Set(('archive archive-header archive-path archive-tail archive-truncated archive-type artifact-identity artifact-metadata ' +
-    'brew-command brew-origin brew-path brew-readiness brew-snapshot-changed ' +
+    'brew-command brew-origin brew-path brew-snapshot-changed ' +
     'changed-copy changed-receipt custom-link custom-prefix custom-wrapper duplicate-metadata integrity libc metadata missing-binary outside-home package-conflict pinned receipt ' +
     'recovery-occupied relative-path release-metadata shadowed shadowed-newer unreachable unsafe-file unsafe-path unverified-copy url version version-probe windows-acl foreign-command command-conflict selection-unverified').split(' '));
 const nativeCodes = new Set('EACCES EPERM ENOENT EIO EEXIST ENOTDIR ELOOP ENOSPC EROFS ETIMEDOUT ENOBUFS'.split(' '));
@@ -1651,7 +1651,6 @@ function inspectBrewCopy(file) {
     const receipt = json(boundedRead(receiptPath));
     if (receipt?.source?.tap !== 'anomalyco/tap') fail('brew-origin');
     inspect(path.join(prefix, 'var/homebrew/pinned/opencode'), 'pin', true);
-    if (process.platform === 'darwin' && process.env.SETUP_OPENCODE_BREW_READY !== '1') fail('brew-readiness');
     const trust = {command: file, link, snapshots};
     checkBrewTrust(trust);
     return {binary, release: match[1], route: 'homebrew', trust};
@@ -1946,7 +1945,7 @@ if (require.main === module || process.argv[1] === '-') install().then(result =>
                 $recovery = $output[0].StartsWith('opencode-cli:recovery-required:')
                 Write-Warning "OpenCode CLI download failed (operation=$($Matches[1]), HTTP=$($Matches[2]))."
             } elseif ($run.Status -ne 0 -and $output.Count -eq 1 -and
-                $output[0] -cmatch '\Aopencode-cli:(?:recovery-required:)?policy-failed:(homebrew-preflight|installation|setup-selection|fresh-shell-selection):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-readiness|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|foreign-command|command-conflict|selection-unverified|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))\z') {
+                $output[0] -cmatch '\Aopencode-cli:(?:recovery-required:)?policy-failed:(homebrew-preflight|installation|setup-selection|fresh-shell-selection):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|foreign-command|command-conflict|selection-unverified|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))\z') {
                 $recovery = $output[0].StartsWith('opencode-cli:recovery-required:')
                 Write-Warning "OpenCode CLI blocked (operation=$($Matches[1]), reason=$($Matches[2]))."
                 Write-Warning 'Inspect the identified command and filesystem evidence; preserve conflicts and recovery artifacts. Do not change unrelated permissions.'
@@ -7598,7 +7597,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 174 | Last changed: Verify interactive OpenCode selection before committing native updates"
+    Write-Host "Version 175 | Last changed: Sync OpenCode policy without macOS compiler readiness gating"
 
     Assert-HeadlessUnsupported
 
