@@ -1979,9 +1979,9 @@ install_gemini_cli() {
 
 # Install/update Codex CLI with OpenAI's per-user standalone installer.
 # BEGIN GENERATED OPENCODE CLI
-# Version 6 | Last changed: Retire OpenCode Homebrew privacy-proof diagnostics
+# Version 7 | Last changed: Verify account-local OpenCode command selection
 install_opencode_cli() {
-    local result status=0 brew_ready=0 machine kind
+    local result status=0 brew_ready=0 machine kind native_shell cached_command recovery=0
     machine=$(uname -m) || return 1
     case "${machine}" in
         x86_64|arm64|aarch64) ;;
@@ -1989,23 +1989,30 @@ install_opencode_cli() {
     esac
     kind=$(type -t opencode 2>/dev/null) || kind=''
     if [[ "${kind}" == function || "${kind}" == alias ]]; then
-        print_error 'OpenCode CLI conflicts with a shell function/alias; preserving it without execution.'
+        print_error 'OpenCode CLI blocked (operation=setup-selection, reason=command-conflict).'
+        print_error 'Preserving the shell function/alias without execution.'
         return 1
     fi
     if declare -F macos_existing_prerequisites >/dev/null; then
-        macos_existing_prerequisites 'OpenCode native download/extraction' node || return 1
+        if ! macos_existing_prerequisites 'OpenCode native download/extraction' node; then
+            print_error 'OpenCode CLI blocked (operation=prerequisites, reason=unverified).'
+            return 1
+        fi
         if [[ "${MACOS_DEVELOPER_TOOLS_STATE:-unverified}" == ready ]]; then brew_ready=1; fi
     fi
     if ! command -v node >/dev/null || ! env -u NODE_OPTIONS -u NODE_PATH node -e 'require("node:https"); require("node:zlib"); require("node:crypto"); if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)' </dev/null >/dev/null 2>&1; then
+        print_error 'OpenCode CLI blocked (operation=prerequisites, reason=unverified).'
         print_error 'OpenCode CLI requires a working Node >=22 for verified native downloads/extraction (no npm execution).'
         return 1
     fi
+    native_shell=$(type -P fish) || native_shell=''
+    cached_command=$(hash -t opencode 2>/dev/null) || cached_command=''
     # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
     {
-        result=$(SETUP_OPENCODE_BREW_READY="${brew_ready}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null) || status=$?
+        result=$(SETUP_OPENCODE_BREW_READY="${brew_ready}" SETUP_OPENCODE_SHELL="${native_shell}" SETUP_OPENCODE_HASHED="${cached_command}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null) || status=$?
     } <<'OPENCODE_CLI_JS'
 // Embedded in all six entry points by tools/embed-opencode-cli.py.
-// Version 4 | Last changed: Accept account-owned Linux Homebrew group write without privacy proof.
+// Version 5 | Last changed: Preserve foreign commands and verify account-local selection.
 // Installation only: never import application code or inherit its environment.
 'use strict';
 const fs = require('node:fs');
@@ -2018,7 +2025,7 @@ const cp = require('node:child_process');
 const policyReasons = new Set(('archive archive-header archive-path archive-tail archive-truncated archive-type artifact-identity artifact-metadata ' +
     'brew-command brew-origin brew-path brew-readiness brew-snapshot-changed ' +
     'changed-copy changed-receipt custom-link custom-prefix custom-wrapper duplicate-metadata integrity libc metadata missing-binary outside-home package-conflict pinned receipt ' +
-    'recovery-occupied relative-path release-metadata shadowed shadowed-newer unreachable unsafe-file unsafe-path unverified-copy url version version-probe windows-acl').split(' '));
+    'recovery-occupied relative-path release-metadata shadowed shadowed-newer unreachable unsafe-file unsafe-path unverified-copy url version version-probe windows-acl foreign-command command-conflict selection-unverified').split(' '));
 const nativeCodes = new Set('EACCES EPERM ENOENT EIO EEXIST ENOTDIR ELOOP ENOSPC EROFS ETIMEDOUT ENOBUFS'.split(' '));
 class PolicyError extends Error {
     constructor(reason, operation = reason.startsWith('brew-') ? 'homebrew-preflight' : 'installation') {
@@ -2074,13 +2081,17 @@ function target(platform = process.platform, machine = os.machine(), glibc = pro
 class DownloadError extends Error {
     constructor(operation, status) { super('download'); this.operation = operation; this.status = status; }
 }
+class RecoveryError extends Error {
+    constructor(original) { super('recovery-required'); this.original = original; }
+}
 function failureResult(error) {
+    if (error instanceof RecoveryError) return `opencode-cli:recovery-required:${failureResult(error.original).slice('opencode-cli:'.length)}`;
     if (error?.message === 'recovery-required') return 'opencode-cli:recovery-required';
     if (error instanceof DownloadError && ['latest-release', 'package-index', 'package-version', 'artifact-download', 'download'].includes(error.operation)) {
         const status = Number.isInteger(error.status) && error.status >= 100 && error.status <= 599 ? error.status : 'unknown';
         return `opencode-cli:download-failed:${error.operation}:http-${status}`;
     }
-    if (error instanceof PolicyError && typeof error.reason === 'string' && ['homebrew-preflight', 'installation'].includes(error.operation) &&
+    if (error instanceof PolicyError && typeof error.reason === 'string' && ['homebrew-preflight', 'installation', 'setup-selection', 'fresh-shell-selection'].includes(error.operation) &&
         (policyReasons.has(error.reason) || (error.reason.startsWith('native-') && nativeCodes.has(error.reason.slice(7))))) {
         return `opencode-cli:policy-failed:${error.operation}:${error.reason}`;
     }
@@ -2198,6 +2209,81 @@ function commands(home, env = process.env) {
         try { fs.lstatSync(file); result.push(file); } catch (e) { if (e.code !== 'ENOENT') throw e; }
     }
     return [...new Map(result.map(file => [process.platform === 'win32' ? file.toLowerCase() : file, file])).values()];
+}
+// Foreign commands are observations, never migration candidates. Stop at the
+// first foreign boundary: do not traverse its links, receipts or package store.
+function foreignCommand(file, home) {
+    const relative = path.relative(home, file);
+    if (!relative.startsWith('..') && !path.isAbsolute(relative)) return false;
+    if (!path.isAbsolute(file)) fail('relative-path');
+    // Windows migration is HOME-only and retains the native ACL preflight.
+    if (process.platform === 'win32') return true;
+    const chain = [path.parse(file).root];
+    for (const part of file.slice(chain[0].length).split(path.sep).filter(Boolean)) chain.push(path.join(chain.at(-1), part));
+    for (const item of chain) {
+        const info = fs.lstatSync(item);
+        if (![0, process.getuid()].includes(info.uid) || (item === file && info.uid !== process.getuid())) return true;
+        if (item !== file && (!info.isDirectory() || (info.mode & 0o002))) fail('unsafe-path');
+    }
+    return false;
+}
+function verifySetupSelection(expected, home, homeInput, searchPath) {
+    const reject = reason => { throw new PolicyError(reason, 'setup-selection'); };
+    const cached = process.env.SETUP_OPENCODE_HASHED;
+    if (cached) {
+        const normalized = cached.startsWith(homeInput + path.sep) ? path.join(home, path.relative(homeInput, cached)) : cached;
+        if (!samePath(normalized, expected)) reject('command-conflict');
+    }
+    // Include script/native extensions, not only the installer's migration names.
+    const names = process.platform === 'win32' ? ['opencode.ps1', ...new Set((process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').map(ext => 'opencode' + ext.toLowerCase()))] : ['opencode'];
+    for (const directory of searchPath.split(path.delimiter)) {
+        if (!directory && process.platform === 'win32') continue;
+        if (!path.isAbsolute(directory)) reject('selection-unverified');
+        for (const name of names) {
+            const candidate = path.join(directory, name);
+            let info;
+            try { info = fs.lstatSync(candidate); } catch (error) { if (error.code === 'ENOENT') continue; reject('selection-unverified'); }
+            // Resolve only the trusted HOME alias, never an arbitrary command link.
+            const normalized = candidate.startsWith(homeInput + path.sep)
+                ? path.join(home, path.relative(homeInput, candidate)) : candidate;
+            if (!samePath(normalized, expected)) reject(foreignCommand(candidate, home) ? 'foreign-command' : 'command-conflict');
+            if (!info.isFile() || info.isSymbolicLink()) reject('selection-unverified');
+            try { fs.accessSync(expected, fs.constants.X_OK); } catch { reject('selection-unverified'); }
+            return;
+        }
+    }
+    reject('unreachable');
+}
+function verifyFreshSelection(expected, home, homeInput) {
+    const reject = reason => { throw new PolicyError(reason, 'fresh-shell-selection'); };
+    const shell = process.env.SETUP_OPENCODE_SHELL;
+    if (!shell || !path.isAbsolute(shell)) reject('selection-unverified');
+    const env = {...process.env, HOME: homeInput, USERPROFILE: homeInput};
+    for (const name of Object.keys(env)) {
+        if (/^(__MISE_|FNM_)|^MISE_(SHELL|.*_VERSION|TOOL_OPTS__NODE)$|^NODE_(PATH|OPTIONS)$/.test(name) ||
+            ['BASH_ENV', 'ENV', '__setup_shared_node_activation'].includes(name)) delete env[name];
+    }
+    env.MISE_AUTO_INSTALL = 'false'; env.MISE_NODE_COMPILE = 'false';
+    let args;
+    if (process.platform === 'win32') {
+        if (!['powershell.exe', 'pwsh.exe'].includes(path.basename(shell).toLowerCase()) || !env.SETUP_OPENCODE_FRESH_PATH) reject('selection-unverified');
+        env.PATH = env.SETUP_OPENCODE_FRESH_PATH;
+        // Load the normal native profile. Only query resolution; never run the app.
+        args = ['-NoLogo', '-NonInteractive', '-Command', "$ErrorActionPreference = 'Stop'; try { $c = Get-Command opencode -ErrorAction Stop; if ($c.CommandType -ne 'Application') { exit 2 }; [Console]::WriteLine($c.Source) } catch { exit 3 }"];
+    } else {
+        if (path.basename(shell) !== 'fish') reject('selection-unverified');
+        env.PATH = '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin';
+        args = ['-l', '-c', 'if functions -q opencode; exit 2; end; command -s opencode; or exit 3'];
+    }
+    let output;
+    try {
+        output = cp.execFileSync(shell, args, {cwd: home, env, timeout: 20000, maxBuffer: 4096,
+            stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true}).toString();
+    } catch (error) { reject(error.status === 2 ? 'command-conflict' : 'selection-unverified'); }
+    const selected = output.replace(/\r?\n$/, '');
+    if (!path.isAbsolute(selected) || /[\r\n\0]/.test(selected)) reject('selection-unverified');
+    const normalized = selected.startsWith(homeInput + path.sep) ? path.join(home, path.relative(homeInput, selected)) : selected;
+    if (!samePath(normalized, expected)) reject('command-conflict');
 }
 function probe(file, release, workspace) {
     const isolated = fs.mkdtempSync(path.join(workspace, 'probe-'));
@@ -2397,7 +2483,7 @@ async function installChecked(options) {
     const release = latest.version, destination = path.join(home, '.local/bin', process.platform === 'win32' ? 'opencode.exe' : 'opencode');
     const receipt = path.join(home, '.local/bin/.setup-opencode-cli.json');
     safePath(destination, home, true); safePath(receipt, home);
-    const found = options.commands || commands(home);
+    const found = (options.commands || commands(home)).filter(file => !foreignCommand(file, home));
     // Bun can publish a native hardlink rather than a symlink. Preserve its
     // explicit global selection even when command identity comes from bytes.
     if (found.some(file => samePath(path.dirname(file), path.join(home, '.bun/bin')))) {
@@ -2409,9 +2495,10 @@ async function installChecked(options) {
             if (policy.overrides?.['opencode-ai'] || policy.resolutions?.['opencode-ai']) fail('pinned');
         }
     }
-    const reachable = () => (options.path || process.env.PATH || '').split(path.delimiter).some(dir => {
-        try { return path.isAbsolute(dir) && samePath(fs.realpathSync(dir), path.dirname(destination)); } catch { return false; }
-    });
+    const verifySelection = expected => {
+        verifySetupSelection(expected, home, homeInput, options.path ?? process.env.PATH ?? '');
+        verifyFreshSelection(expected, home, homeInput);
+    };
     let installed = null, installedBytes = null;
     if (fs.existsSync(receipt)) {
         safePath(destination, home);
@@ -2432,15 +2519,27 @@ async function installChecked(options) {
     }
     if (old.some(item => compare(item.release, release) > 0)) {
         if (old.length !== 1 || installed) fail('shadowed-newer');
+        safePath(old[0].file, home);
+        verifySelection(old[0].file);
+        safePath(old[0].file, home);
+        if (digest(boundedRead(old[0].file)) !== old[0].nativeHash) fail('changed-copy');
         return 'newer';
     }
     if (installed && compare(installed, release) >= 0) {
         if (old.length) fail('shadowed');
-        if (!reachable()) fail('unreachable');
+        verifySelection(destination);
+        safePath(destination, home);
+        if (!boundedRead(destination).equals(installedBytes)) fail('changed-copy');
         // A newer official version is preserved, never rewritten or downgraded.
         if (compare(installed, release) > 0) return 'newer';
         const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'setup-opencode-'));
-        try { runProbe(destination, installed, temp); } finally { fs.rmSync(temp, {recursive: true, force: true}); }
+        let probeError;
+        try { runProbe(destination, installed, temp); }
+        catch (error) { probeError = nativeFailure('installation', error); throw probeError; }
+        finally {
+            try { fs.rmSync(temp, {recursive: true, force: true}); }
+            catch (error) { throw new RecoveryError(probeError || nativeFailure('installation', error)); }
+        }
         return 'current';
     }
     const files = await artifact(`@opencode/cli-${nativeTarget}`, release, get);
@@ -2450,7 +2549,7 @@ async function installChecked(options) {
     fs.mkdirSync(bin, {recursive: true, mode: 0o755}); safePath(bin, home);
     const stage = fs.mkdtempSync(path.join(bin, '.setup-opencode-'));
     const staged = path.join(stage, path.basename(destination));
-    const backups = []; let promoted = false, completed = false, locked = false;
+    const backups = []; let promoted = false, completed = false, locked = false, originalError;
     const lock = path.join(bin, '.setup-opencode-cli.lock');
     const previousReceipt = fs.existsSync(receipt) ? boundedRead(receipt) : null;
     try {
@@ -2487,16 +2586,21 @@ async function installChecked(options) {
         fs.linkSync(staged, destination); promoted = true;
         fs.unlinkSync(staged);
         runProbe(destination, release, stage);
-        // No PATH edits: require the existing user-local directory to be reachable.
-        if (!reachable()) fail('unreachable');
+        // Verify the effective command, not mere PATH membership. Failure rolls back.
+        verifySelection(destination);
+        safePath(destination, home);
+        if (!boundedRead(destination).equals(bytes)) fail('changed-copy');
         const remaining = options.commands ? [destination] : commands(home);
-        if (remaining.some(file => !samePath(file, destination))) fail('shadowed');
+        if (remaining.some(file => !samePath(file, destination) && !foreignCommand(file, home))) fail('shadowed');
         const record = JSON.stringify({package: `@opencode/cli-${nativeTarget}`, version: release, sha512: digest(bytes)}) + '\n';
         const nextReceipt = path.join(stage, 'receipt'); fs.writeFileSync(nextReceipt, record, {mode: 0o600, flag: 'wx'});
         safePath(receipt, home);
         if (previousReceipt ? !boundedRead(receipt).equals(previousReceipt) : fs.existsSync(receipt)) fail('changed-receipt');
         fs.renameSync(nextReceipt, receipt); completed = true;
         return old.length ? 'migrated' : 'installed';
+    } catch (error) {
+        originalError = nativeFailure('installation', error);
+        throw originalError;
     } finally {
         if (!completed) {
             try {
@@ -2511,12 +2615,14 @@ async function installChecked(options) {
                     try { fs.lstatSync(original); fail('recovery-occupied'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
                     fs.renameSync(backup, original);
                 }
-            } catch { fail('recovery-required'); }
+            } catch { throw new RecoveryError(originalError); }
         }
         // Retain old commands privately for manual recovery after a successful migration.
-        if (completed && backups.length) fs.chmodSync(stage, 0o700);
-        else fs.rmSync(stage, {recursive: true, force: true});
-        if (locked) fs.rmdirSync(lock);
+        try {
+            if (completed && backups.length) fs.chmodSync(stage, 0o700);
+            else fs.rmSync(stage, {recursive: true, force: true});
+            if (locked) fs.rmdirSync(lock);
+        } catch (error) { throw new RecoveryError(originalError || nativeFailure('installation', error)); }
     }
 }
 module.exports = {version, compare, target, unpack, artifact, identify, install, commands, safePath, brewCopy, windowsNpmShims, probe, fetchBytes, failureResult};
@@ -2526,13 +2632,20 @@ if (require.main === module || process.argv[1] === '-') install().then(result =>
 });
 OPENCODE_CLI_JS
     if [[ "${status}" -ne 0 ]]; then
-        if [[ "${result}" == opencode-cli:recovery-required ]]; then
-            print_error 'OpenCode CLI rollback needs manual recovery; preserve .setup-opencode-* directories, .opencode-setup-recovery-* commands and the lock. Inspect recovery.json before restoring identified commands.'
-        elif [[ "${result}" =~ ^opencode-cli:download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)$ ]]; then
-            print_error "OpenCode CLI download failed (operation=${BASH_REMATCH[1]}, HTTP=${BASH_REMATCH[2]})."
-        elif [[ "${result}" =~ ^opencode-cli:policy-failed:(homebrew-preflight|installation):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-readiness|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))$ ]]; then
-            print_error "OpenCode CLI blocked (operation=${BASH_REMATCH[1]}, reason=${BASH_REMATCH[2]})."
+        if [[ "${result}" == opencode-cli:recovery-required || "${result}" == opencode-cli:recovery-required:failed ]]; then
+            recovery=1
+        elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)$ ]]; then
+            [[ -z "${BASH_REMATCH[1]}" ]] || recovery=1
+            print_error "OpenCode CLI download failed (operation=${BASH_REMATCH[2]}, HTTP=${BASH_REMATCH[3]})."
+        elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?policy-failed:(homebrew-preflight|installation|setup-selection|fresh-shell-selection):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-readiness|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|foreign-command|command-conflict|selection-unverified|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))$ ]]; then
+            [[ -z "${BASH_REMATCH[1]}" ]] || recovery=1
+            print_error "OpenCode CLI blocked (operation=${BASH_REMATCH[2]}, reason=${BASH_REMATCH[3]})."
             print_error 'Inspect the identified command and filesystem evidence; preserve conflicts and recovery artifacts. Do not change unrelated permissions.'
+        else
+            print_error 'OpenCode CLI unverified (operation=installation, reason=unrecognized-result).'
+        fi
+        if [[ "${recovery}" -eq 1 ]]; then
+            print_error 'OpenCode CLI rollback needs manual recovery; preserve .setup-opencode-* directories, .opencode-setup-recovery-* commands and the lock. Inspect recovery.json before restoring identified commands.'
         fi
         print_error 'OpenCode CLI installation incomplete; existing data preserved. Review command ownership, pins, metadata, prerequisites and PATH.'
         return 1
@@ -2542,7 +2655,7 @@ OPENCODE_CLI_JS
         opencode-cli:migrated) print_success 'OpenCode CLI native command migrated and verified; legacy package stores and command backups retained.' ;;
         opencode-cli:newer) print_warning 'OpenCode CLI: newer official release preserved; no downgrade or migration performed.' ;;
         opencode-cli:unsupported) print_warning 'OpenCode CLI: unsupported architecture; skipping without source builds.' ;;
-        *) print_error 'OpenCode CLI returned an unrecognized result.'; return 1 ;;
+        *) print_error 'OpenCode CLI unverified (operation=installation, reason=unrecognized-result).'; return 1 ;;
     esac
 }
 
@@ -8949,7 +9062,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 241 | Last changed: Accept account-owned Linux Homebrew group write for OpenCode"
+    echo -e "${GRAY}Version 242 | Last changed: Preserve foreign OpenCode copies with verified account-local selection"
 
     if ! acquire_setup_lock; then
         return 1

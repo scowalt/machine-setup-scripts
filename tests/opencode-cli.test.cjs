@@ -1,4 +1,4 @@
-// Version 6 | Last changed: Exercise Homebrew group-write migration without privacy dependencies
+// Version 7 | Last changed: Exercise foreign-copy preservation and actual account-local selection
 'use strict';
 process.umask(0o077);
 const {test} = require('node:test');
@@ -9,6 +9,9 @@ const path = require('node:path');
 const zlib = require('node:zlib');
 const crypto = require('node:crypto');
 const policy = require('../lib/opencode-cli.cjs');
+const nativeExecFileSync = require('node:child_process').execFileSync;
+// Native shell boundary only: default fixtures never load any real profile.
+process.env.SETUP_OPENCODE_SHELL = '/fixture/fish';
 const sha = bytes => crypto.createHash('sha512').update(bytes).digest('base64');
 function tar(entries) {
     const blocks = [];
@@ -61,7 +64,13 @@ function fixture(t) {
             package: '@opencode/cli-linux-x64-baseline', version: release, sha512: sha(bytes), ...changes}), {mode: 0o600});
         options.commands = [dest];
     };
-    return {home, responses, probes, publish, binary, dest, options, setLatest, legacy, receipt};
+    const f = {home, responses, probes, publish, binary, dest, options, setLatest, legacy, receipt};
+    f.shellBoundary = () => Buffer.from((f.shellSelection || dest) + '\n');
+    t.mock.method(require('node:child_process'), 'execFileSync', (file, ...args) => {
+        assert.equal(file, '/fixture/fish', 'unmocked application execution forbidden');
+        return f.shellBoundary(file, ...args);
+    });
+    return f;
 }
 test('strict stable version semantics and native platform matrix', () => {
     for (const value of ['2.0.1-beta', 'v2.0.1', '02.0.1', '2.0', '2.0.1\n', null]) assert.throws(() => policy.version(value));
@@ -94,8 +103,114 @@ test('unmarked official v2 and newer standalone copies have artifact identity', 
     for (const release of ['2.0.18', '3.0.0']) {
         const f = fixture(t), bytes = f.publish('@opencode/cli-linux-x64-baseline', release);
         const command = f.legacy('.opencode/bin', bytes);
+        f.options.path += path.delimiter + path.dirname(command);
+        if (release.startsWith('3')) f.shellSelection = command;
         assert.equal(await policy.install(f.options), release.startsWith('3') ? 'newer' : 'migrated');
         if (release.startsWith('3')) assert.deepEqual(fs.readFileSync(command), bytes);
+    }
+});
+test('fresh native shell disagreement rolls back an otherwise verified account-local update', async t => {
+    const f = fixture(t), previous = f.publish('@opencode/cli-linux-x64-baseline', '2.0.10');
+    f.receipt('2.0.10', previous);
+    const receipt = path.join(path.dirname(f.dest), '.setup-opencode-cli.json'), before = fs.readFileSync(receipt);
+    f.shellBoundary = (file, args, options) => {
+            assert.equal(file, '/fixture/fish');
+            assert.equal(options.cwd, f.home);
+            assert.equal(options.env.PATH, '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin');
+            assert.equal(options.env.MISE_AUTO_INSTALL, 'false');
+            assert.equal(options.stdio[2], 'ignore');
+            assert.ok(!args.join(' ').includes('--version'), 'resolution must never execute OpenCode');
+            return Buffer.from('/another-account/bin/opencode\n');
+    };
+    const {api} = virtualPolicy(f);
+    await assert.rejects(api.install(f.options), error => {
+        assert.equal(api.failureResult(error), 'opencode-cli:policy-failed:fresh-shell-selection:command-conflict');
+        return true;
+    });
+    assert.deepEqual(fs.readFileSync(f.dest), previous);
+    assert.deepEqual(fs.readFileSync(receipt), before);
+});
+test('fresh-shell startup cannot invalidate official bytes before the current command probe', async t => {
+    const f = fixture(t); f.receipt('2.0.18', f.binary);
+    f.shellBoundary = () => { fs.writeFileSync(f.dest, 'INERT independently changed'); return Buffer.from(f.dest + '\n'); };
+    await assert.rejects(policy.install(f.options), /changed-copy/);
+    assert.equal(f.probes.length, 0);
+    assert.equal(fs.readFileSync(f.dest, 'utf8'), 'INERT independently changed');
+});
+test('fresh-shell changes cannot be accepted as a promoted or preserved newer command', async t => {
+    for (const state of ['promoted', 'newer']) {
+        const f = fixture(t);
+        let selected = f.dest;
+        if (state === 'newer') {
+            selected = f.legacy('.opencode/bin', f.publish('@opencode/cli-linux-x64-baseline', '3.0.0'));
+            f.options.path = path.dirname(selected);
+        }
+        f.shellBoundary = () => { fs.writeFileSync(selected, 'INERT independently changed'); return Buffer.from(selected + '\n'); };
+        await assert.rejects(policy.install(f.options), error => {
+            assert.equal(policy.failureResult(error), state === 'promoted'
+                ? 'opencode-cli:recovery-required:policy-failed:installation:changed-copy'
+                : 'opencode-cli:policy-failed:installation:changed-copy'); return true;
+        });
+        assert.equal(fs.readFileSync(selected, 'utf8'), 'INERT independently changed');
+        assert.equal(fs.existsSync(path.join(path.dirname(f.dest), '.setup-opencode-cli.json')), false);
+    }
+});
+test('setup cached command cannot override verified PATH selection', async t => {
+    const f = fixture(t); f.receipt('2.0.18', f.binary);
+    const {api} = virtualPolicy(f, {env: {SETUP_OPENCODE_HASHED: '/foreign/opencode'}});
+    await assert.rejects(api.install(f.options), error => {
+        assert.equal(api.failureResult(error), 'opencode-cli:policy-failed:setup-selection:command-conflict');
+        return true;
+    });
+    assert.equal(f.probes.length, 0);
+    assert.deepEqual(fs.readFileSync(f.dest), f.binary);
+});
+test('fresh native fish loads the private profile and rejects aliases, functions and shadowing without running commands', {skip: !fs.existsSync('/usr/bin/fish')}, async t => {
+    const f = fixture(t), config = path.join(f.home, '.config/fish/config.fish');
+    fs.mkdirSync(path.dirname(config), {recursive: true});
+    const foreign = path.join(f.home, 'foreign/opencode');
+    fs.mkdirSync(path.dirname(foreign));
+    fs.writeFileSync(foreign, '#!/bin/sh\necho UNEXPECTED_EXECUTION > "$HOME/executed"\n', {mode: 0o700});
+    f.shellBoundary = (file, args, options) => nativeExecFileSync(file, args, options);
+    const {api} = virtualPolicy(f, {env: {SETUP_OPENCODE_SHELL: '/usr/bin/fish', HOME: f.home,
+        XDG_CONFIG_HOME: path.join(f.home, '.config'), XDG_DATA_HOME: path.join(f.home, '.data'),
+        XDG_CACHE_HOME: path.join(f.home, '.cache'), XDG_STATE_HOME: path.join(f.home, '.state')}});
+    fs.writeFileSync(config, 'set -gx PATH "$HOME/.local/bin" "$HOME/foreign" $PATH\n');
+    assert.equal(await api.install(f.options), 'installed');
+    f.options.commands = [f.dest];
+    assert.equal(await api.install(f.options), 'current');
+    const receipt = path.join(path.dirname(f.dest), '.setup-opencode-cli.json'), before = fs.readFileSync(receipt);
+    for (const profile of [
+        'set -gx PATH "$HOME/.local/bin" $PATH\nalias opencode "echo SECRET"\n',
+        'set -gx PATH "$HOME/.local/bin" $PATH\nfunction opencode; echo SECRET; end\n',
+        'set -gx PATH "$HOME/foreign" "$HOME/.local/bin" $PATH\n',
+    ]) {
+        fs.writeFileSync(config, profile);
+        await assert.rejects(api.install(f.options), error => {
+            assert.equal(api.failureResult(error), 'opencode-cli:policy-failed:fresh-shell-selection:command-conflict'); return true;
+        });
+        assert.deepEqual(fs.readFileSync(receipt), before);
+        assert.equal(fs.existsSync(path.join(f.home, 'executed')), false);
+        assert.equal(fs.readFileSync(config, 'utf8'), profile);
+    }
+});
+test('unverified fresh-shell evidence is bounded, secret-safe and never accepted for current or newer copies', async t => {
+    for (const release of ['2.0.18', '3.0.0']) {
+        const f = fixture(t), bytes = f.publish('@opencode/cli-linux-x64-baseline', release);
+        f.receipt(release, bytes);
+        const {api} = virtualPolicy(f);
+        for (const output of ['', 'SECRET\n' + f.dest + '\n', f.dest + '\nSECRET', f.dest + '\n\n']) {
+            f.shellBoundary = () => Buffer.from(output);
+            await assert.rejects(api.install(f.options), error => {
+                assert.equal(api.failureResult(error), 'opencode-cli:policy-failed:fresh-shell-selection:selection-unverified'); return true;
+            });
+        }
+        f.shellBoundary = () => { throw Object.assign(new Error('SECRET shell stderr'), {status: 3}); };
+        await assert.rejects(api.install(f.options), error => {
+            assert.equal(api.failureResult(error), 'opencode-cli:policy-failed:fresh-shell-selection:selection-unverified'); return true;
+        });
+        assert.deepEqual(fs.readFileSync(f.dest), bytes);
+        assert.equal(f.probes.length, 0);
     }
 });
 test('standalone migration preserves application data, credentials and shell files', async t => {
@@ -164,6 +279,40 @@ for (const failure of ['staged-version', 'promoted-version', 'unreachable', 'cha
     await assert.rejects(policy.install(f.options));
     assert.equal(fs.readFileSync(old, 'utf8'), failure === 'changed-copy' ? 'user change' : 'INERT official 1.2.3');
     assert.equal(fs.existsSync(f.dest), false);
+});
+test('original selection failure survives a failed cleanup with controlled recovery diagnostics', async t => {
+    const f = fixture(t);
+    f.shellBoundary = () => Buffer.from('/SECRET/private/opencode\n');
+    const remove = fs.rmSync;
+    const {api} = virtualPolicy(f, {}, {'node:fs': new Proxy(fs, {get(object, key) {
+        if (key === 'rmSync') return file => {
+            if (path.basename(file).startsWith('.setup-opencode-')) throw new Error('SECRET cleanup exception');
+            return remove(file, {recursive: true, force: true});
+        };
+        return object[key];
+    }})});
+    await assert.rejects(api.install(f.options), error => {
+        assert.equal(api.failureResult(error), 'opencode-cli:recovery-required:policy-failed:fresh-shell-selection:command-conflict');
+        return true;
+    });
+    assert.equal(fs.existsSync(f.dest), false);
+    assert.ok(fs.existsSync(path.join(path.dirname(f.dest), '.setup-opencode-cli.lock')));
+});
+test('current-copy probe failure survives temporary cleanup failure', async t => {
+    const f = fixture(t); f.receipt('2.0.18', f.binary);
+    const leftovers = [];
+    const {api} = virtualPolicy(f, {}, {
+        'node:child_process': {execFileSync: () => { throw new Error('SECRET probe'); }},
+        'node:fs': new Proxy(fs, {get(object, key) {
+            if (key === 'rmSync') return file => { leftovers.push(file); throw new Error('SECRET cleanup'); };
+            return object[key];
+        }}),
+    });
+    t.after(() => { for (const file of leftovers) fs.rmSync(file, {recursive: true, force: true}); });
+    await assert.rejects(api.install({...f.options, probe: undefined}), error => {
+        assert.equal(api.failureResult(error), 'opencode-cli:recovery-required:policy-failed:installation:version-probe'); return true;
+    });
+    assert.deepEqual(fs.readFileSync(f.dest), f.binary);
 });
 test('concurrent destination and occupied lock are preserved without clobbering', async t => {
     for (const mode of ['destination', 'lock']) {
@@ -269,8 +418,12 @@ function virtualPolicy(f, overrides = {}, modules = {}, log = () => assert.fail(
     }});
     const module = {exports: {}};
     const fakeProcess = {platform: 'linux', env: {}, getuid: process.getuid, report: process.report, argv: ['node', 'fixture'], ...overrides};
+    fakeProcess.env = {SETUP_OPENCODE_SHELL: '/fixture/fish', ...fakeProcess.env};
+    const native = modules['node:child_process'] || require('node:child_process');
+    const childProcess = {...native, execFileSync: (file, ...args) => file === fakeProcess.env.SETUP_OPENCODE_SHELL
+        ? f.shellBoundary(file, ...args) : native.execFileSync(file, ...args)};
     vm.runInNewContext(fs.readFileSync(require.resolve('../lib/opencode-cli.cjs'), 'utf8'), {
-        require: name => modules[name] || (name === 'node:fs' ? proxy : require(name)), module, process: fakeProcess,
+        require: name => name === 'node:child_process' ? childProcess : modules[name] || (name === 'node:fs' ? proxy : require(name)), module, process: fakeProcess,
         Buffer, URL, setTimeout, clearTimeout, console: {log, error: () => assert.fail('unexpected output')},
     });
     return {api: module.exports, mapped, process: fakeProcess};
@@ -568,6 +721,62 @@ function homebrewFixture(t, platform = 'linux') {
     });
     return Object.assign(f, {api, command, prefix, cellar, mapped, put, calls, observed});
 }
+test('lower-priority foreign Homebrew survives account-local install and repeated verification without inspection or execution', async t => {
+    const f = homebrewFixture(t);
+    f.statOverrides.set(f.prefix, {uid: process.getuid() + 1});
+    f.statOverrides.set(f.command, {uid: process.getuid() + 1});
+    f.options.path += path.delimiter + f.prefix + '/bin';
+    const snapshot = () => {
+        const walk = dir => fs.readdirSync(dir).sort().flatMap(name => {
+            const file = path.join(dir, name), st = fs.lstatSync(file);
+            return [[file, st.mode, st.ino, st.mtimeMs, st.isSymbolicLink() ? fs.readlinkSync(file) : st.isFile() ? fs.readFileSync(file) : null],
+                ...(st.isDirectory() ? walk(file) : [])];
+        });
+        return walk(f.mapped(f.prefix));
+    };
+    f.put(f.prefix + '/bin/.opencode-setup-recovery-existing', 'foreign recovery');
+    const before = snapshot();
+    assert.equal(await f.api.install(f.options), 'installed');
+    f.options.commands = [f.dest, f.command];
+    assert.equal(await f.api.install(f.options), 'current');
+    assert.deepEqual(snapshot(), before);
+    assert.equal(f.calls.some(call => call.file.startsWith(f.prefix)), false);
+    assert.equal(f.observed.some(([operation, file]) => file.startsWith(f.prefix + '/') &&
+        !(operation === 'lstatSync' && file === f.command)), false, 'do not inspect beyond the foreign ownership boundary');
+});
+for (const state of ['upgrade', 'newer', 'owned-migration', 'pinned', 'custom', 'staged-failure', 'promoted-failure']) {
+    test(`foreign commands remain untouched through account-local ${state}`, async t => {
+        const f = homebrewFixture(t);
+        f.statOverrides.set(f.prefix, {uid: process.getuid() + 1});
+        const native = f.mapped(f.cellar + '/bin/opencode'), receipt = f.mapped(f.cellar + '/INSTALL_RECEIPT.json');
+        const before = [fs.readFileSync(native), fs.readFileSync(receipt), fs.readlinkSync(f.mapped(f.command)), fs.lstatSync(receipt).mode];
+        if (['upgrade', 'staged-failure', 'promoted-failure'].includes(state)) f.receipt('2.0.10', f.publish('@opencode/cli-linux-x64-baseline', '2.0.10'));
+        if (state === 'newer') f.receipt('3.0.0', f.publish('@opencode/cli-linux-x64-baseline', '3.0.0'));
+        if (state === 'pinned') f.receipt('2.0.18', f.binary, {pinned: true});
+        if (state === 'owned-migration' || state === 'custom') f.legacy('.opencode/bin', state === 'custom' ? 'INERT custom' : 'INERT official 1.2.3');
+        if (state === 'custom') fs.writeFileSync(f.options.commands.at(-1), 'unidentified custom');
+        if (!f.options.commands.includes(f.command)) f.options.commands.push(f.command);
+        f.options.path += path.delimiter + f.prefix + '/bin';
+        f.duringProbe = count => { if ((state === 'staged-failure' && count === 1) || (state === 'promoted-failure' && count === 2)) throw new Error('inert probe refusal'); };
+        if (['pinned', 'custom', 'staged-failure', 'promoted-failure'].includes(state)) await assert.rejects(f.api.install(f.options));
+        else assert.equal(await f.api.install(f.options), state === 'newer' ? 'newer' : 'migrated');
+        assert.deepEqual([fs.readFileSync(native), fs.readFileSync(receipt), fs.readlinkSync(f.mapped(f.command)), fs.lstatSync(receipt).mode], before);
+        assert.equal(f.calls.some(call => call.file.startsWith(f.prefix)), false);
+        assert.deepEqual(fs.readdirSync(f.mapped(f.prefix + '/bin')), ['opencode']);
+    });
+}
+test('higher-priority foreign command cannot be hidden by account-local PATH membership', async t => {
+    const f = homebrewFixture(t);
+    f.statOverrides.set(f.prefix, {uid: process.getuid() + 1});
+    f.options.path = f.prefix + '/bin' + path.delimiter + path.dirname(f.dest);
+    await assert.rejects(f.api.install(f.options), error => {
+        assert.equal(f.api.failureResult(error), 'opencode-cli:policy-failed:setup-selection:foreign-command');
+        return true;
+    });
+    assert.equal(fs.existsSync(f.dest), false);
+    assert.equal(fs.readlinkSync(f.mapped(f.command)), '../Cellar/opencode/1.18.33/bin/opencode');
+    assert.equal(f.calls.some(call => call.file.startsWith(f.prefix)), false);
+});
 test('busy-system 0775/0664 Homebrew migration does not require a quiet process inventory', async t => {
     const f = homebrewFixture(t);
     // Model unrelated processes/threads starting, exiting and reusing IDs during
@@ -732,7 +941,9 @@ for (const phase of ['before-quarantine', 'before-publication', 'recovery']) {
             };
             await assert.rejects(f.api.install(f.options), error => {
                 assert.equal(f.api.failureResult(error), phase === 'before-quarantine'
-                    ? 'opencode-cli:policy-failed:homebrew-preflight:brew-snapshot-changed' : 'opencode-cli:recovery-required');
+                    ? 'opencode-cli:policy-failed:homebrew-preflight:brew-snapshot-changed'
+                    : phase === 'before-publication' ? 'opencode-cli:recovery-required:policy-failed:homebrew-preflight:brew-snapshot-changed'
+                    : 'opencode-cli:recovery-required:policy-failed:installation:version-probe');
                 return true;
             });
             assert.deepEqual(snapshot(changed), evidence, 'independent changes must never be repaired or overwritten');
@@ -828,7 +1039,9 @@ test('native npm Windows shim templates match the installed cmd-shim implementat
     for (const [name, expected] of Object.entries(policy.windowsNpmShims())) assert.equal(fs.readFileSync(path.join(f.home, name), 'utf8'), expected);
 });
 test('Windows npm command shims migrate only after official native-byte verification', async t => {
-    const f = fixture(t), {api} = virtualPolicy(f, {platform: 'win32', env: {SETUP_OPENCODE_ACL_VERIFIED: '1'}});
+    const f = fixture(t), {api} = virtualPolicy(f, {platform: 'win32', env: {SETUP_OPENCODE_ACL_VERIFIED: '1',
+        SETUP_OPENCODE_SHELL: '/fixture/pwsh.exe', SETUP_OPENCODE_FRESH_PATH: '/fixture/windows'}});
+    f.shellSelection = f.dest + '.exe';
     const directory = path.join(f.home, 'AppData/Roaming/npm'), root = path.join(directory, 'node_modules/opencode-ai');
     fs.mkdirSync(path.join(root, 'bin'), {recursive: true});
     fs.writeFileSync(path.join(root, 'package.json'), '{"name":"opencode-ai","version":"1.2.3"}');
