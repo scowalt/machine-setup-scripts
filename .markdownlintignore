@@ -1,3 +1,3 @@
-# CLAUDE.md contains vendored Backlog.md CLI guidance and is kept in upstream formatting.
-# Exclude it from markdownlint so we do not reformat vendored documentation in this repo.
+# Preserve CLAUDE.md's existing reference formatting without unrelated reformatting.
+# The focused skill configuration in docs/agents/ remains covered by markdownlint.
 CLAUDE.md
