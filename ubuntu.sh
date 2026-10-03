@@ -10103,23 +10103,38 @@ def trusted_home(raw, platform):
     require(home != Path('/') and home.stat().st_uid == UID, 'unsafe-home')
     return home
 
-def directory(path, create=False):
+def checked_directory(path, macos=False):
+    s = path.lstat()
+    if macos and sys.platform == 'darwin' and path == Path('/Applications'):
+        # Native admin (GID 80) may replace entries here. This is not a privacy
+        # proof or a general group-write exception; see ADR 0006.
+        require(stat.S_ISDIR(s.st_mode) and s.st_uid == 0 and s.st_gid == 80 and
+                stat.S_IMODE(s.st_mode) in (0o755, 0o775), 'unsafe-directory')
+    else:
+        require(stat.S_ISDIR(s.st_mode) and s.st_uid in (0, UID) and
+                (not s.st_mode & 0o022 or
+                 (s.st_uid == 0 and s.st_mode & stat.S_ISVTX)), 'unsafe-directory')
+    return s
+
+def directory(path, create=False, macos=False):
     # Check every ancestor before creation. Root-owned sticky /tmp is fixtures-only
     # in practice; production stages beneath the verified application directory.
     for item in [*reversed(path.parents), path]:
         try:
-            s = item.lstat()
+            checked_directory(item, macos)
         except FileNotFoundError:
             require(create, 'missing-directory')
             item.mkdir(mode=0o700)
-            s = item.lstat()
-        require(stat.S_ISDIR(s.st_mode) and s.st_uid in (0, UID) and
-                (not s.st_mode & 0o022 or
-                 (s.st_uid == 0 and s.st_mode & stat.S_ISVTX)), 'unsafe-directory')
+            checked_directory(item, macos)
     return path
 
-def regular(path):
-    directory(path.parent)
+def directory_identity(s):
+    # Exclude size/times/link count: our own lock/stage/rename operations change
+    # those. Ownership, group, permissions, type and filesystem identity must stay.
+    return (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_gid)
+
+def regular(path, macos=False):
+    directory(path.parent, macos=macos)
     s = path.lstat()
     require(stat.S_ISREG(s.st_mode) and s.st_uid == UID and s.st_nlink == 1 and
             not s.st_mode & 0o022, 'unsafe-file')
@@ -10128,8 +10143,8 @@ def regular(path):
 def stable(s):
     return (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
 
-def fingerprint(path):
-    s = regular(path)
+def fingerprint(path, macos=False):
+    s = regular(path, macos)
     digest = hashlib.sha256()
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, 'rb') as stream:
@@ -10175,8 +10190,12 @@ def installed_linux(path, latest):
             break
     raise Refusal('unverified-installed-appimage')
 
+def bundle_root_identity(path):
+    s = path.lstat()
+    return (stable(s), s.st_gid)
+
 def bundle(path):
-    directory(path)
+    directory(path, macos=True)
     require(path.stat().st_uid == UID, 'foreign-bundle')
     # Framework symlinks are normal; allow only bundle-contained resolved targets.
     for root, dirs, files in os.walk(path, followlinks=False):
@@ -10190,7 +10209,7 @@ def bundle(path):
                 require((stat.S_ISDIR(s.st_mode) or stat.S_ISREG(s.st_mode)) and
                         not s.st_mode & 0o022, 'unsafe-bundle-file')
     info = path / 'Contents/Info.plist'
-    regular(info)
+    regular(info, macos=True)
     data = plistlib.loads(info.read_bytes())
     require(data.get('CFBundleIdentifier') == 'dev.bb.desktop' and
             data.get('CFBundleExecutable') == 'bb', 'wrong-bundle-identity')
@@ -10339,12 +10358,14 @@ def menu_text(path):
             'Icon=applications-development\nTerminal=false\nCategories=Development;IDE;\n'
             'X-Setup-BB-Desktop=1\n')
 
-def promote(candidate, target, menu, text, stage, verify, unchanged, platform):
+def promote(candidate, target, menu, text, stage, verify, unchanged, platform, boundary=None):
     # Preserve both prior objects through all validation/menu failures. No native
     # updater lock is available: recheck process state immediately before rename.
     unchanged()
     if running(target, platform):
         require(exists(target), 'unverified-desktop-process')
+        if boundary:
+            unchanged()
         return 'deferred-running'
     unchanged()
     objects = [(candidate, target)]
@@ -10355,23 +10376,35 @@ def promote(candidate, target, menu, text, stage, verify, unchanged, platform):
     moved = []
     try:
         for index, (source, dest) in enumerate(objects):
-            directory(dest.parent)
+            if boundary:
+                boundary()
+            directory(dest.parent, macos=platform == 'macos')
             backup = stage / ('previous-' + str(index))
             had_old = exists(dest)
             if had_old:
                 os.rename(dest, backup)
             moved.append((dest, backup, had_old))
+            if boundary:
+                boundary()
             os.rename(source, dest)
+        if boundary:
+            boundary()
         verify(target)
+        if boundary:
+            boundary()
         if menu:
             regular(menu)
             require(menu.read_text() == text, 'menu-verification')
     except Exception:
         for dest, backup, had_old in reversed(moved):
-            directory(dest.parent)
+            if boundary:
+                boundary()
+            directory(dest.parent, macos=platform == 'macos')
             if exists(dest):
                 os.rename(dest, stage / ('rejected-' + dest.name))
             if had_old:
+                if boundary:
+                    boundary()
                 os.rename(backup, dest)
         raise
     return 'installed'
@@ -10398,8 +10431,28 @@ def install(platform):
         require(os.path.isabs(data_home) and Path(data_home).is_relative_to(home) and
                 Path(data_home) != home and '..' not in Path(data_home).parts, 'unsafe-menu-directory')
         menu = Path(data_home) / 'applications/dev.bb.desktop.desktop'
-    directory(target.parent, create=True)
-    require(target.parent.stat().st_uid == UID, 'foreign-applications-directory')
+    system_app = (platform == 'macos' and sys.platform == 'darwin' and
+                  target == Path('/Applications/bb.app'))
+    directory(target.parent, create=not system_app, macos=platform == 'macos')
+    require(target.parent.stat().st_uid == UID or system_app, 'foreign-applications-directory')
+    # Only an already-present system app selects this path. Fresh installs still
+    # use ~/Applications; never elevate, repair permissions or relocate a copy.
+    boundaries = []
+    if system_app:
+        for item in [*reversed(target.parent.parents), target.parent]:
+            boundaries.append((item, directory_identity(checked_directory(item, macos=True))))
+    def boundary():
+        # Parent-before-descendant revalidation also guards rollback and cleanup.
+        for item, identity in boundaries:
+            require(directory_identity(item.lstat()) == identity, 'transaction-changed')
+    def private_boundary(path):
+        if system_app:
+            boundary()
+            s = checked_directory(path, macos=True)
+            require(s.st_uid == UID and stat.S_IMODE(s.st_mode) == 0o700, 'unsafe-transaction-directory')
+            boundaries.append((path, directory_identity(s)))
+            boundary()
+    boundary()
     text = menu_text(target) if menu else None
     old_menu = None
     if menu:
@@ -10411,13 +10464,21 @@ def install(platform):
     lock = target.parent / '.setup-bb-desktop.lock'
     lock.mkdir(mode=0o700)  # An occupied/link/stale lock fails closed.
     lock_identity = (lock.stat().st_dev, lock.stat().st_ino)
+    private_boundary(lock)
     completed = False
+    transaction_ready = not system_app
     try:
+        boundary()
         stage = Path(tempfile.mkdtemp(prefix='stage-', dir=lock))
+        private_boundary(stage)
+        transaction_ready = True
         latest = release_asset(fetch(API + '/tags/desktop-latest'), platform, 'desktop-latest')
+        boundary()
         previous = None
+        previous_root = bundle_root_identity(target) if system_app else None
         if exists(target):
             previous = installed_linux(target, latest) if platform == 'linux' else bundle(target)
+            boundary()
             if platform == 'linux' and running(target, platform):
                 completed = True
                 return 'deferred-running'
@@ -10443,16 +10504,28 @@ def install(platform):
                 completed = True
                 return 'current' if previous[0] == latest['version'] else 'newer-preserved'
         archive = stage / 'download'
+        boundary()
         fetch(latest['browser_download_url'], archive, latest['size'])
+        boundary()
         require(archive.stat().st_size == latest['size'] and
-                fingerprint(archive) == latest['digest'][7:], 'integrity-mismatch')
+                fingerprint(archive, macos=platform == 'macos') == latest['digest'][7:], 'integrity-mismatch')
         if platform == 'macos':
+            boundary()
             candidate = unpack_mac(archive, stage)
+            boundary()
             identity = bundle(candidate)
+            boundary()
             require(identity[0] == latest['version'], 'bundle-version-mismatch')
             if previous:
                 require(previous[1] == identity[1], 'different-signing-team')
-                if running(target, platform):
+                is_running = running(target, platform)
+                if system_app:
+                    boundary()
+                    require(bundle(target) == previous and
+                            bundle_root_identity(target) == previous_root,
+                            'installation-changed')
+                    boundary()
+                if is_running:
                     completed = True
                     return 'deferred-running'
                 if version(previous[0]) >= version(identity[0]):
@@ -10465,24 +10538,33 @@ def install(platform):
             require(installed_linux(candidate, latest)[0] == latest['version'], 'invalid-appimage')
             verify = lambda path: require(fingerprint(path) == latest['digest'][7:], 'integrity-mismatch')
         def unchanged():
-            directory(target.parent)
+            boundary()
+            directory(target.parent, macos=platform == 'macos')
             actual = (installed_linux(target, latest) if platform == 'linux' else bundle(target)) if exists(target) else None
             require(actual == previous, 'installation-changed')
+            if system_app:
+                require(bundle_root_identity(target) == previous_root, 'installation-changed')
+            boundary()
             if menu:
                 regular(menu) if exists(menu) else directory(menu.parent)
                 require((menu.read_bytes() if exists(menu) else None) == old_menu, 'menu-changed')
-        result = promote(candidate, target, menu, text, stage, verify, unchanged, platform)
+        result = promote(candidate, target, menu, text, stage, verify, unchanged, platform,
+                         boundary if system_app else None)
         completed = True
         return result
     finally:
         # Retain an interrupted/failed rollback for manual recovery. Ordinary
         # preflight/download failures and completed rollbacks can be retried.
-        directory(lock)
+        boundary()
+        directory(lock, macos=platform == 'macos')
         require((lock.stat().st_dev, lock.stat().st_ino) == lock_identity, 'transaction-changed')
-        backups = list(lock.glob('stage-*/previous-*'))
-        if completed or not backups:
-            require(shutil.rmtree.avoids_symlink_attacks, 'unsafe-cleanup-runtime')
-            shutil.rmtree(lock)
+        # A system stage that never passed private-boundary validation is not
+        # ours to traverse/delete. Preserve it along with the lock on uncertainty.
+        if transaction_ready:
+            backups = list(lock.glob('stage-*/previous-*'))
+            if completed or not backups:
+                require(shutil.rmtree.avoids_symlink_attacks, 'unsafe-cleanup-runtime')
+                shutil.rmtree(lock)
 
 def main():
     try:
@@ -10508,7 +10590,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 297 | Last changed: Verify interactive OpenCode selection before committing native updates"
+    echo -e "${GRAY}Version 298 | Last changed: Safely maintain account-owned bb in native macOS Applications"
 
     if ! acquire_setup_lock; then
         return 1

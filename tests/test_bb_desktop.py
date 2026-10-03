@@ -15,6 +15,7 @@ from unittest.mock import Mock, patch
 import zipfile
 import plistlib
 import re
+import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ('mac', 'ubuntu', 'bazzite', 'wsl', 'pi')
@@ -416,8 +417,8 @@ class DesktopTests(unittest.TestCase):
     def test_post_install_verification_failure_rolls_back(self):
         original = self.old_install()
         original_fingerprint = self.ns['fingerprint']
-        def changed(path):
-            result = original_fingerprint(path)
+        def changed(path, macos=False):
+            result = original_fingerprint(path, macos)
             if path == self.target and path.read_bytes() == self.data:
                 return '0' * 64
             return result
@@ -838,6 +839,384 @@ class DesktopTests(unittest.TestCase):
         self.ns['command'] = lambda _: f'{os.getuid()} 123 bb\n'
         with self.assertRaisesRegex(self.ns['Refusal'], 'ambiguous-process'):
             self.real_running(path, 'macos')
+
+
+class MacApplicationsTests(unittest.TestCase):
+    """Real installer, inert native checks, reported macOS metadata on private files.
+
+    No chown, host /Applications access or desktop execution. The path adapter
+    maps native absolute paths before any installer I/O; stat/fstat agree on the
+    simulated account. HOME's native deny-delete ACL is not a POSIX mode bit and
+    is deliberately not invented as additional write authority by this fixture.
+    """
+    setUp = DesktopTests.setUp
+    tearDown = DesktopTests.tearDown
+    fetch = DesktopTests.fetch
+    command = DesktopTests.command
+    install = DesktopTests.install
+
+    def native_layout(self, number='1.0.0'):
+        native = self.base / 'native'
+        users = native / 'Users'
+        users.mkdir(parents=True)
+        home = users / 'scowalt'
+        self.home.rename(home)
+        self.sentinels = {home / p.relative_to(self.home): data for p, data in self.sentinels.items()}
+        self.home = home
+        os.environ['HOME'] = str(home)
+        # getpwuid was installed by the base fixture as a Mock.
+        self.ns['pwd'].getpwuid.return_value = types.SimpleNamespace(pw_dir=str(home))
+        self.target = native / 'Applications/bb.app'
+        self.target.parent.mkdir()
+        with zipfile.ZipFile(io.BytesIO(mac_zip(number))) as archive:
+            archive.extractall(self.target.parent)
+        self.data = mac_zip(self.number)
+        self.latest = release(self.number, self.data, 'macos')
+        self.ns['UID'] = 501
+        self.ns['Path'] = lambda *args: native / Path(*args).relative_to('/') if args and str(args[0]) in (
+            '/', '/Applications', '/Applications/bb.app') else Path(*args)
+        self.metadata = {
+            native: dict(st_uid=0, st_gid=0, st_mode=stat.S_IFDIR | 0o755),
+            users: dict(st_uid=0, st_gid=80, st_mode=stat.S_IFDIR | 0o755),
+            home: dict(st_uid=501, st_gid=20, st_mode=stat.S_IFDIR | 0o755),
+            home / 'Applications': dict(st_uid=501, st_gid=20, st_mode=stat.S_IFDIR | 0o700),
+            self.target.parent: dict(st_uid=0, st_gid=80, st_mode=stat.S_IFDIR | 0o775),
+            self.target: dict(st_uid=501, st_gid=80, st_mode=stat.S_IFDIR | 0o755),
+        }
+        real_stat, real_fstat = Path.stat, os.fstat
+        def metadata(s, overrides=None):
+            fields = {key: getattr(s, key) for key in dir(s) if key.startswith('st_')}
+            if s.st_uid == os.getuid():
+                fields.update(st_uid=501, st_gid=20)
+            fields.update(overrides or {})
+            return types.SimpleNamespace(**fields)
+        def path_stat(path, **kwargs):
+            return metadata(real_stat(path, **kwargs), self.metadata.get(path))
+        self.addCleanup(patch.stopall)
+        patch.object(Path, 'stat', path_stat).start()
+        patch.object(os, 'fstat', lambda fd: metadata(real_fstat(fd))).start()
+        patch.object(self.ns['sys'], 'platform', 'darwin').start()
+        patch.object(subprocess, 'run', side_effect=AssertionError('native execution forbidden')).start()
+
+    def test_root_admin_parent_without_group_write_also_updates(self):
+        self.native_layout()
+        self.metadata[self.target.parent]['st_mode'] = stat.S_IFDIR | 0o755
+        self.assertEqual(self.install('macos'), 'installed')
+
+    def test_reported_root_admin_applications_updates_in_place(self):
+        self.native_layout()
+        parent_before = self.target.parent.stat()
+        with patch.object(os, 'chmod', side_effect=AssertionError('permission repair forbidden')), \
+                patch.object(os, 'chown', side_effect=AssertionError('ownership repair forbidden')):
+            self.assertEqual(self.install('macos'), 'installed')
+        self.assertEqual(plistlib.loads((self.target / 'Contents/Info.plist').read_bytes())[
+            'CFBundleShortVersionString'], self.number)
+        parent_after = self.target.parent.stat()
+        self.assertEqual((parent_after.st_uid, parent_after.st_gid, parent_after.st_mode),
+                         (parent_before.st_uid, parent_before.st_gid, parent_before.st_mode))
+        self.assertFalse((self.home / 'Applications/bb.app').exists())
+        self.assertFalse((self.target.parent / '.setup-bb-desktop.lock').exists())
+
+    def installed_bytes(self):
+        return (self.target / 'Contents/Info.plist').read_bytes()
+
+    def test_current_newer_and_real_running_deferral_preserve_system_copy(self):
+        self.native_layout(self.number)
+        original = self.installed_bytes()
+        self.assertEqual(self.install('macos'), 'current')
+        self.data = mac_zip('1.0.0')
+        self.latest = release('1.0.0', self.data, 'macos')
+        self.assertEqual(self.install('macos'), 'newer-preserved')
+        self.data = mac_zip('2.0.0')
+        self.latest = release('2.0.0', self.data, 'macos')
+        self.ns['command'] = lambda args: (f'501 123 {self.target}/Contents/MacOS/bb\n'
+                                           if args[0] == '/bin/ps' else self.command(args))
+        self.ns['running'] = self.real_running
+        self.assertEqual(self.install('macos'), 'deferred-running')
+        self.assertEqual(self.installed_bytes(), original)
+        self.assertFalse((self.home / 'Applications/bb.app').exists())
+        self.assertFalse((self.target.parent / '.setup-bb-desktop.lock').exists())
+
+    def test_running_at_promotion_defers_without_renaming(self):
+        self.native_layout()
+        original = self.installed_bytes()
+        results = iter([False, True])
+        self.ns['running'] = lambda *_: next(results)
+        with patch.object(os, 'rename', side_effect=AssertionError('running app renamed')):
+            self.assertEqual(self.install('macos'), 'deferred-running')
+        self.assertEqual(self.installed_bytes(), original)
+
+    def test_nonstandard_applications_metadata_rejected_before_fetch(self):
+        self.native_layout()
+        original = self.installed_bytes()
+        accepted = self.metadata[self.target.parent].copy()
+        for change in ({'st_uid': 501}, {'st_uid': 999}, {'st_gid': 20},
+                       {'st_gid': 0, 'st_mode': stat.S_IFDIR | 0o755},
+                       {'st_mode': stat.S_IFDIR | 0o777}, {'st_mode': stat.S_IFDIR | 0o1775},
+                       {'st_mode': stat.S_IFLNK | 0o775}, {'st_mode': stat.S_IFREG | 0o775}):
+            with self.subTest(change=change):
+                self.metadata[self.target.parent] = {**accepted, **change}
+                with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-directory'):
+                    self.install('macos')
+                self.assertFalse(any(c[0] == 'fetch' for c in self.calls))
+                self.assertEqual(self.installed_bytes(), original)
+                self.assertFalse((self.target.parent / '.setup-bb-desktop.lock').exists())
+
+    def test_exception_requires_native_macos_and_explicit_mac_caller(self):
+        self.native_layout()
+        with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-directory'):
+            self.ns['directory'](self.target.parent)
+        with patch.object(self.ns['sys'], 'platform', 'linux'):
+            with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-directory'):
+                self.install('macos')
+        nested = self.target / 'Contents'
+        self.metadata[nested] = dict(st_uid=501, st_gid=80, st_mode=stat.S_IFDIR | 0o775)
+        with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-bundle-file'):
+            self.install('macos')
+        del self.metadata[nested]
+        self.metadata[self.home / 'Applications']['st_mode'] = stat.S_IFDIR | 0o775
+        with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-directory'):
+            self.ns['directory'](self.home / 'Applications', macos=True)
+
+    def test_root_foreign_and_writable_bundles_still_refused(self):
+        self.native_layout()
+        original = self.installed_bytes()
+        accepted = self.metadata[self.target].copy()
+        for change, reason in (({'st_uid': 0}, 'foreign-bundle'),
+                               ({'st_uid': 999}, 'unsafe-directory'),
+                               ({'st_mode': stat.S_IFDIR | 0o775}, 'unsafe-directory')):
+            with self.subTest(change=change):
+                self.metadata[self.target] = {**accepted, **change}
+                with self.assertRaisesRegex(self.ns['Refusal'], reason):
+                    self.install('macos')
+                self.assertEqual(self.installed_bytes(), original)
+                self.assertFalse((self.target.parent / '.setup-bb-desktop.lock').exists())
+
+    def test_linked_parent_and_target_are_not_followed(self):
+        self.native_layout()
+        parent = self.target.parent
+        real_parent = parent.with_name('saved-applications')
+        parent.rename(real_parent)
+        parent.symlink_to(real_parent)
+        del self.metadata[parent]
+        with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-directory'):
+            self.install('macos')
+        parent.unlink()
+        real_parent.rename(parent)
+        self.metadata[parent] = dict(st_uid=0, st_gid=80, st_mode=stat.S_IFDIR | 0o775)
+        saved = self.target.with_name('saved.app')
+        self.target.rename(saved)
+        self.target.symlink_to(saved)
+        del self.metadata[self.target]
+        with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-directory'):
+            self.install('macos')
+        self.assertTrue((saved / 'Contents/Info.plist').is_file())
+        self.assertFalse((parent / '.setup-bb-desktop.lock').exists())
+
+    def test_system_nightly_custom_signature_and_signer_rejections_preserve_copy(self):
+        self.native_layout()
+        original = self.installed_bytes()
+        plist = self.target / 'Contents/Info.plist'
+        bad = plistlib.loads(original)
+        bad['CFBundleIdentifier'] = 'dev.bb.desktop.nightly'
+        plist.write_bytes(plistlib.dumps(bad))
+        with self.assertRaisesRegex(self.ns['Refusal'], 'wrong-bundle-identity'):
+            self.install('macos')
+        self.assertEqual(plistlib.loads(self.installed_bytes()), bad)
+        plist.write_bytes(original)
+        for failure, reason in (('signature', 'native-check-failed'), ('signer', 'different-signing-team'),
+                                ('notarization', 'not-notarized')):
+            def command(args):
+                if failure == 'signature' and args[:2] == ['/usr/bin/codesign', '--verify']:
+                    raise self.ns['Refusal']('native-check-failed')
+                if failure == 'notarization' and args[0] == '/usr/sbin/spctl':
+                    return 'source=Developer ID\n'
+                result = self.command(args)
+                return result.replace('ABCDEFGHIJ', 'OTHERTEAM0') if failure == 'signer' and 'stage-' in args[-1] else result
+            self.ns['command'] = command
+            with self.subTest(failure=failure), self.assertRaisesRegex(self.ns['Refusal'], reason):
+                self.install('macos')
+            self.assertEqual(self.installed_bytes(), original)
+
+    def test_ambiguous_copies_and_stale_linked_locks_are_preserved(self):
+        self.native_layout()
+        duplicate = self.home / 'Applications/bb.app'
+        duplicate.mkdir()
+        with self.assertRaisesRegex(self.ns['Refusal'], 'ambiguous-applications'):
+            self.install('macos')
+        duplicate.rmdir()
+        lock = self.target.parent / '.setup-bb-desktop.lock'
+        lock.mkdir()
+        (lock / 'recovery').write_text('preserve')
+        with self.assertRaises(FileExistsError):
+            self.install('macos')
+        self.assertEqual((lock / 'recovery').read_text(), 'preserve')
+        saved = lock.with_name('saved-lock')
+        lock.rename(saved)
+        lock.symlink_to(saved)
+        with self.assertRaises(FileExistsError):
+            self.install('macos')
+        self.assertEqual((saved / 'recovery').read_text(), 'preserve')
+
+    def test_parent_identity_owner_group_mode_changes_fail_closed(self):
+        self.native_layout()
+        original = self.installed_bytes()
+        parent = self.target.parent
+        accepted = self.metadata[parent].copy()
+        initial = parent.stat()
+        for change in ({'st_ino': initial.st_ino + 1}, {'st_dev': initial.st_dev + 1},
+                       {'st_uid': 501}, {'st_gid': 20}, {'st_mode': stat.S_IFDIR | 0o755}):
+            def fetch(url, target=None, maximum=None):
+                result = self.fetch(url, target, maximum)
+                if target:
+                    self.metadata[parent].update(change)
+                return result
+            self.ns['fetch'] = fetch
+            with self.subTest(change=change), self.assertRaisesRegex(self.ns['Refusal'], 'transaction-changed'):
+                self.install('macos')
+            self.assertEqual(self.installed_bytes(), original)
+            lock = parent / '.setup-bb-desktop.lock'
+            self.assertTrue(lock.exists())  # uncertainty is not authority to clean up
+            self.metadata[parent] = accepted.copy()
+            shutil.rmtree(lock)  # only this fixture's synthetic recovery tree
+
+    def test_changed_target_cannot_be_current_or_deferred(self):
+        self.native_layout(self.number)
+        original = self.installed_bytes()
+        def running(*_):
+            self.metadata[self.target]['st_gid'] = 20
+            return True
+        self.ns['running'] = running
+        with self.assertRaisesRegex(self.ns['Refusal'], 'installation-changed'):
+            self.install('macos')
+        self.assertEqual(self.installed_bytes(), original)
+
+    def test_changed_lock_and_stage_are_retained_not_cleaned(self):
+        self.native_layout()
+        original = self.installed_bytes()
+        for part in ('lock', 'stage'):
+            def fetch(url, target=None, maximum=None):
+                result = self.fetch(url, target, maximum)
+                if target:
+                    path = target.parent if part == 'stage' else target.parent.parent
+                    self.metadata[path] = dict(st_mode=stat.S_IFDIR | 0o750)
+                return result
+            self.ns['fetch'] = fetch
+            with self.subTest(part=part), self.assertRaisesRegex(self.ns['Refusal'], 'transaction-changed'):
+                self.install('macos')
+            self.assertEqual(self.installed_bytes(), original)
+            lock = self.target.parent / '.setup-bb-desktop.lock'
+            self.assertTrue(lock.exists())
+            self.metadata = {p: s for p, s in self.metadata.items() if not p.is_relative_to(lock)}
+            shutil.rmtree(lock)
+
+    def test_failed_verification_rolls_back_in_system_parent(self):
+        self.native_layout()
+        original = self.installed_bytes()
+        def command(args):
+            if args[:2] == ['/usr/bin/codesign', '--verify'] and args[-1] == str(self.target) and self.installed_bytes() != original:
+                raise self.ns['Refusal']('native-check-failed')
+            return self.command(args)
+        self.ns['command'] = command
+        with self.assertRaisesRegex(self.ns['Refusal'], 'native-check-failed'):
+            self.install('macos')
+        self.assertEqual(self.installed_bytes(), original)
+        self.assertFalse((self.target.parent / '.setup-bb-desktop.lock').exists())
+
+    def test_parent_change_before_rollback_retains_backup(self):
+        self.native_layout()
+        original = self.installed_bytes()
+        def command(args):
+            if args[:2] == ['/usr/bin/codesign', '--verify'] and args[-1] == str(self.target) and self.installed_bytes() != original:
+                self.metadata[self.target.parent]['st_gid'] = 20
+                raise self.ns['Refusal']('native-check-failed')
+            return self.command(args)
+        self.ns['command'] = command
+        with self.assertRaisesRegex(self.ns['Refusal'], 'transaction-changed'):
+            self.install('macos')
+        backups = list(self.target.parent.glob('.setup-bb-desktop.lock/stage-*/previous-0'))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual((backups[0] / 'Contents/Info.plist').read_bytes(), original)
+        self.assertFalse((self.home / 'Applications/bb.app').exists())
+
+    def test_unverified_new_stage_is_retained_without_traversal_or_cleanup(self):
+        self.native_layout()
+        original = self.installed_bytes()
+        mkdtemp = tempfile.mkdtemp
+        made = []
+        def unsafe_stage(*args, **kwargs):
+            path = Path(mkdtemp(*args, **kwargs))
+            (path / 'unverified').write_text('preserve')
+            self.metadata[path] = dict(st_uid=999)
+            made.append(path)
+            return str(path)
+        with patch.object(tempfile, 'mkdtemp', unsafe_stage):
+            with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-directory'):
+                self.install('macos')
+        self.assertEqual(len(made), 1)
+        self.assertEqual((made[0] / 'unverified').read_text(), 'preserve')
+        self.assertEqual(self.installed_bytes(), original)
+        self.assertFalse(any(c[0] == 'fetch' for c in self.calls))
+
+    def test_link_substituted_for_stage_is_not_followed_or_cleaned(self):
+        self.native_layout()
+        outside = self.base / 'outside-stage'
+        outside.mkdir()
+        marker = outside / 'preserve'
+        marker.write_text('unrelated')
+        def fetch(url, target=None, maximum=None):
+            result = self.fetch(url, target, maximum)
+            if target:
+                stage = target.parent
+                stage.rename(stage.with_name('saved-stage'))
+                stage.symlink_to(outside)
+            return result
+        self.ns['fetch'] = fetch
+        with self.assertRaisesRegex(self.ns['Refusal'], 'transaction-changed'):
+            self.install('macos')
+        self.assertEqual(marker.read_text(), 'unrelated')
+        self.assertTrue((self.target.parent / '.setup-bb-desktop.lock').exists())
+
+    def test_parent_replaced_after_backup_preserves_recovery_without_promotion(self):
+        self.native_layout()
+        original = self.installed_bytes()
+        rename = os.rename
+        calls = []
+        def replaced(source, dest):
+            calls.append((source, dest))
+            rename(source, dest)
+            if source == self.target:
+                self.metadata[self.target.parent]['st_ino'] = self.target.parent.stat().st_ino + 1
+        with patch.object(os, 'rename', replaced):
+            with self.assertRaisesRegex(self.ns['Refusal'], 'transaction-changed'):
+                self.install('macos')
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(self.target.exists())
+        self.assertEqual((calls[0][1] / 'Contents/Info.plist').read_bytes(), original)
+        self.assertFalse((self.home / 'Applications/bb.app').exists())
+
+    def test_insufficient_parent_access_does_not_elevate_or_fall_back(self):
+        self.native_layout()
+        original = self.installed_bytes()
+        mkdir = Path.mkdir
+        def denied(path, *args, **kwargs):
+            if path == self.target.parent / '.setup-bb-desktop.lock':
+                raise PermissionError('inert native denial')
+            return mkdir(path, *args, **kwargs)
+        with patch.object(Path, 'mkdir', denied):
+            with self.assertRaises(PermissionError):
+                self.install('macos')
+        self.assertEqual(self.installed_bytes(), original)
+        self.assertFalse(any(c[0] == 'fetch' for c in self.calls))
+        self.assertFalse((self.home / 'Applications/bb.app').exists())
+
+    def test_system_app_absent_uses_user_directory_without_duplicate(self):
+        self.native_layout()
+        shutil.rmtree(self.target)
+        self.assertEqual(self.install('macos'), 'installed')
+        self.assertTrue((self.home / 'Applications/bb.app/Contents/Info.plist').is_file())
+        self.assertFalse(self.target.exists())
+        self.assertFalse((self.target.parent / '.setup-bb-desktop.lock').exists())
 
 
 class WiringTests(unittest.TestCase):
