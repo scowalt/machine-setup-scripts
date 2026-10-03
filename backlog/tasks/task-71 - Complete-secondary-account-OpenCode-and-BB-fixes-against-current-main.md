@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@openai'
 created_date: '2026-10-03 15:23'
-updated_date: '2026-10-03 15:23'
+updated_date: '2026-10-03 15:50'
 labels:
   - ready-for-agent
 dependencies: []
@@ -96,6 +96,8 @@ Continue the user-approved dedicated-worktree, TDD, serialized contained-test an
 
 <!-- SECTION:NOTES:BEGIN -->
 Canonical renamed record for the originally approved branch-local TASK-69. Main independently published a different TASK-69, and another existing worktree owns TASK-70 Beszel; archived earlier local record names preserve history without overwriting either. Original Infisical child is explicitly superseded, stopped and unmerged. Publication has user authorization.
+
+Upstream and BB merge completed at 23947aa, preserving d1a8bd0 behavior; 17/17 contained suites pass. OpenCode worker is completing remaining actual-caller evidence and will merge that integration tip. Superseded Infisical work is preserved at Git stash object 4f001892b7b2cae906889acb03340cf2f23c93a4 and private SUPERSEDED-INFISICAL.patch; its stopped worktree is clean. The outer coordinator timeout was reviewed in COORDINATION-REVIEW.md; the interrupted run is not counted as complete. STOP marker archived, no kernel/fixture guard changed; remaining tests resumed under the same runner with a longer outer orchestration timeout.
 <!-- SECTION:NOTES:END -->
 
 ## Definition of Done
