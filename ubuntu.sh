@@ -8794,7 +8794,7 @@ bb_server_failure() {
         preflight.metadata-link) _reason='linked BB metadata is not supported' ;;
         preflight.migration-state) _reason='existing server move or import marker blocks setup' ;;
         preflight.app-unit-file|preflight.ingress-unit-file|preflight.guard-file|preflight.endpoint-file|preflight.config-file|preflight.env-file|npm.owner-file|npm.pending-file) _reason='ownership, type, permissions or managed identity is unsafe or unverified' ;;
-        preflight.unit-dropins) _reason='service drop-in path exists' ;;
+        preflight.unit-dropins) _reason='service drop-in path is not a verified empty directory' ;;
         preflight.endpoint-read) _reason='saved endpoint could not be read' ;;
         preflight.endpoint-port|preflight.endpoint-origin) _reason='saved endpoint value is invalid or inconsistent' ;;
         preflight.app-unit|preflight.ingress-unit) _reason='service fragment or drop-in ownership is unverified' ;;
@@ -9091,6 +9091,22 @@ bb_owned_script() {
         { IFS= read -r _first && IFS= read -r _second; } 2>/dev/null < "${_file}" || return 1
         [[ "${_first}" == '#!/usr/bin/env bash' && "${_second}" == "${_marker}" ]] || return 1
     fi
+}
+
+# Empty directories carry no overrides, but only accept a readable, account-owned
+# real directory with no other writers. Never remove it or inspect child contents.
+bb_unit_dropins_empty() {
+    local _directory="$1" _before _after _entries
+    [[ -d "${_directory}" && ! -L "${_directory}" && -r "${_directory}" && -x "${_directory}" ]] || return 1
+    _before=$(stat -c '%d:%i:%u:%g:%f:%y:%z' -- "${_directory}" 2>/dev/null) || return 1
+    [[ -n "${_before}" ]] || return 1
+    bb_owned_safe_directory "${_directory}" || return 1
+    # find includes hidden entries, does not follow links, and reports enumeration
+    # failures instead of confusing an unreadable directory with an empty one.
+    _entries=$(find "${_directory}" -mindepth 1 -maxdepth 1 -printf x -quit 2>/dev/null) || return 1
+    [[ -z "${_entries}" && -d "${_directory}" && ! -L "${_directory}" ]] || return 1
+    _after=$(stat -c '%d:%i:%u:%g:%f:%y:%z' -- "${_directory}" 2>/dev/null) || return 1
+    [[ "${_before}" == "${_after}" ]]
 }
 
 bb_unit_preflight() {
@@ -9468,9 +9484,9 @@ setup_bb_server() {
     bb_owned_file "${_units}/setup-bb-ingress.service" '# setup-managed bb ingress v1' || { bb_server_failure preflight.ingress-unit-file; return 1; }
     local _unit
     for _unit in setup-bb-app.service setup-bb-ingress.service; do
-        if [[ -e "${_units}/${_unit}.d" || -L "${_units}/${_unit}.d" ]]; then
+        if [[ -e "${_units}/${_unit}.d" || -L "${_units}/${_unit}.d" ]] && ! bb_unit_dropins_empty "${_units}/${_unit}.d"; then
             bb_server_failure preflight.unit-dropins
-            print_error "BB service preflight: ${_unit} has a drop-in path at \$HOME/.config/systemd/user/${_unit}.d. Review its overrides before rerunning setup; BB setup is blocked and overrides are left unchanged."
+            print_error "BB service preflight: ${_unit} has a nonempty or unverified drop-in path at \$HOME/.config/systemd/user/${_unit}.d. Review its overrides before rerunning setup; BB setup is blocked and overrides are left unchanged."
             return 1
         fi
     done
@@ -10258,7 +10274,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 293 | Last changed: Drop completed secrets-manager retirement"
+    echo -e "${GRAY}Version 294 | Last changed: Drop completed secrets-manager retirement"
 
     if ! acquire_setup_lock; then
         return 1

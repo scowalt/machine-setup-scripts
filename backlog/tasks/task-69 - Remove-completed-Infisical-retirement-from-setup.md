@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@pi'
 created_date: '2026-10-03 03:49'
-updated_date: '2026-10-03 14:32'
+updated_date: '2026-10-03 14:39'
 labels: []
 dependencies: []
 references:
@@ -141,6 +141,8 @@ Vertical contained TDD slices complete: APT/WSL red /tmp/setup-fixture-matrix-gc
 Implementation verification complete; parent retains independent review and final closure (status remains In Progress). All 42 aggregate entries passed at /tmp/setup-fixture-matrix-mbwoo4od; 493 reported unittest executions include 16 explicit skips, plus OpenCode 115/116 with one optional skip. Separate reviewed BB plugin-refresh suite passed 24/24 at /tmp/setup-fixture-matrix-0bjtsst1. Bash syntax/ShellCheck on seven files, changed Python AST, Windows parsing/AST fixtures, whitespace and source-preservation checks passed. Full commands, red/green history, scope, skips, native limits and hook limitation: docs/research/2026-10-03-infisical-non-management-validation.md. No trusted installed Markdownlint; no bunx cache/tool fetch. Commit will exclude only bunx shellcheck/markdownlint hooks, using already-passing standalone ShellCheck and native Gitleaks. No containment refusal/unexpected real effect; historical incident uncertainty unchanged.
 
 Integrated aaaa222 by fast-forward onto integration/task-69-infisical-non-management; merger verified clean identical tree. Parent verified 42/42 aggregate statuses, separate plugin-refresh result and 17 source/containment hashes. Independent standards review (@thread:thr_jbey7n7ki2): 0 hard violations, 0 actionable smells. Independent spec review (@thread:thr_d9mijxqpzy): 0 findings. All four AC accepted with recorded optional/native and offline Markdownlint limitations. No review fixes needed; no PR/push or rollout.
+
+User requested publication to remote main. Merged origin/main 1b75ae3, preserving the verified-empty BB service drop-in change and regressions. Only conflict was Ubuntu version banner, resolved to version 294. Reviewed upstream fixture containment; integration cohort 5/5 passed at /tmp/setup-fixture-matrix-68lrnk13 (containment, setup-default, Infisical non-management, BB server, plugin refresh). All setup Bash syntax and standalone shellcheck *.sh pass. Full contained pre-push hook remains enabled for publication; offline Markdownlint limitation is unchanged.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
