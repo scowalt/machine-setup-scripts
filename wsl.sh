@@ -6448,241 +6448,6 @@ install_doppler() {
     fi
 }
 
-# BEGIN INFISICAL APT SOURCE HELPER
-retire_infisical_apt_sources() {
-    sudo /usr/bin/python3 -I - /etc/apt <<'INFISICAL_APT_PY'
-import os
-import re
-import stat
-import sys
-from urllib.parse import urlsplit
-
-root = sys.argv[1]
-old = 'dl.cloudsmith.io'
-new = 'artifacts-cli.infisical.com'
-
-def official(uri):
-    try:
-        parsed = urlsplit(uri)
-        return (parsed.scheme == 'https' and not parsed.username and not parsed.password
-                and not parsed.port and not parsed.query and not parsed.fragment
-                and ((parsed.hostname == old and parsed.path.startswith('/public/infisical/infisical-cli/deb/'))
-                     or (parsed.hostname == new and parsed.path in ('/deb', '/deb/'))))
-    except ValueError:
-        return False
-
-def strip_list(data):
-    result = []
-    for line in data.splitlines(keepends=True):
-        match = re.match(rb'^\s*deb(?:-src)?\s+(?:\[[^\]\r\n]*\]\s+)?(\S+)', line)
-        if match and official(match.group(1).decode('utf-8', 'replace')):
-            continue
-        result.append(line)
-    return b''.join(result)
-
-def strip_sources(data):
-    pieces = re.split(rb'(\r?\n[ \t]*\r?\n)', data)
-    output = []
-    for i in range(0, len(pieces), 2):
-        stanza = pieces[i]
-        fields = []
-        for line in stanza.splitlines():
-            if line.startswith((b' ', b'\t')):
-                if fields:
-                    fields[-1][1].append(line.strip())
-            elif b':' in line:
-                key, value = line.split(b':', 1)
-                fields.append((key.lower(), [value.strip()]))
-        uris = [b' '.join(parts).decode('utf-8', 'replace').split()
-                for key, parts in fields if key == b'uris']
-        values = [value for field in uris for value in field]
-        matches = [official(value) for value in values]
-        if any(matches):
-            if len(uris) != 1 or not all(matches):
-                raise ValueError('mixed or ambiguous Deb822 URIs')
-            stanza = b''
-        if stanza:
-            output.append(stanza)
-            if i + 1 < len(pieces):
-                output.append(pieces[i + 1])
-    return b''.join(output)
-
-try:
-    ancestor = os.open(os.path.dirname(root), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    ancestor_info = os.fstat(ancestor)
-    os.close(ancestor)
-    if ancestor_info.st_uid != os.geteuid() or ancestor_info.st_mode & 0o022:
-        raise ValueError('unsafe source ancestor')
-    rootfd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    parent = os.fstat(rootfd)
-    if parent.st_uid != os.geteuid() or parent.st_mode & 0o022:
-        raise ValueError('unsafe source directory')
-    dirs = [(rootfd, 'sources.list')]
-    try:
-        child = os.open('sources.list.d', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=rootfd)
-    except FileNotFoundError:
-        child = None
-    if child is not None:
-        parent = os.fstat(child)
-        if parent.st_uid != os.geteuid() or parent.st_mode & 0o022:
-            raise ValueError('unsafe source directory')
-        dirs.extend((child, name) for name in os.listdir(child) if name.endswith(('.list', '.sources')))
-    changes = []
-    # Inspect every applicable candidate before changing any one of them.
-    for directory, name in dirs:
-        try:
-            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-        except FileNotFoundError:
-            continue
-        with os.fdopen(fd, 'rb') as file:
-            info = os.fstat(file.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.geteuid() or info.st_mode & 0o022:
-                raise ValueError('unsafe source metadata')
-            attributes = os.listxattr(file.fileno())
-            data = file.read(1024 * 1024 + 1)
-            if len(data) > 1024 * 1024:
-                raise ValueError('oversized source')
-        updated = strip_sources(data) if name.endswith('.sources') else strip_list(data)
-        if updated != data:
-            if attributes:
-                raise ValueError('source has extended metadata')
-            changes.append((directory, name, info, data, updated))
-    for directory, name, info, data, updated in changes:
-        check = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-        with os.fdopen(check, 'rb') as file:
-            now = os.fstat(file.fileno())
-            if (now.st_dev, now.st_ino, now.st_size, now.st_mtime_ns, now.st_ctime_ns,
-                now.st_mode, now.st_uid, now.st_gid, now.st_nlink) != (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns,
-                info.st_mode, info.st_uid, info.st_gid, info.st_nlink) or os.listxattr(file.fileno()) or file.read() != data:
-                raise ValueError('source changed during retirement')
-        # Use an exclusive sibling with the same ownership and mode, then atomic rename.
-        tmp = '.infisical-retirement-%d-%s' % (os.getpid(), name)
-        created = None
-        try:
-            out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, stat.S_IMODE(info.st_mode), dir_fd=directory)
-            created = os.fstat(out)
-            with os.fdopen(out, 'wb') as file:
-                os.fchown(file.fileno(), info.st_uid, info.st_gid)
-                os.fchmod(file.fileno(), stat.S_IMODE(info.st_mode))
-                file.write(updated)
-                file.flush()
-                os.fsync(file.fileno())
-            current = os.stat(name, dir_fd=directory, follow_symlinks=False)
-            if (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns,
-                current.st_mode, current.st_uid, current.st_gid, current.st_nlink) != (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns,
-                info.st_mode, info.st_uid, info.st_gid, info.st_nlink):
-                raise ValueError('source changed before replacement')
-            temp_now = os.stat(tmp, dir_fd=directory, follow_symlinks=False)
-            if (temp_now.st_dev, temp_now.st_ino) != (created.st_dev, created.st_ino):
-                raise ValueError('temporary source changed')
-            os.rename(tmp, name, src_dir_fd=directory, dst_dir_fd=directory)
-            os.fsync(directory)
-        finally:
-            if created is not None:
-                try:
-                    temp_now = os.stat(tmp, dir_fd=directory, follow_symlinks=False)
-                    if (temp_now.st_dev, temp_now.st_ino) == (created.st_dev, created.st_ino):
-                        os.unlink(tmp, dir_fd=directory)
-                except FileNotFoundError:
-                    pass
-    if child is not None:
-        os.close(child)
-    os.close(rootfd)
-except (OSError, ValueError) as exc:
-    print('Infisical APT source retirement failed (unsafe or unavailable source metadata).', file=sys.stderr)
-    sys.exit(1)
-INFISICAL_APT_PY
-}
-# END INFISICAL APT SOURCE HELPER
-
-# Retire only the native APT identity; a simulated removal must not remove dependencies.
-retire_infisical_apt() {
-    local status="" plan="" remaining="" query_status=0
-    if ! can_sudo || ! retire_infisical_apt_sources; then
-        print_error "Infisical APT source retirement requires verified sources and sudo."
-        return 1
-    fi
-    status=$(dpkg-query -W -f='${Status}' infisical 2>/dev/null) || query_status=$?
-    if [[ "${query_status}" -ne 0 ]]; then
-        # dpkg-query returns 1 for no match; other codes indicate inventory errors.
-        if [[ "${query_status}" -ne 1 ]] || ! dpkg-query -W -f='${Status}' dpkg >/dev/null 2>&1; then
-            print_error "Infisical package inventory unavailable."
-            return 1
-        fi
-        status="absent"
-    fi
-    if [[ "${status}" == "install ok installed" ]]; then
-        plan=$(sudo LC_ALL=C apt-get -s remove infisical 2>/dev/null) || { print_error "Infisical removal plan unavailable."; return 1; }
-        local line="" removals=0 advisory=0 advisory_items=0
-        while IFS= read -r line; do
-            if [[ "${advisory}" -eq 1 ]]; then
-                case "${line}" in
-                    "Use 'apt autoremove' to remove it."|"Use 'apt autoremove' to remove them.")
-                        if [[ "${advisory_items}" -eq 0 ]]; then
-                            print_error "Infisical removal plan has an empty advisory."
-                            return 1
-                        fi
-                        advisory=0
-                        ;;
-                    '  '*)
-                        if ! grep -Eq '^  [a-z0-9][a-z0-9+.:~-]*( [a-z0-9][a-z0-9+.:~-]*)*$' <<< "${line}"; then
-                            print_error "Infisical removal plan has an unverified advisory."
-                            return 1
-                        fi
-                        advisory_items=$((advisory_items + 1))
-                        ;;
-                    *) print_error "Infisical removal plan has an unverified advisory action."; return 1 ;;
-                esac
-                continue
-            fi
-            case "${line}" in
-                Remv\ infisical*)
-                    if ! grep -Eq '^Remv infisical( \[[^]]+\])?( \([^)]*\))?$' <<< "${line}"; then
-                        print_error "Infisical removal plan has an unverified package action."
-                        return 1
-                    fi
-                    removals=$((removals + 1))
-                    ;;
-                'The following package was automatically installed and is no longer required:'|'The following packages were automatically installed and are no longer required:')
-                    advisory=1
-                    advisory_items=0
-                    ;;
-                'Reading package lists...'|'Building dependency tree...'|'Reading state information...'|'Solving dependencies...'|'The following packages will be REMOVED:'|'  infisical'|'infisical'|'') ;;
-                '0 upgraded, 0 newly installed, 1 to remove and '*' not upgraded.')
-                    if ! grep -Eq '^0 upgraded, 0 newly installed, 1 to remove and [0-9]+ not upgraded\.$' <<< "${line}"; then
-                        print_error "Infisical removal plan has an unverified summary."
-                        return 1
-                    fi
-                    ;;
-                *) print_error "Infisical removal plan includes an unverified action."; return 1 ;;
-            esac
-        done <<< "${plan}"
-        if [[ "${advisory}" -ne 0 ]] || [[ "${removals}" -ne 1 ]]; then
-            print_error "Infisical removal plan is unverified."
-            return 1
-        fi
-        # dpkg targets exactly this package and refuses dependent removals;
-        # apt-get remove could re-plan after simulation and remove other packages.
-        if ! sudo dpkg --no-triggers --remove infisical; then
-            print_error "Infisical package removal failed."
-            return 1
-        fi
-        query_status=0
-        remaining=$(dpkg-query -W -f='${Status}' infisical 2>/dev/null) || query_status=$?
-        if [[ "${query_status}" -gt 1 ]] || { [[ "${query_status}" -eq 0 ]] && [[ "${remaining}" != "deinstall ok config-files" && "${remaining}" != "unknown ok not-installed" ]]; } || ! dpkg-query -W -f='${Status}' dpkg >/dev/null 2>&1; then
-            print_error "Infisical package removal could not be verified."
-            return 1
-        fi
-    elif [[ "${status}" != "absent" && "${status}" != "deinstall ok config-files" && "${status}" != "unknown ok not-installed" ]]; then
-        print_error "Infisical package status is unverified."
-        return 1
-    fi
-    if command -v infisical >/dev/null 2>&1; then
-        print_warning "An Infisical executable remains; check custom installations manually."
-    fi
-    print_debug "Infisical APT retirement verified."
-}
-
 # Personal machines retain Doppler; work machines have no replacement.
 install_secrets_manager() {
     if [[ "${WORK_MACHINE:-}" != "1" ]]; then
@@ -7252,18 +7017,19 @@ check_pending_reboot() {
 
 # BEGIN BB PLUGIN REFRESH
 # Native main-server plugin refresh only; independent of preparation and Pi gates.
-# Version 1 | Last changed: Refresh verified local BB plugins through native APIs
+# Version 2 | Last changed: Report controlled BB plugin refresh refusal reasons
 refresh_bb_plugins() {
     local _bb_refresh_output _bb_refresh_status=0 _bb_refresh_line
+    local _bb_refresh_operation _bb_refresh_reason _bb_refresh_diagnostic=0
     print_section 'BB Plugin Refresh'
     if [[ ! -x /usr/bin/python3 ]]; then
-        print_error 'BB plugin refresh unverified: native Python 3 is unavailable.'
+        print_error 'BB plugin refresh failed: preflight / python-unavailable.'
         return 1
     fi
     # No inherited CLI/server URL is used, and no BB executable is invoked.
     _bb_refresh_output=$(bb_plugin_refresh_payload "${1:-ready}" 2>/dev/null) || _bb_refresh_status=$?
     if [[ ${#_bb_refresh_output} -gt 16384 || -z "${_bb_refresh_output}" ]]; then
-        print_error 'BB plugin refresh failed: unverified helper result.'
+        print_error 'BB plugin refresh failed: helper-result / unverified-result.'
         return 1
     fi
     while IFS= read -r _bb_refresh_line; do
@@ -7274,11 +7040,30 @@ refresh_bb_plugins() {
             'BB_PLUGIN_REFRESH safe-mode') print_warning 'BB plugin refresh deliberately deferred: native safe mode remains enabled.' ;;
             'BB_PLUGIN_REFRESH checked') print_message 'BB native plugin check completed; pinned, local and incompatible selections preserved.' ;;
             'BB_PLUGIN_REFRESH updated') print_message 'BB native plugin updates processed; final verification determines success.' ;;
-            'BB_PLUGIN_REFRESH failed') print_error 'BB plugin refresh failed or remains unverified; no lifecycle recovery was attempted.'; _bb_refresh_status=1 ;;
-            *) print_error 'BB plugin refresh failed: unverified helper result.'; return 1 ;;
+            'BB_PLUGIN_REFRESH failed') print_error 'BB plugin refresh failed: helper-result / unverified-result.'; _bb_refresh_status=1; _bb_refresh_diagnostic=1 ;;
+            'BB_PLUGIN_REFRESH failed '*)
+                # Validate both fields in full before displaying any helper bytes.
+                if [[ ! "${_bb_refresh_line}" =~ ^BB_PLUGIN_REFRESH\ failed\ (preflight|discovery|identity|inventory|source-check|update-check|update|verification)\ ([a-z-]+)$ ]]; then
+                    print_error 'BB plugin refresh failed: helper-result / unverified-result.'
+                    return 1
+                fi
+                _bb_refresh_operation=${BASH_REMATCH[1]}
+                _bb_refresh_reason=${BASH_REMATCH[2]}
+                case "${_bb_refresh_reason}" in
+                    activation-failed|activation-unverified|ambiguous-endpoint|ambiguous-main-server|ambiguous-process|changed-local-state|changed-plugin-intent|changed-plugin-inventory|changed-preserved-plugin|changed-process|changed-source-resolution|foreign-local-state|foreign-process|incomplete-results|malformed-result|native-request-failed|operation-timeout|process-proof-unavailable|rolled-back|server-move-in-progress|source-unavailable|unexpected-update-selection|unsupported-account|unsupported-native-contract|unsupported-platform|unverified-compatibility|unverified-home|unverified-local-state|unverified-main-server|unverified-peer|unverified-policy|unverified-result|unverified-source-intent|update-unverified|writable-local-state|unknown-failure) ;;
+                    *) print_error 'BB plugin refresh failed: helper-result / unverified-result.'; return 1 ;;
+                esac
+                print_error "BB plugin refresh failed: ${_bb_refresh_operation} / ${_bb_refresh_reason}."
+                _bb_refresh_status=1
+                _bb_refresh_diagnostic=1
+                ;;
+            *) print_error 'BB plugin refresh failed: helper-result / unverified-result.'; return 1 ;;
         esac
     done <<< "${_bb_refresh_output}"
     if [[ "${_bb_refresh_status}" -ne 0 ]]; then
+        if [[ "${_bb_refresh_diagnostic}" -eq 0 ]]; then
+            print_error 'BB plugin refresh failed: helper-result / unverified-result.'
+        fi
         print_error 'BB plugin refresh incomplete; unrelated setup and log finalization will continue.'
         return 1
     fi
@@ -7313,6 +7098,43 @@ MAX_PLUGINS = 1024
 
 class Refusal(Exception):
     pass
+
+
+class Diagnostics:
+    """Keep the first failure, not exception text or native response contents."""
+    def __init__(self):
+        self.operation = 'preflight'
+        self.first = None
+
+    def record(self, error):
+        if self.first is not None:
+            return
+        operations = ('preflight', 'discovery', 'identity', 'inventory', 'source-check',
+                      'update-check', 'update', 'verification')
+        reasons = ('activation-failed', 'activation-unverified', 'ambiguous-endpoint',
+                   'ambiguous-main-server', 'ambiguous-process', 'changed-local-state',
+                   'changed-plugin-intent', 'changed-plugin-inventory', 'changed-preserved-plugin',
+                   'changed-process', 'changed-source-resolution', 'foreign-local-state',
+                   'foreign-process', 'incomplete-results', 'malformed-result',
+                   'native-request-failed', 'operation-timeout', 'process-proof-unavailable', 'rolled-back',
+                   'server-move-in-progress', 'source-unavailable', 'unexpected-update-selection', 'unsupported-account',
+                   'unsupported-native-contract', 'unsupported-platform', 'unverified-compatibility',
+                   'unverified-home', 'unverified-local-state', 'unverified-main-server',
+                   'unverified-peer', 'unverified-policy', 'unverified-result',
+                   'unverified-source-intent', 'update-unverified', 'writable-local-state')
+        reason = error.args[0] if type(error) is Refusal and len(error.args) == 1 else None
+        if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+            reason = 'operation-timeout'
+        elif isinstance(error, (ConnectionError, http.client.HTTPException)):
+            reason = 'native-request-failed'
+        if type(reason) is not str or reason not in reasons:
+            reason = 'unknown-failure'
+        operation = self.operation if self.operation in operations else 'preflight'
+        self.first = (operation, reason)
+
+    def report(self):
+        if self.first is not None:
+            print('BB_PLUGIN_REFRESH failed ' + ' '.join(self.first))
 
 
 def need(value, reason):
@@ -7402,6 +7224,7 @@ class LocalFiles:
                 return fingerprint(observed)[:5] == fingerprint(info)[:5] and observed.st_nlink == 1
             return fingerprint(observed) == fingerprint(info)
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        completed = False
         try:
             need(stable(os.fstat(fd)), 'changed-local-state')
             with os.fdopen(fd, 'rb', closefd=False) as stream:
@@ -7409,9 +7232,16 @@ class LocalFiles:
             need(len(raw) <= MAX_BYTES, 'unverified-local-state')
             need(stable(os.fstat(fd)), 'changed-local-state')
             need(stable(os.lstat(path)), 'changed-local-state')
+            completed = True
             return raw
         finally:
-            os.close(fd)
+            if completed:
+                os.close(fd)
+            else:
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass  # Preserve the original failed observation.
 
     def json(self, path, optional=False):
         raw = self.read(path, optional)
@@ -7658,6 +7488,7 @@ class NativeApi:
         self.files.inspect(s['data'], directory=True)
         connection = http.client.HTTPConnection('127.0.0.1', s['port'],
                                                timeout=min(180, self.deadline - time.monotonic()))
+        failed = True
         try:
             connection.connect()
             connection.auto_open = 0  # never reconnect after proving a socket
@@ -7680,13 +7511,22 @@ class NativeApi:
                 refusal = ('plugin safe mode is on; turn it off with `bb plugin safe-mode off` '
                            'before you update "' + identity + '"')
                 if isinstance(result, dict) and result.get('error') == refusal:
+                    failed = False  # A deferral cannot hide an independent close failure.
                     raise Refusal('safe-mode')
             need(response.status == 200, 'native-request-failed')  # no redirects or remote fallback
+            failed = False
             return result
         except (TimeoutError, socket.timeout):
             raise Refusal('operation-timeout') from None
         finally:
-            connection.close()
+            if not failed:
+                connection.close()
+            else:
+                # Closing a failed request must not replace its causal refusal.
+                try:
+                    connection.close()
+                except Exception:
+                    pass
 
     def verify(self):
         health = self.request('GET', '/health')
@@ -7728,18 +7568,23 @@ def resolution(value):
             and bool(value['version']) and isinstance(value.get('display'), str))
 
 
-def refresh(api):
+def refresh(api, diagnostics=None):
+    diagnostics = diagnostics if diagnostics is not None else Diagnostics()
+    diagnostics.operation = 'identity'
     api.verify()
+    diagnostics.operation = 'inventory'
     if safe_mode(api):
         return 'safe-mode', False
     before = plugin_map(api.request('GET', '/api/v1/plugins'))
     sources = {}
+    diagnostics.operation = 'source-check'
     for identity, plugin in before.items():
         source = api.request('GET', '/api/v1/plugins/' + identity + '/source')
         need(isinstance(source, dict) and source.get('requested') == plugin['source']
              and isinstance(source.get('resolved'), str), 'unverified-source-intent')
         sources[identity] = source
     targets = {}
+    diagnostics.operation = 'update-check'
     checks = api.request('POST', '/api/v1/plugins/updates/check', {})
     need(isinstance(checks, dict) and isinstance(checks.get('results'), list), 'malformed-result')
     need(len(checks['results']) == len(before), 'incomplete-results')
@@ -7761,9 +7606,11 @@ def refresh(api):
         need(sources[entry['id']]['resolved'] == entry['installed']['display'], 'changed-source-resolution')
         checked[entry['id']] = entry
     for identity, entry in checked.items():
+        diagnostics.operation = 'update-check'
         plugin = before[identity]
         outcome = entry['outcome']
         if outcome == 'unavailable':
+            diagnostics.record(Refusal('source-unavailable'))
             failed = True
             continue
         if outcome != 'update-available':
@@ -7771,6 +7618,7 @@ def refresh(api):
         need(plugin['provenance'] != 'builtin' and not plugin['source'].startswith(('path:', 'builtin:')),
              'unexpected-update-selection')
         need(resolution(entry.get('candidate')), 'malformed-result')
+        diagnostics.operation = 'update'
         if safe_mode(api):
             return 'safe-mode', failed
         try:
@@ -7779,6 +7627,7 @@ def refresh(api):
                  and resolution(result.get('from')), 'malformed-result')
             need(result.get('outcome') in ('current', 'updated', 'rolled-back'), 'malformed-result')
             if result['outcome'] == 'rolled-back':
+                diagnostics.record(Refusal('rolled-back'))
                 failed = True
             elif result['outcome'] == 'updated':
                 need(result['applied'] is True and resolution(result.get('to')), 'malformed-result')
@@ -7788,11 +7637,13 @@ def refresh(api):
                 need(result['applied'] is False, 'malformed-result')
                 targets[identity] = result['from']
         except Refusal as error:
-            if str(error) == 'safe-mode':
+            if type(error) is Refusal and error.args == ('safe-mode',):
                 return 'safe-mode', failed
             # Unknown completion (including timeout) must not be retried or
             # converted to success by a later current result.
+            diagnostics.record(error)
             failed = True
+    diagnostics.operation = 'verification'
     after = plugin_map(api.request('GET', '/api/v1/plugins'))
     need(before.keys() == after.keys(), 'changed-plugin-inventory')
     for identity, old in before.items():
@@ -7821,6 +7672,8 @@ def refresh(api):
         if entry['id'] in targets:
             need(entry['installed'] == targets[entry['id']], 'update-unverified')
         if entry.get('outcome') not in ('current', 'pinned', 'incompatible'):
+            diagnostics.record(Refusal('source-unavailable' if entry.get('outcome') == 'unavailable'
+                                      else 'update-unverified'))
             failed = True
     return ('updated' if updated else 'checked'), failed
 
@@ -7829,6 +7682,7 @@ def run():
     # Diagnostics are finite, controlled labels only. No paths, URLs, process
     # arguments, native errors, plugin output, settings or credentials escape.
     labels = {'safe-mode', 'checked', 'updated', 'stopped', 'absent', 'failed'}
+    diagnostics = Diagnostics()
     try:
         need(os.getuid() != 0, 'unsupported-account')
         deadline = time.monotonic() + 1800
@@ -7838,6 +7692,7 @@ def run():
         processes = Processes(os.getuid())
         policy = sys.argv[2] if len(sys.argv) > 2 else 'ready'
         need(policy in ('ready', 'block-default'), 'unverified-policy')
+        diagnostics.operation = 'discovery'
         servers, stopped = discover(files, processes, os.environ.get('BB_DATA_DIR'), policy == 'block-default')
         failed = False
         if policy == 'block-default':
@@ -7848,16 +7703,21 @@ def run():
             print('BB_PLUGIN_REFRESH absent')
         for server in servers:
             try:
-                state, error = refresh(NativeApi(files, processes, server, deadline))
+                diagnostics.operation = 'verification'
+                state, error = refresh(NativeApi(files, processes, server, deadline), diagnostics)
                 need(state in labels, 'unverified-result')
                 print('BB_PLUGIN_REFRESH ' + state)
                 failed = failed or error
-            except Exception:
+                if error:
+                    diagnostics.record(Refusal('unverified-result'))
+            except Exception as error:
                 failed = True
-                print('BB_PLUGIN_REFRESH failed')
+                diagnostics.record(error)
+        diagnostics.report()
         return int(failed)
-    except Exception:
-        print('BB_PLUGIN_REFRESH failed')
+    except Exception as error:
+        diagnostics.record(error)
+        diagnostics.report()
         return 1
 
 
@@ -8491,7 +8351,7 @@ run_setup_tasks() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 225 | Last changed: Preserve foreign OpenCode copies with verified account-local selection${NC}"
+    echo -e "${GRAY}Version 227 | Last changed: Preserve foreign OpenCode copies with verified account-local selection${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -8508,9 +8368,6 @@ run_setup_tasks() {
 
     print_section "User & System Setup"
     ensure_not_root || return 1
-    if ! retire_infisical_apt; then
-        _setup_had_errors=1
-    fi
     update_and_install_core
 
     print_section "SSH Configuration"

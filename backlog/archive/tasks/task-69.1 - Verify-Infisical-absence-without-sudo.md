@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@openai'
 created_date: '2026-10-03 14:11'
-updated_date: '2026-10-03 14:33'
+updated_date: '2026-10-03 15:21'
 labels: []
 dependencies: []
 references:
@@ -38,6 +38,12 @@ Child of TASK-69; its approved specification and safety boundaries are authorita
 - [ ] #4 Contained real caller tests prove correct failure aggregation, continued unrelated work and log finalization; sentinel secrets/paths and arbitrary native errors never escape diagnostics.
 - [ ] #5 Applicable helper copies remain identical; modified script versions are incremented; focused contained contracts and static checks have recorded evidence without live operations or weakened containment.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Superseded by current remote main d1a8bd0: Infisical is unmanaged; stopped worker work is preserved but must not be integrated.
+<!-- SECTION:NOTES:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->

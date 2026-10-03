@@ -121,7 +121,6 @@ check_dotfiles_access() { [[ "${DOTFILES_ACCESS:-0}" == 1 ]]; }
 setup_dotfiles_deploy_key() { return 1; }
 install_homebrew() { printf 'brew-bootstrap\n' >> "$HOME/calls"; [[ "${BREW_BOOTSTRAP_OK:-1}" == 1 ]] || return 1; : > "$HOME/brew-ready"; }
 /opt/homebrew/bin/brew() { [[ "$*" == shellenv ]] || return 90; printf 'shellenv\n' >> "$HOME/calls"; printf 'BREW_OK=1\n'; }
-retire_infisical_brew() { printf 'retire\n' >> "$HOME/calls"; [[ "${RETIRE_OK:-1}" == 1 ]]; }
 check_pending_reboot() { printf 'reboot\n' >> "$HOME/calls"; }
 create_env_local() { [[ "${EARLIER_FAILURE:-0}" != 1 ]] || _setup_had_errors=1; }
 start_setup_log() { printf 'log-start\n' >> "$HOME/calls"; }
@@ -310,7 +309,6 @@ ensure_macos_developer_tools_ready
                     self.assertNotIn('work:' + name, calls)
                 for name in ('install_bun', 'install_claude_code', 'install_ntn_cli', 'remove_impeccable_resources', 'remove_compound_engineering_resources'):
                     self.assertIn('work:' + name, calls)
-                self.assertIn('retire', calls)
                 self.assertEqual(calls.count('reboot'), 1)
                 self.assertEqual(calls.count('final:1'), 1)
                 self.assertIn('Skipped dependent work:', result.stdout)
@@ -360,7 +358,7 @@ ensure_macos_developer_tools_ready
         self.assertEqual(calls.count('final:1'), 1)
 
     def test_caller_recovery_preserves_operations_and_earlier_failures(self):
-        for variables, status in (({}, 0), ({'EARLIER_FAILURE': '1'}, 1), ({'RETIRE_OK': '0'}, 1), ({'INSTALL_OK': '0'}, 1)):
+        for variables, status in (({}, 0), ({'EARLIER_FAILURE': '1'}, 1), ({'INSTALL_OK': '0'}, 1)):
             result, calls = self.run_case({'DIAGNOSTIC': 'incompatible', **variables}, caller=True)
             self.assertEqual(result.returncode, status, result.stdout + result.stderr)
             self.assertIn('work:install_codex_cli', calls)
@@ -368,8 +366,7 @@ ensure_macos_developer_tools_ready
             self.assertEqual(calls.count('final:' + str(status)), 1)
             self.assertEqual(calls.count('reboot'), 1)
             self.assertEqual(len(self.installs(calls)), 1)
-            if variables.get('RETIRE_OK') == '0':
-                self.assertNotIn('work:update_brew', calls)
+            self.assertIn('work:update_brew', calls)
         # An operation failure cannot be cleared by a later healthy verification.
         result, _ = self.run_case({'DIAGNOSTIC': 'incompatible', 'QUERY_OK': '0'}, expression='''
 ensure_macos_developer_tools_ready

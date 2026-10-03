@@ -326,116 +326,6 @@ function Install-GiteaClient {
     Write-Success "Gitea client is ready ($($versionOutput -join ' '))."
 }
 
-# BEGIN INFISICAL WINGET RETIREMENT
-# This adapter opens only WinGet's known portable ARP product codes. Never create keys.
-function Open-InfisicalPortableRegistryKey {
-    param($Hive, $View, $Path)
-    $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
-        [Microsoft.Win32.RegistryHive]::$Hive, [Microsoft.Win32.RegistryView]::$View)
-    try { return $base.OpenSubKey($Path, $false) }
-    finally { $base.Close() }
-}
-
-function Get-InfisicalPortableRecords {
-    $identifier = 'Microsoft.Winget.Source_8wekyb3d8bbwe'
-    $locations = @(
-        @{ Hive = 'CurrentUser'; View = 'Registry64'; Scope = 'user' },
-        @{ Hive = 'LocalMachine'; View = 'Registry64'; Scope = 'machine' },
-        @{ Hive = 'LocalMachine'; View = 'Registry32'; Scope = 'machine' }
-    )
-    $records = @()
-    foreach ($id in @('Infisical.CLI', 'infisical.infisical')) {
-        $code = "${id}_${identifier}"
-        foreach ($location in $locations) {
-            # HKCU uninstall is shared and inspected once. Registry32 redirects
-            # HKLM Software to Wow6432Node; do not append that component twice.
-            $path = "Software\Microsoft\Windows\CurrentVersion\Uninstall\$code"
-            $key = Open-InfisicalPortableRegistryKey $location.Hive $location.View $path
-            if ($null -eq $key) { continue }
-            try {
-                $expected = @{
-                    WinGetPackageIdentifier = $id
-                    WinGetSourceIdentifier = $identifier
-                    WinGetInstallerType = 'portable'
-                    UninstallString = "winget uninstall --product-code $code"
-                }
-                foreach ($field in $expected.Keys) {
-                    if ($key.GetValueKind($field).ToString() -cne 'String' -or
-                        $key.GetValue($field) -isnot [string] -or
-                        $key.GetValue($field) -cne $expected[$field]) { throw 'unverified registration' }
-                }
-                $records += [pscustomobject]@{
-                    Id = $id; Code = $code; Scope = $location.Scope; View = $location.View
-                }
-            } finally { $key.Close() }
-        }
-    }
-    foreach ($id in @('Infisical.CLI', 'infisical.infisical')) {
-        foreach ($scope in @('user', 'machine')) {
-            if (@($records | Where-Object { $_.Id -ceq $id -and $_.Scope -eq $scope }).Count -gt 1) {
-                throw 'ambiguous portable registration'
-            }
-        }
-    }
-    return $records
-}
-
-function Assert-OfficialInfisicalWingetSource {
-    $json = winget source export --name winget 2>$null
-    $status = $LASTEXITCODE
-    if ($status -ne 0 -or -not ($json -is [string]) -or $json.Length -gt 8192 -or
-        -not $json.TrimStart().StartsWith('{') -or -not $json.TrimEnd().EndsWith('}')) {
-        throw 'source inventory unavailable'
-    }
-    $source = ConvertFrom-Json -InputObject $json -ErrorAction Stop
-    if ($source -isnot [pscustomobject] -or
-        $source.Name -cne 'winget' -or
-        $source.Type -cne 'Microsoft.PreIndexed.Package' -or
-        $source.Arg -cne 'https://cdn.winget.microsoft.com/cache' -or
-        $source.Identifier -cne 'Microsoft.Winget.Source_8wekyb3d8bbwe' -or
-        $source.Data -cne 'Microsoft.Winget.Source_8wekyb3d8bbwe') {
-        throw 'unverified source configuration'
-    }
-}
-
-function Remove-InfisicalCli {
-    try {
-        $before = @(Get-InfisicalPortableRecords)
-        if ($before.Count -eq 0) {
-            if (Get-Command infisical -ErrorAction SilentlyContinue) {
-                Write-Warning 'An Infisical executable remains; check custom installations manually.'
-            }
-            return $true
-        }
-        Assert-OfficialInfisicalWingetSource
-        foreach ($record in $before) {
-            winget uninstall --product-code $record.Code --exact --source winget --scope $record.Scope --silent --preserve --accept-source-agreements --disable-interactivity *> $null
-            $status = $LASTEXITCODE
-            if ($status -ne 0) { throw 'native uninstall failed' }
-            $after = @(Get-InfisicalPortableRecords)
-            if ($after.Count -ne $before.Count - 1) { throw 'native inventory changed unexpectedly' }
-            if (@($after | Where-Object { $_.Code -ceq $record.Code -and $_.Scope -eq $record.Scope }).Count -ne 0) {
-                throw 'portable registration remains'
-            }
-            foreach ($other in $before) {
-                if ($other.Code -ceq $record.Code -and $other.Scope -eq $record.Scope) { continue }
-                if (@($after | Where-Object { $_.Code -ceq $other.Code -and $_.Scope -eq $other.Scope -and $_.View -eq $other.View }).Count -ne 1) {
-                    throw 'unrelated registration changed'
-                }
-            }
-            $before = $after
-        }
-        if (Get-Command infisical -ErrorAction SilentlyContinue) {
-            Write-Warning 'An Infisical executable remains; check custom installations manually.'
-        }
-        return $true
-    } catch {
-        Write-Warning 'Infisical WinGet retirement failed or inventory was unverified.'
-        return $false
-    }
-}
-# END INFISICAL WINGET RETIREMENT
-
 # Personal machines retain Doppler; work machines have no replacement.
 function Install-SecretsManager {
     if (-not (Test-EnvLocalFlag "WORK_MACHINE")) {
@@ -7610,10 +7500,9 @@ function Invoke-WindowsSetupTasks {
     $simpleEnglishSetupFailed = $false
     $showMeSetupFailed = $false
     $prLensSetupFailed = $false
-    $infisicalRetirementFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 172 | Last changed: Preserve foreign OpenCode copies with verified account-local selection"
+    Write-Host "Version 173 | Last changed: Preserve foreign OpenCode copies with verified account-local selection"
 
     Assert-HeadlessUnsupported
 
@@ -7624,7 +7513,6 @@ function Invoke-WindowsSetupTasks {
     if (-not (Install-BbDesktop)) { $bbDesktopSetupFailed = $true }
 
     Write-Section "Package Installation"
-    if (-not (Remove-InfisicalCli)) { $infisicalRetirementFailed = $true }
     Install-WingetPackages
     Install-SecretsManager
     Install-GcloudCli
@@ -7732,20 +7620,12 @@ function Invoke-WindowsSetupTasks {
     Install-TursoCli
 
     Write-Section "System Updates"
-    if (-not $infisicalRetirementFailed) {
-        if ($openCodeSetupFailed) {
-            Write-Warning 'Deferring blanket WinGet upgrades because OpenCode command ownership or installation is unresolved.'
-        } else {
-            Install-WingetUpdates
-        }
+    if ($openCodeSetupFailed) {
+        Write-Warning 'Deferring blanket WinGet upgrades because OpenCode command ownership or installation is unresolved.'
     } else {
-        Write-Warning 'Skipping WinGet upgrades until Infisical retirement is verified.'
+        Install-WingetUpdates
     }
-    if (-not $infisicalRetirementFailed) {
-        Install-WindowsUpdates # last: may prompt a system reboot
-    } else {
-        Write-Warning 'Deferring Windows updates so the incomplete setup result and log can be finalized.'
-    }
+    Install-WindowsUpdates # last: may prompt a system reboot
 
     Test-PendingReboot
 
@@ -7766,9 +7646,6 @@ function Invoke-WindowsSetupTasks {
     }
     if ($prLensSetupFailed) {
         throw "Required PR Lens skill removal failed."
-    }
-    if ($infisicalRetirementFailed) {
-        throw "Infisical retirement was incomplete."
     }
     if ($bbDesktopSetupFailed) {
         throw "bb desktop setup was incomplete."

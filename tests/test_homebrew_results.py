@@ -1,4 +1,4 @@
-"""Contract v3: ordinary Homebrew/OpenCode caller seams; no live setup/brew."""
+"""Contract v4: ordinary Homebrew/OpenCode caller seams; no live setup/brew."""
 from pathlib import Path
 import re
 import subprocess
@@ -14,7 +14,7 @@ def function(name):
 
 
 class HomebrewResults(unittest.TestCase):
-    def run_setup(self, phase='', earlier=0, outdated='', pinned='', trust=0, infisical_failed=0, readiness='ready'):
+    def run_setup(self, phase='', earlier=0, outdated='', pinned='', trust=0, readiness='ready'):
         tail = function('run_setup_tasks').split(
             '    if is_main_user; then\n        print_section "Final Updates"', 1)[1]
         script = r'''
@@ -47,7 +47,7 @@ brew() {
         script += '\n' + function('list_unresolved_brew_outdated_items')
         script += '\n' + re.search(r'^opencode_guarded_brew_upgrade\(\) \(\n.*?^\)', SOURCE, re.M | re.S)[0]
         script += '\n' + function('update_brew')
-        script += '\nrun_setup_tasks() {\nlocal _setup_had_errors=${EARLIER}\nlocal _infisical_retirement_failed=${INFISICAL_FAILED}\n'
+        script += '\nrun_setup_tasks() {\nlocal _setup_had_errors=${EARLIER}\n'
         script += 'if is_main_user; then\n print_section "Final Updates"' + tail
         script += '\n' + function('main') + '\nmain\n'
         with tempfile.TemporaryDirectory() as home:
@@ -55,7 +55,6 @@ brew() {
                                     env={'PATH': '/usr/bin:/bin', 'HOME': home,
                                          'FAIL_PHASE': phase, 'EARLIER': str(earlier),
                                          'OUTDATED': outdated, 'PINNED': pinned, 'TRUST': str(trust),
-                                         'INFISICAL_FAILED': str(infisical_failed),
                                          'MACOS_DEVELOPER_TOOLS_STATE': readiness})
             calls_file = Path(home) / 'brew-calls'
             calls = calls_file.read_text().splitlines() if calls_file.exists() else []
@@ -112,12 +111,6 @@ brew() {
         self.assertNotIn('pin tmux', calls)
         self.assertNotIn('unpin tmux', calls)
         self.assertNotIn('cleanup-armed', result.stdout)
-
-    def test_failed_retirement_skips_brew_upgrade_but_finalizes_log(self):
-        result, calls = self.run_setup(earlier=1, infisical_failed=1)
-        self.assert_incomplete(result)
-        self.assertEqual(calls, [])
-        self.assertIn('Skipping Homebrew upgrades', result.stdout)
 
     def test_unready_skips_all_final_brew_mutations_and_finalizes(self):
         for state in ('incompatible', 'unverified'):

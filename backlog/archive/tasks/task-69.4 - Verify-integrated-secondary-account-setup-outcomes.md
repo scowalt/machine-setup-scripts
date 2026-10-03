@@ -4,11 +4,9 @@ title: Verify integrated secondary-account setup outcomes
 status: To Do
 assignee: []
 created_date: '2026-10-03 14:11'
+updated_date: '2026-10-03 15:21'
 labels: []
-dependencies:
-  - TASK-69.1
-  - TASK-69.2
-  - TASK-69.3
+dependencies: []
 references:
   - TASK-69
   - tests/run-fixture-matrix.py
@@ -38,6 +36,12 @@ Child of TASK-69, blocked by its three component tickets. Deliver evidence that 
 - [ ] #4 Standards and spec reviews compare against the pinned integration baseline; all actionable findings are fixed and affected checks rerun without expanding the approved scope.
 - [ ] #5 Every parent/child acceptance criterion and DoD is backed by evidence before Backlog closure; local integration history is coherent and child worktrees are removed only after their work is merged and safe to retain. No remote publication or rollout occurs.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Recreated as TASK-70.7 to resolve a branch-local ID collision with already published main TASK-69. This archived record is historical, not an active task or authorization to restore removed Infisical management.
+<!-- SECTION:NOTES:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->

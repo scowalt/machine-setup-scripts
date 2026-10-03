@@ -26,6 +26,43 @@ class Refusal(Exception):
     pass
 
 
+class Diagnostics:
+    """Keep the first failure, not exception text or native response contents."""
+    def __init__(self):
+        self.operation = 'preflight'
+        self.first = None
+
+    def record(self, error):
+        if self.first is not None:
+            return
+        operations = ('preflight', 'discovery', 'identity', 'inventory', 'source-check',
+                      'update-check', 'update', 'verification')
+        reasons = ('activation-failed', 'activation-unverified', 'ambiguous-endpoint',
+                   'ambiguous-main-server', 'ambiguous-process', 'changed-local-state',
+                   'changed-plugin-intent', 'changed-plugin-inventory', 'changed-preserved-plugin',
+                   'changed-process', 'changed-source-resolution', 'foreign-local-state',
+                   'foreign-process', 'incomplete-results', 'malformed-result',
+                   'native-request-failed', 'operation-timeout', 'process-proof-unavailable', 'rolled-back',
+                   'server-move-in-progress', 'source-unavailable', 'unexpected-update-selection', 'unsupported-account',
+                   'unsupported-native-contract', 'unsupported-platform', 'unverified-compatibility',
+                   'unverified-home', 'unverified-local-state', 'unverified-main-server',
+                   'unverified-peer', 'unverified-policy', 'unverified-result',
+                   'unverified-source-intent', 'update-unverified', 'writable-local-state')
+        reason = error.args[0] if type(error) is Refusal and len(error.args) == 1 else None
+        if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+            reason = 'operation-timeout'
+        elif isinstance(error, (ConnectionError, http.client.HTTPException)):
+            reason = 'native-request-failed'
+        if type(reason) is not str or reason not in reasons:
+            reason = 'unknown-failure'
+        operation = self.operation if self.operation in operations else 'preflight'
+        self.first = (operation, reason)
+
+    def report(self):
+        if self.first is not None:
+            print('BB_PLUGIN_REFRESH failed ' + ' '.join(self.first))
+
+
 def need(value, reason):
     if not value:
         raise Refusal(reason)
@@ -113,6 +150,7 @@ class LocalFiles:
                 return fingerprint(observed)[:5] == fingerprint(info)[:5] and observed.st_nlink == 1
             return fingerprint(observed) == fingerprint(info)
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        completed = False
         try:
             need(stable(os.fstat(fd)), 'changed-local-state')
             with os.fdopen(fd, 'rb', closefd=False) as stream:
@@ -120,9 +158,16 @@ class LocalFiles:
             need(len(raw) <= MAX_BYTES, 'unverified-local-state')
             need(stable(os.fstat(fd)), 'changed-local-state')
             need(stable(os.lstat(path)), 'changed-local-state')
+            completed = True
             return raw
         finally:
-            os.close(fd)
+            if completed:
+                os.close(fd)
+            else:
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass  # Preserve the original failed observation.
 
     def json(self, path, optional=False):
         raw = self.read(path, optional)
@@ -369,6 +414,7 @@ class NativeApi:
         self.files.inspect(s['data'], directory=True)
         connection = http.client.HTTPConnection('127.0.0.1', s['port'],
                                                timeout=min(180, self.deadline - time.monotonic()))
+        failed = True
         try:
             connection.connect()
             connection.auto_open = 0  # never reconnect after proving a socket
@@ -391,13 +437,22 @@ class NativeApi:
                 refusal = ('plugin safe mode is on; turn it off with `bb plugin safe-mode off` '
                            'before you update "' + identity + '"')
                 if isinstance(result, dict) and result.get('error') == refusal:
+                    failed = False  # A deferral cannot hide an independent close failure.
                     raise Refusal('safe-mode')
             need(response.status == 200, 'native-request-failed')  # no redirects or remote fallback
+            failed = False
             return result
         except (TimeoutError, socket.timeout):
             raise Refusal('operation-timeout') from None
         finally:
-            connection.close()
+            if not failed:
+                connection.close()
+            else:
+                # Closing a failed request must not replace its causal refusal.
+                try:
+                    connection.close()
+                except Exception:
+                    pass
 
     def verify(self):
         health = self.request('GET', '/health')
@@ -439,18 +494,23 @@ def resolution(value):
             and bool(value['version']) and isinstance(value.get('display'), str))
 
 
-def refresh(api):
+def refresh(api, diagnostics=None):
+    diagnostics = diagnostics if diagnostics is not None else Diagnostics()
+    diagnostics.operation = 'identity'
     api.verify()
+    diagnostics.operation = 'inventory'
     if safe_mode(api):
         return 'safe-mode', False
     before = plugin_map(api.request('GET', '/api/v1/plugins'))
     sources = {}
+    diagnostics.operation = 'source-check'
     for identity, plugin in before.items():
         source = api.request('GET', '/api/v1/plugins/' + identity + '/source')
         need(isinstance(source, dict) and source.get('requested') == plugin['source']
              and isinstance(source.get('resolved'), str), 'unverified-source-intent')
         sources[identity] = source
     targets = {}
+    diagnostics.operation = 'update-check'
     checks = api.request('POST', '/api/v1/plugins/updates/check', {})
     need(isinstance(checks, dict) and isinstance(checks.get('results'), list), 'malformed-result')
     need(len(checks['results']) == len(before), 'incomplete-results')
@@ -472,9 +532,11 @@ def refresh(api):
         need(sources[entry['id']]['resolved'] == entry['installed']['display'], 'changed-source-resolution')
         checked[entry['id']] = entry
     for identity, entry in checked.items():
+        diagnostics.operation = 'update-check'
         plugin = before[identity]
         outcome = entry['outcome']
         if outcome == 'unavailable':
+            diagnostics.record(Refusal('source-unavailable'))
             failed = True
             continue
         if outcome != 'update-available':
@@ -482,6 +544,7 @@ def refresh(api):
         need(plugin['provenance'] != 'builtin' and not plugin['source'].startswith(('path:', 'builtin:')),
              'unexpected-update-selection')
         need(resolution(entry.get('candidate')), 'malformed-result')
+        diagnostics.operation = 'update'
         if safe_mode(api):
             return 'safe-mode', failed
         try:
@@ -490,6 +553,7 @@ def refresh(api):
                  and resolution(result.get('from')), 'malformed-result')
             need(result.get('outcome') in ('current', 'updated', 'rolled-back'), 'malformed-result')
             if result['outcome'] == 'rolled-back':
+                diagnostics.record(Refusal('rolled-back'))
                 failed = True
             elif result['outcome'] == 'updated':
                 need(result['applied'] is True and resolution(result.get('to')), 'malformed-result')
@@ -499,11 +563,13 @@ def refresh(api):
                 need(result['applied'] is False, 'malformed-result')
                 targets[identity] = result['from']
         except Refusal as error:
-            if str(error) == 'safe-mode':
+            if type(error) is Refusal and error.args == ('safe-mode',):
                 return 'safe-mode', failed
             # Unknown completion (including timeout) must not be retried or
             # converted to success by a later current result.
+            diagnostics.record(error)
             failed = True
+    diagnostics.operation = 'verification'
     after = plugin_map(api.request('GET', '/api/v1/plugins'))
     need(before.keys() == after.keys(), 'changed-plugin-inventory')
     for identity, old in before.items():
@@ -532,6 +598,8 @@ def refresh(api):
         if entry['id'] in targets:
             need(entry['installed'] == targets[entry['id']], 'update-unverified')
         if entry.get('outcome') not in ('current', 'pinned', 'incompatible'):
+            diagnostics.record(Refusal('source-unavailable' if entry.get('outcome') == 'unavailable'
+                                      else 'update-unverified'))
             failed = True
     return ('updated' if updated else 'checked'), failed
 
@@ -540,6 +608,7 @@ def run():
     # Diagnostics are finite, controlled labels only. No paths, URLs, process
     # arguments, native errors, plugin output, settings or credentials escape.
     labels = {'safe-mode', 'checked', 'updated', 'stopped', 'absent', 'failed'}
+    diagnostics = Diagnostics()
     try:
         need(os.getuid() != 0, 'unsupported-account')
         deadline = time.monotonic() + 1800
@@ -549,6 +618,7 @@ def run():
         processes = Processes(os.getuid())
         policy = sys.argv[2] if len(sys.argv) > 2 else 'ready'
         need(policy in ('ready', 'block-default'), 'unverified-policy')
+        diagnostics.operation = 'discovery'
         servers, stopped = discover(files, processes, os.environ.get('BB_DATA_DIR'), policy == 'block-default')
         failed = False
         if policy == 'block-default':
@@ -559,16 +629,21 @@ def run():
             print('BB_PLUGIN_REFRESH absent')
         for server in servers:
             try:
-                state, error = refresh(NativeApi(files, processes, server, deadline))
+                diagnostics.operation = 'verification'
+                state, error = refresh(NativeApi(files, processes, server, deadline), diagnostics)
                 need(state in labels, 'unverified-result')
                 print('BB_PLUGIN_REFRESH ' + state)
                 failed = failed or error
-            except Exception:
+                if error:
+                    diagnostics.record(Refusal('unverified-result'))
+            except Exception as error:
                 failed = True
-                print('BB_PLUGIN_REFRESH failed')
+                diagnostics.record(error)
+        diagnostics.report()
         return int(failed)
-    except Exception:
-        print('BB_PLUGIN_REFRESH failed')
+    except Exception as error:
+        diagnostics.record(error)
+        diagnostics.report()
         return 1
 
 
