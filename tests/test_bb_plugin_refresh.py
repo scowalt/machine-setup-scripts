@@ -147,6 +147,17 @@ class FakeApi:
         return [call for call in self.calls if call[1].endswith('/update')]
 
 
+def run_wrapper(text, status=0):
+    source = (ROOT / 'lib/bb-plugin-refresh.bash').read_text().split('\nbb_plugin_refresh_payload()', 1)[0]
+    code = source + '\n' + '\n'.join(f'{name}() {{ printf "%s\\n" "$1"; }}' for name in
+                                      ('print_section', 'print_message', 'print_error', 'print_warning', 'print_debug'))
+    code += '\nbb_plugin_refresh_payload() { printf "%s\\n" "$FIXTURE_OUTPUT"; printf "%s\\n" "stderr-secret-sentinel" >&2; return "$FIXTURE_STATUS"; }\nrefresh_bb_plugins\n'
+    with tempfile.TemporaryDirectory(prefix='bb-refresh-wrapper-') as home:
+        return subprocess.run(['/bin/bash', '-c', code], cwd=home,
+                              env={'HOME': home, 'PATH': '/usr/bin:/bin', 'FIXTURE_OUTPUT': text, 'FIXTURE_STATUS': str(status)},
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+
+
 class Policy(unittest.TestCase):
     def test_source_import_rejects_definition_time_effects_before_execution(self):
         candidates = ['import nonexistent_application', 'print("BEFORE_MOCKS")',
@@ -177,7 +188,7 @@ class Policy(unittest.TestCase):
                 patch.object(P.signal, 'alarm', side_effect=lambda value: events.append(('alarm', value))), \
                 contextlib.redirect_stdout(output):
             self.assertEqual(P.run(), 1)
-        self.assertEqual(output.getvalue(), 'BB_PLUGIN_REFRESH failed\n')
+        self.assertEqual(output.getvalue(), 'BB_PLUGIN_REFRESH failed discovery unknown-failure\n')
 
     def test_current_pinned_local_bundled_and_incompatible_are_preserved(self):
         rows = [plugin('current'), plugin('pin', 'npm:fixture@1.0.0'),
@@ -294,6 +305,152 @@ class Discovery(unittest.TestCase):
                               'BB_SERVER_PORT': port, 'BB_SERVER_LAUNCH_ID': 'fixture-launch'}, b'12345')
         return data
 
+    def run_policy(self, api=None, policy='ready'):
+        output = io.StringIO()
+        apis = iter(api) if isinstance(api, list) else None
+        with patch.object(P.sys, 'argv', ['fixture', str(self.home), policy]), \
+                patch.dict(P.os.environ, {}, clear=True), \
+                patch.object(P, 'Processes', return_value=self.proc), \
+                patch.object(P, 'NativeApi', side_effect=lambda *_: next(apis) if apis is not None else api), \
+                patch.object(P.signal, 'signal'), patch.object(P.signal, 'alarm'), \
+                patch.object(P.os, 'chmod', side_effect=AssertionError('permission mutation forbidden')), \
+                patch.object(P.os, 'chown', side_effect=AssertionError('ownership mutation forbidden')), \
+                contextlib.redirect_stdout(output):
+            status = P.run()
+        return status, output.getvalue()
+
+    def test_writable_state_reports_controlled_refusal_without_permission_repair(self):
+        data = self.data()
+        data.chmod(0o775)
+        before = data.stat(), (data / 'bb.db').read_bytes()
+        status, output = self.run_policy()
+        self.assertEqual(status, 1)
+        self.assertEqual(output, 'BB_PLUGIN_REFRESH failed discovery writable-local-state\n')
+        self.assertEqual((data.stat(), (data / 'bb.db').read_bytes()), before)
+        result = run_wrapper(output, status)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('BB plugin refresh failed: discovery / writable-local-state.', result.stdout)
+        self.assertNotIn(str(self.home), result.stdout + result.stderr)
+        self.assertNotIn('secret-sentinel', result.stdout + result.stderr)
+
+    def test_changed_local_evidence_survives_file_close_failure(self):
+        data = self.data()
+        original = (data / 'bb.db').read_bytes()
+        native_stat, native_close = os.fstat, os.close
+        def changed(fd):
+            fields = ('st_dev', 'st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_size',
+                      'st_mtime_ns', 'st_ctime_ns', 'st_nlink')
+            info = native_stat(fd)
+            result = types.SimpleNamespace(**{key: getattr(info, key) for key in fields})
+            result.st_ino += 1
+            return result
+        def close(fd):
+            native_close(fd)
+            raise RuntimeError('close-secret-path-sentinel')
+        with patch.object(P.os, 'fstat', side_effect=changed), patch.object(P.os, 'close', side_effect=close):
+            status, output = self.run_policy()
+        self.assertEqual(status, 1)
+        self.assertEqual(output, 'BB_PLUGIN_REFRESH failed discovery changed-local-state\n')
+        self.assertEqual((data / 'bb.db').read_bytes(), original)
+
+    def test_source_failure_survives_later_update_success_safe_mode_and_verification_failure(self):
+        self.server()
+        for later in ('updated', 'safe-mode', 'verification-failure'):
+            with self.subTest(later=later):
+                api = FakeApi([plugin('first'), plugin('second')],
+                              {'first': 'unavailable', 'second': 'update-available'})
+                if later == 'safe-mode':
+                    api.results['second'] = P.Refusal('safe-mode')
+                if later == 'verification-failure':
+                    api.after_update = lambda _: api.plugins['second'].update(source='npm:secret-path-sentinel')
+                status, output = self.run_policy(api)
+                self.assertEqual(status, 1)
+                self.assertIn('BB_PLUGIN_REFRESH failed update-check source-unavailable\n', output)
+                self.assertEqual(output.count('BB_PLUGIN_REFRESH failed'), 1)
+                if later != 'verification-failure':
+                    self.assertIn('BB_PLUGIN_REFRESH ' + later, output)
+                self.assertNotIn('sentinel', output)
+                self.assertEqual(len(api.mutations()), 1)
+                result = run_wrapper(output, status)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('update-check / source-unavailable', result.stdout)
+                self.assertNotIn('sentinel', result.stdout + result.stderr)
+
+    def test_native_failures_identify_the_operation_without_response_or_exception_text(self):
+        self.server()
+        cases = (
+            ('identity', 'identity', 'unverified-main-server'),
+            ('inventory', 'inventory', 'malformed-result'),
+            ('source', 'source-check', 'unverified-source-intent'),
+            ('check', 'update-check', 'malformed-result'),
+            ('rolled-back', 'update', 'rolled-back'),
+            ('timeout', 'update', 'operation-timeout'),
+            ('unknown-refusal', 'update', 'unknown-failure'),
+            ('unknown-exception', 'update', 'unknown-failure'),
+            ('current', 'verification', 'update-unverified'),
+            ('activation', 'verification', 'activation-unverified'),
+            ('final-unavailable', 'verification', 'source-unavailable'),
+        )
+        for case, operation, reason in cases:
+            with self.subTest(case=case):
+                api = FakeApi()
+                native = api.request
+                def request(method, path, payload=None):
+                    if case == 'inventory' and path == '/api/v1/plugins':
+                        return {'plugins': 'secret-path-sentinel'}
+                    if case == 'source' and path.endswith('/source'):
+                        return {'requested': '/secret-path-sentinel'}
+                    if case == 'check' and path.endswith('/updates/check'):
+                        return {'results': [{'secret': 'secret-path-sentinel'}]}
+                    return native(method, path, payload)
+                api.request = request
+                if case == 'identity':
+                    api.verify = lambda: P.need(False, 'unverified-main-server')
+                if case in ('rolled-back', 'current'):
+                    api.results['tracking'] = case
+                if case == 'timeout':
+                    api.results['tracking'] = P.Refusal('operation-timeout')
+                if case == 'unknown-refusal':
+                    api.results['tracking'] = P.Refusal('safe-mode\n/secret-path-sentinel')
+                if case == 'unknown-exception':
+                    api.results['tracking'] = RuntimeError('/secret-path-sentinel')
+                if case == 'activation':
+                    api.after_update = lambda _: api.plugins['tracking'].update(status='secret-path-sentinel')
+                if case == 'final-unavailable':
+                    api.after_update = lambda _: api.outcomes.update(tracking='unavailable')
+                status, output = self.run_policy(api)
+                self.assertEqual(status, 1)
+                self.assertIn(f'BB_PLUGIN_REFRESH failed {operation} {reason}\n', output)
+                self.assertNotIn('sentinel', output)
+                self.assertLess(len(output), 200)
+                result = run_wrapper(output, status)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(f'{operation} / {reason}.', result.stdout)
+                self.assertNotIn('sentinel', result.stdout + result.stderr)
+
+    def test_later_server_deferral_cannot_erase_an_earlier_server_failure(self):
+        self.server()
+        self.server(101, self.home / 'second', '39002')
+        first, second = FakeApi(), FakeApi()
+        first.results['tracking'] = P.Refusal('operation-timeout')
+        second.safe = True
+        status, output = self.run_policy([first, second])
+        self.assertEqual(status, 1)
+        self.assertIn('BB_PLUGIN_REFRESH failed update operation-timeout\n', output)
+        self.assertIn('BB_PLUGIN_REFRESH safe-mode\n', output)
+        self.assertFalse(second.mutations())
+
+    def test_native_process_failures_do_not_disclose_subprocess_output(self):
+        self.proc.table = lambda: P.command(['/bin/ps', '-axo', 'uid=,pid='])
+        with patch.object(P.subprocess, 'run', return_value=types.SimpleNamespace(
+                returncode=1, stdout=b'secret-path-sentinel', stderr=b'secret-path-sentinel')):
+            status, output = self.run_policy()
+        self.assertEqual((status, output), (1, 'BB_PLUGIN_REFRESH failed discovery process-proof-unavailable\n'))
+        with patch.object(P.subprocess, 'run', side_effect=subprocess.TimeoutExpired(
+                '/secret-path-sentinel', 10, output=b'secret-path-sentinel')):
+            status, output = self.run_policy()
+        self.assertEqual((status, output), (1, 'BB_PLUGIN_REFRESH failed discovery operation-timeout\n'))
+
     def test_absent_prepared_and_enrolled_only_have_no_main_server(self):
         for marker in ('.local/share/setup-bb-machine', '.bb-machines/remote', '.bb'):
             (self.home / marker).mkdir(parents=True, exist_ok=True)
@@ -305,6 +462,9 @@ class Discovery(unittest.TestCase):
     def test_stopped_and_moved_server_data_never_become_live_targets(self):
         data = self.data()
         self.assertEqual(P.discover(self.files(), self.proc), ([], 1))
+        self.assertEqual(self.run_policy(), (0, 'BB_PLUGIN_REFRESH stopped\n'))
+        self.assertEqual(self.run_policy(policy='block-default'),
+                         (0, 'BB_PLUGIN_REFRESH readiness-deferred\nBB_PLUGIN_REFRESH absent\n'))
         self.proc.database_open = lambda _: True
         with self.assertRaises(P.Refusal):
             P.discover(self.files(), self.proc)
@@ -371,6 +531,7 @@ class Discovery(unittest.TestCase):
         manifest.write_text(json.dumps(metadata))
         with self.assertRaisesRegex(P.Refusal, 'unsupported-native-contract'):
             P.discover(self.files(), self.proc)
+        self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery unsupported-native-contract\n'))
 
     def test_live_launcher_without_verified_main_is_not_called_stopped(self):
         data = self.data()
@@ -378,6 +539,59 @@ class Discovery(unittest.TestCase):
         (data / 'bb-app-runtime.json').write_text('{"pid":100}')
         with self.assertRaises(P.Refusal):
             P.discover(self.files(), self.proc)
+
+    def test_transport_and_cleanup_failures_keep_the_original_diagnostic(self):
+        self.server()
+        for failure, expected in (('http', 'native-request-failed'),
+                                  ('json', 'malformed-result'),
+                                  ('timeout', 'operation-timeout'),
+                                  ('connection', 'native-request-failed'),
+                                  ('close-only', 'unknown-failure')):
+            with self.subTest(failure=failure):
+                files = self.files()
+                server = P.discover(files, self.proc)[0][0]
+                api = P.NativeApi(files, self.proc, server, P.time.monotonic() + 10)
+                def close():
+                    raise RuntimeError('cleanup-secret-path-sentinel')
+                def connect():
+                    if failure == 'timeout':
+                        raise TimeoutError('timeout-secret-path-sentinel')
+                    if failure == 'connection':
+                        raise ConnectionRefusedError('connection-secret-path-sentinel')
+                response = types.SimpleNamespace(status=503 if failure == 'http' else 200,
+                    getheader=lambda _: None, read=lambda _: b'secret-path-sentinel' if failure == 'json' else b'{"error":"secret-path-sentinel"}')
+                connection = types.SimpleNamespace(sock=types.SimpleNamespace(getsockname=lambda: ('127.0.0.1', 49999)),
+                    connect=connect, request=lambda *_: None, getresponse=lambda: response, close=close)
+                with patch.object(P.http.client, 'HTTPConnection', return_value=connection):
+                    status, output = self.run_policy(api)
+                self.assertEqual(status, 1)
+                self.assertEqual(output, f'BB_PLUGIN_REFRESH failed identity {expected}\n')
+                self.assertNotIn('sentinel', output)
+
+    def test_safe_mode_is_not_an_original_failure_that_can_hide_a_close_error(self):
+        self.server()
+        for close_fails in (False, True):
+            with self.subTest(close_fails=close_fails):
+                files = self.files()
+                server = P.discover(files, self.proc)[0][0]
+                native_api = P.NativeApi(files, self.proc, server, P.time.monotonic() + 10)
+                api = FakeApi()
+                fake_request = api.request
+                api.request = lambda method, path, payload=None: (
+                    native_api.request(method, path, payload) if path.endswith('/update')
+                    else fake_request(method, path, payload))
+                def close():
+                    if close_fails:
+                        raise RuntimeError('cleanup-secret-path-sentinel')
+                response = types.SimpleNamespace(status=422, getheader=lambda _: None,
+                    read=lambda _: json.dumps({'error': 'plugin safe mode is on; turn it off with `bb plugin safe-mode off` before you update "tracking"'}).encode())
+                connection = types.SimpleNamespace(sock=types.SimpleNamespace(getsockname=lambda: ('127.0.0.1', 49999)),
+                    connect=lambda: None, request=lambda *_: None, getresponse=lambda: response, close=close)
+                with patch.object(P.http.client, 'HTTPConnection', return_value=connection):
+                    status, output = self.run_policy(api)
+                self.assertEqual(status, int(close_fails))
+                self.assertEqual(output, 'BB_PLUGIN_REFRESH failed update unknown-failure\n' if close_fails
+                                 else 'BB_PLUGIN_REFRESH safe-mode\n')
 
     def test_peer_proof_precedes_every_request_no_cli_proxy_redirect_or_reconnect(self):
         self.server()
@@ -524,15 +738,21 @@ run_fixture
             main = re.search(r'^run_setup_tasks\(\) \{\n.*?^\}', selected, re.M | re.S).group()
             outer = re.search(r'^main\(\) \{\n.*?^\}', selected, re.M | re.S).group()
             names = re.findall(r'^([A-Za-z_][A-Za-z_0-9]*)\(\) \{', selected, re.M)
-            stubs = '\n'.join(f'{name}() {{ :; }}' for name in names if name not in ('main', 'run_setup_tasks'))
+            refresh = re.search(r'^refresh_bb_plugins\(\) \{\n.*?^\}', selected, re.M | re.S).group()
+            stubs = '\n'.join(f'{name}() {{ :; }}' for name in names if name not in ('main', 'run_setup_tasks', 'refresh_bb_plugins'))
             with tempfile.TemporaryDirectory(prefix='bb-refresh-caller-') as temp:
                 home = Path(temp) / 'home'
                 home.mkdir()
-                code = stubs + '\n' + main + '\n' + outer + '''
-refresh_bb_plugins() { echo refresh; return "${REFRESH_STATUS}"; }
-prepare_pi_profile_permissions() { echo unrelated; return 1; }
+                code = stubs + '\n' + main + '\n' + outer + '\n' + refresh + '''
+bb_plugin_refresh_payload() { printf '%s\\n' "$FIXTURE_OUTPUT"; echo stderr-secret-path-sentinel >&2; return "$REFRESH_STATUS"; }
+setup_bb_machine() { return "$EARLIER"; }
+print_error() { printf '%s\\n' "$1"; }
+print_warning() { printf '%s\\n' "$1"; }
+print_message() { printf '%s\\n' "$1"; }
+prepare_pi_profile_permissions() { echo unrelated; return 0; }
+refresh_pi_packages() { echo later-pi-success; }
 start_setup_log() { echo logging; }
-finish_setup_log() { echo finalized; return "$1"; }
+finish_setup_log() { echo "finalized:$1"; return "$1"; }
 setup_load_environment() { :; }
 setup_dotfiles_access() { :; }
 determine_dotfiles_access() { :; }
@@ -553,19 +773,54 @@ DOTFILES_ACCESS_METHOD=none
                             'bun', 'pi', 'bb', 'chezmoi', 'sudo', 'kill', 'pkill', 'tailscale'):
                     code += f'\n{cmd}() {{ echo FORBIDDEN:{cmd}; return 99; }}'
                 code += '\nmain\n'
-                # Entire setup bodies remain inert: ALL helpers are replaced
-                # before intentionally invoking the extracted real callers.
-                env = {'HOME': str(home), 'PATH': '/usr/bin:/bin', 'REFRESH_STATUS': '1',
-                       'USER': 'fixture', 'LANG': 'C', 'TERM': 'dumb'}
-                result = subprocess.run(['/bin/bash', '-c', code], env=env, cwd=home,
-                                        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
-                with self.subTest(script=script):
-                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertIn('refresh', result.stdout)
-                    self.assertIn('unrelated', result.stdout)
-                    self.assertIn('finalized', result.stdout)
-                    self.assertNotIn('FORBIDDEN:', result.stdout + result.stderr)
+                # Only real caller + refresh wrapper execute. The payload and
+                # every unrelated helper are inert before intentional invocation.
+                cases = [('BB_PLUGIN_REFRESH checked', 0, 0, 0),
+                         ('BB_PLUGIN_REFRESH stopped', 0, 0, 0),
+                         ('BB_PLUGIN_REFRESH safe-mode', 0, 0, 0),
+                         ('BB_PLUGIN_REFRESH failed discovery writable-local-state', 0, 0, 1),
+                         ('BB_PLUGIN_REFRESH checked', 1, 0, 1),
+                         ('secret-path-sentinel', 0, 0, 1),
+                         ('BB_PLUGIN_REFRESH checked', 0, 1, 1),
+                         ('BB_PLUGIN_REFRESH safe-mode', 0, 1, 1)]
+                for text, status, earlier, expected in cases:
+                    env = {'HOME': str(home), 'PATH': '/usr/bin:/bin', 'REFRESH_STATUS': str(status),
+                           'EARLIER': str(earlier), 'FIXTURE_OUTPUT': text,
+                           'USER': 'fixture', 'LANG': 'C', 'TERM': 'dumb'}
+                    result = subprocess.run(['/bin/bash', '-c', code], env=env, cwd=home,
+                                            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+                    with self.subTest(script=script, text=text, earlier=earlier, status=status):
+                        self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                        self.assertIn('logging', result.stdout)
+                        self.assertIn('unrelated', result.stdout)
+                        self.assertIn('later-pi-success', result.stdout)
+                        self.assertIn(f'finalized:{expected}', result.stdout)
+                        self.assertLess(result.stdout.index('unrelated'), result.stdout.index('finalized:'))
+                        if text.startswith('BB_PLUGIN_REFRESH failed discovery'):
+                            self.assertIn('discovery / writable-local-state.', result.stdout)
+                        if text == 'secret-path-sentinel':
+                            self.assertIn('helper-result / unverified-result.', result.stdout)
+                        self.assertNotIn('FORBIDDEN:', result.stdout + result.stderr)
+                        self.assertNotIn('sentinel', result.stdout + result.stderr)
         self.assertNotIn('refresh_bb_plugins', (ROOT / 'win.ps1').read_text())
+
+    def test_wrapper_rejects_unknown_diagnostics_with_a_bounded_controlled_fallback(self):
+        refused = ('', 'secret-path-sentinel',
+                   'BB_PLUGIN_REFRESH failed secret-path-sentinel writable-local-state',
+                   'BB_PLUGIN_REFRESH failed discovery secret-path-sentinel',
+                   'BB_PLUGIN_REFRESH failed discovery writable-local-state /secret-path-sentinel',
+                   'BB_PLUGIN_REFRESH failed discovery writable-local-state\rsecret-path-sentinel',
+                   'BB_PLUGIN_REFRESH failed discovery writable-local-state\nsecret-path-sentinel',
+                   'BB_PLUGIN_REFRESH checked\n' * 700)
+        for text, status in [(text, 0) for text in refused] + [('BB_PLUGIN_REFRESH checked', 1)]:
+            with self.subTest(text=text[:90], status=status):
+                result = run_wrapper(text, status)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('helper-result / unverified-result.', result.stdout)
+                self.assertNotIn('sentinel', result.stdout + result.stderr)
+                self.assertLess(len(result.stdout + result.stderr), 500)
+                if text.startswith('BB_PLUGIN_REFRESH failed discovery writable-local-state\n'):
+                    self.assertIn('discovery / writable-local-state.', result.stdout)
 
     def test_wrapper_suppresses_uncontrolled_output_and_retains_status(self):
         source = (ROOT / 'lib/bb-plugin-refresh.bash').read_text().split('\nbb_plugin_refresh_payload()', 1)[0]
