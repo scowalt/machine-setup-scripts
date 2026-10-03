@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@openai'
 created_date: '2026-10-03 14:11'
-updated_date: '2026-10-03 14:33'
+updated_date: '2026-10-03 15:21'
 labels: []
 dependencies: []
 references:
@@ -37,6 +37,12 @@ Child of TASK-69; its approved specification and safety boundaries are authorita
 - [ ] #4 Extracted real wrapper/caller fixtures retain nonzero failure aggregation, unrelated-work continuation and log finalization, rejecting unrecognized helper output.
 - [ ] #5 Shared policy/wrapper embeddings remain identical with incremented modified-script versions; focused contained red/green, BB regressions and static checks are recorded without live daemon inventory, plugin/API requests or installed-code imports.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Recreated as TASK-70.6 to resolve a branch-local ID collision with already published main TASK-69. This archived record is historical, not an active task or authorization to restore removed Infisical management.
+<!-- SECTION:NOTES:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
