@@ -1,4 +1,4 @@
-// Version 7 | Last changed: Exercise foreign-copy preservation and actual account-local selection
+// Version 8 | Last changed: Cover interactive selection, non-commands and newer Homebrew trust
 'use strict';
 process.umask(0o077);
 const {test} = require('node:test');
@@ -13,6 +13,14 @@ const nativeExecFileSync = require('node:child_process').execFileSync;
 // Native shell boundary only: default fixtures never load any real profile.
 process.env.SETUP_OPENCODE_SHELL = '/fixture/fish';
 const sha = bytes => crypto.createHash('sha512').update(bytes).digest('base64');
+// Encode inert native resolution evidence like the real shell query. Actual
+// fish uses its real stdout, including any private-profile banner noise.
+function selectionOutput(file, args, output) {
+    if (file === '/usr/bin/fish') return output;
+    const marker = args.join(' ').match(/opencode-selection-[a-f0-9]+:/)?.[0];
+    assert.ok(marker, 'fresh query must frame native evidence');
+    return Buffer.from('\n' + marker + output.toString().replace(/\r?\n$/, '') + marker + '\n');
+}
 function tar(entries) {
     const blocks = [];
     for (const [name, value, type = '0'] of entries) {
@@ -68,7 +76,7 @@ function fixture(t) {
     f.shellBoundary = () => Buffer.from((f.shellSelection || dest) + '\n');
     t.mock.method(require('node:child_process'), 'execFileSync', (file, ...args) => {
         assert.equal(file, '/fixture/fish', 'unmocked application execution forbidden');
-        return f.shellBoundary(file, ...args);
+        return selectionOutput(file, args[0], f.shellBoundary(file, ...args));
     });
     return f;
 }
@@ -174,8 +182,10 @@ test('fresh native fish loads the private profile and rejects aliases, functions
     f.shellBoundary = (file, args, options) => nativeExecFileSync(file, args, options);
     const {api} = virtualPolicy(f, {env: {SETUP_OPENCODE_SHELL: '/usr/bin/fish', HOME: f.home,
         XDG_CONFIG_HOME: path.join(f.home, '.config'), XDG_DATA_HOME: path.join(f.home, '.data'),
-        XDG_CACHE_HOME: path.join(f.home, '.cache'), XDG_STATE_HOME: path.join(f.home, '.state')}});
-    fs.writeFileSync(config, 'set -gx PATH "$HOME/.local/bin" "$HOME/foreign" $PATH\n');
+        XDG_CACHE_HOME: path.join(f.home, '.cache'), XDG_STATE_HOME: path.join(f.home, '.state'),
+        XDG_DATA_DIRS: path.join(f.home, '.data'), FISH_UNIT_TESTS_RUNNING: '1', TERM: 'dumb'}});
+    fs.writeFileSync(config, 'set -gx PATH "$HOME/.local/bin" "$HOME/foreign" $PATH\n' +
+        'if status is-interactive; printf "Welcome SECRET banner\\n/foreign/opencode\\n"; end\n');
     assert.equal(await api.install(f.options), 'installed');
     f.options.commands = [f.dest];
     assert.equal(await api.install(f.options), 'current');
@@ -184,6 +194,9 @@ test('fresh native fish loads the private profile and rejects aliases, functions
         'set -gx PATH "$HOME/.local/bin" $PATH\nalias opencode "echo SECRET"\n',
         'set -gx PATH "$HOME/.local/bin" $PATH\nfunction opencode; echo SECRET; end\n',
         'set -gx PATH "$HOME/foreign" "$HOME/.local/bin" $PATH\n',
+        'set -gx PATH "$HOME/.local/bin" $PATH\nif status is-interactive; alias opencode "echo SECRET"; end\n',
+        'set -gx PATH "$HOME/.local/bin" $PATH\nif status is-interactive; function opencode; echo SECRET; end; end\n',
+        'set -gx PATH "$HOME/.local/bin" $PATH\nif status is-interactive; set -gx PATH "$HOME/foreign" $PATH; end\n',
     ]) {
         fs.writeFileSync(config, profile);
         await assert.rejects(api.install(f.options), error => {
@@ -193,6 +206,47 @@ test('fresh native fish loads the private profile and rejects aliases, functions
         assert.equal(fs.existsSync(path.join(f.home, 'executed')), false);
         assert.equal(fs.readFileSync(config, 'utf8'), profile);
     }
+});
+for (const kind of ['nonexecutable-file', 'directory']) test(`native shells skip earlier foreign ${kind} during installation and repeated selection`, {skip: !fs.existsSync('/usr/bin/fish')}, async t => {
+    const f = fixture(t), foreign = fs.mkdtempSync(path.join(os.tmpdir(), 'opencode-noncommand-'));
+    t.after(() => fs.rmSync(foreign, {recursive: true, force: true}));
+    const noncommand = path.join(foreign, 'opencode');
+    if (kind === 'directory') fs.mkdirSync(noncommand);
+    else fs.writeFileSync(noncommand, 'INERT foreign non-command', {mode: 0o644});
+    const before = fs.lstatSync(noncommand);
+    f.options.commands = [noncommand];
+    f.options.path = [foreign, path.dirname(f.dest), '/usr/bin', '/bin'].join(path.delimiter);
+    const config = path.join(f.home, '.config/fish/config.fish');
+    fs.mkdirSync(path.dirname(config), {recursive: true});
+    fs.writeFileSync(config, `set -gx PATH '${foreign}' "$HOME/.local/bin" /usr/bin /bin\n`);
+    f.shellBoundary = (file, args, options) => nativeExecFileSync(file, args, options);
+    const {api} = virtualPolicy(f, {env: {SETUP_OPENCODE_SHELL: '/usr/bin/fish', HOME: f.home,
+        XDG_CONFIG_HOME: path.join(f.home, '.config'), XDG_DATA_HOME: path.join(f.home, '.data'),
+        XDG_CACHE_HOME: path.join(f.home, '.cache'), XDG_STATE_HOME: path.join(f.home, '.state'),
+        XDG_DATA_DIRS: path.join(f.home, '.data'), FISH_UNIT_TESTS_RUNNING: '1', TERM: 'dumb'}}, {
+        'node:fs': new Proxy(fs, {get(object, key) {
+            if (key === 'lstatSync') return file => {
+                const st = fs.lstatSync(file);
+                if (file === foreign || file === noncommand) st.uid = process.getuid() + 1;
+                if (foreign.startsWith(file + path.sep)) st.mode &= ~0o022;
+                return st;
+            };
+            return object[key];
+        }}),
+    });
+    // Prove actual Bash selection independently before asking the installer to
+    // accept a current copy; no command execution, aliases or startup files.
+    f.receipt('2.0.18', f.binary);
+    f.options.commands.push(noncommand);
+    assert.equal(nativeExecFileSync('/bin/bash', ['--noprofile', '--norc', '-c', 'command -v opencode'],
+        {cwd: f.home, env: {HOME: f.home, PATH: f.options.path}, encoding: 'utf8'}).trim(), f.dest);
+    assert.equal(await api.install(f.options), 'current');
+    fs.unlinkSync(f.dest); fs.unlinkSync(path.join(path.dirname(f.dest), '.setup-opencode-cli.json'));
+    f.options.commands = [noncommand];
+    assert.equal(await api.install(f.options), 'installed');
+    const after = fs.lstatSync(noncommand);
+    for (const field of ['ino', 'mode', 'mtimeMs', 'size']) assert.equal(after[field], before[field]);
+    if (kind === 'nonexecutable-file') assert.equal(fs.readFileSync(noncommand, 'utf8'), 'INERT foreign non-command');
 });
 test('unverified fresh-shell evidence is bounded, secret-safe and never accepted for current or newer copies', async t => {
     for (const release of ['2.0.18', '3.0.0']) {
@@ -421,7 +475,7 @@ function virtualPolicy(f, overrides = {}, modules = {}, log = () => assert.fail(
     fakeProcess.env = {SETUP_OPENCODE_SHELL: '/fixture/fish', ...fakeProcess.env};
     const native = modules['node:child_process'] || require('node:child_process');
     const childProcess = {...native, execFileSync: (file, ...args) => file === fakeProcess.env.SETUP_OPENCODE_SHELL
-        ? f.shellBoundary(file, ...args) : native.execFileSync(file, ...args)};
+        ? selectionOutput(file, args[0], f.shellBoundary(file, ...args)) : native.execFileSync(file, ...args)};
     vm.runInNewContext(fs.readFileSync(require.resolve('../lib/opencode-cli.cjs'), 'utf8'), {
         require: name => name === 'node:child_process' ? childProcess : modules[name] || (name === 'node:fs' ? proxy : require(name)), module, process: fakeProcess,
         Buffer, URL, setTimeout, clearTimeout, console: {log, error: () => assert.fail('unexpected output')},
@@ -721,6 +775,29 @@ function homebrewFixture(t, platform = 'linux') {
     });
     return Object.assign(f, {api, command, prefix, cellar, mapped, put, calls, observed});
 }
+test('verified newer account-owned Homebrew command is preserved with native bytes and route trust intact', async t => {
+    const f = homebrewFixture(t), newer = f.prefix + '/Cellar/opencode/3.0.0';
+    const bytes = f.publish('@opencode/cli-linux-x64-baseline', '3.0.0');
+    f.put(newer + '/bin/opencode', bytes, 0o555);
+    f.put(newer + '/INSTALL_RECEIPT.json', '{"source":{"tap":"anomalyco/tap"}}', 0o664);
+    fs.unlinkSync(f.mapped(f.command)); fs.symlinkSync('../Cellar/opencode/3.0.0/bin/opencode', f.mapped(f.command));
+    f.options.path = f.prefix + '/bin'; f.shellSelection = f.command;
+    const before = fs.lstatSync(f.mapped(f.command));
+    assert.equal(await f.api.install(f.options), 'newer');
+    assert.equal(f.probes.length, 0);
+    assert.equal(fs.lstatSync(f.mapped(f.command)).ino, before.ino);
+    assert.equal(fs.readlinkSync(f.mapped(f.command)), '../Cellar/opencode/3.0.0/bin/opencode');
+    assert.deepEqual(fs.readFileSync(f.mapped(newer + '/bin/opencode')), bytes);
+    assert.deepEqual(fs.readdirSync(path.dirname(f.dest)), []);
+    // A fresh-shell boundary cannot invalidate route trust after identification.
+    f.shellBoundary = () => {
+        f.put(newer + '/INSTALL_RECEIPT.json', '{"source":{"tap":"custom/tap"}}', 0o664);
+        return Buffer.from(f.command + '\n');
+    };
+    await assert.rejects(f.api.install(f.options), /brew-snapshot-changed/);
+    assert.equal(fs.readFileSync(f.mapped(newer + '/INSTALL_RECEIPT.json'), 'utf8'), '{"source":{"tap":"custom/tap"}}');
+    assert.equal(f.probes.length, 0);
+});
 test('lower-priority foreign Homebrew survives account-local install and repeated verification without inspection or execution', async t => {
     const f = homebrewFixture(t);
     f.statOverrides.set(f.prefix, {uid: process.getuid() + 1});
@@ -1059,6 +1136,7 @@ test('Windows npm command shims migrate only after official native-byte verifica
         const command = path.join(directory, name); fs.writeFileSync(command, value); f.options.commands.push(command);
     }
     f.options.target = 'windows-x64-baseline';
+    f.options.verifySessionSelection = async expected => expected === f.dest + '.exe';
     assert.equal(await api.install(f.options), 'migrated');
     assert.deepEqual(fs.readFileSync(f.dest + '.exe'), modern);
     assert.deepEqual(fs.readFileSync(path.join(root, 'bin/opencode.exe')), bytes);

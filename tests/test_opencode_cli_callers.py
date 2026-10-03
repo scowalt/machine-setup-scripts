@@ -1,4 +1,7 @@
-"""Contract v8: real installer/wrappers/callers preserve foreign copies and controlled selection failures."""
+"""Contract v9: native selection approval preserves the original installer rollback transaction."""
+import base64
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -283,7 +286,7 @@ opencode_apt_upgrade_safe() { return 1; }
             fake = Path(home) / 'node-fixture.ps1'
             fake.write_text('if ($args[0] -eq "-e") { $global:LASTEXITCODE=0; return }\n'
                             'if ($env:MOCK_SELECTION_INPUTS -eq "1" -and ($env:SETUP_OPENCODE_SHELL -notmatch "[\\\\/]pwsh.exe$" -or $env:SETUP_OPENCODE_HASHED -or $env:SETUP_OPENCODE_FRESH_PATH -eq "SECRET")) { $global:LASTEXITCODE=91; return }\n'
-                            '$global:OpenCodeCompleted=$true\n$input | Out-Null\nWrite-Output ([regex]::Split($env:MOCK_RESULT, "`n"))\n'
+                            '$input | Out-Null\nWrite-Output ([regex]::Split($env:MOCK_RESULT, "`n"))\n'
                             'Write-Error "SECRET stderr" -ErrorAction Continue\n$global:LASTEXITCODE=[int]$env:MOCK_STATUS\n')
             harness = Path(home) / 'wrapper.ps1'
             harness.write_text('''$ErrorActionPreference='Stop'
@@ -291,13 +294,13 @@ function Write-Success { param($Message) Write-Host $Message }
 function Write-Warning { param($Message) Write-Host $Message }
 function Get-Command { param($Name, $CommandType, $ErrorAction)
     if ($Name -eq 'node') { [pscustomobject]@{Source=$env:MOCK_NODE} }
-    if ($Name -eq 'opencode' -and $global:OpenCodeCompleted) {
-        $selected = Join-Path $env:USERPROFILE '.local/bin/opencode.exe'
-        if ($env:MOCK_SELECTED -eq 'foreign') { $selected = 'C:/SECRET/other/opencode.exe' }
-        [pscustomobject]@{Source=$selected; CommandType=$(if ($env:MOCK_SELECTED -eq 'function') { 'Function' } else { 'Application' })}
-    }
 }
 function Test-OpenCodeCliAcl { param($HomePath) $true }
+# Diagnostic-only cases stub the pipe boundary, not installer/rollback behavior.
+function Invoke-OpenCodeCliCore { param($NodePath, $Code)
+    $output=@($Code | & $NodePath - 2>$null)
+    @{ Status=$LASTEXITCODE; Output=$output }
+}
 $env:PROCESSOR_ARCHITECTURE='AMD64'
 $env:PROCESSOR_ARCHITEW6432=$null
 $env:NODE_OPTIONS='fixture-original'
@@ -327,14 +330,6 @@ if ($result) { exit 0 } else { exit 1 }
                     self.assertNotIn('OpenCode CLI download failed (', run.stdout)
                     self.assertNotIn('OpenCode CLI blocked (', run.stdout)
                 self.assertEqual('rollback needs manual recovery' in run.stdout, result in RECOVERY_RESULTS)
-            for selected in ('foreign', 'function'):
-                run = subprocess.run([PWSH, '-NoProfile', '-NonInteractive', '-File', str(harness)], cwd=home,
-                                     env={'PATH': os.environ['PATH'], 'HOME': home, 'USERPROFILE': home, 'MOCK_NODE': str(fake),
-                                          'MOCK_RESULT': 'opencode-cli:installed', 'MOCK_STATUS': '0', 'MOCK_SELECTED': selected},
-                                     capture_output=True, text=True, timeout=20)
-                self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
-                self.assertIn('OpenCode CLI blocked (operation=setup-selection, reason=command-conflict).', run.stdout)
-                self.assertNotIn('SECRET', run.stdout + run.stderr)
 
     @unittest.skipUnless(PWSH, 'No existing PWSH_BIN/pwsh: native Windows/PowerShell execution not claimed')
     def test_real_powershell_installer_caller_and_finalization(self):
@@ -346,7 +341,7 @@ $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($SourcePath,[ref]$tokens,[ref]$errors)
 if ($errors.Count) { throw 'Fixture source parse failed' }
 $definitions=@($ast.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] })
-$selectedNames=@('Invoke-WindowsSetupTasks','Initialize-WindowsEnvironment','Install-OpenCodeCli')
+$selectedNames=@('Invoke-WindowsSetupTasks','Initialize-WindowsEnvironment','Install-OpenCodeCli','Invoke-OpenCodeCliCore')
 foreach ($definition in $definitions) {
     if ($definition.Name -notin $selectedNames) { Set-Item -Path ('function:' + $definition.Name) -Value { $true } }
 }
@@ -370,7 +365,10 @@ function Get-Command { param($Name, $CommandType, $ErrorAction)
     if ($Name -eq 'node') { return [pscustomobject]@{Source=$env:FIXTURE_WRAPPER} }
     if ($Name -eq 'opencode') {
         $file=Join-Path $env:USERPROFILE '.local/bin/opencode.exe'
-        if (Test-Path -LiteralPath $file) { [pscustomobject]@{Source=$file; CommandType='Application'} }
+        if (Test-Path -LiteralPath $file) {
+            if ($env:FIXTURE_OUTCOME -eq 'session') { $file='C:/SECRET/other/opencode.exe' }
+            [pscustomobject]@{Source=$file; CommandType='Application'}
+        }
     }
 }
 $env:PROCESSOR_ARCHITECTURE='AMD64'; $env:PROCESSOR_ARCHITEW6432=$null
@@ -379,14 +377,15 @@ try { Initialize-WindowsEnvironment; exit 0 } catch {
     [Console]::WriteLine('original-opencode-failure'); exit 1
 }
 '''
-        for outcome in ('lower', 'shadowed', 'fresh', 'cleanup'):
+        for outcome in ('lower', 'shadowed', 'fresh', 'cleanup', 'session'):
             with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp); home = root / 'account'; foreign = root / 'foreign'
                 home.mkdir(mode=0o700); foreign.mkdir(mode=0o700)
                 foreign_command = foreign / 'opencode.exe'; foreign_command.write_text('INERT foreign SECRET'); foreign_command.chmod(0o700)
                 before = foreign_command.stat()
-                wrapper = root / 'node.ps1'
-                wrapper.write_text('$input | & $env:FIXTURE_NODE $env:FIXTURE_DRIVER @args\n')
+                wrapper = root / 'node'
+                wrapper.write_text('#!/bin/sh\nexec "$FIXTURE_NODE" "$FIXTURE_DRIVER" "$@"\n')
+                wrapper.chmod(0o700)
                 harness = root / 'caller.ps1'; harness.write_text(script)
                 paths = [str(foreign), str(home / '.local/bin')] if outcome == 'shadowed' else [str(home / '.local/bin'), str(foreign)]
                 run = subprocess.run([PWSH, '-NoProfile', '-NonInteractive', '-File', str(harness), str(ROOT / 'win.ps1')], cwd=home,
@@ -401,13 +400,132 @@ try { Initialize-WindowsEnvironment; exit 0 } catch {
                 self.assertNotIn('SECRET', run.stdout + run.stderr)
                 if outcome != 'lower':
                     self.assertIn('original-opencode-failure', run.stdout)
-                    operation, reason = ('setup-selection', 'foreign-command') if outcome == 'shadowed' else ('fresh-shell-selection', 'command-conflict')
+                    operation, reason = ('setup-selection', 'foreign-command') if outcome == 'shadowed' else (
+                        ('setup-selection', 'command-conflict') if outcome == 'session' else ('fresh-shell-selection', 'command-conflict'))
                     self.assertIn(f'operation={operation}, reason={reason}', run.stdout)
                 self.assertEqual('rollback needs manual recovery' in run.stdout, outcome == 'cleanup')
                 after = foreign_command.stat()
                 self.assertEqual((after.st_ino, after.st_mode, after.st_mtime_ns), (before.st_ino, before.st_mode, before.st_mtime_ns))
                 self.assertEqual(foreign_command.read_text(), 'INERT foreign SECRET')
                 self.assertEqual((home / '.local/bin/opencode.exe').exists(), outcome == 'lower')
+
+    @unittest.skipUnless(PWSH, 'No existing PowerShell: native selection transaction not claimed')
+    def test_powershell_selection_transaction_restores_prior_state_and_preserves_races(self):
+        # Linux PowerShell performs real discovery of inert .exe filenames. Only
+        # Windows suffix inference and ACLs are adapted; never invoke a command.
+        script = r'''param([string]$SourcePath)
+$ErrorActionPreference='Stop'
+$tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile($SourcePath,[ref]$tokens,[ref]$errors)
+if ($errors.Count) { throw 'parse' }
+foreach ($name in @('Install-OpenCodeCli','Invoke-OpenCodeCliCore')) {
+    $definition=@($ast.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -eq $name })
+    if ($definition.Count -ne 1) { throw 'selection' }
+    . ([scriptblock]::Create($definition[0].Extent.Text))
+}
+function Write-Warning { param($Message) [Console]::WriteLine($Message) }
+function Write-Success { param($Message) [Console]::WriteLine($Message) }
+function Test-OpenCodeCliAcl { param($HomePath) $true }
+function Get-Command { param($Name, $CommandType, $ErrorAction)
+    if ($Name -eq 'node') { return [pscustomobject]@{Source=$env:FIXTURE_WRAPPER} }
+    if ($Name -ne 'opencode') { throw 'unexpected discovery' }
+    $homePath=$env:USERPROFILE
+    if (Test-Path -LiteralPath (Join-Path $homePath 'selection-ready')) {
+        # Approval is in the original transaction, before replacing the receipt.
+        if (-not (Test-Path -LiteralPath (Join-Path $homePath '.local/bin/.setup-opencode-cli.lock'))) { throw 'missing transaction' }
+        $destination=Join-Path $homePath '.local/bin/opencode.exe'
+        $receipt=Join-Path $homePath '.local/bin/.setup-opencode-cli.json'
+        if ([IO.File]::ReadAllText($destination) -ne 'INERT official native 2.0.18') { throw 'not promoted' }
+        if ($env:FIXTURE_PRIOR -eq 'upgrade' -and [IO.File]::ReadAllText($receipt) -ne [IO.File]::ReadAllText((Join-Path $homePath 'receipt-before'))) { throw 'receipt already committed' }
+        switch ($env:FIXTURE_SESSION_OUTCOME) {
+            'alias' { Set-Alias -Name opencode -Value 'NEVER_EXECUTE_SECRET' -Scope Global }
+            'function' { Set-Item function:global:opencode { throw 'NEVER_EXECUTE_SECRET' } }
+            'lookup-error' { return Microsoft.PowerShell.Core\Get-Command nonexistent-fixture-command -ErrorAction Stop }
+            'changed-destination' {
+                [IO.File]::WriteAllText($destination, 'INERT external command')
+                Set-Alias -Name opencode -Value 'NEVER_EXECUTE_SECRET' -Scope Global
+            }
+            'changed-receipt' { [IO.File]::WriteAllText($receipt, 'INERT external receipt') }
+            'occupied' {
+                [IO.File]::WriteAllText((Join-Path $homePath '.opencode/bin/opencode.exe'), 'INERT external occupied command')
+                Set-Alias -Name opencode -Value 'NEVER_EXECUTE_SECRET' -Scope Global
+            }
+        }
+    }
+    if ((Test-Path Alias:opencode) -or (Test-Path Function:opencode)) {
+        return Microsoft.PowerShell.Core\Get-Command opencode -ErrorAction $ErrorAction
+    }
+    # The native cmdlet still exercises cached PATH, fresh file discovery and
+    # application precedence; Linux does not append Windows PATHEXT for us.
+    $selected=Microsoft.PowerShell.Core\Get-Command opencode.exe -ErrorAction $ErrorAction
+    if ($selected) { [IO.File]::AppendAllText((Join-Path $homePath 'selected'), $selected.Source + "`n") }
+    return $selected
+}
+$env:PROCESSOR_ARCHITECTURE='AMD64'; $env:PROCESSOR_ARCHITEW6432=$null
+if (Install-OpenCodeCli) { exit 0 } else { exit 1 }
+'''
+        for prior in ('upgrade', 'migration'):
+            outcomes = ['success', 'alias', 'function', 'lookup-error', 'changed-destination', 'changed-receipt']
+            if prior == 'migration':
+                outcomes.append('occupied')
+            for outcome in outcomes:
+                with self.subTest(prior=prior, outcome=outcome), tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp); home = root / 'account'; foreign = root / 'foreign'
+                    home.mkdir(mode=0o700); foreign.mkdir(mode=0o700)
+                    binary = home / '.local/bin/opencode.exe'; binary.parent.mkdir(parents=True)
+                    old = binary if prior == 'upgrade' else home / '.opencode/bin/opencode.exe'
+                    old.parent.mkdir(parents=True, exist_ok=True)
+                    previous = b'INERT official native 2.0.10' if prior == 'upgrade' else b'INERT --user-agent=opencode/1.2.3\0'
+                    old.write_bytes(previous); old.chmod(0o700)
+                    receipt = binary.parent / '.setup-opencode-cli.json'
+                    before_receipt = None
+                    if prior == 'upgrade':
+                        before_receipt = json.dumps({'package': '@opencode/cli-windows-x64-baseline', 'version': '2.0.10',
+                                                     'sha512': base64.b64encode(hashlib.sha512(previous).digest()).decode()})
+                        receipt.write_text(before_receipt); (home / 'receipt-before').write_text(before_receipt)
+                    wrapper = root / 'node'
+                    wrapper.write_text('#!/bin/sh\nexec "$FIXTURE_NODE" "$FIXTURE_DRIVER" "$@"\n'); wrapper.chmod(0o700)
+                    harness = root / 'transaction.ps1'; harness.write_text(script)
+                    run = subprocess.run([PWSH, '-NoProfile', '-NonInteractive', '-File', str(harness), str(ROOT / 'win.ps1')], cwd=home,
+                                         env={'PATH': ':'.join([str(binary.parent), str(home / '.opencode/bin'), '/usr/bin', '/bin']),
+                                              'HOME': str(home), 'USERPROFILE': str(home), 'FIXTURE_NODE': shutil.which('node'),
+                                              'FIXTURE_DRIVER': str(ROOT / 'tests/fixtures/opencode-cli-driver.cjs'),
+                                              'FIXTURE_FOREIGN': str(foreign), 'FIXTURE_PLATFORM': 'win32', 'FIXTURE_WRAPPER': str(wrapper),
+                                              'FIXTURE_SESSION_TRANSACTION': '1', 'FIXTURE_SESSION_OUTCOME': outcome, 'FIXTURE_PRIOR': prior,
+                                              'POWERSHELL_TELEMETRY_OPTOUT': '1'}, capture_output=True, text=True, timeout=40)
+                    self.assertEqual(run.returncode, 0 if outcome == 'success' else 1, run.stdout + run.stderr)
+                    self.assertNotIn('SECRET', run.stdout + run.stderr)
+                    recovery = outcome in ('changed-destination', 'occupied')
+                    self.assertEqual('rollback needs manual recovery' in run.stdout, recovery)
+                    if outcome != 'success':
+                        operation, reason = ('installation', 'changed-receipt') if outcome == 'changed-receipt' else ('setup-selection', 'command-conflict')
+                        self.assertIn(f'operation={operation}, reason={reason}', run.stdout)
+                    if outcome == 'success':
+                        self.assertEqual(binary.read_bytes(), b'INERT official native 2.0.18')
+                        self.assertEqual(json.loads(receipt.read_text())['version'], '2.0.18')
+                        self.assertEqual((home / 'selected').read_text().splitlines(), [str(old), str(binary)])
+                    else:
+                        if outcome == 'changed-receipt':
+                            self.assertEqual(receipt.read_text(), 'INERT external receipt')
+                        elif before_receipt is None:
+                            self.assertFalse(receipt.exists())
+                        else:
+                            self.assertEqual(receipt.read_text(), before_receipt)
+                        if not recovery:
+                            self.assertEqual(old.read_bytes(), previous)
+                            if prior == 'migration': self.assertFalse(binary.exists())
+                        elif outcome == 'changed-destination':
+                            self.assertEqual(binary.read_text(), 'INERT external command')
+                        else:
+                            self.assertEqual(old.read_text(), 'INERT external occupied command')
+                            self.assertFalse(binary.exists())
+                    self.assertEqual((binary.parent / '.setup-opencode-cli.lock').exists(), recovery)
+                    stages = [p for p in binary.parent.glob('.setup-opencode-*') if p.is_dir() and p.name != '.setup-opencode-cli.lock']
+                    self.assertEqual(len(stages), int(recovery or outcome == 'success'))
+                    if stages:
+                        journal = json.loads((stages[0] / 'recovery.json').read_text())
+                        self.assertEqual(journal, [[str(old), str(stages[0] / 'previous-0')]])
+                        self.assertEqual((stages[0] / 'previous-0').read_bytes(), previous)
 
     @unittest.skipUnless(PWSH, 'No existing PWSH_BIN/pwsh: native Windows/PowerShell execution not claimed')
     def test_powershell_caller_aggregation(self):

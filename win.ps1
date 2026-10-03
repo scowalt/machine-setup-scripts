@@ -1117,7 +1117,7 @@ function Install-GeminiCli {
 # Function to install/update Codex CLI from OpenAI's native GitHub release
 # binary, so codex does not depend on Node.js/Bun being present at runtime.
 # BEGIN GENERATED OPENCODE CLI
-# Version 6 | Last changed: Verify account-local OpenCode command selection
+# Version 7 | Last changed: Verify same-session selection before OpenCode commit
 function Test-OpenCodeCliAcl {
     param([string]$HomePath)
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -1175,6 +1175,85 @@ function Test-OpenCodeCliAcl {
     return $true
 }
 
+# One private pipe exchange keeps the existing Node transaction/rollback live
+# while this PowerShell session performs authoritative command discovery. No
+# installer files, second transaction, shell repair or application invocation.
+function Invoke-OpenCodeCliCore {
+    param([string]$NodePath, [string]$Code)
+    $bootstrap = @'
+const rl = require('node:readline').createInterface({input: process.stdin, crlfDelay: Infinity});
+rl.once('line', source => {
+    try { eval(Buffer.from(source, 'base64').toString('utf8')); }
+    catch { console.log('opencode-cli:failed'); process.exitCode = 1; rl.close(); process.stdin.destroy(); return; }
+    const api = module.exports;
+    api.install({verifySessionSelection: expected => new Promise(resolve => {
+        const finish = value => { clearTimeout(timer); rl.removeListener('line', reply); rl.removeListener('close', closed); resolve(value); };
+        const reply = line => finish(line === 'verified' ? true : line === 'refused' ? false : undefined);
+        const closed = () => finish(undefined);
+        const timer = setTimeout(closed, 20000);
+        rl.once('line', reply); rl.once('close', closed);
+        console.log('opencode-cli:verify-selection:' + Buffer.from(expected).toString('base64'));
+    })}).then(result => console.log('opencode-cli:' + result)).catch(error => {
+        console.log(api.failureResult(error)); process.exitCode = 1;
+    }).finally(() => { rl.close(); process.stdin.destroy(); });
+});
+'@
+    $process = New-Object System.Diagnostics.Process
+    $started = $false
+    try {
+        $process.StartInfo.FileName = $NodePath
+        # Compatible with Windows PowerShell 5.1 (no ArgumentList property).
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($bootstrap))
+        $process.StartInfo.Arguments = '-e "eval(Buffer.from(''' + $encoded + ''',''base64'').toString(''utf8''))"'
+        $process.StartInfo.UseShellExecute = $false
+        $process.StartInfo.CreateNoWindow = $true
+        $process.StartInfo.RedirectStandardInput = $true
+        $process.StartInfo.RedirectStandardOutput = $true
+        $process.StartInfo.RedirectStandardError = $true
+        $started = $process.Start()
+        if (-not $started) { throw 'start' }
+        $discard = $process.StandardError.BaseStream.CopyToAsync([IO.Stream]::Null)
+        $process.StandardInput.WriteLine([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Code)))
+        $process.StandardInput.Flush()
+        $output = @(); $requested = $false; $verified = $false
+        while ($true) {
+            $read = $process.StandardOutput.ReadLineAsync()
+            if (-not $read.Wait(600000)) { throw 'timeout' }
+            $line = $read.Result
+            if ($null -eq $line) { break }
+            if ($line.Length -gt 4096) { throw 'output' }
+            if ($line -cmatch '\Aopencode-cli:verify-selection:([A-Za-z0-9+/]+={0,2})\z') {
+                if ($requested -or $output.Count) { throw 'protocol' }
+                $requested = $true
+                $expected = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Matches[1]))
+                $allowed = @('.local/bin/opencode.exe', '.opencode/bin/opencode.exe', '.bun/bin/opencode.exe') |
+                    ForEach-Object { Join-Path $env:USERPROFILE $_ }
+                if ($expected -notin $allowed) { throw 'selection' }
+                try {
+                    $selected = Get-Command opencode -ErrorAction Stop
+                    $verified = $selected -and $selected.CommandType -eq 'Application' -and $selected.Source -eq $expected
+                } catch { $verified = $false }
+                $process.StandardInput.WriteLine($(if ($verified) { 'verified' } else { 'refused' }))
+                $process.StandardInput.Flush()
+            } else {
+                $output += $line
+                if ($output.Count -gt 1) { throw 'output' }
+            }
+        }
+        if (-not $process.WaitForExit(25000)) { throw 'exit' }
+        if ($process.ExitCode -eq 0 -and -not $verified -and $output[0] -cne 'opencode-cli:unsupported') { throw 'selection' }
+        return @{ Status = $process.ExitCode; Output = $output }
+    } catch {
+        # EOF rejects a pending approval so the core can restore commands itself.
+        # Never attempt a second, less-informed rollback or print process output.
+        if ($started) {
+            try { $process.StandardInput.Close() } catch { }
+            if (-not $process.WaitForExit(25000)) { $process.Kill(); $process.WaitForExit() }
+        }
+        return @{ Status = 1; Output = @('opencode-cli:recovery-required:failed') }
+    } finally { $process.Dispose() }
+}
+
 function Install-OpenCodeCli {
     $saved = @{}
     $operation = 'prerequisites'; $reason = 'unverified'
@@ -1210,7 +1289,7 @@ function Install-OpenCodeCli {
         if ($LASTEXITCODE -ne 0) { throw 'prerequisite' }
         $code = @'
 // Embedded in all six entry points by tools/embed-opencode-cli.py.
-// Version 5 | Last changed: Preserve foreign commands and verify account-local selection.
+// Version 6 | Last changed: Verify interactive selection and preserve recoverable native commands.
 // Installation only: never import application code or inherit its environment.
 'use strict';
 const fs = require('node:fs');
@@ -1425,7 +1504,7 @@ function foreignCommand(file, home) {
     }
     return false;
 }
-function verifySetupSelection(expected, home, homeInput, searchPath) {
+function verifySetupSelection(expected, home, homeInput, searchPath, brewTrust) {
     const reject = reason => { throw new PolicyError(reason, 'setup-selection'); };
     const cached = process.env.SETUP_OPENCODE_HASHED;
     if (cached) {
@@ -1441,11 +1520,20 @@ function verifySetupSelection(expected, home, homeInput, searchPath) {
             const candidate = path.join(directory, name);
             let info;
             try { info = fs.lstatSync(candidate); } catch (error) { if (error.code === 'ENOENT') continue; reject('selection-unverified'); }
+            // Native shells ignore directories and non-executable regular files.
+            // Do not follow foreign links just to decide whether to ignore them;
+            // uncertain metadata and actual executable shadows still fail closed.
+            if (info.isDirectory()) continue;
+            if (process.platform !== 'win32' && info.isFile()) {
+                try { fs.accessSync(candidate, fs.constants.X_OK); }
+                catch (error) { if (error.code === 'EACCES') continue; reject('selection-unverified'); }
+            }
             // Resolve only the trusted HOME alias, never an arbitrary command link.
             const normalized = candidate.startsWith(homeInput + path.sep)
                 ? path.join(home, path.relative(homeInput, candidate)) : candidate;
             if (!samePath(normalized, expected)) reject(foreignCommand(candidate, home) ? 'foreign-command' : 'command-conflict');
-            if (!info.isFile() || info.isSymbolicLink()) reject('selection-unverified');
+            if (brewTrust && samePath(brewTrust.command, expected)) checkBrewTrust(brewTrust);
+            else if (!info.isFile() || info.isSymbolicLink()) reject('selection-unverified');
             try { fs.accessSync(expected, fs.constants.X_OK); } catch { reject('selection-unverified'); }
             return;
         }
@@ -1463,22 +1551,27 @@ function verifyFreshSelection(expected, home, homeInput) {
     }
     env.MISE_AUTO_INSTALL = 'false'; env.MISE_NODE_COMPILE = 'false';
     let args;
+    const marker = `opencode-selection-${crypto.randomBytes(16).toString('hex')}:`;
     if (process.platform === 'win32') {
         if (!['powershell.exe', 'pwsh.exe'].includes(path.basename(shell).toLowerCase()) || !env.SETUP_OPENCODE_FRESH_PATH) reject('selection-unverified');
         env.PATH = env.SETUP_OPENCODE_FRESH_PATH;
         // Load the normal native profile. Only query resolution; never run the app.
-        args = ['-NoLogo', '-NonInteractive', '-Command', "$ErrorActionPreference = 'Stop'; try { $c = Get-Command opencode -ErrorAction Stop; if ($c.CommandType -ne 'Application') { exit 2 }; [Console]::WriteLine($c.Source) } catch { exit 3 }"];
+        args = ['-NoLogo', '-NonInteractive', '-Command', `$ErrorActionPreference = 'Stop'; try { $c = Get-Command opencode -ErrorAction Stop; if ($c.CommandType -ne 'Application') { exit 2 }; [Console]::WriteLine("\`n${marker}" + $c.Source + "${marker}") } catch { exit 3 }`];
     } else {
         if (path.basename(shell) !== 'fish') reject('selection-unverified');
         env.PATH = '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin';
-        args = ['-l', '-c', 'if functions -q opencode; exit 2; end; command -s opencode; or exit 3'];
+        args = ['-l', '-i', '-c', `if functions -q opencode; exit 2; end; set -l selected (command -s opencode); or exit 3; printf '\\n${marker}%s${marker}\\n' "$selected"`];
     }
     let output;
     try {
-        output = cp.execFileSync(shell, args, {cwd: home, env, timeout: 20000, maxBuffer: 4096,
+        output = cp.execFileSync(shell, args, {cwd: home, env, timeout: 20000, maxBuffer: 65536,
             stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true}).toString();
     } catch (error) { reject(error.status === 2 ? 'command-conflict' : 'selection-unverified'); }
-    const selected = output.replace(/\r?\n$/, '');
+    // Ordinary startup banners are not evidence. Accept exactly one fresh,
+    // framed query result; never surface other stdout or arbitrary stderr.
+    const records = output.split(/\r?\n/).filter(line => line.startsWith(marker));
+    if (records.length !== 1 || !records[0].endsWith(marker)) reject('selection-unverified');
+    const selected = records[0].slice(marker.length, -marker.length);
     if (!path.isAbsolute(selected) || /[\r\n\0]/.test(selected)) reject('selection-unverified');
     const normalized = selected.startsWith(homeInput + path.sep) ? path.join(home, path.relative(homeInput, selected)) : selected;
     if (!samePath(normalized, expected)) reject('command-conflict');
@@ -1693,9 +1786,16 @@ async function installChecked(options) {
             if (policy.overrides?.['opencode-ai'] || policy.resolutions?.['opencode-ai']) fail('pinned');
         }
     }
-    const verifySelection = expected => {
-        verifySetupSelection(expected, home, homeInput, options.path ?? process.env.PATH ?? '');
+    const verifySelection = async (expected, brewTrust) => {
+        verifySetupSelection(expected, home, homeInput, options.path ?? process.env.PATH ?? '', brewTrust);
         verifyFreshSelection(expected, home, homeInput);
+        if (process.platform === 'win32') {
+            // PowerShell's own session (aliases/functions and native discovery)
+            // must approve before receipt commit while rollback is still live.
+            let selected;
+            try { selected = await options.verifySessionSelection?.(expected); } catch { /* fail closed below */ }
+            if (selected !== true) throw new PolicyError(selected === false ? 'command-conflict' : 'selection-unverified', 'setup-selection');
+        }
     };
     let installed = null, installedBytes = null;
     if (fs.existsSync(receipt)) {
@@ -1717,15 +1817,20 @@ async function installChecked(options) {
     }
     if (old.some(item => compare(item.release, release) > 0)) {
         if (old.length !== 1 || installed) fail('shadowed-newer');
-        safePath(old[0].file, home);
-        verifySelection(old[0].file);
-        safePath(old[0].file, home);
-        if (digest(boundedRead(old[0].file)) !== old[0].nativeHash) fail('changed-copy');
+        const item = old[0];
+        const revalidate = () => {
+            if (item.route === 'homebrew') checkBrewTrust(item.brewTrust);
+            else safePath(item.file, home);
+            if (digest(boundedRead(item.binary)) !== item.nativeHash) fail('changed-copy');
+        };
+        revalidate();
+        await verifySelection(item.file, item.brewTrust);
+        revalidate();
         return 'newer';
     }
     if (installed && compare(installed, release) >= 0) {
         if (old.length) fail('shadowed');
-        verifySelection(destination);
+        await verifySelection(destination);
         safePath(destination, home);
         if (!boundedRead(destination).equals(installedBytes)) fail('changed-copy');
         // A newer official version is preserved, never rewritten or downgraded.
@@ -1785,7 +1890,7 @@ async function installChecked(options) {
         fs.unlinkSync(staged);
         runProbe(destination, release, stage);
         // Verify the effective command, not mere PATH membership. Failure rolls back.
-        verifySelection(destination);
+        await verifySelection(destination);
         safePath(destination, home);
         if (!boundedRead(destination).equals(bytes)) fail('changed-copy');
         const remaining = options.commands ? [destination] : commands(home);
@@ -1830,16 +1935,17 @@ if (require.main === module || process.argv[1] === '-') install().then(result =>
 });
 '@
         $operation = 'installation'; $reason = 'unrecognized-result'
-        $output = @($code | & $node.Source - 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $output.Count -ne 1) {
+        $run = Invoke-OpenCodeCliCore -NodePath $node.Source -Code $code
+        $output = @($run.Output)
+        if ($run.Status -ne 0 -or $output.Count -ne 1) {
             $recovery = $false
             if ($output.Count -eq 1 -and $output[0] -cin @('opencode-cli:recovery-required', 'opencode-cli:recovery-required:failed')) {
                 $recovery = $true
-            } elseif ($LASTEXITCODE -ne 0 -and $output.Count -eq 1 -and
+            } elseif ($run.Status -ne 0 -and $output.Count -eq 1 -and
                 $output[0] -cmatch '\Aopencode-cli:(?:recovery-required:)?download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)\z') {
                 $recovery = $output[0].StartsWith('opencode-cli:recovery-required:')
                 Write-Warning "OpenCode CLI download failed (operation=$($Matches[1]), HTTP=$($Matches[2]))."
-            } elseif ($LASTEXITCODE -ne 0 -and $output.Count -eq 1 -and
+            } elseif ($run.Status -ne 0 -and $output.Count -eq 1 -and
                 $output[0] -cmatch '\Aopencode-cli:(?:recovery-required:)?policy-failed:(homebrew-preflight|installation|setup-selection|fresh-shell-selection):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-readiness|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|foreign-command|command-conflict|selection-unverified|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))\z') {
                 $recovery = $output[0].StartsWith('opencode-cli:recovery-required:')
                 Write-Warning "OpenCode CLI blocked (operation=$($Matches[1]), reason=$($Matches[2]))."
@@ -1852,16 +1958,6 @@ if (require.main === module || process.argv[1] === '-') install().then(result =>
             }
             $operation = $null
             throw 'installation'
-        }
-        if ($output[0] -cin @('opencode-cli:installed', 'opencode-cli:current', 'opencode-cli:migrated', 'opencode-cli:newer')) {
-            $operation = 'setup-selection'; $reason = 'command-conflict'
-            $selected = Get-Command opencode -ErrorAction Stop
-            $expected = @((Join-Path $env:USERPROFILE '.local/bin/opencode.exe'))
-            if ($output[0] -ceq 'opencode-cli:newer') {
-                $expected += (Join-Path $env:USERPROFILE '.opencode/bin/opencode.exe')
-                $expected += (Join-Path $env:USERPROFILE '.bun/bin/opencode.exe')
-            }
-            if (-not $selected -or $selected.CommandType -ne 'Application' -or $selected.Source -notin $expected) { throw 'selection' }
         }
         switch -Exact ($output[0]) {
             'opencode-cli:installed' { Write-Success 'OpenCode CLI stable v2 installation/version verified.' }
@@ -7502,7 +7598,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a  # Windows logo
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 173 | Last changed: Preserve foreign OpenCode copies with verified account-local selection"
+    Write-Host "Version 174 | Last changed: Verify interactive OpenCode selection before committing native updates"
 
     Assert-HeadlessUnsupported
 

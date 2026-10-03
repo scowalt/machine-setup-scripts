@@ -1,4 +1,4 @@
-# Version 6 | Last changed: Verify account-local OpenCode command selection
+# Version 7 | Last changed: Verify same-session selection before OpenCode commit
 function Test-OpenCodeCliAcl {
     param([string]$HomePath)
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -56,6 +56,85 @@ function Test-OpenCodeCliAcl {
     return $true
 }
 
+# One private pipe exchange keeps the existing Node transaction/rollback live
+# while this PowerShell session performs authoritative command discovery. No
+# installer files, second transaction, shell repair or application invocation.
+function Invoke-OpenCodeCliCore {
+    param([string]$NodePath, [string]$Code)
+    $bootstrap = @'
+const rl = require('node:readline').createInterface({input: process.stdin, crlfDelay: Infinity});
+rl.once('line', source => {
+    try { eval(Buffer.from(source, 'base64').toString('utf8')); }
+    catch { console.log('opencode-cli:failed'); process.exitCode = 1; rl.close(); process.stdin.destroy(); return; }
+    const api = module.exports;
+    api.install({verifySessionSelection: expected => new Promise(resolve => {
+        const finish = value => { clearTimeout(timer); rl.removeListener('line', reply); rl.removeListener('close', closed); resolve(value); };
+        const reply = line => finish(line === 'verified' ? true : line === 'refused' ? false : undefined);
+        const closed = () => finish(undefined);
+        const timer = setTimeout(closed, 20000);
+        rl.once('line', reply); rl.once('close', closed);
+        console.log('opencode-cli:verify-selection:' + Buffer.from(expected).toString('base64'));
+    })}).then(result => console.log('opencode-cli:' + result)).catch(error => {
+        console.log(api.failureResult(error)); process.exitCode = 1;
+    }).finally(() => { rl.close(); process.stdin.destroy(); });
+});
+'@
+    $process = New-Object System.Diagnostics.Process
+    $started = $false
+    try {
+        $process.StartInfo.FileName = $NodePath
+        # Compatible with Windows PowerShell 5.1 (no ArgumentList property).
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($bootstrap))
+        $process.StartInfo.Arguments = '-e "eval(Buffer.from(''' + $encoded + ''',''base64'').toString(''utf8''))"'
+        $process.StartInfo.UseShellExecute = $false
+        $process.StartInfo.CreateNoWindow = $true
+        $process.StartInfo.RedirectStandardInput = $true
+        $process.StartInfo.RedirectStandardOutput = $true
+        $process.StartInfo.RedirectStandardError = $true
+        $started = $process.Start()
+        if (-not $started) { throw 'start' }
+        $discard = $process.StandardError.BaseStream.CopyToAsync([IO.Stream]::Null)
+        $process.StandardInput.WriteLine([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Code)))
+        $process.StandardInput.Flush()
+        $output = @(); $requested = $false; $verified = $false
+        while ($true) {
+            $read = $process.StandardOutput.ReadLineAsync()
+            if (-not $read.Wait(600000)) { throw 'timeout' }
+            $line = $read.Result
+            if ($null -eq $line) { break }
+            if ($line.Length -gt 4096) { throw 'output' }
+            if ($line -cmatch '\Aopencode-cli:verify-selection:([A-Za-z0-9+/]+={0,2})\z') {
+                if ($requested -or $output.Count) { throw 'protocol' }
+                $requested = $true
+                $expected = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Matches[1]))
+                $allowed = @('.local/bin/opencode.exe', '.opencode/bin/opencode.exe', '.bun/bin/opencode.exe') |
+                    ForEach-Object { Join-Path $env:USERPROFILE $_ }
+                if ($expected -notin $allowed) { throw 'selection' }
+                try {
+                    $selected = Get-Command opencode -ErrorAction Stop
+                    $verified = $selected -and $selected.CommandType -eq 'Application' -and $selected.Source -eq $expected
+                } catch { $verified = $false }
+                $process.StandardInput.WriteLine($(if ($verified) { 'verified' } else { 'refused' }))
+                $process.StandardInput.Flush()
+            } else {
+                $output += $line
+                if ($output.Count -gt 1) { throw 'output' }
+            }
+        }
+        if (-not $process.WaitForExit(25000)) { throw 'exit' }
+        if ($process.ExitCode -eq 0 -and -not $verified -and $output[0] -cne 'opencode-cli:unsupported') { throw 'selection' }
+        return @{ Status = $process.ExitCode; Output = $output }
+    } catch {
+        # EOF rejects a pending approval so the core can restore commands itself.
+        # Never attempt a second, less-informed rollback or print process output.
+        if ($started) {
+            try { $process.StandardInput.Close() } catch { }
+            if (-not $process.WaitForExit(25000)) { $process.Kill(); $process.WaitForExit() }
+        }
+        return @{ Status = 1; Output = @('opencode-cli:recovery-required:failed') }
+    } finally { $process.Dispose() }
+}
+
 function Install-OpenCodeCli {
     $saved = @{}
     $operation = 'prerequisites'; $reason = 'unverified'
@@ -93,16 +172,17 @@ function Install-OpenCodeCli {
 // @OPENCODE_CORE@
 '@
         $operation = 'installation'; $reason = 'unrecognized-result'
-        $output = @($code | & $node.Source - 2>$null)
-        if ($LASTEXITCODE -ne 0 -or $output.Count -ne 1) {
+        $run = Invoke-OpenCodeCliCore -NodePath $node.Source -Code $code
+        $output = @($run.Output)
+        if ($run.Status -ne 0 -or $output.Count -ne 1) {
             $recovery = $false
             if ($output.Count -eq 1 -and $output[0] -cin @('opencode-cli:recovery-required', 'opencode-cli:recovery-required:failed')) {
                 $recovery = $true
-            } elseif ($LASTEXITCODE -ne 0 -and $output.Count -eq 1 -and
+            } elseif ($run.Status -ne 0 -and $output.Count -eq 1 -and
                 $output[0] -cmatch '\Aopencode-cli:(?:recovery-required:)?download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)\z') {
                 $recovery = $output[0].StartsWith('opencode-cli:recovery-required:')
                 Write-Warning "OpenCode CLI download failed (operation=$($Matches[1]), HTTP=$($Matches[2]))."
-            } elseif ($LASTEXITCODE -ne 0 -and $output.Count -eq 1 -and
+            } elseif ($run.Status -ne 0 -and $output.Count -eq 1 -and
                 $output[0] -cmatch '\Aopencode-cli:(?:recovery-required:)?policy-failed:(homebrew-preflight|installation|setup-selection|fresh-shell-selection):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-readiness|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|foreign-command|command-conflict|selection-unverified|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))\z') {
                 $recovery = $output[0].StartsWith('opencode-cli:recovery-required:')
                 Write-Warning "OpenCode CLI blocked (operation=$($Matches[1]), reason=$($Matches[2]))."
@@ -115,16 +195,6 @@ function Install-OpenCodeCli {
             }
             $operation = $null
             throw 'installation'
-        }
-        if ($output[0] -cin @('opencode-cli:installed', 'opencode-cli:current', 'opencode-cli:migrated', 'opencode-cli:newer')) {
-            $operation = 'setup-selection'; $reason = 'command-conflict'
-            $selected = Get-Command opencode -ErrorAction Stop
-            $expected = @((Join-Path $env:USERPROFILE '.local/bin/opencode.exe'))
-            if ($output[0] -ceq 'opencode-cli:newer') {
-                $expected += (Join-Path $env:USERPROFILE '.opencode/bin/opencode.exe')
-                $expected += (Join-Path $env:USERPROFILE '.bun/bin/opencode.exe')
-            }
-            if (-not $selected -or $selected.CommandType -ne 'Application' -or $selected.Source -notin $expected) { throw 'selection' }
         }
         switch -Exact ($output[0]) {
             'opencode-cli:installed' { Write-Success 'OpenCode CLI stable v2 installation/version verified.' }

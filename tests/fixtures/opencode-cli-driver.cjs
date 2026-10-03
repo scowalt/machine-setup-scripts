@@ -1,4 +1,4 @@
-// Version 1 | Offline native boundary for the extracted real OpenCode wrappers.
+// Version 2 | Offline native selection boundary for the extracted real OpenCode wrappers.
 // Evaluate only their bounded embedded Node helper, never a setup entry point.
 'use strict';
 const assert = require('node:assert/strict');
@@ -9,8 +9,9 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 const {EventEmitter} = require('node:events');
-if (process.argv[2] === '-e') process.exit(0);
-assert.equal(process.argv[2], '-');
+const session = process.argv[2] === '-e' && process.argv[3]?.startsWith('eval(Buffer.from(');
+if (process.argv[2] === '-e' && !session) process.exit(0);
+assert.ok(session || process.argv[2] === '-');
 const home = process.env.HOME, foreign = process.env.FIXTURE_FOREIGN;
 assert.ok(home && foreign && path.dirname(home) === path.dirname(foreign));
 const windows = process.env.FIXTURE_PLATFORM === 'win32';
@@ -18,23 +19,27 @@ const leaf = windows ? 'opencode.exe' : 'opencode';
 const destination = path.join(home, '.local/bin', leaf);
 const name = `@opencode/cli-${windows ? 'windows' : 'linux'}-x64-baseline`;
 const release = '2.0.18', bytes = Buffer.from('INERT official native 2.0.18');
-const tarball = `https://registry.npmjs.org/${name}/-/cli-${windows ? 'windows' : 'linux'}-x64-baseline-${release}.tgz`;
-const blocks = [];
-for (const [filename, contents] of [['package/package.json', JSON.stringify({name, version: release})], [`package/bin/${leaf}`, bytes]]) {
-    const value = Buffer.from(contents), header = Buffer.alloc(512);
-    header.write(filename); header.write('0000755\0', 100); header.write('0000000\0', 108); header.write('0000000\0', 116);
-    header.write(value.length.toString(8).padStart(11, '0') + '\0', 124);
-    header.fill(32, 148, 156); header.write('0', 156); header.write('ustar\0', 257);
-    header.write(header.reduce((sum, b) => sum + b, 0).toString(8).padStart(6, '0') + '\0 ', 148);
-    blocks.push(header, value, Buffer.alloc((512 - value.length % 512) % 512));
+function publish(packageName, version, binary) {
+    const tarball = `https://registry.npmjs.org/${packageName}/-/${packageName.split('/').pop()}-${version}.tgz`;
+    const blocks = [];
+    for (const [filename, contents] of [['package/package.json', JSON.stringify({name: packageName, version})], [`package/bin/${leaf}`, binary]]) {
+        const value = Buffer.from(contents), header = Buffer.alloc(512);
+        header.write(filename); header.write('0000755\0', 100); header.write('0000000\0', 108); header.write('0000000\0', 116);
+        header.write(value.length.toString(8).padStart(11, '0') + '\0', 124);
+        header.fill(32, 148, 156); header.write('0', 156); header.write('ustar\0', 257);
+        header.write(header.reduce((sum, b) => sum + b, 0).toString(8).padStart(6, '0') + '\0 ', 148);
+        blocks.push(header, value, Buffer.alloc((512 - value.length % 512) % 512));
+    }
+    const archive = zlib.gzipSync(Buffer.concat([...blocks, Buffer.alloc(1024)]));
+    return [[`https://registry.npmjs.org/${packageName}/${version}`, Buffer.from(JSON.stringify({name: packageName, version,
+        dist: {tarball, integrity: 'sha512-' + crypto.createHash('sha512').update(archive).digest('base64')}}))], [tarball, archive]];
 }
-const archive = zlib.gzipSync(Buffer.concat([...blocks, Buffer.alloc(1024)]));
 const responses = new Map([
     ['https://opencode.ai/update/api/latest/cli/npm', Buffer.from(JSON.stringify({channel: 'latest', name: 'cli', distribution: 'npm',
         version: release, active: true, minimum: false, metadata: {package: '@opencode/cli'}}))],
-    [`https://registry.npmjs.org/${name}/${release}`, Buffer.from(JSON.stringify({name, version: release,
-        dist: {tarball, integrity: 'sha512-' + crypto.createHash('sha512').update(archive).digest('base64')}}))],
-    [tarball, archive],
+    ...publish(name, release, bytes),
+    ...publish(name, '2.0.10', Buffer.from('INERT official native 2.0.10')),
+    ...publish(`opencode-${windows ? 'windows' : 'linux'}-x64-baseline`, '1.2.3', Buffer.from('INERT --user-agent=opencode/1.2.3\0')),
 ]);
 const https = {get(url, options, callback) {
     assert.equal(options.rejectUnauthorized, true);
@@ -55,7 +60,9 @@ const proxy = new Proxy(fs, {get(object, key) {
         if (writes.has(key)) {
             for (const file of args.slice(0, ['renameSync', 'linkSync'].includes(key) ? 2 : 1)) assert.ok(file.startsWith(home + path.sep), 'only private account writes allowed');
         }
-        if (typeof args[0] === 'string' && args[0].startsWith(foreign)) assert.equal(key, 'lstatSync', 'foreign content and mutation forbidden');
+        if (typeof args[0] === 'string' && args[0].startsWith(foreign)) {
+            assert.ok(key === 'lstatSync' || (key === 'accessSync' && args[1] === fs.constants.X_OK), 'foreign content and mutation forbidden');
+        }
         if (key === 'rmSync' && process.env.FIXTURE_OUTCOME === 'cleanup') throw new Error('SECRET cleanup output');
         const result = object[key](...args);
         if (key === 'lstatSync') {
@@ -69,7 +76,10 @@ const proxy = new Proxy(fs, {get(object, key) {
 const cp = {execFileSync(file, args) {
     if (file === process.env.SETUP_OPENCODE_SHELL) {
         assert.ok(!args.includes('--version'));
-        return Buffer.from((['fresh', 'cleanup'].includes(process.env.FIXTURE_OUTCOME) ? path.join(foreign, leaf) : destination) + '\n');
+        const marker = args.join(' ').match(/opencode-selection-[a-f0-9]+:/)?.[0];
+        assert.ok(marker, 'native evidence must be framed');
+        if (process.env.FIXTURE_SESSION_TRANSACTION === '1') fs.writeFileSync(path.join(home, 'selection-ready'), 'inert query checkpoint');
+        return Buffer.from('\n' + marker + (['fresh', 'cleanup'].includes(process.env.FIXTURE_OUTCOME) ? path.join(foreign, leaf) : destination) + marker + '\n');
     }
     assert.ok(file.startsWith(home + path.sep), 'foreign application execution forbidden');
     assert.deepEqual(Array.from(args), ['--version']);
@@ -77,13 +87,15 @@ const cp = {execFileSync(file, args) {
     return Buffer.from('opencode v2.0.18\n');
 }};
 const fakeProcess = {platform: windows ? 'win32' : 'linux', env: {...process.env}, getuid: process.getuid,
-    report: process.report, argv: ['node', '-']};
+    report: process.report, stdin: process.stdin, argv: ['node', session ? 'fixture' : '-']};
 if (windows) fakeProcess.env.SETUP_OPENCODE_FRESH_PATH = '/fixture/persisted-windows-path';
 const modules = {'node:fs': proxy, 'node:https': https, 'node:child_process': cp,
     'node:os': {...os, homedir: () => home, machine: () => 'x86_64'}};
-const source = fs.readFileSync(0, 'utf8');
-assert.ok(source.startsWith('// Embedded in all six entry points'));
-assert.ok(source.includes('module.exports ='));
+const source = session ? process.argv[3] : fs.readFileSync(0, 'utf8');
+if (!session) {
+    assert.ok(source.startsWith('// Embedded in all six entry points'));
+    assert.ok(source.includes('module.exports ='));
+} else assert.match(source, /^eval\(Buffer\.from\('[A-Za-z0-9+/=]+','base64'\)\.toString\('utf8'\)\)$/);
 vm.runInNewContext(source, {require: name => modules[name] || require(name), module: {exports: {}},
     process: fakeProcess, Buffer, URL, setTimeout, clearTimeout, console});
 process.on('beforeExit', () => { process.exitCode = fakeProcess.exitCode || 0; });
