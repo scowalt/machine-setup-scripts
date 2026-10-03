@@ -932,241 +932,6 @@ install_doppler() {
     fi
 }
 
-# BEGIN INFISICAL APT SOURCE HELPER
-retire_infisical_apt_sources() {
-    sudo /usr/bin/python3 -I - /etc/apt <<'INFISICAL_APT_PY'
-import os
-import re
-import stat
-import sys
-from urllib.parse import urlsplit
-
-root = sys.argv[1]
-old = 'dl.cloudsmith.io'
-new = 'artifacts-cli.infisical.com'
-
-def official(uri):
-    try:
-        parsed = urlsplit(uri)
-        return (parsed.scheme == 'https' and not parsed.username and not parsed.password
-                and not parsed.port and not parsed.query and not parsed.fragment
-                and ((parsed.hostname == old and parsed.path.startswith('/public/infisical/infisical-cli/deb/'))
-                     or (parsed.hostname == new and parsed.path in ('/deb', '/deb/'))))
-    except ValueError:
-        return False
-
-def strip_list(data):
-    result = []
-    for line in data.splitlines(keepends=True):
-        match = re.match(rb'^\s*deb(?:-src)?\s+(?:\[[^\]\r\n]*\]\s+)?(\S+)', line)
-        if match and official(match.group(1).decode('utf-8', 'replace')):
-            continue
-        result.append(line)
-    return b''.join(result)
-
-def strip_sources(data):
-    pieces = re.split(rb'(\r?\n[ \t]*\r?\n)', data)
-    output = []
-    for i in range(0, len(pieces), 2):
-        stanza = pieces[i]
-        fields = []
-        for line in stanza.splitlines():
-            if line.startswith((b' ', b'\t')):
-                if fields:
-                    fields[-1][1].append(line.strip())
-            elif b':' in line:
-                key, value = line.split(b':', 1)
-                fields.append((key.lower(), [value.strip()]))
-        uris = [b' '.join(parts).decode('utf-8', 'replace').split()
-                for key, parts in fields if key == b'uris']
-        values = [value for field in uris for value in field]
-        matches = [official(value) for value in values]
-        if any(matches):
-            if len(uris) != 1 or not all(matches):
-                raise ValueError('mixed or ambiguous Deb822 URIs')
-            stanza = b''
-        if stanza:
-            output.append(stanza)
-            if i + 1 < len(pieces):
-                output.append(pieces[i + 1])
-    return b''.join(output)
-
-try:
-    ancestor = os.open(os.path.dirname(root), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    ancestor_info = os.fstat(ancestor)
-    os.close(ancestor)
-    if ancestor_info.st_uid != os.geteuid() or ancestor_info.st_mode & 0o022:
-        raise ValueError('unsafe source ancestor')
-    rootfd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    parent = os.fstat(rootfd)
-    if parent.st_uid != os.geteuid() or parent.st_mode & 0o022:
-        raise ValueError('unsafe source directory')
-    dirs = [(rootfd, 'sources.list')]
-    try:
-        child = os.open('sources.list.d', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=rootfd)
-    except FileNotFoundError:
-        child = None
-    if child is not None:
-        parent = os.fstat(child)
-        if parent.st_uid != os.geteuid() or parent.st_mode & 0o022:
-            raise ValueError('unsafe source directory')
-        dirs.extend((child, name) for name in os.listdir(child) if name.endswith(('.list', '.sources')))
-    changes = []
-    # Inspect every applicable candidate before changing any one of them.
-    for directory, name in dirs:
-        try:
-            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-        except FileNotFoundError:
-            continue
-        with os.fdopen(fd, 'rb') as file:
-            info = os.fstat(file.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.geteuid() or info.st_mode & 0o022:
-                raise ValueError('unsafe source metadata')
-            attributes = os.listxattr(file.fileno())
-            data = file.read(1024 * 1024 + 1)
-            if len(data) > 1024 * 1024:
-                raise ValueError('oversized source')
-        updated = strip_sources(data) if name.endswith('.sources') else strip_list(data)
-        if updated != data:
-            if attributes:
-                raise ValueError('source has extended metadata')
-            changes.append((directory, name, info, data, updated))
-    for directory, name, info, data, updated in changes:
-        check = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-        with os.fdopen(check, 'rb') as file:
-            now = os.fstat(file.fileno())
-            if (now.st_dev, now.st_ino, now.st_size, now.st_mtime_ns, now.st_ctime_ns,
-                now.st_mode, now.st_uid, now.st_gid, now.st_nlink) != (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns,
-                info.st_mode, info.st_uid, info.st_gid, info.st_nlink) or os.listxattr(file.fileno()) or file.read() != data:
-                raise ValueError('source changed during retirement')
-        # Use an exclusive sibling with the same ownership and mode, then atomic rename.
-        tmp = '.infisical-retirement-%d-%s' % (os.getpid(), name)
-        created = None
-        try:
-            out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, stat.S_IMODE(info.st_mode), dir_fd=directory)
-            created = os.fstat(out)
-            with os.fdopen(out, 'wb') as file:
-                os.fchown(file.fileno(), info.st_uid, info.st_gid)
-                os.fchmod(file.fileno(), stat.S_IMODE(info.st_mode))
-                file.write(updated)
-                file.flush()
-                os.fsync(file.fileno())
-            current = os.stat(name, dir_fd=directory, follow_symlinks=False)
-            if (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns,
-                current.st_mode, current.st_uid, current.st_gid, current.st_nlink) != (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns,
-                info.st_mode, info.st_uid, info.st_gid, info.st_nlink):
-                raise ValueError('source changed before replacement')
-            temp_now = os.stat(tmp, dir_fd=directory, follow_symlinks=False)
-            if (temp_now.st_dev, temp_now.st_ino) != (created.st_dev, created.st_ino):
-                raise ValueError('temporary source changed')
-            os.rename(tmp, name, src_dir_fd=directory, dst_dir_fd=directory)
-            os.fsync(directory)
-        finally:
-            if created is not None:
-                try:
-                    temp_now = os.stat(tmp, dir_fd=directory, follow_symlinks=False)
-                    if (temp_now.st_dev, temp_now.st_ino) == (created.st_dev, created.st_ino):
-                        os.unlink(tmp, dir_fd=directory)
-                except FileNotFoundError:
-                    pass
-    if child is not None:
-        os.close(child)
-    os.close(rootfd)
-except (OSError, ValueError) as exc:
-    print('Infisical APT source retirement failed (unsafe or unavailable source metadata).', file=sys.stderr)
-    sys.exit(1)
-INFISICAL_APT_PY
-}
-# END INFISICAL APT SOURCE HELPER
-
-# Retire only the native APT identity; a simulated removal must not remove dependencies.
-retire_infisical_apt() {
-    local status="" plan="" remaining="" query_status=0
-    if ! can_sudo || ! retire_infisical_apt_sources; then
-        print_error "Infisical APT source retirement requires verified sources and sudo."
-        return 1
-    fi
-    status=$(dpkg-query -W -f='${Status}' infisical 2>/dev/null) || query_status=$?
-    if [[ "${query_status}" -ne 0 ]]; then
-        # dpkg-query returns 1 for no match; other codes indicate inventory errors.
-        if [[ "${query_status}" -ne 1 ]] || ! dpkg-query -W -f='${Status}' dpkg >/dev/null 2>&1; then
-            print_error "Infisical package inventory unavailable."
-            return 1
-        fi
-        status="absent"
-    fi
-    if [[ "${status}" == "install ok installed" ]]; then
-        plan=$(sudo LC_ALL=C apt-get -s remove infisical 2>/dev/null) || { print_error "Infisical removal plan unavailable."; return 1; }
-        local line="" removals=0 advisory=0 advisory_items=0
-        while IFS= read -r line; do
-            if [[ "${advisory}" -eq 1 ]]; then
-                case "${line}" in
-                    "Use 'apt autoremove' to remove it."|"Use 'apt autoremove' to remove them.")
-                        if [[ "${advisory_items}" -eq 0 ]]; then
-                            print_error "Infisical removal plan has an empty advisory."
-                            return 1
-                        fi
-                        advisory=0
-                        ;;
-                    '  '*)
-                        if ! grep -Eq '^  [a-z0-9][a-z0-9+.:~-]*( [a-z0-9][a-z0-9+.:~-]*)*$' <<< "${line}"; then
-                            print_error "Infisical removal plan has an unverified advisory."
-                            return 1
-                        fi
-                        advisory_items=$((advisory_items + 1))
-                        ;;
-                    *) print_error "Infisical removal plan has an unverified advisory action."; return 1 ;;
-                esac
-                continue
-            fi
-            case "${line}" in
-                Remv\ infisical*)
-                    if ! grep -Eq '^Remv infisical( \[[^]]+\])?( \([^)]*\))?$' <<< "${line}"; then
-                        print_error "Infisical removal plan has an unverified package action."
-                        return 1
-                    fi
-                    removals=$((removals + 1))
-                    ;;
-                'The following package was automatically installed and is no longer required:'|'The following packages were automatically installed and are no longer required:')
-                    advisory=1
-                    advisory_items=0
-                    ;;
-                'Reading package lists...'|'Building dependency tree...'|'Reading state information...'|'Solving dependencies...'|'The following packages will be REMOVED:'|'  infisical'|'infisical'|'') ;;
-                '0 upgraded, 0 newly installed, 1 to remove and '*' not upgraded.')
-                    if ! grep -Eq '^0 upgraded, 0 newly installed, 1 to remove and [0-9]+ not upgraded\.$' <<< "${line}"; then
-                        print_error "Infisical removal plan has an unverified summary."
-                        return 1
-                    fi
-                    ;;
-                *) print_error "Infisical removal plan includes an unverified action."; return 1 ;;
-            esac
-        done <<< "${plan}"
-        if [[ "${advisory}" -ne 0 ]] || [[ "${removals}" -ne 1 ]]; then
-            print_error "Infisical removal plan is unverified."
-            return 1
-        fi
-        # dpkg targets exactly this package and refuses dependent removals;
-        # apt-get remove could re-plan after simulation and remove other packages.
-        if ! sudo dpkg --no-triggers --remove infisical; then
-            print_error "Infisical package removal failed."
-            return 1
-        fi
-        query_status=0
-        remaining=$(dpkg-query -W -f='${Status}' infisical 2>/dev/null) || query_status=$?
-        if [[ "${query_status}" -gt 1 ]] || { [[ "${query_status}" -eq 0 ]] && [[ "${remaining}" != "deinstall ok config-files" && "${remaining}" != "unknown ok not-installed" ]]; } || ! dpkg-query -W -f='${Status}' dpkg >/dev/null 2>&1; then
-            print_error "Infisical package removal could not be verified."
-            return 1
-        fi
-    elif [[ "${status}" != "absent" && "${status}" != "deinstall ok config-files" && "${status}" != "unknown ok not-installed" ]]; then
-        print_error "Infisical package status is unverified."
-        return 1
-    fi
-    if command -v infisical >/dev/null 2>&1; then
-        print_warning "An Infisical executable remains; check custom installations manually."
-    fi
-    print_debug "Infisical APT retirement verified."
-}
-
 # Personal machines retain Doppler; work machines have no replacement.
 install_secrets_manager() {
     if [[ "${WORK_MACHINE:-}" != "1" ]]; then
@@ -8944,12 +8709,11 @@ install_bb_desktop() {
 
 run_setup_tasks() {
     local _setup_had_errors=0
-    local _infisical_retirement_ok=1
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 241 | Last changed: Accept account-owned Linux Homebrew group write for OpenCode"
+    echo -e "${GRAY}Version 242 | Last changed: Drop completed secrets-manager retirement"
 
     if ! acquire_setup_lock; then
         return 1
@@ -8968,17 +8732,9 @@ run_setup_tasks() {
     check_raspberry_pi
     setup_swap
     setup_dns64_for_ipv6_only
-    if ! retire_infisical_apt; then
-        _infisical_retirement_ok=0
-        _setup_had_errors=1
-    fi
 
     print_section "System Updates"
-    if [[ "${_infisical_retirement_ok}" -eq 1 ]]; then
-        update_dependencies || _setup_had_errors=1
-    else
-        print_warning "Skipping APT upgrades until Infisical retirement is verified."
-    fi
+    update_dependencies || _setup_had_errors=1
     update_and_install_core
 
     print_section "Development Tools"

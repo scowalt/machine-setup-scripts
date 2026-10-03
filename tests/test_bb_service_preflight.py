@@ -1,4 +1,4 @@
-"""Version 1: real BB override refusals and caller propagation, with inert effects."""
+"""Version 2: tolerate verified empty BB drop-in directories; preserve override refusals."""
 import hashlib
 import os
 from pathlib import Path
@@ -13,7 +13,7 @@ from extract_setup_fixture import validate_function
 ROOT = Path(__file__).resolve().parents[1]
 UNITS = ('setup-bb-app.service', 'setup-bb-ingress.service')
 REAL = ('bb_server_failure', 'bb_setup_directory_preflight', 'bb_owned_metadata_file', 'bb_owned_file',
-        'bb_owned_script', 'bb_unit_preflight', 'setup_bb_server',
+        'bb_owned_script', 'bb_owned_safe_directory', 'bb_unit_dropins_empty', 'bb_unit_preflight', 'setup_bb_server',
         'bb_server_selection', 'bb_server_restore_process_override',
         'run_setup_tasks', 'main')
 HARNESS = r'''
@@ -41,9 +41,34 @@ id() {
 }
 stat() {
     [[ "$#" == 4 && "$1" == -c && "$3" == -- ]] || { printf 'FORBIDDEN_STAT\n' >&2; exit 97; }
-    case "$2" in '%u %a'|'%u %h %a') ;; *) exit 97 ;; esac
+    case "$2" in '%u %a'|'%u %h %a'|'%d:%i:%u:%g:%f:%y:%z') ;; *) exit 97 ;; esac
     case "$4" in "$HOME"|"$HOME/"*) ;; *) exit 97 ;; esac
+    if [[ "$4" == "$HOME/.config/systemd/user/$FIXTURE_UNIT.d" ]]; then
+        case "$FIXTURE_INSPECTION" in
+            foreign)
+                if [[ "$2" == '%u %a' ]]; then printf '%s 700\n' "$((FIXTURE_UID + 1))"; return 0; fi ;;
+            failed) printf 'fixture-secret-stat-error\n' >&2; return 1 ;;
+            malformed)
+                if [[ "$2" == '%u %a' ]]; then printf 'fixture-secret-invalid-mode\n'; return 0; fi ;;
+            changed)
+                # Each command substitution gets a distinct PID: deterministic
+                # changed snapshots without touching a real directory or account.
+                if [[ "$2" == '%d:%i:%u:%g:%f:%y:%z' ]]; then printf '%s\n' "$BASHPID"; return 0; fi ;;
+        esac
+    fi
     /usr/bin/stat "$@"
+}
+find() {
+    [[ "$#" == 8 && "$2 $3 $4 $5 $6 $7 $8" == '-mindepth 1 -maxdepth 1 -printf x -quit' ]] || exit 97
+    case "$1" in
+        "$HOME/.config/systemd/user/setup-bb-app.service.d"|"$HOME/.config/systemd/user/setup-bb-ingress.service.d") ;;
+        *) printf 'FORBIDDEN_FIND\n' >&2; exit 97 ;;
+    esac
+    case "$FIXTURE_INSPECTION" in
+        enumeration-failed) printf 'fixture-secret-enumeration-error\n' >&2; return 1 ;;
+        enumeration-missing) return 127 ;;
+    esac
+    /usr/bin/find "$@"
 }
 systemctl() {
     if [[ "$*" == '--user is-active --quiet setup-bb-app.service' ]]; then
@@ -182,13 +207,13 @@ class BbServicePreflightTests(unittest.TestCase):
             raise AssertionError('unknown fixture kind')
         return path
 
-    def run_preflight(self, unit=UNITS[0], mode='setup', systemd='clean', status=1):
+    def run_preflight(self, unit=UNITS[0], mode='setup', systemd='clean', status=1, inspection=''):
         before = snapshot(self.root)
         result = subprocess.run(
             ['/bin/bash', '--noprofile', '--norc', '-c', HARNESS, '_', str(self.helpers)],
             env={'PATH': str(self.empty_path), 'HOME': str(self.home), 'LANG': 'C',
                  'FIXTURE_UID': str(os.getuid()), 'FIXTURE_UNIT': unit,
-                 'FIXTURE_MODE': mode, 'FIXTURE_SYSTEMD': systemd},
+                 'FIXTURE_MODE': mode, 'FIXTURE_SYSTEMD': systemd, 'FIXTURE_INSPECTION': inspection},
             cwd=self.home, stdin=subprocess.DEVNULL, capture_output=True,
             text=True, close_fds=True, timeout=5,
         )
@@ -211,7 +236,7 @@ class BbServicePreflightTests(unittest.TestCase):
 
     def test_local_dropin_paths_refuse_explain_and_preserve_without_systemd(self):
         for unit in UNITS:
-            for kind in ('populated', 'empty', 'file', 'link', 'dangling'):
+            for kind in ('populated', 'file', 'link', 'dangling'):
                 with self.subTest(unit=unit, kind=kind):
                     path = self.add_dropin(unit, kind)
                     try:
@@ -233,6 +258,93 @@ class BbServicePreflightTests(unittest.TestCase):
                         if target.exists():
                             (target / 'keep').unlink()
                             target.rmdir()
+
+    def test_verified_empty_dropin_directories_reach_next_inert_gate_unchanged(self):
+        for unit in UNITS:
+            path = self.add_dropin(unit, 'empty')
+            try:
+                for mode in ('setup', 'caller'):
+                    with self.subTest(unit=unit, mode=mode):
+                        result = self.run_preflight(unit, mode=mode, status=73)
+                        self.assertIn('NEXT_INERT_GATE', result.stderr)
+                        for checked in UNITS:
+                            self.assertIn('SYSTEMD_SHOW: ' + checked, result.stderr)
+                        self.assertNotIn('[preflight.unit-dropins]', result.stderr)
+                        self.assertNotIn('BB server setup incomplete', result.stdout)
+            finally:
+                path.rmdir()
+
+    def test_any_dropin_entry_including_hidden_or_dangling_blocks_unchanged(self):
+        for unit in UNITS:
+            for kind in ('hidden', 'directory', 'dangling'):
+                with self.subTest(unit=unit, kind=kind):
+                    path = self.add_dropin(unit, 'empty')
+                    entry = path / '.fixture-secret'
+                    if kind == 'hidden':
+                        entry.write_text('fixture-secret: never read contents\n')
+                    elif kind == 'directory':
+                        entry.mkdir()
+                    else:
+                        entry.symlink_to(self.root / 'fixture-secret-missing')
+                    try:
+                        result = self.run_preflight(unit)
+                        self.assert_diagnostic(result, unit)
+                        self.assertIn('[preflight.unit-dropins]', result.stderr)
+                        self.assertNotIn('SYSTEMD_SHOW', result.stderr)
+                    finally:
+                        if kind == 'directory':
+                            entry.rmdir()
+                        else:
+                            entry.unlink()
+                        path.rmdir()
+
+    def test_empty_dropins_with_unsafe_or_unreadable_modes_stay_blocked(self):
+        for unit in UNITS:
+            for permissions in (0o770, 0o707, 0o100, 0o400, 0o000):
+                with self.subTest(unit=unit, permissions=oct(permissions)):
+                    path = self.add_dropin(unit, 'empty')
+                    path.chmod(permissions)
+                    try:
+                        result = self.run_preflight(unit)
+                        self.assert_diagnostic(result, unit)
+                        self.assertNotIn('SYSTEMD_SHOW', result.stderr)
+                    finally:
+                        path.chmod(0o700)
+                        path.rmdir()
+
+    def test_empty_dropin_inspection_failures_preserve_failure_through_real_caller(self):
+        for unit in UNITS:
+            for inspection in ('foreign', 'failed', 'malformed', 'changed',
+                               'enumeration-failed', 'enumeration-missing'):
+                with self.subTest(unit=unit, inspection=inspection):
+                    path = self.add_dropin(unit, 'empty')
+                    try:
+                        result = self.run_preflight(unit, mode='caller', inspection=inspection)
+                        self.assert_diagnostic(result, unit)
+                        self.assertIn('[preflight.unit-dropins]', result.stderr)
+                        self.assertNotIn('SYSTEMD_SHOW', result.stderr)
+                        self.assertIn('PLUGIN_REFRESH: block-default', result.stdout)
+                        self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
+                    finally:
+                        path.rmdir()
+
+    def test_empty_local_directory_does_not_bypass_loaded_override_or_identity_checks(self):
+        for unit in UNITS:
+            for metadata in ('loaded', 'foreign', 'missing', 'malformed', 'failed'):
+                with self.subTest(unit=unit, metadata=metadata):
+                    path = self.add_dropin(unit, 'empty')
+                    try:
+                        result = self.run_preflight(unit, mode='caller', systemd=metadata)
+                        self.assertIn('SYSTEMD_SHOW: ' + unit, result.stderr)
+                        self.assertNotIn('[preflight.unit-dropins]', result.stderr)
+                        self.assertNotIn('NEXT_INERT_GATE', result.stderr)
+                        self.assertIn('PLUGIN_REFRESH: block-default', result.stdout)
+                        self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
+                        if metadata == 'loaded':
+                            self.assert_diagnostic(result, unit)
+                            self.assertIn('loaded systemd drop-ins', result.stdout)
+                    finally:
+                        path.rmdir()
 
     def test_loaded_dropins_refuse_without_disclosing_systemd_paths(self):
         for unit in UNITS:
@@ -264,7 +376,7 @@ class BbServicePreflightTests(unittest.TestCase):
         for unit in UNITS:
             for boundary in ('local', 'loaded'):
                 with self.subTest(unit=unit, boundary=boundary):
-                    path = self.add_dropin(unit, 'empty') if boundary == 'local' else None
+                    path = self.add_dropin(unit, 'populated') if boundary == 'local' else None
                     try:
                         result = self.run_preflight(unit, mode='caller',
                                                     systemd='loaded' if boundary == 'loaded' else 'clean')
@@ -278,6 +390,8 @@ class BbServicePreflightTests(unittest.TestCase):
                         self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
                     finally:
                         if path is not None:
+                            for child in path.iterdir():
+                                child.unlink()
                             path.rmdir()
 
 

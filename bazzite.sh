@@ -486,27 +486,6 @@ install_core_packages() {
     fi
 }
 
-# Retire only the formula with the exact managed Homebrew identity.
-retire_infisical_brew() {
-    local installed=""
-    installed=$(brew list --formula --full-name) || { print_error "Infisical Homebrew inventory unavailable."; return 1; }
-    if grep -Fxq 'infisical/get-cli/infisical' <<< "${installed}"; then
-        if ! brew uninstall --formula infisical/get-cli/infisical; then
-            print_error "Infisical Homebrew removal failed."
-            return 1
-        fi
-        installed=$(brew list --formula --full-name) || { print_error "Infisical Homebrew postcheck unavailable."; return 1; }
-        if grep -Fxq 'infisical/get-cli/infisical' <<< "${installed}"; then
-            print_error "Infisical Homebrew removal could not be verified."
-            return 1
-        fi
-    fi
-    # The tap may be user-added or have other consumers; preserve it.
-    if command -v infisical >/dev/null 2>&1; then
-        print_warning "An Infisical executable remains; check custom installations manually."
-    fi
-}
-
 # Personal machines retain Doppler; work machines have no replacement.
 install_secrets_manager() {
     if [[ "${WORK_MACHINE:-}" != "1" ]]; then
@@ -8720,11 +8699,10 @@ BB_DESKTOP_PY
 
 run_setup_tasks() {
     local _setup_had_errors=0
-    local _infisical_retirement_failed=0
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 142 | Last changed: Accept account-owned Linux Homebrew group write for OpenCode"
+    echo -e "${GRAY}Version 143 | Last changed: Drop completed secrets-manager retirement"
 
     if ! acquire_setup_lock; then
         return 1
@@ -8750,10 +8728,6 @@ run_setup_tasks() {
 
     print_section "Package Manager"
     ensure_brew_available || return 1
-    if ! retire_infisical_brew; then
-        _infisical_retirement_failed=1
-        _setup_had_errors=1
-    fi
     install_core_packages || return 1
 
     print_section "bb Desktop"
@@ -8935,11 +8909,7 @@ HELPER_EOF
     remove_compound_engineering_resources
 
     print_section "Final Updates"
-    if [[ "${_infisical_retirement_failed}" -eq 0 ]]; then
-        update_brew || _setup_had_errors=1
-    else
-        print_warning "Skipping Homebrew upgrades until Infisical retirement is verified."
-    fi
+    update_brew || _setup_had_errors=1
 
     check_pending_reboot
 

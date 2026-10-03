@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version 5 | Last changed: Exercise ordinary setup through definitions-only fixtures
+# Version 6 | Last changed: Drop obsolete secrets-manager retirement assertions
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -493,8 +493,6 @@ fi
 assert_contains mac.sh 'brew trust "\$\{_trust_flag\}" "\$\{_item\}"' 'item-level trust command'
 assert_contains mac.sh 'ensure_brew_item_trusted formula "libsql/sqld/sqld"' 'item-level libsql trust'
 assert_contains mac.sh 'ensure_brew_item_trusted formula "tursodatabase/tap/turso"' 'item-level Turso trust'
-assert_not_contains mac.sh 'ensure_brew_item_trusted formula "infisical/get-cli/infisical"' 'retired Infisical trust'
-assert_contains mac.sh 'retire_infisical_brew' 'Infisical native Homebrew retirement'
 assert_contains mac.sh 'ensure_brew_item_trusted formula "dopplerhq/cli/doppler"' 'item-level Doppler trust'
 assert_contains mac.sh 'ensure_brew_item_trusted cask "soren-starck/tap/sessionwatcher"' 'item-level SessionWatcher trust'
 assert_not_contains mac.sh 'brew trust "\$\{tap\}"' 'whole-tap trust'
