@@ -1,6 +1,6 @@
 # Issue #184 integrated validation
 
-Implements acceptance child [#188](https://github.com/scowalt/machine-setup-scripts/issues/188), including the post-review follow-up based on integration `b12083b82b961cd03c563fecfb54d39a2efef32b`. Initial two-axis review found **zero standards findings and one spec P2**: extra Darwin per-process rows were accepted as start identity. The fix and fresh **43/43 final inventory** pass are recorded below; **original-reviewer recheck remains pending**, not a clean-review claim. No issues are closed and nothing is pushed by this implementer.
+Implements acceptance child [#188](https://github.com/scowalt/machine-setup-scripts/issues/188). Initial two-axis review found **zero standards findings and one spec P2**: extra Darwin per-process rows were accepted as start identity. A single follow-up implementer repaired that gap and reran the complete **43/43 passing inventory**. Both original reviewers rechecked integration `aeae236dcd49659e025f9ec575038de7fdd57548`: **the P2 is resolved; zero remaining standards or spec findings**. [PR #189](https://github.com/scowalt/machine-setup-scripts/pull/189) links closure of #184–#188 when merged; no native rollout is claimed.
 
 ## Coverage and execution boundary
 
@@ -44,7 +44,7 @@ Four new methods at the existing `Discovery` seam run real discovery, `NativeApi
 | Same-row shape red | `/tmp/setup-fixture-matrix-yjlawxeh` | 47 methods, 72 failing subcases; valid controls pass. |
 | Complete shape/targeted green | `/tmp/setup-fixture-matrix-ezq71n0o` | 3/3 entries: 47 plugin, eight containment and eight default/environment methods pass; zero skips. |
 
-All targeted invocations used the common shared-lock/sanitized runner prefix with existing Node/PowerShell, `--tool-path /usr/bin:/bin` and `--timeout 600`. The final inventory below uses the exact integrated native-tools command. Detailed delivery, counts and static evidence: [review-fix evidence](/tmp/issue-184-coordination/review-fix-evidence.md). Implementer validation has been rechecked; independent standards/spec recheck and #188 acceptance remain with the parent/original reviewers.
+All targeted invocations used the common shared-lock/sanitized runner prefix with existing Node/PowerShell, `--tool-path /usr/bin:/bin` and `--timeout 600`. The final inventory below uses the exact integrated native-tools command. Detailed delivery, counts and static evidence: [review-fix evidence](/tmp/issue-184-coordination/review-fix-evidence.md). The independent [standards recheck](/tmp/issue-184-coordination/standards-recheck.md) retains zero findings; the [spec recheck](/tmp/issue-184-coordination/spec-recheck.md) marks the original P2 resolved with no new findings. These are source reviews, not additional behavioral executions.
 
 ## Final complete inventory
 
@@ -81,4 +81,4 @@ Native staged Gitleaks reports no leaks. Commits use command-local `LEFTHOOK=0` 
 
 No new containment refusal or unexpected real effect was observed; this is not a syscall-wide effects audit. No live setup, app/skill/plugin/extension execution, process inventory, machine repair or rollout occurred. Linux PowerShell is not native Windows/ACL/PowerShell 5.1 evidence; native Apple/BSD/GUI, ARM/WSL/Bazzite and BB session/plugin continuity remain unverified. Earlier containment-incident remote receipt/telemetry uncertainty is unchanged.
 
-The original OpenCode PATH refusal remains unreproduced and unattributed: these diagnostics do not identify fish, mise or another historical cause, nor prove the affected installation repaired. Parent retains integration, original-reviewer recheck of this fix, PR #189 updates, issue acceptance/closure and worktree cleanup. The initial P2 is implemented and locally validated, not yet independently marked resolved.
+The original OpenCode PATH refusal remains unreproduced and unattributed: these diagnostics do not identify fish, mise or another historical cause, nor prove the affected installation repaired. Implementation and independent review are complete on the single integration branch. Ticket closure follows PR #189's merge, not fixture execution; the affected machine's repair and native rollout remain separate work.
