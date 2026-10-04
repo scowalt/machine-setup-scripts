@@ -1,4 +1,4 @@
-# Version 8 | Last changed: Retire compiler readiness diagnostics from native installation
+# Version 9 | Last changed: Report bounded secret-safe evidence at real PATH discovery
 function Test-OpenCodeCliAcl {
     param([string]$HomePath)
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -182,6 +182,10 @@ function Install-OpenCodeCli {
                 $output[0] -cmatch '\Aopencode-cli:(?:recovery-required:)?download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)\z') {
                 $recovery = $output[0].StartsWith('opencode-cli:recovery-required:')
                 Write-Warning "OpenCode CLI download failed (operation=$($Matches[1]), HTTP=$($Matches[2]))."
+            } elseif ($run.Status -ne 0 -and $output.Count -eq 1 -and
+                $output[0] -cmatch '\Aopencode-cli:(?:recovery-required:)?policy-failed:installation:relative-path:command-discovery:([1-9][0-9]{0,5}):(empty|relative)\z') {
+                $recovery = $output[0].StartsWith('opencode-cli:recovery-required:')
+                Write-Warning "OpenCode CLI blocked (operation=installation, reason=relative-path, boundary=command-discovery, component=$($Matches[1]), kind=$($Matches[2]))."
             } elseif ($run.Status -ne 0 -and $output.Count -eq 1 -and
                 $output[0] -cmatch '\Aopencode-cli:(?:recovery-required:)?policy-failed:(homebrew-preflight|installation|setup-selection|fresh-shell-selection):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|foreign-command|command-conflict|selection-unverified|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))\z') {
                 $recovery = $output[0].StartsWith('opencode-cli:recovery-required:')

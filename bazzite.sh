@@ -1290,7 +1290,7 @@ install_gemini_cli() {
 
 # Install/update Codex CLI with OpenAI's per-user standalone installer.
 # BEGIN GENERATED OPENCODE CLI
-# Version 8 | Last changed: Attempt native installation without a compiler readiness gate
+# Version 9 | Last changed: Report bounded secret-safe evidence at real PATH discovery
 install_opencode_cli() {
     local result status=0 machine kind native_shell cached_command recovery=0
     machine=$(uname -m) || return 1
@@ -1313,10 +1313,18 @@ install_opencode_cli() {
     cached_command=$(hash -t opencode 2>/dev/null) || cached_command=''
     # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
     {
-        result=$(SETUP_OPENCODE_SHELL="${native_shell}" SETUP_OPENCODE_HASHED="${cached_command}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null) || status=$?
+        result=$(
+            set -o pipefail
+            # Preserve extra records through command substitution. Translate NUL
+            # to a rejected control byte rather than letting Bash erase it.
+            SETUP_OPENCODE_SHELL="${native_shell}" SETUP_OPENCODE_HASHED="${cached_command}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null |
+                LC_ALL=C tr '\000' '\001' || status=$?
+            printf '.'
+            exit "${status}"
+        ) || status=$?
     } <<'OPENCODE_CLI_JS'
 // Embedded in all six entry points by tools/embed-opencode-cli.py.
-// Version 7 | Last changed: Preserve native migration trust without compiler readiness gating.
+// Version 8 | Last changed: Report bounded secret-safe evidence at real PATH discovery.
 // Installation only: never import application code or inherit its environment.
 'use strict';
 const fs = require('node:fs');
@@ -1326,15 +1334,30 @@ const https = require('node:https');
 const crypto = require('node:crypto');
 const zlib = require('node:zlib');
 const cp = require('node:child_process');
+const {isNativeError} = require('node:util').types;
 const policyReasons = new Set(('archive archive-header archive-path archive-tail archive-truncated archive-type artifact-identity artifact-metadata ' +
     'brew-command brew-origin brew-path brew-snapshot-changed ' +
     'changed-copy changed-receipt custom-link custom-prefix custom-wrapper duplicate-metadata integrity libc metadata missing-binary outside-home package-conflict pinned receipt ' +
     'recovery-occupied relative-path release-metadata shadowed shadowed-newer unreachable unsafe-file unsafe-path unverified-copy url version version-probe windows-acl foreign-command command-conflict selection-unverified').split(' '));
 const nativeCodes = new Set('EACCES EPERM ENOENT EIO EEXIST ENOTDIR ELOOP ENOSPC EROFS ETIMEDOUT ENOBUFS'.split(' '));
+const diagnosticErrors = new WeakSet();
 class PolicyError extends Error {
     constructor(reason, operation = reason.startsWith('brew-') ? 'homebrew-preflight' : 'installation') {
-        super(reason); this.reason = reason; this.operation = operation;
+        super(reason); this.reason = reason; this.operation = operation; diagnosticErrors.add(this);
     }
+}
+// Only actual discovery can attach evidence; public exception properties (or
+// objects with the same prototype) cannot forge it. Six decimal digits bound
+// the wire record. Larger positions still fail, with the legacy generic reason.
+const pathRefusals = new WeakMap();
+function rejectPathComponent(index, kind) {
+    const error = new PolicyError('relative-path');
+    try {
+        if (Number.isInteger(index) && index >= 1 && index <= 999999 && ['empty', 'relative'].includes(kind)) {
+            pathRefusals.set(error, Object.freeze({index, kind}));
+        }
+    } catch { /* Diagnostic construction must not replace the original refusal. */ }
+    throw error;
 }
 const fail = reason => { throw new PolicyError(reason); };
 const nativeFailure = (operation, error) => nativeCodes.has(error?.code) ? new PolicyError(`native-${error.code}`, operation) : error;
@@ -1383,21 +1406,36 @@ function target(platform = process.platform, machine = os.machine(), glibc = pro
 }
 // Only these labels/statuses may cross the core-to-shell diagnostic boundary.
 class DownloadError extends Error {
-    constructor(operation, status) { super('download'); this.operation = operation; this.status = status; }
+    constructor(operation, status) { super('download'); this.operation = operation; this.status = status; diagnosticErrors.add(this); }
 }
 class RecoveryError extends Error {
-    constructor(original) { super('recovery-required'); this.original = original; }
+    constructor(original) { super('recovery-required'); this.original = original; diagnosticErrors.add(this); }
 }
-function failureResult(error) {
-    if (error instanceof RecoveryError) return `opencode-cli:recovery-required:${failureResult(error.original).slice('opencode-cli:'.length)}`;
-    if (error?.message === 'recovery-required') return 'opencode-cli:recovery-required';
-    if (error instanceof DownloadError && ['latest-release', 'package-index', 'package-version', 'artifact-download', 'download'].includes(error.operation)) {
+function failureResult(error, recovering = false) {
+    try { return formatFailure(error, recovering); } catch { return 'opencode-cli:failed'; }
+}
+function formatFailure(error, recovering) {
+    const typed = diagnosticErrors.has(error);
+    if (typed && error instanceof RecoveryError) {
+        if (recovering) return 'opencode-cli:failed';
+        return `opencode-cli:recovery-required:${failureResult(error.original, true).slice('opencode-cli:'.length)}`;
+    }
+    if (isNativeError(error) && error.message === 'recovery-required') return 'opencode-cli:recovery-required';
+    if (typed && error instanceof DownloadError && ['latest-release', 'package-index', 'package-version', 'artifact-download', 'download'].includes(error.operation)) {
         const status = Number.isInteger(error.status) && error.status >= 100 && error.status <= 599 ? error.status : 'unknown';
         return `opencode-cli:download-failed:${error.operation}:http-${status}`;
     }
-    if (error instanceof PolicyError && typeof error.reason === 'string' && ['homebrew-preflight', 'installation', 'setup-selection', 'fresh-shell-selection'].includes(error.operation) &&
+    if (typed && error instanceof PolicyError && typeof error.reason === 'string' && ['homebrew-preflight', 'installation', 'setup-selection', 'fresh-shell-selection'].includes(error.operation) &&
         (policyReasons.has(error.reason) || (error.reason.startsWith('native-') && nativeCodes.has(error.reason.slice(7))))) {
-        return `opencode-cli:policy-failed:${error.operation}:${error.reason}`;
+        const generic = `opencode-cli:policy-failed:${error.operation}:${error.reason}`;
+        try {
+            const context = pathRefusals.get(error);
+            if (error.operation === 'installation' && error.reason === 'relative-path' && context &&
+                Number.isInteger(context.index) && context.index >= 1 && context.index <= 999999 && ['empty', 'relative'].includes(context.kind)) {
+                return `${generic}:command-discovery:${context.index}:${context.kind}`;
+            }
+        } catch { /* Retain the controlled generic failure if evidence is unavailable. */ }
+        return generic;
     }
     return 'opencode-cli:failed';
 }
@@ -1501,9 +1539,9 @@ function boundedRead(file) {
 }
 function commands(home, env = process.env) {
     const dirs = new Set([path.join(home, '.local/bin'), path.join(home, '.opencode/bin'), path.join(home, '.bun/bin')]);
-    for (const dir of (env.PATH || '').split(path.delimiter)) {
+    for (const [offset, dir] of (env.PATH || '').split(path.delimiter).entries()) {
         if (!dir && process.platform === 'win32') continue;
-        if (!dir || !path.isAbsolute(dir)) fail('relative-path');
+        if (!dir || !path.isAbsolute(dir)) rejectPathComponent(offset + 1, dir ? 'relative' : 'empty');
         dirs.add(dir.startsWith(env.HOME + path.sep) ? path.join(home, path.relative(env.HOME, dir)) : dir);
     }
     const names = process.platform === 'win32' ? ['opencode.exe', 'opencode.cmd', 'opencode.ps1', 'opencode'] : ['opencode'];
@@ -1960,12 +1998,17 @@ if (require.main === module || process.argv[1] === '-') install().then(result =>
     process.exitCode = 1;
 });
 OPENCODE_CLI_JS
+    result=${result%.}
+    result=${result%$'\n'}
     if [[ "${status}" -ne 0 ]]; then
         if [[ "${result}" == opencode-cli:recovery-required || "${result}" == opencode-cli:recovery-required:failed ]]; then
             recovery=1
         elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)$ ]]; then
             [[ -z "${BASH_REMATCH[1]}" ]] || recovery=1
             print_error "OpenCode CLI download failed (operation=${BASH_REMATCH[2]}, HTTP=${BASH_REMATCH[3]})."
+        elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?policy-failed:installation:relative-path:command-discovery:([1-9][0-9]{0,5}):(empty|relative)$ ]]; then
+            [[ -z "${BASH_REMATCH[1]}" ]] || recovery=1
+            print_error "OpenCode CLI blocked (operation=installation, reason=relative-path, boundary=command-discovery, component=${BASH_REMATCH[2]}, kind=${BASH_REMATCH[3]})."
         elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?policy-failed:(homebrew-preflight|installation|setup-selection|fresh-shell-selection):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|foreign-command|command-conflict|selection-unverified|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))$ ]]; then
             [[ -z "${BASH_REMATCH[1]}" ]] || recovery=1
             print_error "OpenCode CLI blocked (operation=${BASH_REMATCH[2]}, reason=${BASH_REMATCH[3]})."
@@ -9010,7 +9053,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 148 | Last changed: Sync OpenCode policy without macOS compiler readiness gating"
+    echo -e "${GRAY}Version 149 | Last changed: Report bounded secret-safe evidence at real PATH discovery"
 
     if ! acquire_setup_lock; then
         return 1
