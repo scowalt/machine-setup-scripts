@@ -123,6 +123,7 @@ class DesktopTests(unittest.TestCase):
         self.process_state = False
         self.real_fetch = self.ns['fetch']
         self.ns['fetch'] = self.fetch
+        self.real_command = self.ns['command']
         self.ns['command'] = self.command
         self.real_running = self.ns['running']
         self.ns['running'] = lambda *_: self.process_state
@@ -852,10 +853,23 @@ class MacApplicationsTests(unittest.TestCase):
     setUp = DesktopTests.setUp
     tearDown = DesktopTests.tearDown
     fetch = DesktopTests.fetch
-    command = DesktopTests.command
     install = DesktopTests.install
 
-    def native_layout(self, number='1.0.0'):
+    def command(self, args):
+        if args[0] != '/bin/ps':
+            return DesktopTests.command(self, args)
+        self.assertEqual(args, ['/bin/ps', '-ww', '-axo', 'uid=,pid=,comm='])
+        self.calls.append(('command', args))
+        # Exercise the real command decoder and parser with successful native
+        # query bytes, not a precomputed process list. All other native execution
+        # remains forbidden by native_layout's subprocess guard.
+        result = subprocess.CompletedProcess(args, 0, self.process_rows.encode(), b'')
+        with patch.object(subprocess, 'run', return_value=result):
+            return self.real_command(args)
+
+    def native_layout(self, number='1.0.0', uid=501):
+        self.process_rows = '0 1 /usr/bin/unrelated\n'
+        self.ns['running'] = self.real_running
         native = self.base / 'native'
         users = native / 'Users'
         users.mkdir(parents=True)
@@ -872,22 +886,22 @@ class MacApplicationsTests(unittest.TestCase):
             archive.extractall(self.target.parent)
         self.data = mac_zip(self.number)
         self.latest = release(self.number, self.data, 'macos')
-        self.ns['UID'] = 501
+        self.ns['UID'] = uid
         self.ns['Path'] = lambda *args: native / Path(*args).relative_to('/') if args and str(args[0]) in (
             '/', '/Applications', '/Applications/bb.app') else Path(*args)
         self.metadata = {
             native: dict(st_uid=0, st_gid=0, st_mode=stat.S_IFDIR | 0o755),
             users: dict(st_uid=0, st_gid=80, st_mode=stat.S_IFDIR | 0o755),
-            home: dict(st_uid=501, st_gid=20, st_mode=stat.S_IFDIR | 0o755),
-            home / 'Applications': dict(st_uid=501, st_gid=20, st_mode=stat.S_IFDIR | 0o700),
+            home: dict(st_uid=uid, st_gid=20, st_mode=stat.S_IFDIR | 0o755),
+            home / 'Applications': dict(st_uid=uid, st_gid=20, st_mode=stat.S_IFDIR | 0o700),
             self.target.parent: dict(st_uid=0, st_gid=80, st_mode=stat.S_IFDIR | 0o775),
-            self.target: dict(st_uid=501, st_gid=80, st_mode=stat.S_IFDIR | 0o755),
+            self.target: dict(st_uid=uid, st_gid=80, st_mode=stat.S_IFDIR | 0o755),
         }
         real_stat, real_fstat = Path.stat, os.fstat
         def metadata(s, overrides=None):
             fields = {key: getattr(s, key) for key in dir(s) if key.startswith('st_')}
             if s.st_uid == os.getuid():
-                fields.update(st_uid=501, st_gid=20)
+                fields.update(st_uid=uid, st_gid=20)
             fields.update(overrides or {})
             return types.SimpleNamespace(**fields)
         def path_stat(path, **kwargs):
@@ -897,6 +911,157 @@ class MacApplicationsTests(unittest.TestCase):
         patch.object(os, 'fstat', lambda fd: metadata(real_fstat(fd))).start()
         patch.object(self.ns['sys'], 'platform', 'darwin').start()
         patch.object(subprocess, 'run', side_effect=AssertionError('native execution forbidden')).start()
+
+    def assert_unrelated_uid_allows_update(self, owner, pids):
+        self.native_layout()
+        self.process_rows = ''.join(f'{owner} {pid} /usr/bin/unrelated\n' for pid in pids)
+        self.assertEqual(self.install('macos'), 'installed')
+        self.assertEqual(plistlib.loads(self.installed_bytes())['CFBundleShortVersionString'], self.number)
+        self.assertFalse((self.target.parent / '.setup-bb-desktop.lock').exists())
+        self.assertFalse((self.home / 'Applications/bb.app').exists())
+
+    def test_observed_two_signed_uid_rows_allow_update(self):
+        self.assert_unrelated_uid_allows_update('-2', (53750, 53752))
+
+    def test_minimized_one_signed_uid_row_allows_update(self):
+        self.assert_unrelated_uid_allows_update('-2', (53750,))
+
+    def test_observed_two_unsigned_uid_rows_allow_update(self):
+        self.assert_unrelated_uid_allows_update('4294967294', (53750, 53752))
+
+    def test_minimized_one_unsigned_uid_row_allows_update(self):
+        self.assert_unrelated_uid_allows_update('4294967294', (53750,))
+
+    def installed_snapshot(self):
+        paths = [self.target, *self.target.rglob('*')]
+        return {str(p.relative_to(self.target)): (
+            self.ns['stable'](p.lstat()), p.lstat().st_gid, p.read_bytes() if p.is_file() else None
+        ) for p in paths}
+
+    def test_invalid_uids_refuse_even_on_unrelated_rows(self):
+        self.native_layout()
+        original = self.installed_snapshot()
+        for owner in ('-1', '4294967295', '-2147483649', '4294967296', '-9999999999',
+                      'unknown', '+2', '--2', '+-2', '-+2', '2-', '2+', '−2', '２', '²',
+                      '1e3', '1.0', '0x1', '1_0', 'NaN', '9' * 100, '', ' '):
+            with self.subTest(owner=owner):
+                self.process_rows = f'{owner} 53750 /usr/bin/unrelated\n'
+                with self.assertRaisesRegex(self.ns['Refusal'], '^process-inspection$'):
+                    self.install('macos')
+                self.assertEqual(self.installed_snapshot(), original)
+                self.assertFalse((self.target.parent / '.setup-bb-desktop.lock').exists())
+
+    def test_valid_uid_and_pid_edges_keep_current_bundle(self):
+        self.native_layout(self.number)
+        original = self.installed_snapshot()
+        for owner in ('0', '501', '999', '2147483647', '2147483648', '4294967294',
+                      '-2147483648', '-2147483647', '-2', '0000000501'):
+            with self.subTest(owner=owner):
+                self.process_rows = (f'0 0 kernel_task\n{owner} 2147483647 /usr/bin/unrelated\n'
+                                     '501 123 /Applications/Unrelated App.app/Contents/MacOS/tool\n')
+                self.assertEqual(self.install('macos'), 'current')
+                self.assertEqual(self.installed_snapshot(), original)
+
+    def test_malformed_rows_refuse_before_relevance_or_running_deferral(self):
+        self.native_layout()
+        original = self.installed_snapshot()
+        for row in ('', '\n', '501', '501 123', '501 123   ', 'extra 501 123 /usr/bin/unrelated',
+                    '501 extra 123 /usr/bin/unrelated', 'uid pid comm'):
+            with self.subTest(row=row):
+                # A valid relevant row must not hide a malformed later row.
+                self.process_rows = f'501 123 {self.target}/Contents/MacOS/bb\n' + row + '\n'
+                with self.assertRaisesRegex(self.ns['Refusal'], '^process-inspection$'):
+                    self.install('macos')
+                self.assertEqual(self.installed_snapshot(), original)
+
+    def test_empty_inventory_refuses_without_changing_bundle(self):
+        self.native_layout()
+        original = self.installed_snapshot()
+        self.process_rows = ''
+        with self.assertRaisesRegex(self.ns['Refusal'], '^process-inspection$'):
+            self.install('macos')
+        self.assertEqual(self.installed_snapshot(), original)
+
+    def test_foreign_relevant_signed_and_unsigned_uids_still_refuse(self):
+        self.native_layout()
+        original = self.installed_snapshot()
+        for owner in ('-2', '4294967294', '-2147483648', '2147483648', '0', '999'):
+            with self.subTest(owner=owner):
+                self.process_rows = f'{owner} 53750 {self.target}/Contents/MacOS/bb\n'
+                with self.assertRaisesRegex(self.ns['Refusal'], '^process-owner$'):
+                    self.install('macos')
+                self.assertEqual(self.installed_snapshot(), original)
+
+    def test_negative_uid_is_not_absolute_value_owner(self):
+        self.native_layout(uid=2)
+        original = self.installed_snapshot()
+        self.process_rows = f'-2 53750 {self.target}/Contents/MacOS/bb\n'
+        with self.assertRaisesRegex(self.ns['Refusal'], '^process-owner$'):
+            self.install('macos')
+        self.assertEqual(self.installed_snapshot(), original)
+
+    def assert_equivalent_owner_defers(self, uid, signed):
+        self.native_layout(uid=uid)
+        original = self.installed_snapshot()
+        for owner in (signed, str(uid)):
+            with self.subTest(owner=owner):
+                self.process_rows = f'{owner} 53750 {self.target}/Contents/MacOS/bb\n'
+                with patch.object(os, 'rename', side_effect=AssertionError('running app renamed')):
+                    self.assertEqual(self.install('macos'), 'deferred-running')
+                self.assertEqual(self.installed_snapshot(), original)
+
+    def test_signed_and_unsigned_high_account_uid_both_defer(self):
+        self.assert_equivalent_owner_defers(4294967294, '-2')
+
+    def test_signed_lower_bound_and_unsigned_account_uid_both_defer(self):
+        self.assert_equivalent_owner_defers(2147483648, '-2147483648')
+
+    def test_mixed_inventory_defers_account_candidate_in_either_order(self):
+        self.native_layout()
+        original = self.installed_snapshot()
+        rows = ['-2 53750 /usr/bin/unrelated', '0 0 kernel_task',
+                f'501 123 {self.target}/Contents/MacOS/bb Helper (Renderer)',
+                '999 321 /usr/bin/unrelated', '-2147483648 53752 /usr/bin/unrelated']
+        for inventory in (rows, list(reversed(rows))):
+            with self.subTest(inventory=inventory):
+                self.process_rows = '\n'.join(inventory) + '\n'
+                with patch.object(os, 'rename', side_effect=AssertionError('running app renamed')), \
+                        patch.object(os, 'chmod', side_effect=AssertionError('permission repair forbidden')), \
+                        patch.object(os, 'chown', side_effect=AssertionError('ownership repair forbidden')), \
+                        patch.object(os, 'kill', side_effect=AssertionError('process termination forbidden')):
+                    self.assertEqual(self.install('macos'), 'deferred-running')
+                self.assertEqual(self.installed_snapshot(), original)
+
+    def test_signed_rows_preserve_current_and_newer_copies(self):
+        self.native_layout(self.number)
+        original = self.installed_snapshot()
+        self.process_rows = '-2 53750 /usr/bin/unrelated\n'
+        self.assertEqual(self.install('macos'), 'current')
+        self.data = mac_zip('1.0.0')
+        self.latest = release('1.0.0', self.data, 'macos')
+        self.assertEqual(self.install('macos'), 'newer-preserved')
+        self.assertEqual(self.installed_snapshot(), original)
+
+    def test_ambiguous_titles_with_signed_uids_still_refuse(self):
+        self.native_layout()
+        original = self.installed_snapshot()
+        for owner in ('-2', '4294967294', '501'):
+            with self.subTest(owner=owner):
+                self.process_rows = f'{owner} 53750 bb Helper (Renderer)\n'
+                with self.assertRaisesRegex(self.ns['Refusal'], '^ambiguous-process$'):
+                    self.install('macos')
+                self.assertEqual(self.installed_snapshot(), original)
+
+    def test_invalid_pids_refuse_without_changing_bundle(self):
+        self.native_layout()
+        original = self.installed_bytes()
+        for pid in ('-2', '+123', '12x', '1.5', '１２３', '²', '2147483648', '9' * 100):
+            with self.subTest(pid=pid):
+                self.process_rows = f'501 {pid} /usr/bin/unrelated\n'
+                with self.assertRaisesRegex(self.ns['Refusal'], '^process-inspection$'):
+                    self.install('macos')
+                self.assertEqual(self.installed_bytes(), original)
+                self.assertFalse((self.target.parent / '.setup-bb-desktop.lock').exists())
 
     def test_root_admin_parent_without_group_write_also_updates(self):
         self.native_layout()
@@ -938,13 +1103,35 @@ class MacApplicationsTests(unittest.TestCase):
         self.assertFalse((self.target.parent / '.setup-bb-desktop.lock').exists())
 
     def test_running_at_promotion_defers_without_renaming(self):
-        self.native_layout()
-        original = self.installed_bytes()
-        results = iter([False, True])
-        self.ns['running'] = lambda *_: next(results)
+        self.native_layout(uid=4294967294)
+        original = self.installed_snapshot()
+        inventories = iter(['4294967294 53750 /usr/bin/unrelated\n',
+                            f'-2 53750 {self.target}/Contents/MacOS/bb\n'])
+        def command(args):
+            if args[0] == '/bin/ps':
+                self.process_rows = next(inventories)
+            return self.command(args)
+        self.ns['command'] = command
         with patch.object(os, 'rename', side_effect=AssertionError('running app renamed')):
             self.assertEqual(self.install('macos'), 'deferred-running')
-        self.assertEqual(self.installed_bytes(), original)
+        self.assertEqual(self.installed_snapshot(), original)
+        self.assertIsNone(next(inventories, None))
+
+    def test_foreign_signed_uid_at_promotion_still_refuses(self):
+        self.native_layout()
+        original = self.installed_snapshot()
+        inventories = iter(['-2 53750 /usr/bin/unrelated\n',
+                            f'-2 53750 {self.target}/Contents/MacOS/bb\n'])
+        def command(args):
+            if args[0] == '/bin/ps':
+                self.process_rows = next(inventories)
+            return self.command(args)
+        self.ns['command'] = command
+        with patch.object(os, 'rename', side_effect=AssertionError('foreign app renamed')):
+            with self.assertRaisesRegex(self.ns['Refusal'], '^process-owner$'):
+                self.install('macos')
+        self.assertEqual(self.installed_snapshot(), original)
+        self.assertIsNone(next(inventories, None))
 
     def test_nonstandard_applications_metadata_rejected_before_fetch(self):
         self.native_layout()
@@ -1015,6 +1202,7 @@ class MacApplicationsTests(unittest.TestCase):
 
     def test_system_nightly_custom_signature_and_signer_rejections_preserve_copy(self):
         self.native_layout()
+        self.process_rows = '-2 53750 /usr/bin/unrelated\n'
         original = self.installed_bytes()
         plist = self.target / 'Contents/Info.plist'
         bad = plistlib.loads(original)
