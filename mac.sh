@@ -7718,6 +7718,17 @@ def parse_environment(raw):
     return result
 
 
+def darwin_uid(text):
+    # Darwin uid_t is unsigned 32-bit; ps can render its signed alias. -1 and
+    # UINT32_MAX are unknown identities, not accounts. Never use abs(uid).
+    need(re.fullmatch(r'(?:[0-9]{1,10}|-[1-9][0-9]{0,9})', text) is not None,
+         'process-proof-unavailable')
+    value = int(text)
+    need(-(1 << 31) <= value < (1 << 32) - 1 and value != -1,
+         'process-proof-unavailable')
+    return value if value >= 0 else value + (1 << 32)
+
+
 class Processes:
     def __init__(self, uid):
         self.uid = uid
@@ -7725,13 +7736,25 @@ class Processes:
         need(self.system in ('linux', 'darwin'), 'unsupported-platform')
 
     def table(self):
-        rows = command(['/bin/ps', '-axo', 'uid=,pid=']).decode('ascii').splitlines()
+        raw = command(['/bin/ps', '-axo', 'uid=,pid='])
+        if self.system == 'darwin':
+            need(raw.isascii(), 'process-proof-unavailable')
+        rows = raw.decode('ascii').splitlines()
         need(len(rows) <= MAX_PROCESSES, 'process-proof-unavailable')
         result = []
         for row in rows:
             parts = row.split()
-            need(len(parts) == 2 and all(p.isdecimal() for p in parts), 'process-proof-unavailable')
-            if int(parts[0]) == self.uid:
+            need(len(parts) == 2, 'process-proof-unavailable')
+            if self.system == 'darwin':
+                uid = darwin_uid(parts[0])
+                # pid_t is signed 32-bit, but a process-table PID has no signed
+                # UID alias. Retain PID 0 (the kernel); reject negative/overflow.
+                need(re.fullmatch(r'[0-9]{1,10}', parts[1]) is not None
+                     and int(parts[1]) <= (1 << 31) - 1, 'process-proof-unavailable')
+            else:
+                need(all(p.isdecimal() for p in parts), 'process-proof-unavailable')
+                uid = int(parts[0])
+            if uid == self.uid:
                 result.append(int(parts[1]))
         return result
 
@@ -7754,8 +7777,10 @@ class Processes:
         raw_rows = command(['/bin/ps', '-p', str(pid), '-o', 'uid=,lstart='], allow_missing=True)
         if not raw_rows:
             return None
+        need(raw_rows.isascii(), 'process-proof-unavailable')
         rows = raw_rows.decode('ascii').strip().split(None, 1)
-        need(len(rows) == 2 and rows[0] == str(self.uid), 'foreign-process')
+        need(len(rows) == 2, 'process-proof-unavailable')
+        need(darwin_uid(rows[0]) == self.uid, 'foreign-process')
         libc = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
         mib = (ctypes.c_int * 3)(1, 49, pid)
         size = ctypes.c_size_t(2097152)
@@ -9415,7 +9440,7 @@ run_setup_tasks() {
     # Run the setup tasks
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 269 | Last changed: Let actual operations decide success instead of CLT compatibility${NC}"
+    echo -e "${GRAY}Version 270 | Last changed: Normalize Darwin UIDs without weakening BB plugin identity${NC}"
 
     if ! acquire_setup_lock; then
         return 1
