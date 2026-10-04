@@ -10349,6 +10349,14 @@ def linux_running(path):
             require(not proc.exists(), 'process-inspection')
     return found
 
+def darwin_process_uid(value):
+    # Darwin uid_t is unsigned 32-bit; ps can print its signed alias. -2 is
+    # 4294967294, not UID 2. The all-ones identity (-1) is unknown, never an owner.
+    require(re.fullmatch(r'-?[0-9]{1,10}', value), 'process-inspection')
+    number = int(value)
+    require(-(2**31) <= number < 2**32 - 1 and number != -1, 'process-inspection')
+    return number % 2**32
+
 def running(path, platform):
     if platform == 'macos':
         rows = command(['/bin/ps', '-ww', '-axo', 'uid=,pid=,comm=']).splitlines()
@@ -10356,10 +10364,13 @@ def running(path, platform):
         found = False
         for row in rows:
             parts = row.strip().split(None, 2)
-            require(len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit(), 'process-inspection')
-            owner, _, exe = parts
+            # PID is a separate, nonnegative pid_t, never a signed UID alias.
+            require(len(parts) == 3 and re.fullmatch(r'[0-9]{1,10}', parts[1]) and
+                    int(parts[1]) <= 2**31 - 1, 'process-inspection')
+            owner = darwin_process_uid(parts[0])
+            exe = parts[2]
             if exe.startswith(str(path) + '/'):
-                require(int(owner) == UID, 'process-owner')
+                require(owner == UID, 'process-owner')
                 found = True
             elif re.fullmatch(r'bb(?: Helper(?: \([^)]*\))?)?', exe):
                 raise Refusal('ambiguous-process')
@@ -10607,7 +10618,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 300 | Last changed: Normalize Darwin UIDs without weakening BB plugin identity"
+    echo -e "${GRAY}Version 301 | Last changed: Normalize Darwin UIDs for BB desktop and plugin identity"
 
     if ! acquire_setup_lock; then
         return 1
