@@ -1,4 +1,4 @@
-# Version 8 | Last changed: Attempt native installation without a compiler readiness gate
+# Version 9 | Last changed: Report bounded secret-safe evidence at real PATH discovery
 install_opencode_cli() {
     local result status=0 machine kind native_shell cached_command recovery=0
     machine=$(uname -m) || return 1
@@ -21,16 +21,29 @@ install_opencode_cli() {
     cached_command=$(hash -t opencode 2>/dev/null) || cached_command=''
     # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
     {
-        result=$(SETUP_OPENCODE_SHELL="${native_shell}" SETUP_OPENCODE_HASHED="${cached_command}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null) || status=$?
+        result=$(
+            set -o pipefail
+            # Preserve extra records through command substitution. Translate NUL
+            # to a rejected control byte rather than letting Bash erase it.
+            SETUP_OPENCODE_SHELL="${native_shell}" SETUP_OPENCODE_HASHED="${cached_command}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null |
+                LC_ALL=C tr '\000' '\001' || status=$?
+            printf '.'
+            exit "${status}"
+        ) || status=$?
     } <<'OPENCODE_CLI_JS'
 // @OPENCODE_CORE@
 OPENCODE_CLI_JS
+    result=${result%.}
+    result=${result%$'\n'}
     if [[ "${status}" -ne 0 ]]; then
         if [[ "${result}" == opencode-cli:recovery-required || "${result}" == opencode-cli:recovery-required:failed ]]; then
             recovery=1
         elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)$ ]]; then
             [[ -z "${BASH_REMATCH[1]}" ]] || recovery=1
             print_error "OpenCode CLI download failed (operation=${BASH_REMATCH[2]}, HTTP=${BASH_REMATCH[3]})."
+        elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?policy-failed:installation:relative-path:command-discovery:([1-9][0-9]{0,5}):(empty|relative)$ ]]; then
+            [[ -z "${BASH_REMATCH[1]}" ]] || recovery=1
+            print_error "OpenCode CLI blocked (operation=installation, reason=relative-path, boundary=command-discovery, component=${BASH_REMATCH[2]}, kind=${BASH_REMATCH[3]})."
         elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?policy-failed:(homebrew-preflight|installation|setup-selection|fresh-shell-selection):(archive|archive-header|archive-path|archive-tail|archive-truncated|archive-type|artifact-identity|artifact-metadata|brew-command|brew-origin|brew-path|brew-snapshot-changed|changed-copy|changed-receipt|custom-link|custom-prefix|custom-wrapper|duplicate-metadata|integrity|libc|metadata|missing-binary|outside-home|package-conflict|pinned|receipt|recovery-occupied|relative-path|release-metadata|shadowed|shadowed-newer|unreachable|unsafe-file|unsafe-path|unverified-copy|url|version|version-probe|windows-acl|foreign-command|command-conflict|selection-unverified|native-(EACCES|EPERM|ENOENT|EIO|EEXIST|ENOTDIR|ELOOP|ENOSPC|EROFS|ETIMEDOUT|ENOBUFS))$ ]]; then
             [[ -z "${BASH_REMATCH[1]}" ]] || recovery=1
             print_error "OpenCode CLI blocked (operation=${BASH_REMATCH[2]}, reason=${BASH_REMATCH[3]})."

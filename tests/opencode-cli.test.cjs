@@ -1,4 +1,4 @@
-// Version 8 | Last changed: Cover interactive selection, non-commands and newer Homebrew trust
+// Version 9 | Last changed: Cover bounded real discovery evidence and untrusted diagnostics
 'use strict';
 process.umask(0o077);
 const {test} = require('node:test');
@@ -463,7 +463,7 @@ test('modern npm postinstall native copy is proven by upstream bytes, not packag
     fs.symlinkSync(path.join(root, 'bin/opencode.exe'), f.dest); f.options.commands = [f.dest];
     assert.equal(await policy.install(f.options), 'migrated');
 });
-function virtualPolicy(f, overrides = {}, modules = {}, log = () => assert.fail('unexpected output')) {
+function virtualPolicy(f, overrides = {}, modules = {}, log = () => assert.fail('unexpected output'), globals = {}) {
     const vm = require('node:vm');
     const mapped = value => typeof value === 'string' && (value === '/opt' || value.startsWith('/opt/')) ? path.join(f.home, 'virtual-opt', value.slice(4)) : value;
     const proxy = new Proxy(fs, {get(object, key) {
@@ -478,7 +478,7 @@ function virtualPolicy(f, overrides = {}, modules = {}, log = () => assert.fail(
         ? selectionOutput(file, args[0], f.shellBoundary(file, ...args)) : native.execFileSync(file, ...args)};
     vm.runInNewContext(fs.readFileSync(require.resolve('../lib/opencode-cli.cjs'), 'utf8'), {
         require: name => name === 'node:child_process' ? childProcess : modules[name] || (name === 'node:fs' ? proxy : require(name)), module, process: fakeProcess,
-        Buffer, URL, setTimeout, clearTimeout, console: {log, error: () => assert.fail('unexpected output')},
+        Buffer, URL, setTimeout, clearTimeout, console: {log, error: () => assert.fail('unexpected output')}, ...globals,
     });
     return {api: module.exports, mapped, process: fakeProcess};
 }
@@ -625,6 +625,59 @@ test('failure serialization never echoes arbitrary exceptions or forged diagnost
         return true;
     });
     assert.equal(api.failureResult(new Error('recovery-required')), 'opencode-cli:recovery-required');
+});
+test('real discovery uses native Windows delimiters, empty fields and absolute forms', t => {
+    const f = fixture(t), absent = () => { throw Object.assign(new Error('PRIVATE_FS_SECRET'), {code: 'ENOENT'}); };
+    const {api} = virtualPolicy(f, {platform: 'win32'}, {'node:path': path.win32, 'node:fs': {lstatSync: absent}});
+    const home = 'C:\\Users\\fixture';
+    for (const PATH of [undefined, '', ';', ';;C:\\bin;', '\\\\server\\share;C:/bin;\\rooted']) {
+        assert.deepEqual(Array.from(api.commands(home, {HOME: home, PATH})), []);
+    }
+    for (const [PATH, index] of [[';;relative_SECRET', 3], ['C:\\bin;;.', 3], ['C:\\bin;%VARIABLE_SECRET%\\bin', 2], ['C:relative_SECRET', 1]]) {
+        assert.throws(() => api.commands(home, {HOME: home, PATH}), error => {
+            assert.equal(api.failureResult(error), `opencode-cli:policy-failed:installation:relative-path:command-discovery:${index}:relative`);
+            return true;
+        });
+    }
+});
+test('real discovery bounds the canonical index without accepting an unsafe oversized PATH', t => {
+    const f = fixture(t), {api} = virtualPolicy(f);
+    for (const [PATH, expected] of [
+        [Array(999998).fill('/absolute').join(':') + ':', 'opencode-cli:policy-failed:installation:relative-path:command-discovery:999999:empty'],
+        [Array(999999).fill('/absolute').join(':') + ':SECRET', 'opencode-cli:policy-failed:installation:relative-path'],
+    ]) assert.throws(() => api.commands(f.home, {HOME: f.home, PATH}), error => {
+        assert.equal(api.failureResult(error), expected); return true;
+    });
+});
+test('diagnostic construction or lookup failure retains the real installation refusal', async t => {
+    for (const method of ['set', 'get']) {
+        const f = fixture(t);
+        class BrokenEvidence extends WeakMap { [method]() { throw new Error('DIAGNOSTIC_SECRET'); } }
+        const {api} = virtualPolicy(f, {env: {PATH: 'PATH_SECRET'}}, {}, undefined, {WeakMap: BrokenEvidence});
+        await assert.rejects(api.install({...f.options, commands: undefined}), error => {
+            assert.equal(api.failureResult(error), 'opencode-cli:policy-failed:installation:relative-path'); return true;
+        });
+        assert.deepEqual(fs.readdirSync(path.dirname(f.dest)), []);
+        assert.equal(f.probes.length, 0);
+    }
+});
+test('forged evidence and hostile exceptions never become trusted PATH diagnostics', async t => {
+    const f = fixture(t), {api} = virtualPolicy(f, {env: {PATH: 'PATH_SECRET'}});
+    let real;
+    await assert.rejects(api.install({...f.options, commands: undefined}), error => { real = error; return true; });
+    const fields = {operation: 'installation', reason: 'relative-path', boundary: 'command-discovery', index: 2, kind: 'relative'};
+    const revoked = Proxy.revocable({}, {}); revoked.revoke();
+    for (const error of [fields, Object.assign(Object.create(Object.getPrototypeOf(real)), fields),
+        {message: 'recovery-required'}, {get message() { throw new Error('GETTER_SECRET'); }}, revoked.proxy]) {
+        assert.equal(api.failureResult(error), 'opencode-cli:failed');
+    }
+    // A relative path from a different validation boundary has no PATH proof.
+    await assert.rejects(api.install({...f.options, commands: ['SECRET/relative/opencode']}), error => {
+        error.context = fields;
+        assert.equal(api.failureResult(error), 'opencode-cli:policy-failed:installation:relative-path'); return true;
+    });
+    assert.equal(api.failureResult(real), 'opencode-cli:policy-failed:installation:relative-path:command-discovery:1:relative');
+    assert.equal(f.probes.length, 0);
 });
 test('real version probe accepts exact bare and official named lines in isolation', t => {
     const f = fixture(t); let observed, output;

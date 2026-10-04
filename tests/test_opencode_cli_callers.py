@@ -1,4 +1,4 @@
-"""Contract v9: native selection approval preserves the original installer rollback transaction."""
+"""Contract v10: real discovery refusals cross native wrappers without disclosing PATH."""
 import base64
 import hashlib
 import json
@@ -63,11 +63,71 @@ DIAGNOSTICS += [
     ('opencode-cli:recovery-required:policy-failed:fresh-shell-selection:command-conflict\nSECRET', 1, None),
 ]
 
+PATH_RECORD = 'opencode-cli:policy-failed:installation:relative-path:command-discovery:2:relative'
+DIAGNOSTICS += [(f'opencode-cli:{recovery}policy-failed:installation:relative-path:command-discovery:{index}:{kind}', 1,
+                 f'OpenCode CLI blocked (operation=installation, reason=relative-path, boundary=command-discovery, component={index}, kind={kind}).')
+                for recovery in ('', 'recovery-required:') for index in ('1', '2', '999999') for kind in ('empty', 'relative')]
+RECOVERY_RESULTS.update(result for result, _, _ in DIAGNOSTICS if result.startswith('opencode-cli:recovery-required:policy-failed:installation:relative-path:command-discovery:'))
+DIAGNOSTICS += [('opencode-cli:policy-failed:installation:relative-path', 1,
+                 'OpenCode CLI blocked (operation=installation, reason=relative-path).')]
+DIAGNOSTICS += [(result, 1, None) for result in [
+    *(PATH_RECORD.replace(':2:', ':' + index + ':') for index in ('0', '-1', '+1', '02', '1.0', '1e2', '1000000', '999999999999999999999', '٢')),
+    PATH_RECORD.replace('installation', 'setup-selection'), PATH_RECORD.replace('relative-path', 'pinned'),
+    PATH_RECORD.replace('command-discovery', 'SECRET'), PATH_RECORD.replace(':relative', ':SECRET', 1),
+    PATH_RECORD.rsplit(':', 1)[0] + ':absolute', PATH_RECORD + ':SECRET', PATH_RECORD + '\nSECRET',
+    PATH_RECORD + '\n', PATH_RECORD + '\n\n', PATH_RECORD + '\r', PATH_RECORD + '\t', PATH_RECORD + '\x1b',
+    PATH_RECORD + r'\0', PATH_RECORD + '\n' + PATH_RECORD, 'SECRET\n' + PATH_RECORD,
+    PATH_RECORD.replace('command-discovery', 'command-discovery\t'),
+]]
+DIAGNOSTICS += [(PATH_RECORD, 0, None)]
+
 # Obsolete helper replies are unrecognized failures, even with a nonzero status.
 DIAGNOSTICS += [(f'opencode-cli:policy-failed:homebrew-preflight:{reason}', status, None)
                 for reason in ('brew-group-shared', 'brew-identity-source', 'brew-acl-present', 'brew-acl-unverified',
                                'brew-proof-unverified', 'brew-proof-tool', 'brew-process-churn', 'brew-readiness')
                 for status in (0, 1)]
+
+
+# Literal expectations at the real installer -> wrapper -> finalization seam.
+# '|' is substituted with the native delimiter by the inert VM driver only.
+DISCOVERY_CASES = {
+    'path-empty': ('', (1, 'empty'), 'unreachable'),
+    'path-absent': (None, (1, 'empty'), 'unreachable'),
+    'path-leading': ('|@BIN@', (1, 'empty'), None),
+    'path-interior': ('@BIN@||/PRIVATE_ABSOLUTE_SECRET', (2, 'empty'), None),
+    'path-trailing': ('@BIN@|', (2, 'empty'), None),
+    'path-dot': ('@BIN@|.', (2, 'relative'), (2, 'relative')),
+    'path-relative': ('@BIN@|PATH_CREDENTIAL_SECRET/private', (2, 'relative'), (2, 'relative')),
+    'path-variable': ('@BIN@|$PATH_VARIABLE_SECRET/bin', (2, 'relative'), (2, 'relative')),
+    'path-percent': ('@BIN@|%PATH_VARIABLE_SECRET%/bin', (2, 'relative'), (2, 'relative')),
+    'path-first': ('|PATH_CREDENTIAL_SECRET', (1, 'empty'), (2, 'relative')),
+    'path-absolute': ('@BIN@|/PRIVATE_ABSOLUTE_SECRET', None, None),
+    'path-late': ('@BIN@|PATH_CREDENTIAL_SECRET', (2, 'relative'), (2, 'relative')),
+    'path-late-cleanup': ('@BIN@|PATH_CREDENTIAL_SECRET', (2, 'relative'), (2, 'relative')),
+}
+
+
+def discovery_environment(outcome):
+    if outcome not in DISCOVERY_CASES:
+        return {}
+    value = DISCOVERY_CASES[outcome][0]
+    return {'FIXTURE_PATH_INPUT': value} if value is not None else {}
+
+
+def seed_discovery_state(home, windows=False):
+    binary = home / ('.local/bin/opencode.exe' if windows else '.local/bin/opencode')
+    binary.parent.mkdir(parents=True)
+    previous = b'INERT official native 2.0.10'
+    receipt = json.dumps({'package': '@opencode/cli-' + ('windows' if windows else 'linux') + '-x64-baseline',
+                         'version': '2.0.10', 'sha512': base64.b64encode(hashlib.sha512(previous).digest()).decode()}).encode()
+    files = {binary: previous, binary.parent / '.setup-opencode-cli.json': receipt,
+             home / '.config/opencode/auth.json': b'PRIVATE_AUTH_SECRET', home / 'project/config': b'PRIVATE_PROJECT_SECRET',
+             home / '.bashrc': b'PRIVATE_PROFILE_SECRET', home / 'recovery.json': b'PRIVATE_RECOVERY_SECRET'}
+    for file, value in files.items():
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(value)
+    binary.chmod(0o700)
+    return files
 
 
 def function(source, name):
@@ -86,7 +146,7 @@ if [[ "${MOCK_SELECTION_INPUTS:-0}" == 1 ]]; then
     [[ "${SETUP_OPENCODE_SHELL:-}" == "${HOME}/fish" && "${SETUP_OPENCODE_HASHED:-}" == "${HOME}/foreign/opencode" ]] || exit 91
 fi
 while IFS= read -r line; do :; done
-printf '%s\\n' "${MOCK_RESULT:-opencode-cli:installed}"
+printf '%b\\n' "${MOCK_RESULT:-opencode-cli:installed}"
 printf 'SECRET stderr\\n' >&2
 exit "${MOCK_STATUS:-0}"
 ''')
@@ -188,7 +248,7 @@ hash -p "${HOME}/foreign/opencode" opencode
                        'check_pending_reboot() { echo independent-reboot; }; later_success() { echo later-success; return 0; }\n'
                        'start_setup_log() { echo log-started; }; finish_setup_log() { echo "log-finalized:$1"; return "$1"; }\n'
                        + wrapper + '\nrun_setup_tasks() { local _setup_had_errors=0;\n' + call + '\nlater_success\n' + tail + '\n' + function(source, 'main') + '\nmain\n')
-            for outcome in ('lower', 'shadowed', 'fresh', 'cleanup'):
+            for outcome in ('lower', 'shadowed', 'fresh', 'cleanup', *DISCOVERY_CASES):
                 with self.subTest(script=name, outcome=outcome), tempfile.TemporaryDirectory() as temp:
                     root = Path(temp); home = root / 'account'; foreign = root / 'foreign'; tools = root / 'tools'
                     for directory in (home, foreign, tools):
@@ -197,6 +257,9 @@ hash -p "${HOME}/foreign/opencode" opencode
                     foreign_command.write_text('INERT foreign command SECRET')
                     foreign_command.chmod(0o700)
                     before = foreign_command.stat()
+                    saved = seed_discovery_state(home) if outcome in DISCOVERY_CASES else {}
+                    proof = DISCOVERY_CASES[outcome][1] if saved else None
+                    successful = outcome == 'lower' or (bool(saved) and proof is None)
                     node = tools / 'node'
                     node.write_text('#!/bin/sh\nexec "$FIXTURE_NODE" "$FIXTURE_DRIVER" "$@"\n')
                     node.chmod(0o700)
@@ -205,20 +268,30 @@ hash -p "${HOME}/foreign/opencode" opencode
                     run = subprocess.run(['bash', '-c', fixture], cwd=home, text=True, capture_output=True, timeout=30,
                                          env={'PATH': ':'.join([str(tools), *paths, '/usr/bin', '/bin']), 'HOME': str(home),
                                               'FIXTURE_NODE': native_node, 'FIXTURE_DRIVER': str(driver), 'FIXTURE_FOREIGN': str(foreign),
-                                              'FIXTURE_OUTCOME': outcome, 'BOLD': '', 'GREEN': '', 'GRAY': '', 'NC': ''})
-                    self.assertEqual(run.returncode, 0 if outcome == 'lower' else 1, run.stdout + run.stderr)
+                                              'FIXTURE_OUTCOME': outcome, 'BOLD': '', 'GREEN': '', 'GRAY': '', 'NC': '',
+                                              **discovery_environment(outcome)})
+                    self.assertEqual(run.returncode, 0 if successful else 1, run.stdout + run.stderr)
                     self.assertIn('later-success', run.stdout)
                     self.assertIn('independent-reboot', run.stdout)
-                    self.assertIn('log-finalized:' + ('0' if outcome == 'lower' else '1'), run.stdout)
-                    if outcome != 'lower':
+                    self.assertIn('log-finalized:' + ('0' if successful else '1'), run.stdout)
+                    if proof:
+                        self.assertIn(f'operation=installation, reason=relative-path, boundary=command-discovery, component={proof[0]}, kind={proof[1]}', run.stdout)
+                    elif not successful:
                         operation, reason = ('setup-selection', 'foreign-command') if outcome == 'shadowed' else ('fresh-shell-selection', 'command-conflict')
                         self.assertIn(f'operation={operation}, reason={reason}', run.stdout)
-                    self.assertEqual('rollback needs manual recovery' in run.stdout, outcome == 'cleanup')
+                    self.assertEqual('rollback needs manual recovery' in run.stdout, outcome in ('cleanup', 'path-late-cleanup'))
                     self.assertNotIn('SECRET', run.stdout + run.stderr)
                     after = foreign_command.stat()
                     self.assertEqual((after.st_ino, after.st_mode, after.st_mtime_ns), (before.st_ino, before.st_mode, before.st_mtime_ns))
                     self.assertEqual(foreign_command.read_text(), 'INERT foreign command SECRET')
-                    self.assertEqual((home / '.local/bin/opencode').exists(), outcome == 'lower')
+                    self.assertEqual((home / '.local/bin/opencode').exists(), bool(saved) or successful)
+                    for file, value in saved.items():
+                        if not successful or file.parent != home / '.local/bin':
+                            self.assertEqual(file.read_bytes(), value)
+                    if saved:
+                        self.assertEqual((home / '.local/bin/.setup-opencode-cli.lock').exists(), outcome == 'path-late-cleanup')
+                    if successful:
+                        self.assertNotIn('boundary=command-discovery', run.stdout)
 
     def test_brew_upgrade_protects_legacy_records_and_preserves_pins(self):
         text = (ROOT / 'mac.sh').read_text()
@@ -288,7 +361,7 @@ opencode_apt_upgrade_safe() { return 1; }
             fake = Path(home) / 'node-fixture.ps1'
             fake.write_text('if ($args[0] -eq "-e") { $global:LASTEXITCODE=0; return }\n'
                             'if ($env:MOCK_SELECTION_INPUTS -eq "1" -and ($env:SETUP_OPENCODE_SHELL -notmatch "[\\\\/]pwsh.exe$" -or $env:SETUP_OPENCODE_HASHED -or $env:SETUP_OPENCODE_FRESH_PATH -eq "SECRET")) { $global:LASTEXITCODE=91; return }\n'
-                            '$input | Out-Null\nWrite-Output ([regex]::Split($env:MOCK_RESULT, "`n"))\n'
+                            '$input | Out-Null\nWrite-Output ([regex]::Split($env:MOCK_RESULT.Replace(([string][char]92 + \'0\'), [string][char]0), "`n"))\n'
                             'Write-Error "SECRET stderr" -ErrorAction Continue\n$global:LASTEXITCODE=[int]$env:MOCK_STATUS\n')
             harness = Path(home) / 'wrapper.ps1'
             harness.write_text('''$ErrorActionPreference='Stop'
@@ -379,12 +452,15 @@ try { Initialize-WindowsEnvironment; exit 0 } catch {
     [Console]::WriteLine('original-opencode-failure'); exit 1
 }
 '''
-        for outcome in ('lower', 'shadowed', 'fresh', 'cleanup', 'session'):
+        for outcome in ('lower', 'shadowed', 'fresh', 'cleanup', 'session', *DISCOVERY_CASES):
             with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp); home = root / 'account'; foreign = root / 'foreign'
                 home.mkdir(mode=0o700); foreign.mkdir(mode=0o700)
                 foreign_command = foreign / 'opencode.exe'; foreign_command.write_text('INERT foreign SECRET'); foreign_command.chmod(0o700)
                 before = foreign_command.stat()
+                saved = seed_discovery_state(home, windows=True) if outcome in DISCOVERY_CASES else {}
+                proof = DISCOVERY_CASES[outcome][2] if saved else None
+                successful = outcome == 'lower' or (bool(saved) and proof is None)
                 wrapper = root / 'node'
                 wrapper.write_text('#!/bin/sh\nexec "$FIXTURE_NODE" "$FIXTURE_DRIVER" "$@"\n')
                 wrapper.chmod(0o700)
@@ -394,22 +470,35 @@ try { Initialize-WindowsEnvironment; exit 0 } catch {
                                      env={'PATH': ':'.join([*paths, '/usr/bin', '/bin']), 'HOME': str(home), 'USERPROFILE': str(home),
                                           'FIXTURE_NODE': native_node, 'FIXTURE_DRIVER': str(ROOT / 'tests/fixtures/opencode-cli-driver.cjs'),
                                           'FIXTURE_FOREIGN': str(foreign), 'FIXTURE_PLATFORM': 'win32', 'FIXTURE_OUTCOME': outcome,
-                                          'FIXTURE_WRAPPER': str(wrapper), 'POWERSHELL_TELEMETRY_OPTOUT': '1'},
+                                          'FIXTURE_WRAPPER': str(wrapper), 'POWERSHELL_TELEMETRY_OPTOUT': '1', **discovery_environment(outcome)},
                                      capture_output=True, text=True, timeout=30)
-                self.assertEqual(run.returncode, 0 if outcome == 'lower' else 1, run.stdout + run.stderr)
+                self.assertEqual(run.returncode, 0 if successful else 1, run.stdout + run.stderr)
                 self.assertIn('later-success', run.stdout); self.assertIn('reboot', run.stdout)
                 self.assertEqual(run.stdout.splitlines().count('finalized'), 1)
                 self.assertNotIn('SECRET', run.stdout + run.stderr)
-                if outcome != 'lower':
+                if not successful:
                     self.assertIn('original-opencode-failure', run.stdout)
+                if isinstance(proof, tuple):
+                    self.assertIn(f'operation=installation, reason=relative-path, boundary=command-discovery, component={proof[0]}, kind={proof[1]}', run.stdout)
+                elif proof == 'unreachable':
+                    self.assertIn('operation=setup-selection, reason=unreachable', run.stdout)
+                    self.assertNotIn('boundary=command-discovery', run.stdout)
+                elif not successful:
                     operation, reason = ('setup-selection', 'foreign-command') if outcome == 'shadowed' else (
                         ('setup-selection', 'command-conflict') if outcome == 'session' else ('fresh-shell-selection', 'command-conflict'))
                     self.assertIn(f'operation={operation}, reason={reason}', run.stdout)
-                self.assertEqual('rollback needs manual recovery' in run.stdout, outcome == 'cleanup')
+                self.assertEqual('rollback needs manual recovery' in run.stdout, outcome in ('cleanup', 'path-late-cleanup'))
                 after = foreign_command.stat()
                 self.assertEqual((after.st_ino, after.st_mode, after.st_mtime_ns), (before.st_ino, before.st_mode, before.st_mtime_ns))
                 self.assertEqual(foreign_command.read_text(), 'INERT foreign SECRET')
-                self.assertEqual((home / '.local/bin/opencode.exe').exists(), outcome == 'lower')
+                self.assertEqual((home / '.local/bin/opencode.exe').exists(), bool(saved) or successful)
+                for file, value in saved.items():
+                    if not successful or file.parent != home / '.local/bin':
+                        self.assertEqual(file.read_bytes(), value)
+                if saved:
+                    self.assertEqual((home / '.local/bin/.setup-opencode-cli.lock').exists(), outcome == 'path-late-cleanup')
+                if successful:
+                    self.assertNotIn('boundary=command-discovery', run.stdout)
 
     @unittest.skipUnless(PWSH, 'No existing PowerShell: native selection transaction not claimed')
     def test_powershell_selection_transaction_restores_prior_state_and_preserves_races(self):
