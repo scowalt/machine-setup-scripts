@@ -1,6 +1,6 @@
 # Issue #184 integrated validation
 
-Implements acceptance child [#188](https://github.com/scowalt/machine-setup-scripts/issues/188) on integration `8feb79d2d07f8c1fcde719578d0f9696643b576d`, containing #185–#187. **43/43 final inventory entries pass; standards/spec two-axis review remains pending with the parent.** No issues are closed and nothing is pushed by this child.
+Implements acceptance child [#188](https://github.com/scowalt/machine-setup-scripts/issues/188), including the post-review follow-up based on integration `b12083b82b961cd03c563fecfb54d39a2efef32b`. Initial two-axis review found **zero standards findings and one spec P2**: extra Darwin per-process rows were accepted as start identity. The fix and fresh **43/43 final inventory** pass are recorded below; **original-reviewer recheck remains pending**, not a clean-review claim. No issues are closed and nothing is pushed by this implementer.
 
 ## Coverage and execution boundary
 
@@ -11,9 +11,9 @@ The [authoritative spec](https://github.com/scowalt/machine-setup-scripts/issues
 - [OpenCode fixtures](../../tests/test_opencode_cli_callers.py): `test_real_installer_wrapper_caller_and_finalization_with_two_accounts` and `test_real_powershell_installer_caller_and_finalization` carry real discovery failures through wrappers and finalization. [Node cases](../../tests/opencode-cli.test.cjs) supplement native delimiter, bounds, forgery, rollback and secondary diagnostic failure coverage.
 - [Homebrew results](../../tests/test_homebrew_results.py): `test_failed_upgrade_reaches_final_result_and_log`, `test_clt_warning_does_not_block_successful_upgrade_or_poison_final_result` and `test_success_does_not_erase_an_earlier_failure` already prove actual failure versus warning-only success under [ADR 0007](../adr/0007-use-operation-results-instead-of-clt-compatibility-gates.md). [CLT caller tests](../../tests/test_macos_clt.py) retain ordinary work, bootstrap and selection boundaries.
 
-The sole new method is `Callers.test_early_failure_survives_success_deferral_reboot_and_completed_log` in the plugin fixtures. Six cases combine desktop/OpenCode failure or a success control with stopped/safe-mode deferral. They retain the complete real macOS `run_setup_tasks`, `main`, `refresh_bb_plugins`, `start_setup_log` and `finish_setup_log` definitions from [mac.sh](../../mac.sh). They verify later independent success, deferral, Pi work, reboot reporting, final status and a completed on-disk log; the inert upload copy must equal the drained log. Failure controls cannot become successful summaries, and deferrals alone remain successful.
+The initial #188 addition was `Callers.test_early_failure_survives_success_deferral_reboot_and_completed_log` in the plugin fixtures. Six cases combine desktop/OpenCode failure or a success control with stopped/safe-mode deferral. They retain the complete real macOS `run_setup_tasks`, `main`, `refresh_bb_plugins`, `start_setup_log` and `finish_setup_log` definitions from [mac.sh](../../mac.sh). They verify later independent success, deferral, Pi work, reboot reporting, final status and a completed on-disk log; the inert upload copy must equal the drained log. Failure controls cannot become successful summaries, and deferrals alone remain successful.
 
-Before execution, reviewed merged fixture changes and this new boundary against the [execution audit](2026-09-29-fixture-execution-audit.md) and [incident](2026-09-29-fixture-containment-incident.md). Definitions-only extraction is unchanged. Every other setup helper is replaced before invocation; native inventory, package/lifecycle commands and transport are inert. Real log creation/tee/draining and upload-copy writes stay inside the private fixture HOME. No production test API, umbrella framework or production change was needed.
+Before execution, reviewed merged fixture changes and this new boundary against the [execution audit](2026-09-29-fixture-execution-audit.md) and [incident](2026-09-29-fixture-containment-incident.md). Definitions-only extraction is unchanged. Every other setup helper is replaced before invocation; native inventory, package/lifecycle commands and transport are inert. Real log creation/tee/draining and upload-copy writes stay inside the private fixture HOME. That initial caller-only addition needed no production change. The post-review parser fix below adds neither a production test API nor an umbrella framework.
 
 ## Red/green evidence
 
@@ -27,6 +27,24 @@ Each root below contains private preflight diagnostics, suite logs and `results.
 | Integrated #188 | `/tmp/setup-fixture-matrix-505swdr6` | `/tmp/setup-fixture-matrix-kehfad8v` | Regression sensitivity, **not a new production defect**: an in-memory caller mutation erased prior failures before refresh. Four failure cases went red; two success controls passed. Removing that mutation gives 43 plugin methods, eight containment methods and eight default/environment methods passing across 3/3 entries. |
 
 Component detail: [desktop evidence](/tmp/issue-184-coordination/desktop-evidence.md), [plugin evidence](/tmp/issue-184-coordination/plugin-evidence.md), [OpenCode evidence](/tmp/issue-184-coordination/opencode-evidence.md), [merge evidence](/tmp/issue-184-coordination/merge-evidence.md). The temporary mutation exists only in [red sensitivity evidence](/tmp/issue-184-coordination/integration-red-sensitivity.patch), not the committed tests or production source.
+
+## Post-review Darwin identity fix
+
+Initial read-only reviews of `1c457b9...b12083b`: [standards](/tmp/issue-184-coordination/standards-review.md) reported no findings; [spec](/tmp/issue-184-coordination/spec-review.md) reported one P2. `Processes.read()` used `strip().split(None, 1)`, accepting extra rows as part of the start string before private argv/environment inspection. This was an unmet row-shape requirement, not a newly introduced regression.
+
+The real Darwin parser now requires exactly one UID plus C-locale `lstart` row before UID classification or `KERN_PROCARGS2`. Full-match shape enforcement also rejects arbitrary same-row suffixes, missing fields, controls and out-of-range day/time fields. Apple's [`lstarted` implementation](https://github.com/apple-oss-distributions/adv_cmds/blob/main/ps/print.c) uses `strftime("%c")`; the existing native command environment pins `LC_ALL=C`. This is a bounded shape check, not a calendar/timezone conversion or a new inventory: native internal spaces/tabs and start text remain unchanged, a terminal newline is optional, and second 60 is accepted. Signed/unsigned UID aliases and all existing foreign, PID-reuse, package, accepted-peer and native-contract proofs remain. Linux code is unchanged.
+
+Four new methods at the existing `Discovery` seam run real discovery, `NativeApi` and policy reporting against inert ps/sysctl/HTTP inputs. Extra rows and malformed suffixes refuse without private reads or requests during discovery; all three identity rechecks refuse without further private reads or requests (the post-response check necessarily follows the already-proved health request). Valid native whitespace/update controls pass. Existing PID-reuse fixtures now change between two well-shaped native start stamps, rather than relying on an invalid placeholder; alias/foreign/Linux controls remain passing.
+
+| Post-review stage | Artifact root | Result |
+| --- | --- | --- |
+| Extra-row discovery red | `/tmp/setup-fixture-matrix-52kqdm2p` | 44 methods, six failing subcases. |
+| Extra-row discovery/revalidation red | `/tmp/setup-fixture-matrix-6hstyx2i` | 45 methods, 15 failing subcases. |
+| Single-row guard green | `/tmp/setup-fixture-matrix-0g5ky6tw` | 45 methods pass. |
+| Same-row shape red | `/tmp/setup-fixture-matrix-yjlawxeh` | 47 methods, 72 failing subcases; valid controls pass. |
+| Complete shape/targeted green | `/tmp/setup-fixture-matrix-ezq71n0o` | 3/3 entries: 47 plugin, eight containment and eight default/environment methods pass; zero skips. |
+
+All targeted invocations used the common shared-lock/sanitized runner prefix with existing Node/PowerShell, `--tool-path /usr/bin:/bin` and `--timeout 600`. The final inventory below uses the exact integrated native-tools command. Detailed delivery, counts and static evidence: [review-fix evidence](/tmp/issue-184-coordination/review-fix-evidence.md). Implementer validation has been rechecked; independent standards/spec recheck and #188 acceptance remain with the parent/original reviewers.
 
 ## Final complete inventory
 
@@ -44,9 +62,9 @@ flock /tmp/issue-184-coordination/fixtures.lock env -i PATH=/usr/bin:/bin \
   tests/test_managed_skill_suite.py tests/test_bb_plugin_refresh.py tests/*.sh
 ```
 
-Artifacts: [/tmp/setup-fixture-matrix-wibga34a](/tmp/setup-fixture-matrix-wibga34a). **43/43 entries exit 0, zero timeouts**, in 1,112.4 suite-seconds. Mandatory compiler/kernel-filter self-test and private stdio remain unchanged. No optional integration variables were inherited; no tools were installed.
+Post-review artifacts: [/tmp/setup-fixture-matrix-gx4vucmr](/tmp/setup-fixture-matrix-gx4vucmr). **43/43 entries exit 0, zero timeouts**, in 1,115.1 suite-seconds on final executable sources. Mandatory compiler/kernel-filter self-test, private stdio/roots and sequential shared-lock execution remain unchanged. No optional integration variables were inherited; no tools were installed. The earlier 43/43 root `/tmp/setup-fixture-matrix-wibga34a` remains pre-review evidence, not evidence for this fix.
 
-Logs report **559 unittest method executions: 543 pass, 16 skipped**, plus **140 OpenCode Node cases: 139 pass, one skipped**. These are executions, not unique tests: some shell contracts dispatch the direct Python suites again. Shell and available Linux PowerShell contracts also pass; shared-runtime PowerShell reports 1,409 assertions on each of two runs. Exact per-entry counts, inventory and source hashes are linked from [integration evidence](/tmp/issue-184-coordination/integration-evidence.md).
+Logs report **563 unittest method executions: 547 pass, 16 skipped**, plus **140 OpenCode Node cases: 139 pass, one skipped**. These are executions, not unique tests: some shell contracts dispatch the direct Python suites again. Shell and available Linux PowerShell contracts also pass; shared-runtime PowerShell reports 1,409 assertions on each of two runs. Exact [per-entry counts](/tmp/issue-184-coordination/review-fix-counts.json), [inventory](/tmp/issue-184-coordination/review-fix-inventory.txt) and [source hashes](/tmp/issue-184-coordination/review-fix-tested-source.json) are retained.
 
 Skips remain explicit:
 
@@ -57,10 +75,10 @@ Skips remain explicit:
 
 ## Static checks and handoff
 
-After the final inventory, all three embedding `--check` tools, desktop payload equality, cumulative changed Bash syntax/ShellCheck, Python AST and Node syntax, contained PowerShell AST parsing, setup banners and whitespace checks pass. [Static command](/tmp/issue-184-coordination/integration-static-checks.sh) and [log](/tmp/issue-184-coordination/integration-static.log) record them. A 107-file manifest verifies executable sources did not change after the matrix. Integrated versions remain macOS 272, Ubuntu 302, Pi 248, Bazzite 151, WSL 231, Windows 176; this test/documentation-only child changes none.
+Post-review static checks are recorded in the [command](/tmp/issue-184-coordination/review-fix-static-checks.sh) and [log](/tmp/issue-184-coordination/review-fix-static.log): all three embedding checks, desktop equality, cumulative changed Bash syntax/ShellCheck, Python AST and Node syntax, contained PowerShell AST parsing, banners and whitespace. A 107-file manifest verifies final executable-source identity. The five regenerated setup entries increment once: macOS 272→273, Ubuntu 302→303, Pi 248→249, Bazzite 151→152 and WSL 231→232. Windows remains byte-identical at 176. Combined desktop/OpenCode features and Linux process behavior are preserved.
 
 Native staged Gitleaks reports no leaks. Commits use command-local `LEFTHOOK=0` to avoid tool-installing `bunx`; no global hook configuration changes. The complete contained inventory and explicit native checks substitute for those hook commands. Trusted Markdownlint is unavailable; Markdown formatting and local links were checked without installing a replacement, not claimed as a Markdownlint pass.
 
 No new containment refusal or unexpected real effect was observed; this is not a syscall-wide effects audit. No live setup, app/skill/plugin/extension execution, process inventory, machine repair or rollout occurred. Linux PowerShell is not native Windows/ACL/PowerShell 5.1 evidence; native Apple/BSD/GUI, ARM/WSL/Bazzite and BB session/plugin continuity remain unverified. Earlier containment-incident remote receipt/telemetry uncertainty is unchanged.
 
-The original OpenCode PATH refusal remains unreproduced and unattributed: these diagnostics do not identify fish, mise or another historical cause, nor prove the affected installation repaired. Parent retains integration, two-axis review and finding resolution, PR #189 updates, issue closure and worktree cleanup.
+The original OpenCode PATH refusal remains unreproduced and unattributed: these diagnostics do not identify fish, mise or another historical cause, nor prove the affected installation repaired. Parent retains integration, original-reviewer recheck of this fix, PR #189 updates, issue acceptance/closure and worktree cleanup. The initial P2 is implemented and locally validated, not yet independently marked resolved.

@@ -153,6 +153,7 @@ class DarwinInputs:
         self.table = table
         self.records = records
         self.uids = uids or {}
+        self.identity_rows = {}
         self.private_reads = []
         self.queries = []
         self.peer = True
@@ -171,7 +172,7 @@ class DarwinInputs:
                 raw, status = b'', 1
             else:
                 stamp = self.records[pid][2].decode('ascii')
-                raw = f'{self.uids.get(pid, os.getuid())} {stamp}\n'.encode('ascii')
+                raw = self.identity_rows.get(pid, f'{self.uids.get(pid, os.getuid())} {stamp}\n'.encode('ascii'))
         elif args[:4] == ['/usr/sbin/lsof', '-nP', '-a', '-p'] and args[5:] == ['-iTCP', '-FpnT']:
             pid = int(args[4])
             port = self.records[pid][1]['BB_SERVER_PORT']
@@ -357,7 +358,7 @@ class Discovery(unittest.TestCase):
         data = self.data(data)
         self.records[pid] = ([str(self.root / 'node'), str(self.entry)],
                              {'HOME': str(self.home), 'BB_DATA_DIR': str(data),
-                              'BB_SERVER_PORT': port, 'BB_SERVER_LAUNCH_ID': 'fixture-launch'}, b'12345')
+                              'BB_SERVER_PORT': port, 'BB_SERVER_LAUNCH_ID': 'fixture-launch'}, b'Thu Oct  1 00:00:00 2026')
         return data
 
     @contextlib.contextmanager
@@ -568,6 +569,21 @@ class Discovery(unittest.TestCase):
                             (1, 'BB_PLUGIN_REFRESH failed discovery process-proof-unavailable\n'))
                     self.assertEqual(native.private_reads, [])
 
+    def test_darwin_extra_identity_rows_refuse_discovery_before_private_reads_or_requests(self):
+        self.server()
+        account = str(os.getuid()).encode()
+        row = account + b' Thu Oct  1 00:00:00 2026\n'
+        for extra in (row, b'-2 Thu Oct  1 00:00:00 2026\n', b'\n'):
+            for raw in (row + extra, extra + row):
+                with self.subTest(raw=raw):
+                    api = FakeApi()
+                    with self.darwin_inventory(account + b' 100\n') as native, self.darwin_http(api) as requests:
+                        native.identity_rows[100] = raw
+                        result = self.run_policy(native_api=True)
+                    self.assertEqual(native.private_reads, [])
+                    self.assertEqual(requests, [])
+                    self.assertEqual(result, (1, 'BB_PLUGIN_REFRESH failed discovery process-proof-unavailable\n'))
+
     def test_darwin_mixed_inventory_updates_only_verified_account_server_and_preserves_intent(self):
         data = self.server()
         # A foreign row may even name the same BB entry; it is not a candidate
@@ -649,6 +665,78 @@ class Discovery(unittest.TestCase):
                 self.assertTrue(set(native.private_reads) <= {100})
         manifest.write_bytes(original)
 
+    def test_darwin_extra_identity_rows_refuse_revalidation_before_further_private_reads_or_requests(self):
+        self.server()
+        account = str(os.getuid()).encode()
+        row = account + b' Thu Oct  1 00:00:00 2026\n'
+        for raw in (row + row, row + b'-2 Thu Oct  1 00:00:00 2026\n', row + b'\n'):
+            for at_read in (2, 3, 4):
+                with self.subTest(raw=raw, at_read=at_read):
+                    api = FakeApi()
+                    count = 0
+                    with self.darwin_inventory(account + b' 100\n') as native, self.darwin_http(api) as requests:
+                        def change(args):
+                            nonlocal count
+                            if args[:2] == ['/bin/ps', '-p']:
+                                count += 1
+                                if count == at_read:
+                                    native.identity_rows[100] = raw
+                        native.on_query = change
+                        result = self.run_policy(native_api=True)
+                    self.assertEqual(native.private_reads, [100] * (at_read - 1))
+                    self.assertEqual(requests, [('GET', '/health', None)] if at_read == 4 else [])
+                    self.assertEqual(api.calls, [])
+                    self.assertEqual(result, (1, 'BB_PLUGIN_REFRESH failed identity process-proof-unavailable\n'))
+
+    def test_darwin_malformed_start_shape_refuses_before_further_private_reads_or_requests(self):
+        self.server()
+        account = str(os.getuid()).encode()
+        stamp = b'Thu Oct  1 00:00:00 2026'
+        malformed = (stamp + b' private-path-secret-sentinel', stamp + b'junk',
+                     stamp + b'\0', stamp + b'\r', stamp + b'\v',
+                     b'\v' + stamp, b'\r' + stamp, stamp.replace(b'Oct', b'Oct\0'),
+                     stamp.replace(b'Oct  ', b'Oct\tsecret-sentinel '),
+                     b'start', b'12345', b'Thu Oct 1 00:00:00', b'Oct 1 00:00:00 2026',
+                     b'Bad Oct 1 00:00:00 2026', b'Thu Bad 1 00:00:00 2026',
+                     b'Thu Oct 0 00:00:00 2026', b'Thu Oct 32 00:00:00 2026',
+                     b'Thu Oct 1 24:00:00 2026', b'Thu Oct 1 00:60:00 2026',
+                     b'Thu Oct 1 00:00:61 2026', b'Thu Oct 1 00:00:00 20260')
+        for bad in malformed:
+            for at_read in (1, 2, 3, 4):
+                with self.subTest(stamp=bad, at_read=at_read):
+                    api = FakeApi()
+                    count = 0
+                    with self.darwin_inventory(account + b' 100\n') as native, self.darwin_http(api) as requests:
+                        def change(args):
+                            nonlocal count
+                            if args[:2] == ['/bin/ps', '-p']:
+                                count += 1
+                                if count == at_read:
+                                    native.identity_rows[100] = account + b' ' + bad + b'\n'
+                        native.on_query = change
+                        result = self.run_policy(native_api=True)
+                    self.assertEqual(native.private_reads, [100] * (at_read - 1))
+                    self.assertEqual(requests, [('GET', '/health', None)] if at_read == 4 else [])
+                    self.assertEqual(api.calls, [])
+                    operation = 'discovery' if at_read == 1 else 'identity'
+                    self.assertEqual(result, (1, f'BB_PLUGIN_REFRESH failed {operation} process-proof-unavailable\n'))
+
+    def test_darwin_native_start_whitespace_allows_verified_refresh(self):
+        self.server()
+        account = str(os.getuid()).encode()
+        for raw in (account + b' Thu Oct  1 00:00:00 2026\n',
+                    b'  ' + account + b'   Wed Sep 30 23:59:59 2026   \n',
+                    b'\t' + account + b'\tThu\tOct 1\t00:00:00 2026\t',
+                    account + b' Sat Dec 31 23:59:60 2016\n'):
+            with self.subTest(raw=raw):
+                api = FakeApi()
+                with self.darwin_inventory(account + b' 100\n') as native, self.darwin_http(api):
+                    native.identity_rows[100] = raw
+                    self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH updated\n'))
+                self.assertTrue(native.private_reads)
+                self.assertEqual(set(native.private_reads), {100})
+                self.assertEqual(len(api.mutations()), 1)
+
     def test_darwin_pid_reuse_and_changed_evidence_refuse_before_plugin_operations(self):
         self.server()
         table = b'-2 53750\n' + f'{os.getuid()} 100\n'.encode()
@@ -671,7 +759,7 @@ class Discovery(unittest.TestCase):
                                 return
                             argv, env, stamp = self.records[100]
                             if changed == 'stamp':
-                                stamp = b'reused-pid'
+                                stamp = b'Thu Oct  1 00:00:01 2026'
                             elif changed == 'argv':
                                 argv = ['/inert/different-node', argv[1]]
                             elif changed == 'environment':
@@ -899,7 +987,7 @@ class NativeEvidence(unittest.TestCase):
                         self.assertEqual(native.private_reads, [99])
 
     def test_darwin_foreign_and_malformed_per_process_uids_never_read_private_environment(self):
-        records = {99: (['/inert/node', '/inert/bb-app/server/dist/index.js'], {}, b'start')}
+        records = {99: (['/inert/node', '/inert/bb-app/server/dist/index.js'], {}, b'Thu Oct  1 00:00:00 2026')}
         foreign = ((2, '-2'), (2, '4294967294'), (4294967294, '-2147483648'),
                    (1234, '0'), (1234, '-2'), (1234, '4294967294'))
         for account, uid in foreign:
@@ -917,7 +1005,7 @@ class NativeEvidence(unittest.TestCase):
                      b'999999999999999999999', '٢'.encode(), '−2'.encode(), b'\xff')
         with patch.object(P.sys, 'platform', 'darwin'):
             processes = P.Processes(1234)
-        for raw in [uid + b' start\n' for uid in malformed] + [b'1234\n', b'\n']:
+        for raw in [uid + b' Thu Oct  1 00:00:00 2026\n' for uid in malformed] + [b'1234\n', b'\n']:
             with self.subTest(raw=raw), patch.object(P.subprocess, 'run', return_value=types.SimpleNamespace(
                     returncode=0, stdout=raw, stderr=b'')), \
                     patch.object(P.ctypes, 'CDLL', side_effect=AssertionError('private environment read')):

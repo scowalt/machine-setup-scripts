@@ -7391,9 +7391,20 @@ class Processes:
         if not raw_rows:
             return None
         need(raw_rows.isascii(), 'process-proof-unavailable')
-        rows = raw_rows.decode('ascii').strip().split(None, 1)
-        need(len(rows) == 2, 'process-proof-unavailable')
-        need(darwin_uid(rows[0]) == self.uid, 'foreign-process')
+        # ps lstart uses C-locale %c. Accept one complete UID/start row, not
+        # extra rows or arbitrary suffixes, before KERN_PROCARGS2 reads anything
+        # private. Keep the native start text (including internal whitespace)
+        # as identity evidence; do not reinterpret its calendar or timezone.
+        row = re.fullmatch(
+            r'[ \t]*(-?[0-9]{1,10})[ \t]+'
+            r'((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[ \t]+'
+            r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[ \t]+'
+            r'(?:0?[1-9]|[12][0-9]|3[01])[ \t]+'
+            r'(?:[01][0-9]|2[0-3]):[0-5][0-9]:(?:[0-5][0-9]|60)[ \t]+[0-9]{4})[ \t]*\n?',
+            raw_rows.decode('ascii'))
+        need(row is not None, 'process-proof-unavailable')
+        uid, stamp = row.groups()
+        need(darwin_uid(uid) == self.uid, 'foreign-process')
         libc = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
         mib = (ctypes.c_int * 3)(1, 49, pid)
         size = ctypes.c_size_t(2097152)
@@ -7407,7 +7418,7 @@ class Processes:
         values = rest[1].lstrip(b'\0').split(b'\0')
         need(len(values) >= argc, 'ambiguous-process')
         argv = [value.decode('utf-8', 'strict') for value in values[:argc]]
-        return argv, parse_environment(b'\0'.join(values[argc:])), rows[1]
+        return argv, parse_environment(b'\0'.join(values[argc:])), stamp
 
     def database_open(self, path):
         # A native main server holds its bb.db connection. A stopped-data
@@ -8437,7 +8448,7 @@ run_setup_tasks() {
 
     # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 231 | Last changed: Preserve BB Darwin UID identity and bounded OpenCode PATH refusals${NC}"
+    echo -e "${GRAY}Version 232 | Last changed: Reject malformed Darwin BB process identity rows${NC}"
 
     if ! acquire_setup_lock; then
         return 1
