@@ -1116,6 +1116,62 @@ DOTFILES_ACCESS_METHOD=none
                         self.assertNotIn('sentinel', result.stdout + result.stderr)
         self.assertNotIn('refresh_bb_plugins', (ROOT / 'win.ps1').read_text())
 
+    def test_early_failure_survives_success_deferral_reboot_and_completed_log(self):
+        # Existing caller seam, now with real log draining/finalization. All setup
+        # helpers and the upload transport are inert before either caller runs.
+        selected = EXTRACT.definitions((ROOT / 'mac.sh').read_text())
+        real = ('run_setup_tasks', 'main', 'refresh_bb_plugins', 'start_setup_log', 'finish_setup_log')
+        names = re.findall(r'^([A-Za-z_][A-Za-z_0-9]*)\(\) \{', selected, re.M)
+        code = '\n'.join(f'{name}() {{ :; }}' for name in names if name not in real)
+        for name in real:
+            definition = re.search(rf'^{name}\(\) \{{\n.*?^\}}', selected, re.M | re.S).group()
+            code += '\n' + definition
+        code += r'''
+print_error() { printf '%s\n' "$*"; }
+print_warning() { printf '%s\n' "$*"; }
+print_message() { printf '%s\n' "$*"; }
+print_debug() { printf '%s\n' "$*"; }
+install_bb_desktop() { echo desktop-operation; [[ "$FAIL_TASK" != desktop ]]; }
+install_opencode_cli() { echo opencode-operation; [[ "$FAIL_TASK" != opencode ]]; }
+install_gitea_client() { echo independent-success; return 0; }
+bb_plugin_refresh_payload() { printf 'BB_PLUGIN_REFRESH %s\n' "$DEFERRAL"; }
+refresh_pi_packages() { echo later-pi-success; return 0; }
+check_pending_reboot() { echo reboot-reported; }
+check_dotfiles_access() { return 1; }
+setup_dotfiles_deploy_key() { return 1; }
+is_main_user() { return 0; }
+whoami() { echo fixture; }
+upload_log() { cp -- "$SETUP_LOG_FILE" "$HOME/completed-upload.log"; }
+'''
+        for command in ('curl', 'sudo', 'brew', 'chezmoi', 'bb', 'npm', 'ps', 'pgrep',
+                        'launchctl', 'kill', 'pkill', 'tailscale'):
+            code += f'\n{command}() {{ echo FORBIDDEN:{command}; return 99; }}'
+        code += '\nmain\n'
+        for failed in ('desktop', 'opencode', 'none'):
+            for deferral, diagnostic in (
+                    ('safe-mode', 'BB plugin refresh deliberately deferred: native safe mode remains enabled.'),
+                    ('stopped', 'Stopped local BB main-server plugin refresh deferred; no server was started.')):
+                with self.subTest(failed=failed, deferral=deferral), tempfile.TemporaryDirectory(prefix='bb-refresh-final-log-') as home:
+                    result = subprocess.run(['/bin/bash', '-c', code], cwd=home,
+                                            env={'HOME': home, 'PATH': '/usr/bin:/bin', 'FAIL_TASK': failed,
+                                                 'DEFERRAL': deferral, 'TERM': 'dumb'},
+                                            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+                    self.assertEqual(result.returncode, int(failed != 'none'), result.stdout + result.stderr)
+                    logs = list((Path(home) / '.local/log/machine-setup').glob('*.log'))
+                    self.assertEqual(len(logs), 1)
+                    log = logs[0].read_text()
+                    # Upload sees the complete drained log, not an early snapshot.
+                    self.assertEqual((Path(home) / 'completed-upload.log').read_text(), log)
+                    summary = 'Setup completed with errors' if failed != 'none' else '✨ Setup complete!'
+                    milestones = ['desktop-operation', 'opencode-operation', 'independent-success', diagnostic,
+                                  'later-pi-success', 'reboot-reported', summary, 'Run log saved to:']
+                    positions = [log.index(marker) for marker in milestones]
+                    self.assertEqual(positions, sorted(positions), log)
+                    self.assertEqual(log.count('Run log saved to:'), 1)
+                    self.assertEqual('✨ Setup complete!' in log, failed == 'none')
+                    self.assertNotIn('FORBIDDEN:', result.stdout + result.stderr + log)
+                    self.assertEqual(result.stderr, '')
+
     def test_wrapper_rejects_unknown_diagnostics_with_a_bounded_controlled_fallback(self):
         refused = ('', 'secret-path-sentinel',
                    'BB_PLUGIN_REFRESH failed secret-path-sentinel writable-local-state',
