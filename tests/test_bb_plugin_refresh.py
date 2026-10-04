@@ -147,6 +147,61 @@ class FakeApi:
         return [call for call in self.calls if call[1].endswith('/update')]
 
 
+class DarwinInputs:
+    """Inert ps/sysctl/lsof bytes; the production parser and identity proof run."""
+    def __init__(self, table, records, uids=None):
+        self.table = table
+        self.records = records
+        self.uids = uids or {}
+        self.private_reads = []
+        self.queries = []
+        self.peer = True
+        self.on_query = lambda _: None
+
+    def command(self, args, **kwargs):
+        self.queries.append(args)
+        self.on_query(args)
+        assert kwargs['env'] == {'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL': 'C'}
+        status = 0
+        if args == ['/bin/ps', '-axo', 'uid=,pid=']:
+            raw = self.table
+        elif args[:2] == ['/bin/ps', '-p'] and args[3:] == ['-o', 'uid=,lstart=']:
+            pid = int(args[2])
+            if pid not in self.records:
+                raw, status = b'', 1
+            else:
+                stamp = self.records[pid][2].decode('ascii')
+                raw = f'{self.uids.get(pid, os.getuid())} {stamp}\n'.encode('ascii')
+        elif args[:4] == ['/usr/sbin/lsof', '-nP', '-a', '-p'] and args[5:] == ['-iTCP', '-FpnT']:
+            pid = int(args[4])
+            port = self.records[pid][1]['BB_SERVER_PORT']
+            raw = f'p{pid}\nn127.0.0.1:{port}->127.0.0.1:49999\nTST=ESTABLISHED\n'.encode() if self.peer else b''
+        elif len(args) == 5 and args[:4] == ['/usr/sbin/lsof', '-nP', '-Fpu', '--']:
+            assert Path(args[-1]).name == 'bb.db'
+            raw, status = b'', 1
+        else:
+            raise AssertionError('unexpected native command')
+        return types.SimpleNamespace(returncode=status, stdout=raw, stderr=b'')
+
+    def sysctl(self, mib, length, buffer, size, new, new_length):
+        assert (mib[0], mib[1], length, new, new_length) == (1, 49, 3, None, 0)
+        pid = mib[2]
+        self.private_reads.append(pid)
+        argv, env, _ = self.records[pid]
+        values = [arg.encode() for arg in argv] + [f'{key}={value}'.encode() for key, value in env.items()]
+        raw = len(argv).to_bytes(4, P.sys.byteorder) + argv[0].encode() + b'\0\0' + b'\0'.join(values) + b'\0'
+        P.ctypes.memmove(buffer, raw, len(raw))
+        size._obj.value = len(raw)
+        return 0
+
+    @contextlib.contextmanager
+    def installed(self):
+        with patch.object(P.subprocess, 'run', side_effect=self.command), \
+                patch.object(P.ctypes, 'CDLL', return_value=types.SimpleNamespace(sysctl=self.sysctl)), \
+                patch.object(P.os, 'kill', side_effect=AssertionError('process mutation forbidden')):
+            yield self
+
+
 def run_wrapper(text, status=0):
     source = (ROOT / 'lib/bb-plugin-refresh.bash').read_text().split('\nbb_plugin_refresh_payload()', 1)[0]
     code = source + '\n' + '\n'.join(f'{name}() {{ printf "%s\\n" "$1"; }}' for name in
@@ -305,13 +360,52 @@ class Discovery(unittest.TestCase):
                               'BB_SERVER_PORT': port, 'BB_SERVER_LAUNCH_ID': 'fixture-launch'}, b'12345')
         return data
 
-    def run_policy(self, api=None, policy='ready'):
+    @contextlib.contextmanager
+    def darwin_inventory(self, table, uids=None):
+        previous = self.proc
+        with patch.object(P.sys, 'platform', 'darwin'):
+            self.proc = P.Processes(os.getuid())
+        native = DarwinInputs(table, self.records, uids)
+        try:
+            with native.installed():
+                yield native
+        finally:
+            self.proc = previous
+
+    @contextlib.contextmanager
+    def darwin_http(self, api, fault=None):
+        # Only the transport is replaced: NativeApi still revalidates process,
+        # package, data, accepted-socket, health and native configuration proof.
+        requests = []
+        def connection(host, port, **_kwargs):
+            self.assertEqual((host, port), ('127.0.0.1', 39001))
+            def request(method, path, body, _headers):
+                requests.append((method, path, None if body is None else json.loads(body)))
+            def response():
+                method, path, payload = requests[-1]
+                if path == '/health':
+                    value = {'ok': fault != 'health', 'launchId': 'fixture-launch'}
+                elif path == '/api/v1/system/config':
+                    value = {'dataDir': str(self.home / ('wrong-data' if fault == 'data' else '.bb'))}
+                    api.verified = True
+                else:
+                    value = api.request(method, path, payload)
+                raw = json.dumps(value).encode()
+                return types.SimpleNamespace(status=200, getheader=lambda _: None, read=lambda _: raw)
+            return types.SimpleNamespace(sock=types.SimpleNamespace(getsockname=lambda: ('127.0.0.1', 49999)),
+                connect=lambda: None, request=request, getresponse=response, close=lambda: None)
+        with patch.object(P.http.client, 'HTTPConnection', side_effect=connection):
+            yield requests
+
+    def run_policy(self, api=None, policy='ready', native_api=False):
         output = io.StringIO()
         apis = iter(api) if isinstance(api, list) else None
+        api_class = P.NativeApi
         with patch.object(P.sys, 'argv', ['fixture', str(self.home), policy]), \
                 patch.dict(P.os.environ, {}, clear=True), \
                 patch.object(P, 'Processes', return_value=self.proc), \
-                patch.object(P, 'NativeApi', side_effect=lambda *_: next(apis) if apis is not None else api), \
+                patch.object(P, 'NativeApi', side_effect=lambda *args: api_class(*args) if native_api else
+                             next(apis) if apis is not None else api), \
                 patch.object(P.signal, 'signal'), patch.object(P.signal, 'alarm'), \
                 patch.object(P.os, 'chmod', side_effect=AssertionError('permission mutation forbidden')), \
                 patch.object(P.os, 'chown', side_effect=AssertionError('ownership mutation forbidden')), \
@@ -439,6 +533,163 @@ class Discovery(unittest.TestCase):
         self.assertIn('BB_PLUGIN_REFRESH failed update operation-timeout\n', output)
         self.assertIn('BB_PLUGIN_REFRESH safe-mode\n', output)
         self.assertFalse(second.mutations())
+
+    def test_darwin_observed_signed_uid_inventory_and_minimized_row_allow_discovery(self):
+        # Observed PID/UID bytes, with successful native status and no stderr.
+        # Keep the real command validator, table parser, discovery and policy.
+        for uid in ('-2', '4294967294'):
+            for pids in ((53750, 53752), (53750,)):
+                with self.subTest(uid=uid, pids=pids):
+                    with patch.object(P.sys, 'platform', 'darwin'):
+                        self.proc = P.Processes(os.getuid())
+                    def native(args, **_kwargs):
+                        self.assertEqual(args, ['/bin/ps', '-axo', 'uid=,pid='])
+                        return types.SimpleNamespace(returncode=0, stderr=b'',
+                            stdout=''.join(f'{uid} {pid}\n' for pid in pids).encode('ascii'))
+                    with patch.object(P.subprocess, 'run', side_effect=native), \
+                            patch.object(P.ctypes, 'CDLL', side_effect=AssertionError('foreign environment read')):
+                        self.assertEqual(self.run_policy(), (0, 'BB_PLUGIN_REFRESH absent\n'))
+
+    def test_darwin_malformed_uid_pid_or_row_is_refused_before_account_selection(self):
+        bad_uids = (b'-2147483649', b'4294967296', b'-1', b'4294967295', b'unknown',
+                    b'--2', b'+2', b'2-', b'-0', b'1.0', b'1e3', b'0x2', b'1_000',
+                    b'999999999999999999999', '٢'.encode(), '−2'.encode(), b'\xff')
+        bad_pids = (b'-2', b'-1', b'2147483648', b'4294967294', b'--2', b'+2',
+                    b'2-', b'1.0', b'1e3', b'0x2', b'999999999999999999999', '٢'.encode())
+        rows = [uid + b' 53750\n' for uid in bad_uids]
+        rows += [b'4294967294 ' + pid + b'\n' for pid in bad_pids]
+        rows += [b'\n', b'4294967294\n', b'4294967294 53750 extra\n']
+        self.server()
+        for row in rows:
+            for tail in (b'', f'{os.getuid()} 100\n'.encode()):
+                with self.subTest(row=row, account_candidate=bool(tail)):
+                    with self.darwin_inventory(row + tail) as native:
+                        self.assertEqual(self.run_policy(FakeApi()),
+                            (1, 'BB_PLUGIN_REFRESH failed discovery process-proof-unavailable\n'))
+                    self.assertEqual(native.private_reads, [])
+
+    def test_darwin_mixed_inventory_updates_only_verified_account_server_and_preserves_intent(self):
+        data = self.server()
+        # A foreign row may even name the same BB entry; it is not a candidate
+        # and its environment must never be inspected to decide that.
+        self.records[53750] = self.records[100]
+        self.records[53752] = self.records[100]
+        before = (data / 'bb.db').read_bytes(), (self.package / 'package.json').read_bytes()
+        account = f'{os.getuid()} 100\n'.encode()
+        for foreign in (b'-2', b'4294967294'):
+            unrelated = (b'0 0\n0 1\n' + foreign + b' 53750\n' + foreign + b' 53752\n'
+                         b'-2147483648 123\n2147483647 2147483647\n4294967293 234\n')
+            for table in (unrelated + account, account + unrelated, unrelated[:8] + account + unrelated[8:]):
+                with self.subTest(foreign=foreign, table=table):
+                    rows = [plugin('disabled', enabled=False), plugin('pin', 'npm:fixture@1.0.0'),
+                            plugin('local', 'path:/inert/development')]
+                    api = FakeApi(rows, {'disabled': 'update-available', 'pin': 'pinned', 'local': 'pinned'})
+                    preserved = copy.deepcopy(api.plugins)
+                    with self.darwin_inventory(table) as native, self.darwin_http(api) as requests:
+                        self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH updated\n'))
+                    self.assertTrue(native.private_reads)
+                    self.assertEqual(set(native.private_reads), {100})
+                    self.assertEqual(api.plugins['pin'], preserved['pin'])
+                    self.assertEqual(api.plugins['local'], preserved['local'])
+                    self.assertEqual(api.plugins['disabled']['status'], 'disabled')
+                    self.assertFalse(api.plugins['disabled']['enabled'])
+                    self.assertEqual(api.plugins['disabled']['source'], preserved['disabled']['source'])
+                    self.assertEqual(len(api.mutations()), 1)
+                    self.assertEqual(requests[:2], [('GET', '/health', None), ('GET', '/api/v1/system/config', None)])
+                    self.assertEqual(((data / 'bb.db').read_bytes(), (self.package / 'package.json').read_bytes()), before)
+
+    def test_darwin_signed_inventory_retains_stopped_safe_mode_readiness_and_prior_failure(self):
+        self.server()
+        foreign = b'-2 53750\n-2 53752\n'
+        account = f'{os.getuid()} 100\n'.encode()
+        cases = (('stopped', foreign, 'ready'), ('safe-mode', foreign + account, 'ready'),
+                 ('readiness', foreign + account, 'block-default'), ('failure-then-safe', foreign + account, 'ready'))
+        for case, table, policy in cases:
+            with self.subTest(case=case):
+                api = FakeApi([plugin('first'), plugin('second')],
+                              {'first': 'unavailable', 'second': 'update-available'})
+                api.safe = case == 'safe-mode'
+                if case == 'failure-then-safe':
+                    api.results['second'] = P.Refusal('safe-mode')
+                with self.darwin_inventory(table) as native, self.darwin_http(api) as requests:
+                    status, output = self.run_policy(policy=policy, native_api=True)
+                if case == 'failure-then-safe':
+                    self.assertEqual((status, output), (1, 'BB_PLUGIN_REFRESH safe-mode\n'
+                                     'BB_PLUGIN_REFRESH failed update-check source-unavailable\n'))
+                else:
+                    expected = 'readiness-deferred\nBB_PLUGIN_REFRESH absent' if case == 'readiness' else case
+                    self.assertEqual((status, output), (0, f'BB_PLUGIN_REFRESH {expected}\n'))
+                    self.assertFalse(api.mutations())
+                if case in ('stopped', 'readiness'):
+                    self.assertFalse(requests)
+                self.assertTrue(set(native.private_reads) <= {100})
+
+    def test_darwin_native_contract_socket_and_health_proof_still_gate_plugin_requests(self):
+        self.server()
+        table = b'-2 53750\n' + f'{os.getuid()} 100\n'.encode()
+        manifest = self.package / 'package.json'
+        original = manifest.read_bytes()
+        for fault in ('contract', 'peer', 'health', 'data'):
+            with self.subTest(fault=fault):
+                api = FakeApi()
+                manifest.write_bytes(original)
+                if fault == 'contract':
+                    metadata = json.loads(original)
+                    metadata['version'] = '0.45.0'
+                    manifest.write_text(json.dumps(metadata))
+                with self.darwin_inventory(table) as native, self.darwin_http(api, fault) as requests, \
+                        patch.object(P.time, 'monotonic', side_effect=range(1000)), patch.object(P.time, 'sleep'):
+                    native.peer = fault != 'peer'
+                    status, output = self.run_policy(native_api=True)
+                expected = {'contract': 'discovery unsupported-native-contract', 'peer': 'identity unverified-peer',
+                            'health': 'identity unverified-main-server', 'data': 'identity unverified-main-server'}[fault]
+                self.assertEqual((status, output), (1, 'BB_PLUGIN_REFRESH failed ' + expected + '\n'))
+                self.assertFalse(api.calls)
+                self.assertFalse(any('/plugins' in path for _, path, _ in requests))
+                self.assertTrue(set(native.private_reads) <= {100})
+        manifest.write_bytes(original)
+
+    def test_darwin_pid_reuse_and_changed_evidence_refuse_before_plugin_operations(self):
+        self.server()
+        table = b'-2 53750\n' + f'{os.getuid()} 100\n'.encode()
+        original = copy.deepcopy(self.records[100])
+        for changed in ('stamp', 'argv', 'environment', 'uid', 'package'):
+            for at_read in (2, 3, 4):
+                with self.subTest(changed=changed, at_read=at_read):
+                    self.records[100] = copy.deepcopy(original)
+                    manifest = self.package / 'package.json'
+                    package_before = manifest.read_bytes()
+                    api = FakeApi()
+                    count = 0
+                    with self.darwin_inventory(table) as native, self.darwin_http(api) as requests:
+                        def change(args):
+                            nonlocal count
+                            if args[:2] != ['/bin/ps', '-p']:
+                                return
+                            count += 1
+                            if count != at_read:
+                                return
+                            argv, env, stamp = self.records[100]
+                            if changed == 'stamp':
+                                stamp = b'reused-pid'
+                            elif changed == 'argv':
+                                argv = ['/inert/different-node', argv[1]]
+                            elif changed == 'environment':
+                                env['BB_SERVER_LAUNCH_ID'] = 'changed-launch'
+                            elif changed == 'uid':
+                                native.uids[100] = '-2'
+                            else:
+                                manifest.write_text('{}')
+                            self.records[100] = argv, env, stamp
+                        native.on_query = change
+                        status, output = self.run_policy(native_api=True)
+                    expected = 'foreign-process' if changed == 'uid' else (
+                        'changed-local-state' if changed == 'package' else 'changed-process')
+                    self.assertEqual((status, output), (1, f'BB_PLUGIN_REFRESH failed identity {expected}\n'))
+                    self.assertFalse(api.calls)
+                    self.assertFalse(any('/plugins' in path for _, path, _ in requests))
+                    self.assertTrue(set(native.private_reads) <= {100})
+                    manifest.write_bytes(package_before)
 
     def test_native_process_failures_do_not_disclose_subprocess_output(self):
         self.proc.table = lambda: P.command(['/bin/ps', '-axo', 'uid=,pid='])
@@ -628,6 +879,67 @@ class Discovery(unittest.TestCase):
 
 
 class NativeEvidence(unittest.TestCase):
+    def test_darwin_account_signed_and_unsigned_identity_is_equivalent_at_both_queries(self):
+        records = {99: (['/inert/node', '/inert/bb-app/server/dist/index.js'],
+                        {'HOME': '/inert', 'SECRET': 'must-not-escape'}, b'Thu Oct 1 00:00:00 2026')}
+        cases = ((1234, ('1234',)), (2147483647, ('2147483647',)),
+                 (2147483648, ('-2147483648', '2147483648')),
+                 (4294967294, ('-2', '4294967294')))
+        for account, forms in cases:
+            for inventory in forms:
+                for identity in forms:
+                    with self.subTest(account=account, inventory=inventory, identity=identity):
+                        with patch.object(P.sys, 'platform', 'darwin'):
+                            processes = P.Processes(account)
+                        native = DarwinInputs(f'{inventory} 99\n'.encode(), records, {99: identity})
+                        with native.installed():
+                            self.assertEqual(processes.table(), [99])
+                            self.assertEqual(processes.read(99),
+                                (records[99][0], {'HOME': '/inert'}, 'Thu Oct 1 00:00:00 2026'))
+                        self.assertEqual(native.private_reads, [99])
+
+    def test_darwin_foreign_and_malformed_per_process_uids_never_read_private_environment(self):
+        records = {99: (['/inert/node', '/inert/bb-app/server/dist/index.js'], {}, b'start')}
+        foreign = ((2, '-2'), (2, '4294967294'), (4294967294, '-2147483648'),
+                   (1234, '0'), (1234, '-2'), (1234, '4294967294'))
+        for account, uid in foreign:
+            with self.subTest(account=account, uid=uid):
+                with patch.object(P.sys, 'platform', 'darwin'):
+                    processes = P.Processes(account)
+                native = DarwinInputs(f'{uid} 99\n'.encode(), records, {99: uid})
+                with native.installed():
+                    self.assertEqual(processes.table(), [])
+                    with self.assertRaisesRegex(P.Refusal, '^foreign-process$'):
+                        processes.read(99)
+                self.assertEqual(native.private_reads, [])
+        malformed = (b'-1', b'4294967295', b'-2147483649', b'4294967296', b'unknown',
+                     b'--2', b'+2', b'2-', b'-0', b'1.0', b'1e3', b'0x2', b'1_000',
+                     b'999999999999999999999', '٢'.encode(), '−2'.encode(), b'\xff')
+        with patch.object(P.sys, 'platform', 'darwin'):
+            processes = P.Processes(1234)
+        for raw in [uid + b' start\n' for uid in malformed] + [b'1234\n', b'\n']:
+            with self.subTest(raw=raw), patch.object(P.subprocess, 'run', return_value=types.SimpleNamespace(
+                    returncode=0, stdout=raw, stderr=b'')), \
+                    patch.object(P.ctypes, 'CDLL', side_effect=AssertionError('private environment read')):
+                with self.assertRaisesRegex(P.Refusal, '^process-proof-unavailable$'):
+                    processes.read(99)
+
+    def test_linux_inventory_keeps_unsigned_interpretation_and_darwin_pid_edges_are_distinct(self):
+        for account in (0, 1234, 2147483648, 4294967294, 4294967295):
+            with self.subTest(account=account), patch.object(P.sys, 'platform', 'linux'):
+                processes = P.Processes(account)
+                for text in (f'{account} 99\n', '-2 99\n'):
+                    with DarwinInputs(text.encode(), {}).installed():
+                        if text.startswith('-'):
+                            with self.assertRaisesRegex(P.Refusal, '^process-proof-unavailable$'):
+                                processes.table()
+                        else:
+                            self.assertEqual(processes.table(), [99])
+        with patch.object(P.sys, 'platform', 'darwin'):
+            processes = P.Processes(1234)
+        with DarwinInputs(b'0 0\n1234 1\n1234 2147483647\n', {}).installed():
+            self.assertEqual(processes.table(), [1, 2147483647])
+
     def test_linux_foreign_uid_and_reused_pid_are_rejected_before_requests(self):
         with patch.object(P.sys, 'platform', 'linux'):
             processes = P.Processes(1234)
