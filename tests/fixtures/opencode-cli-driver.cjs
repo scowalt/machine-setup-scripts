@@ -1,4 +1,4 @@
-// Version 2 | Offline native selection boundary for the extracted real OpenCode wrappers.
+// Version 3 | Offline discovery/selection boundaries for the extracted real OpenCode wrappers.
 // Evaluate only their bounded embedded Node helper, never a setup entry point.
 'use strict';
 const assert = require('node:assert/strict');
@@ -47,6 +47,9 @@ const https = {get(url, options, callback) {
     const request = new EventEmitter(); request.setTimeout = () => {}; request.destroy = error => request.emit('error', error);
     queueMicrotask(() => {
         const response = new EventEmitter(); response.statusCode = 200; response.resume = () => {};
+        // The wrapper entered with an absolute-only PATH. Change only this VM's
+        // effective environment before real command discovery, never the host.
+        if (process.env.FIXTURE_OUTCOME?.startsWith('path-') && !process.env.FIXTURE_OUTCOME.startsWith('path-late')) applyDiscoveryPath();
         callback(response); response.emit('data', responses.get(url)); response.emit('end'); request.emit('close');
     });
     return request;
@@ -63,7 +66,7 @@ const proxy = new Proxy(fs, {get(object, key) {
         if (typeof args[0] === 'string' && args[0].startsWith(foreign)) {
             assert.ok(key === 'lstatSync' || (key === 'accessSync' && args[1] === fs.constants.X_OK), 'foreign content and mutation forbidden');
         }
-        if (key === 'rmSync' && process.env.FIXTURE_OUTCOME === 'cleanup') throw new Error('SECRET cleanup output');
+        if (key === 'rmSync' && ['cleanup', 'path-late-cleanup'].includes(process.env.FIXTURE_OUTCOME)) throw new Error('EXCEPTION_SECRET cleanup output');
         const result = object[key](...args);
         if (key === 'lstatSync') {
             if (args[0] === foreign) result.uid = process.getuid() + 1;
@@ -78,6 +81,7 @@ const cp = {execFileSync(file, args) {
         assert.ok(!args.includes('--version'));
         const marker = args.join(' ').match(/opencode-selection-[a-f0-9]+:/)?.[0];
         assert.ok(marker, 'native evidence must be framed');
+        if (process.env.FIXTURE_OUTCOME?.startsWith('path-late')) applyDiscoveryPath();
         if (process.env.FIXTURE_SESSION_TRANSACTION === '1') fs.writeFileSync(path.join(home, 'selection-ready'), 'inert query checkpoint');
         return Buffer.from('\n' + marker + (['fresh', 'cleanup'].includes(process.env.FIXTURE_OUTCOME) ? path.join(foreign, leaf) : destination) + marker + '\n');
     }
@@ -88,8 +92,24 @@ const cp = {execFileSync(file, args) {
 }};
 const fakeProcess = {platform: windows ? 'win32' : 'linux', env: {...process.env}, getuid: process.getuid,
     report: process.report, stdin: process.stdin, argv: ['node', session ? 'fixture' : '-']};
-if (windows) fakeProcess.env.SETUP_OPENCODE_FRESH_PATH = '/fixture/persisted-windows-path';
+if (windows) {
+    fakeProcess.env.SETUP_OPENCODE_FRESH_PATH = '/fixture/persisted-windows-path';
+    fakeProcess.env.PATH = fakeProcess.env.PATH.split(':').join(';');
+}
+let discoveryPathApplied = false;
+function applyDiscoveryPath() {
+    if (discoveryPathApplied) return;
+    discoveryPathApplied = true;
+    assert.ok(fakeProcess.env.PATH.split(windows ? ';' : ':').every(dir => path.isAbsolute(dir)), 'incoming PATH must be valid');
+    const input = process.env.FIXTURE_PATH_INPUT;
+    if (input === undefined) delete fakeProcess.env.PATH;
+    else fakeProcess.env.PATH = input.replaceAll('@BIN@', path.dirname(destination)).replaceAll('|', windows ? ';' : ':');
+    console.error('STDERR_SECRET private native detail');
+}
 const modules = {'node:fs': proxy, 'node:https': https, 'node:child_process': cp,
+    // Keep private POSIX filesystem layout, but real Windows delimiter and
+    // absolute-input classification. This is not native Windows ACL evidence.
+    'node:path': windows ? {...path, delimiter: ';', isAbsolute: path.win32.isAbsolute} : path,
     'node:os': {...os, homedir: () => home, machine: () => 'x86_64'}};
 const source = session ? process.argv[3] : fs.readFileSync(0, 'utf8');
 if (!session) {
