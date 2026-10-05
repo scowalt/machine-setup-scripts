@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Extracted helpers only: no desktop, setup script, service or remote host runs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PYTHONDONTWRITEBYTECODE=1 python3 tests/test_bb_desktop.py

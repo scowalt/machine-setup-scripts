@@ -1,4 +1,3 @@
-"""Extracted, offline directory preparation fixtures; never run setup or Pi."""
 import os
 from pathlib import Path
 import shutil
@@ -15,7 +14,6 @@ END = '// END PI_PROFILE_PERMISSIONS'
 
 
 def metadata(stat):
-    # Reading assertions may update atime under relatime; it is not a setup write.
     return (stat.st_mode, stat.st_ino, stat.st_dev, stat.st_nlink, stat.st_uid,
             stat.st_gid, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
 
@@ -132,7 +130,6 @@ class ProfilePermissionsTests(unittest.TestCase):
         self.assertIn('failed:unsafe-ancestor', result.stdout)
         self.assertEqual(self.profile.stat().st_mode & 0o777, 0o775)
         active_parent.chmod(0o755)
-        # OS stat seam simulates another owner without sudo or a real chown.
         prelude = "const fixtureFs = require('node:fs'); const fixtureStat = fixtureFs.lstatSync;\n"
         prelude += "fixtureFs.lstatSync = (file, ...args) => { const s = fixtureStat(file, ...args); if (file === process.argv[3]) s.uid = process.getuid() + 1; return s; };\n"
         result = self.helper(active, prelude=prelude)
@@ -366,8 +363,6 @@ process.on('exit', () => { if (!fixtureRaced) { process.stdout.write('race-not-e
 
     @unittest.skipIf(os.name == 'nt', 'Cross-platform extracted guards with a POSIX preflight-failure fixture')
     def test_real_mixed_cleanup_guards_preserve_both_profiles_and_continue_unrelated_work(self):
-        # No setup is sourced. All cleanup/dependency functions below are extracted
-        # verbatim. Only logging and the Windows registry PATH boundary are inert.
         rtk = '''## RTK token-optimized commands
 
 - RTK (`rtk-ai/rtk`) is installed by the machine setup scripts when available. Prefer `rtk <command>` for noisy shell commands with supported filters (`git`, `gh`, tests, build/lint tools, package managers, file/search commands) unless full raw output is required.
@@ -395,7 +390,7 @@ process.on('exit', () => { if (!fixtureRaced) { process.stdout.write('race-not-e
                         put(profile / 'settings.json', '{"keep":"PRIVATE-SENTINEL"}')
                         for skill in ('diagnosing-bugs', 'diagnose', 'lfg'):
                             put(profile / 'skills' / skill / 'SKILL.md')
-                    custom.parent.chmod(0o777)  # Reject the whole two-profile transaction.
+                    custom.parent.chmod(0o777)   
                     env = {**self.env, 'HOME': str(home), 'USERPROFILE': str(home),
                            'PI_CODING_AGENT_DIR': str(custom), 'LOCALAPPDATA': str(home / 'local'),
                            'APPDATA': str(home / 'roaming')}
@@ -426,8 +421,6 @@ process.on('exit', () => { if (!fixtureRaced) { process.stdout.write('race-not-e
                         return {str(p.relative_to(profile)): p.read_bytes() for p in profile.rglob('*') if p.is_file()}
                     before = [snapshot(profile) for profile in (default, custom)]
                     for blocked in (True, False):
-                        # The unblocked control must modify each profile; otherwise
-                        # a no-op cleanup fixture could falsely prove a safety gate.
                         if kind == 'compound':
                             repo = home / '.local/share/compound-engineering-plugin/skills/lfg'
                             put(repo / 'SKILL.md')

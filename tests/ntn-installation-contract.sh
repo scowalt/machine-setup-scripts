@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Version 3 | Last changed: Verify macOS Notion failure aggregation wiring
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -116,7 +115,6 @@ for file in "${bash_setup_scripts[@]}"; do
 done
 
 assert_contains win.ps1 '"Notion\.ntn"' 'official Notion CLI WinGet package'
-# These regexes intentionally use single quotes to preserve literal shell and Markdown syntax.
 # shellcheck disable=SC2016
 assert_contains win.ps1 '\$package -eq "Notion\.ntn" -and \$env:PROCESSOR_ARCHITECTURE -ne "AMD64"' 'Windows x64 architecture guard'
 assert_contains win.ps1 'Notion CLI supports Windows x64 only; skipping' 'unsupported Windows architecture warning'

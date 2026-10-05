@@ -1,4 +1,3 @@
-"""Native shared-runtime repair -> staged skills, using temporary homes and inert skills."""
 import json
 import os
 from pathlib import Path
@@ -56,8 +55,6 @@ class SharedNodeConvergence(unittest.TestCase):
                 source = root / 'source'
                 target = source / 'dot_config/private_fish/config.fish.tmpl'
                 target.parent.mkdir(parents=True)
-                # Native Homebrew remains outside the fixture. Relocate only its
-                # hard-coded system prefix to an inert shellenv fixture.
                 fixture_template = template
                 for prefix in ('/opt/homebrew', '/home/linuxbrew/.linuxbrew'):
                     fixture_template = fixture_template.replace(prefix, str(root / 'fixture-brew'))
@@ -106,7 +103,6 @@ npx() { "$SKILL_TEST_PYTHON" "$SKILL_TEST_MOCK" "$@"; }
                 def run(command):
                     return subprocess.run(['/bin/bash', '-c', body + '\n' + command], cwd=home,
                                           env=env, text=True, capture_output=True, timeout=30)
-                # The production verifier must catch the exact legacy-binary symptom first.
                 self.assertNotEqual(run('verify_shared_node_shell').returncode, 0)
                 for _ in range(2):
                     result = run('setup_matt_pocock_skills')
@@ -131,8 +127,6 @@ npx() { "$SKILL_TEST_PYTHON" "$SKILL_TEST_MOCK" "$@"; }
                                              cwd=home, env=env, text=True, capture_output=True, timeout=20)
                     self.assertEqual(changed.stdout.strip(), str(other), changed.stderr)
                     self.assertEqual(pin.read_text(), '18.19.1\n')
-                # Native mise precedence remains authoritative: a HOME .mise.toml
-                # overrides global tools, unlike idiomatic files directly at HOME.
                 home_pin = home / '.mise.toml'
                 home_pin.write_text('[tools]\nnode = "18.19.1"\n')
                 before_calls = (home / 'skill-calls').read_bytes()
@@ -149,8 +143,6 @@ npx() { "$SKILL_TEST_PYTHON" "$SKILL_TEST_MOCK" "$@"; }
                 self.assertTrue((legacy / 'node').is_file())
                 for stage in (home / 'stages').read_text().splitlines():
                     self.assertFalse(os.path.lexists(stage))
-                # Preserve an explicit conflicting override, but never accept a
-                # cold-shell success that would regress on the next directory hook.
                 calls = (home / 'skill-calls').read_bytes()
                 for key, value in (('MISE_ACTIVATE_AGGRESSIVE', 'false'),
                                    ('MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS', 'python')):
@@ -160,7 +152,6 @@ npx() { "$SKILL_TEST_PYTHON" "$SKILL_TEST_MOCK" "$@"; }
                     self.assertEqual((home / 'skill-calls').read_bytes(), calls)
                     self.assertEqual(env[key], value)
                     del env[key]
-                # A stale source cannot turn a successful chezmoi exit into fake runtime readiness.
                 target.write_text(stale)
                 (fish / 'config.fish').write_text(stale)
                 calls = (home / 'skill-calls').read_bytes()
@@ -168,14 +159,12 @@ npx() { "$SKILL_TEST_PYTHON" "$SKILL_TEST_MOCK" "$@"; }
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('repair failed verification', result.stderr)
                 self.assertEqual((home / 'skill-calls').read_bytes(), calls)
-                # Legacy activation may coincidentally select mise correctly on a
-                # clean startup. That is not evidence the durable migration ran.
                 (fish / 'conf.d/vendor-mise.fish').unlink()
                 healthy_legacy = ('set -gx PATH "$HOME/.local/bin" "$HOME/legacy/bin" $PATH\n'
                                   'mise activate fish | source\n')
                 target.write_text(healthy_legacy)
                 (fish / 'config.fish').write_text(healthy_legacy)
-                env['__setup_shared_node_activation'] = '1'  # Cannot inherit evidence of this shell's migration.
+                env['__setup_shared_node_activation'] = '1'   
                 result = run('setup_matt_pocock_skills')
                 self.assertNotEqual(result.returncode, 0, 'Healthy but unmigrated activation was accepted')
                 self.assertIn('repair failed verification', result.stderr)

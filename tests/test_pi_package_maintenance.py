@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Contract v6: safely refresh active-global Pi packages during ordinary setup."""
 import json
 import os
 from pathlib import Path
@@ -129,8 +128,6 @@ print_error() { printf 'ERROR: %s\\n' "$*"; }
         return result
 
     def test_setup_final_status_and_log_finalization(self):
-        # Execute each real orchestration tail and entry point. All unrelated
-        # provisioning is replaced at function boundaries; no setup script is sourced.
         for script in (*BASH, *(['win.ps1'] if PWSH else [])):
             for failure in ('adapter', 'bridge', 'companions', 'goal', 'subagents', 'rpiv', 'refresh', 'prose', 'prepare', 'permissions', 'askclaude-policy', 'none'):
                 with self.subTest(script=script, failure=failure):
@@ -388,8 +385,6 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                         before = envfile.read_bytes()
                         target = self.agent / 'settings.json'
                         target.write_text('{"packages":[]}')
-                        # Start with setup registering the bridge before a later
-                        # dotfiles update. Never run real Pi or load extensions.
                         result = self.run_helper(script, 'bridge')
                         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                         self.assertEqual(json.loads(target.read_text())['packages'], ['npm:pi-claude-bridge'])
@@ -631,8 +626,6 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
     @unittest.skipUnless(os.environ.get('PI_PACKAGE_NPM_CLI') and os.environ.get('PI_PACKAGE_CLI'),
                          'Optional registry probe requires PI_PACKAGE_NPM_CLI (npm 12+) and PI_PACKAGE_CLI')
     def test_real_restricted_npm_clean_affected_and_banned_stores(self):
-        # Explicit opt-in. Run real package CLIs only in this temporary HOME,
-        # with lifecycle scripts disabled and remote dependencies prohibited.
         for name, variable in [('npm', 'PI_PACKAGE_NPM_CLI'), ('pi', 'PI_PACKAGE_CLI')]:
             command = shlex.join([NODE, str(Path(os.environ[variable]).resolve())])
             (self.bin / name).write_text('#!/bin/sh\nexec ' + command + ' "$@"\n')
@@ -651,8 +644,6 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
         broken = cli('pi', 'install', 'npm:pi-mcp-adapter@2.33.0', success=False)
         self.assertNotEqual(broken.returncode, 0)
         self.assertIn('EALLOWREMOTE', broken.stdout + broken.stderr)
-        # run_helper normally has a short offline timeout, so invoke its two
-        # production functions directly for this explicitly networked probe.
         code = '''print_message() { :; }; print_success() { :; }; print_debug() { :; }
 print_warning() { printf '%s\\n' "$*" >&2; }
 ''' + extract('ubuntu.sh', 'prepare_pi_mcp_adapter') + '\n' + extract('ubuntu.sh', 'setup_pi_mcp_adapter') + '\nsetup_pi_mcp_adapter\n'
@@ -674,8 +665,6 @@ print_warning() { printf '%s\\n' "$*" >&2; }
         settings = json.loads((self.agent / 'settings.json').read_text())
         settings['packages'] = [{'source': 'npm:pi-mcp-adapter@2.33.0', 'skills': []}, 'npm:is-number@7.0.0']
         (self.agent / 'settings.json').write_text(json.dumps(settings))
-        # Simulate a previous affected installation without ever allowing remote
-        # downloads, including the visible and hidden npm lockfiles.
         for lockpath in [store / 'package-lock.json', store / 'node_modules/.package-lock.json']:
             lock = json.loads(lockpath.read_text())
             if '' in lock['packages']: lock['packages']['']['dependencies']['pi-mcp-adapter'] = '^2.33.0'

@@ -1,4 +1,3 @@
-"""Inert extracted-helper fixtures: no desktop code, network or host lifecycle runs."""
 import ast
 import copy
 import hashlib
@@ -27,7 +26,7 @@ def payload(name='mac'):
 
 def wrapper(name):
     source = (ROOT / (name + '.sh')).read_text()
-    return source.split('# BEGIN BB DESKTOP WRAPPER', 1)[1].split('# END BB DESKTOP WRAPPER', 1)[0].split('\n', 1)[1]
+    return source.split(": 'BEGIN_BB_DESKTOP_WRAPPER'", 1)[1].split(": 'END_BB_DESKTOP_WRAPPER'", 1)[0].split('\n', 1)[1]
 
 
 def appimage(number):
@@ -58,7 +57,6 @@ def mac_zip(number, identity='dev.bb.desktop'):
 
 
 def import_helper_definitions(source):
-    """Do not rely on __name__ or entry-point text when importing an installer."""
     tree = ast.parse(source)
     selected = []
     for node in tree.body:
@@ -88,7 +86,7 @@ def import_helper_definitions(source):
                 ast.literal_eval(node.value)
             selected.append(node)
         elif isinstance(node, ast.If) and ast.unparse(node.test) == "__name__ == '__main__'":
-            continue  # never execute the production entry path while importing
+            continue   
         else:
             raise AssertionError('Unexpected helper top-level execution')
     namespace = {'__name__': 'fixture_only'}
@@ -129,7 +127,6 @@ class DesktopTests(unittest.TestCase):
         self.ns['running'] = lambda *_: self.process_state
         self.target = self.home / '.local/opt/bb-desktop/bb.AppImage'
         self.menu = self.home / '.local/share/applications/dev.bb.desktop.desktop'
-        # Sentinel state must survive every installer test, including failures.
         self.sentinels = {}
         for name in ('.bb/config.json', '.bb/env.json', '.bb/auth.json', '.npmrc',
                      '.config/systemd/user/setup-bb-app.service', '.env.local',
@@ -390,7 +387,6 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(self.restriction.read_text(), '1\n')
 
     def test_unknown_sandbox_state_does_not_block_verified_installation(self):
-        # No policy state is available, and the installer must not ask for it.
         self.restriction.unlink()
         self.ns['command'] = Mock(side_effect=AssertionError('unexpected native probe'))
         with patch.object(subprocess, 'run', side_effect=AssertionError('native launch/probe attempted')):
@@ -788,7 +784,6 @@ class DesktopTests(unittest.TestCase):
             self.real_running(self.target, 'linux')
 
     def test_trusted_bazzite_alias_and_rejections(self):
-        # Simulate root-owned system paths without touching /home or needing sudo.
         raw = '/home/bb-fixture'
         canonical = Path('/var/home/bb-fixture')
         target = ['var/home']
@@ -843,13 +838,6 @@ class DesktopTests(unittest.TestCase):
 
 
 class MacApplicationsTests(unittest.TestCase):
-    """Real installer, inert native checks, reported macOS metadata on private files.
-
-    No chown, host /Applications access or desktop execution. The path adapter
-    maps native absolute paths before any installer I/O; stat/fstat agree on the
-    simulated account. HOME's native deny-delete ACL is not a POSIX mode bit and
-    is deliberately not invented as additional write authority by this fixture.
-    """
     setUp = DesktopTests.setUp
     tearDown = DesktopTests.tearDown
     fetch = DesktopTests.fetch
@@ -860,9 +848,6 @@ class MacApplicationsTests(unittest.TestCase):
             return DesktopTests.command(self, args)
         self.assertEqual(args, ['/bin/ps', '-ww', '-axo', 'uid=,pid=,comm='])
         self.calls.append(('command', args))
-        # Exercise the real command decoder and parser with successful native
-        # query bytes, not a precomputed process list. All other native execution
-        # remains forbidden by native_layout's subprocess guard.
         result = subprocess.CompletedProcess(args, 0, self.process_rows.encode(), b'')
         with patch.object(subprocess, 'run', return_value=result):
             return self.real_command(args)
@@ -878,7 +863,6 @@ class MacApplicationsTests(unittest.TestCase):
         self.sentinels = {home / p.relative_to(self.home): data for p, data in self.sentinels.items()}
         self.home = home
         os.environ['HOME'] = str(home)
-        # getpwuid was installed by the base fixture as a Mock.
         self.ns['pwd'].getpwuid.return_value = types.SimpleNamespace(pw_dir=str(home))
         self.target = native / 'Applications/bb.app'
         self.target.parent.mkdir()
@@ -968,7 +952,6 @@ class MacApplicationsTests(unittest.TestCase):
         for row in ('', '\n', '501', '501 123', '501 123   ', 'extra 501 123 /usr/bin/unrelated',
                     '501 extra 123 /usr/bin/unrelated', 'uid pid comm'):
             with self.subTest(row=row):
-                # A valid relevant row must not hide a malformed later row.
                 self.process_rows = f'501 123 {self.target}/Contents/MacOS/bb\n' + row + '\n'
                 with self.assertRaisesRegex(self.ns['Refusal'], '^process-inspection$'):
                     self.install('macos')
@@ -1264,9 +1247,9 @@ class MacApplicationsTests(unittest.TestCase):
                 self.install('macos')
             self.assertEqual(self.installed_bytes(), original)
             lock = parent / '.setup-bb-desktop.lock'
-            self.assertTrue(lock.exists())  # uncertainty is not authority to clean up
+            self.assertTrue(lock.exists())   
             self.metadata[parent] = accepted.copy()
-            shutil.rmtree(lock)  # only this fixture's synthetic recovery tree
+            shutil.rmtree(lock)   
 
     def test_changed_target_cannot_be_current_or_deferred(self):
         self.native_layout(self.number)
@@ -1469,8 +1452,6 @@ exit "$_setup_had_errors"
         self.assertIn('success:', result.stdout)
 
     def test_real_bash_callers_aggregate_and_finalize(self):
-        # Execute only extracted callers with every setup/lifecycle function inert.
-        # No sourcing complete scripts, and no live HOME/network/package operations.
         for name in SCRIPTS:
             source = (ROOT / (name + '.sh')).read_text()
             start = source.index('\nrun_setup_tasks() {')

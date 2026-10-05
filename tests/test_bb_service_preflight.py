@@ -1,4 +1,3 @@
-"""Version 2: tolerate verified empty BB drop-in directories; preserve override refusals."""
 import hashlib
 import os
 from pathlib import Path
@@ -124,7 +123,6 @@ def function(source, name):
 
 
 def snapshot(root):
-    """Compare fixture data/metadata without following linked artifacts."""
     paths = [root]
     for directory, dirs, files in os.walk(root, followlinks=False):
         paths.extend(Path(directory) / name for name in dirs + files)
@@ -145,7 +143,6 @@ def snapshot(root):
 class BbServicePreflightTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # Refuse standalone execution without inherited mandatory containment.
         sandbox = os.environ.get('FIXTURE_NETWORK_SANDBOX')
         if not sandbox:
             raise SystemExit(125)
@@ -155,9 +152,6 @@ class BbServicePreflightTests(unittest.TestCase):
         if result.returncode:
             raise SystemExit(125)
         source = (ROOT / 'ubuntu.sh').read_text()
-        # Independently validate only the selected real definitions. All other
-        # named setup helpers are inert before caller execution; no whole-source
-        # evaluation or top-level setup invocation is emitted.
         names = re.findall(r'^([A-Za-z_][A-Za-z_0-9]*)\(\) [({]', source, re.M)
         stubs = '\n'.join(name + '() { :; }' for name in names if name not in REAL)
         cls.definitions = stubs + '\n' + '\n'.join(function(source, name) for name in REAL)
@@ -177,7 +171,6 @@ class BbServicePreflightTests(unittest.TestCase):
                                        '# setup-managed bb ingress v1')):
             (self.units / unit).write_text(marker + '\n')
             (self.units / unit).chmod(0o600)
-        # Neither diagnostics nor caller may read environment/credential content.
         for relative in ('.env.local', '.bb/auth.json'):
             (self.home / relative).write_text('fixture-secret: preserve without reading\n')
             (self.home / relative).chmod(0o600)
@@ -369,7 +362,6 @@ class BbServicePreflightTests(unittest.TestCase):
                 with self.subTest(unit=unit, metadata=metadata):
                     status = 0 if metadata in ('clean', 'absent') else 1
                     result = self.run_preflight(unit, mode='unit', systemd=metadata, status=status)
-                    # Do not misdiagnose an identity/transport failure as overrides.
                     self.assertEqual(result.stdout, '')
 
     def test_real_caller_keeps_failure_continues_independent_work_and_finishes_log(self):

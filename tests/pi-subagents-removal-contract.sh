@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Version 1 | Last changed: Assert aggregated managed Pi package failures
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -46,14 +45,12 @@ assert_min_count() {
 for file in "${bash_setup_scripts[@]}"; do
     bash -n "${file}"
 
-    # Regression guard: the tintinweb Pi subagents extension is gone for good.
     assert_not_contains "${file}" 'pi install npm:@tintinweb/pi-subagents' 'install of npm:@tintinweb/pi-subagents'
     assert_not_contains "${file}" 'pi install npm:pi-subagents' 'install of npm:pi-subagents'
     assert_not_contains "${file}" 'BAN_PI_SUBAGENTS' 'legacy opt-out flag'
     assert_not_contains "${file}" 'setup_pi_subagents' 'legacy install function'
     assert_not_contains "${file}" 'update_pi_subagents_settings' 'legacy settings helper'
 
-    # Removal must run unconditionally in both main() branches.
     assert_contains "${file}" '^remove_pi_subagents\(\)' 'Pi subagents removal function'
     assert_contains "${file}" 'pi remove' 'pi remove uninstall path'
     assert_min_count "${file}" '^[[:space:]]+remove_pi_subagents \|\| _setup_had_errors=1$' 1 'fallback remove_pi_subagents call site'

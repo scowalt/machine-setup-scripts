@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Version 2 | Last changed: Load definitions-only isolated setup fixtures
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
 
-# Never source production top-level code; keep static checks in the real cwd.
 repo_root=$(python3 tests/extract_setup_fixture.py "${repo_root}") || exit 1
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
@@ -50,16 +48,13 @@ assert_min_count() {
 for file in "${bash_setup_scripts[@]}"; do
     bash -n "${file}"
 
-    # Regression guard: the retired RPIV packages are gone for good.
     assert_not_contains "${file}" 'pi install npm:@juicesharp/rpiv-ask-user-question' 'install of npm:@juicesharp/rpiv-ask-user-question'
     assert_not_contains "${file}" 'pi install npm:@juicesharp/rpiv-todo' 'install of npm:@juicesharp/rpiv-todo'
 
-    # The companion install array must stay free of retired RPIV packages.
     if awk '/local -a _packages=\(/,/\)/' "${file}" | grep -q 'rpiv'; then
         fail "${file}: setup_pi_companion_packages install array mentions a retired RPIV package"
     fi
 
-    # Removal must run unconditionally in both main() branches.
     assert_contains "${file}" '^remove_pi_rpiv_packages\(\)' 'Pi RPIV packages removal function'
     assert_contains "${file}" 'npm:@juicesharp/rpiv-ask-user-question' 'RPIV ask-user-question removal source'
     assert_contains "${file}" 'npm:@juicesharp/rpiv-todo' 'RPIV todo removal source'
@@ -81,8 +76,6 @@ if awk '/\$packages = @\(/,/\)/' win.ps1 | grep -q 'rpiv'; then
     fail "win.ps1: Setup-PiCompanionPackages install array mentions a retired RPIV package"
 fi
 
-# Functional check: the removal function uninstalls both retired packages,
-# keeps unrelated packages, and is idempotent on repeat runs.
 for file in "${bash_setup_scripts[@]}"; do
     test_root=$(mktemp -d)
     mock_bin="${test_root}/bin"
@@ -152,8 +145,6 @@ MOCK_PI
 
     grep -Fxq 'npm:pi-web-access' "${package_state}" || fail "${file}: removal deleted npm:pi-web-access"
 
-    # jq fallback: when the pi CLI is unavailable, the function strips both
-    # retired package sources directly from settings.json.
     settings_home="${test_root}/settings-home"
     mkdir -p "${settings_home}/.pi/agent"
     cat > "${settings_home}/.pi/agent/settings.json" <<'JSON'

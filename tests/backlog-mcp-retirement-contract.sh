@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Version 3 | Last changed: Allow version headers to describe later setup changes
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -8,14 +7,12 @@ cd "${repo_root}"
 python3 tests/test_backlog_mcp_retirement.py
 python3 tests/test_backlog_windows_planner.py
 
-# Execute the real Bash wrapper, not only its embedded program. A controlled
-# parser failure must propagate to the caller so setup can aggregate it.
 wrapper_root=$(mktemp -d)
 trap 'rm -rf "${wrapper_root}"' EXIT
 mkdir -p "${wrapper_root}/home/.codex"
 chmod 700 "${wrapper_root}/home"
 printf '%s\n' '[mcp_servers.backlog]' 'invalid = [' > "${wrapper_root}/home/.codex/config.toml"
-awk '/^retire_global_backlog_mcp\(\)/ { copy=1 } copy { print } /^# End global Backlog MCP retirement\./ { exit }' mac.sh > "${wrapper_root}/wrapper.sh"
+awk '/^retire_global_backlog_mcp\(\)/ { copy=1 } copy { print } /END_GLOBAL_BACKLOG_MCP_RETIREMENT/ { exit }' mac.sh > "${wrapper_root}/wrapper.sh"
 if HOME="${wrapper_root}/home" NODE_OPTIONS='--require=/does/not/exist' NODE_PATH='/does/not/exist' bash -c '
     ensure_shared_node_runtime() { return 0; }
     print_error() { :; }; print_success() { :; }; print_debug() { :; }
@@ -37,7 +34,7 @@ function Enable-SharedNodeRuntime { return $true }
 function Write-Success { param($Message) }
 function Write-Debug { param($Message) }
 POWERSHELL_STUBS
-        awk '/^function Invoke-BacklogMcpWindowsRetirement / { copy=1 } copy { print } /^# End global Backlog MCP retirement\./ { exit }' win.ps1
+        awk '/^function Invoke-BacklogMcpWindowsRetirement / { copy=1 } copy { print } /END_GLOBAL_BACKLOG_MCP_RETIREMENT/ { exit }' win.ps1
         printf '%s\n' 'if (Remove-GlobalBacklogMcp) { exit 1 } else { exit 0 }'
     } > "${wrapper_root}/wrapper.ps1"
     HOME="${wrapper_root}/home" BACKLOG_FIXTURE_HOME="${wrapper_root}/home" NODE_OPTIONS='--require=/does/not/exist' NODE_PATH='/does/not/exist' \
@@ -45,8 +42,6 @@ POWERSHELL_STUBS
     "${PWSH_BIN}" -NoProfile -File tests/backlog-mcp-windows.ps1
 fi
 
-# Headers must remain versioned, but later features legitimately replace their
-# change descriptions. Retirement behavior is checked by the fixtures above.
 for script in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh; do
     grep -Fq 'retire_global_backlog_mcp' "${script}"
     grep -Eq 'Version [0-9]+ \| Last changed: .+' "${script}"

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Contract v1: extracted Codex installers must not modify account shell profiles."""
 import os
 from pathlib import Path
 import re
@@ -26,8 +25,6 @@ class CodexProfiles(unittest.TestCase):
         self.home = self.root / 'account'
         self.home.mkdir()
         self.installer = self.root / 'installer'
-        # Boundary fixture deliberately exercises upstream's shell-profile writes.
-        # CODEX_INSTALL_DIR and CODEX_HOME are the native installer's real inputs.
         self.installer.write_text('''#!/bin/sh
 set -eu
 [ "${CODEX_NON_INTERACTIVE:-}" = 1 ] || exit 43

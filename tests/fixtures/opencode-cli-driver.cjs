@@ -1,5 +1,3 @@
-// Version 3 | Offline discovery/selection boundaries for the extracted real OpenCode wrappers.
-// Evaluate only their bounded embedded Node helper, never a setup entry point.
 'use strict';
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -47,8 +45,6 @@ const https = {get(url, options, callback) {
     const request = new EventEmitter(); request.setTimeout = () => {}; request.destroy = error => request.emit('error', error);
     queueMicrotask(() => {
         const response = new EventEmitter(); response.statusCode = 200; response.resume = () => {};
-        // The wrapper entered with an absolute-only PATH. Change only this VM's
-        // effective environment before real command discovery, never the host.
         if (process.env.FIXTURE_OUTCOME?.startsWith('path-') && !process.env.FIXTURE_OUTCOME.startsWith('path-late')) applyDiscoveryPath();
         callback(response); response.emit('data', responses.get(url)); response.emit('end'); request.emit('close');
     });
@@ -70,7 +66,6 @@ const proxy = new Proxy(fs, {get(object, key) {
         const result = object[key](...args);
         if (key === 'lstatSync') {
             if (args[0] === foreign) result.uid = process.getuid() + 1;
-            // Model trusted system ancestors of the private two-account fixture.
             if (home.startsWith(args[0] + path.sep) && args[0] !== home) { result.uid = 0; result.mode = (result.mode & ~0o777) | 0o755; }
         }
         return result;
@@ -107,13 +102,11 @@ function applyDiscoveryPath() {
     console.error('STDERR_SECRET private native detail');
 }
 const modules = {'node:fs': proxy, 'node:https': https, 'node:child_process': cp,
-    // Keep private POSIX filesystem layout, but real Windows delimiter and
-    // absolute-input classification. This is not native Windows ACL evidence.
     'node:path': windows ? {...path, delimiter: ';', isAbsolute: path.win32.isAbsolute} : path,
     'node:os': {...os, homedir: () => home, machine: () => 'x86_64'}};
 const source = session ? process.argv[3] : fs.readFileSync(0, 'utf8');
 if (!session) {
-    assert.ok(source.startsWith('// Embedded in all six entry points'));
+    assert.equal(source.trimEnd(), fs.readFileSync(path.join(__dirname, '../../lib/opencode-cli.cjs'), 'utf8').trimEnd());
     assert.ok(source.includes('module.exports ='));
 } else assert.match(source, /^eval\(Buffer\.from\('[A-Za-z0-9+/=]+','base64'\)\.toString\('utf8'\)\)$/);
 vm.runInNewContext(source, {require: name => modules[name] || require(name), module: {exports: {}},

@@ -1,7 +1,3 @@
-"""TASK-69: real caller/logging seams, inert dependencies, private legacy state.
-
-Run only through run-fixture-matrix.py. No whole setup file is evaluated.
-"""
 import os
 from pathlib import Path
 import re
@@ -26,8 +22,6 @@ def function(source, name):
 
 
 def seed(home, residual):
-    # Not live package-manager paths. Malformed/unreadable installation metadata
-    # must not become a prerequisite; credentials and unrelated data also survive.
     files = {'.env.local': 'UNCHANGED=literal-fixture\n', 'project/data': 'keep',
              '.config/doppler/config.yaml': 'existing-doppler-state'}
     if residual:
@@ -54,8 +48,6 @@ def snapshot(home):
 def bash_fixture(name):
     source = (ROOT / name).read_text()
     names = set(re.findall(r'^([A-Za-z_][A-Za-z_0-9]*)\(\) [\{(]', source, re.M))
-    # Dependencies are inert before the real task dispatcher is invoked. Record
-    # every request, including obsolete retirement requests on the red source.
     code = '\n'.join(f'{n}() {{ record request:{n}; }}' for n in sorted(names))
     retained = ['run_setup_tasks', 'main', 'install_secrets_manager']
     if name in APT:
@@ -105,8 +97,6 @@ check_pending_reboot() { record pending-reboot; }
 start_setup_log() { record log-start; }
 finish_setup_log() { record "final:$1"; return "$1"; }
 '''
-    # A retirement dependency may neither succeed as a hidden prerequisite nor
-    # fail setup; do not execute its old native metadata/source helper.
     for n in names:
         if 'infisical' in n.lower():
             code += f'\n{n}() {{ record forbidden:{n}; return 1; }}'
@@ -136,7 +126,6 @@ class NonManagement(unittest.TestCase):
             gated = headless == '1' and (name == 'wsl.sh' or container == '1')
             failed = (failure != 'none' or gated
                       or (name == 'bazzite.sh' and work == '0' and trust == '0'))
-            # Repeat against the same preserved state; absence must stay a no-op.
             for repeat in range(2):
                 events.write_text('')
                 result = subprocess.run(['/bin/bash', '--noprofile', '--norc', '-c', bash_fixture(name)],

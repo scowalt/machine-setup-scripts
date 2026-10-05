@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Version 4 | Last changed: Keep README prose outside installation contracts
-# Run only extracted functions with mocked installers. Never install or authenticate Claude Code.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -35,7 +33,6 @@ for file in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh; do
         touch "${command_log}"
         supported=1
 
-        # These callbacks are called by the extracted installer function.
         # shellcheck disable=SC2317
         print_debug() { :; }
         # shellcheck disable=SC2317
@@ -63,7 +60,6 @@ for file in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh; do
             printf 'mock claude 1.0\n'
         }
         eval "${installer_body}"
-        # Exercise the real create-only environment functions without sourcing user files.
         env_body=$(awk '/^(migrate_token_files|create_env_local)\(\) \{/ { printing=1 } printing { print } printing && /^}$/ { printing=0 }' "${file}")
         eval "${env_body}"
         source "${repo_root}/lib/setup-policy.bash"
@@ -94,18 +90,15 @@ for file in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh; do
     printf 'PASS: %s installs and updates with the retired flag set; platform guard remains\n' "${file}"
 done
 
-# Inspect all scripts, including Windows, for retired checks and template entries.
 for file in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh win.ps1; do
     if grep -q 'BAN_CLAUDE_CODE' "${file}"; then
         fail "${file}: still contains the retired Claude Code opt-out"
     fi
 done
-# Match literal PowerShell syntax.
 # shellcheck disable=SC2016
 grep -Fq 'if (-not (Test-ClaudeCodeSupportedPlatform))' win.ps1 || fail 'Windows: missing platform guard'
 printf '%s\n' 'PASS: Windows static installation contract (PowerShell execution not covered by this test)'
 
-# Match literal Markdown code formatting.
 # shellcheck disable=SC2016
 grep -Fq 'Setup ignores `BAN_CLAUDE_CODE`' CLAUDE.md || fail 'CLAUDE.md: missing retired-flag guidance'
 printf '%s\n' 'PASS: Claude Code installation contracts'

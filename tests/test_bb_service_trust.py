@@ -1,4 +1,3 @@
-"""Read-only BB reference trust: fake account/procfs data, real temporary paths."""
 import errno
 import json
 import os

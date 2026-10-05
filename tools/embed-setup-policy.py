@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Embed data-only environment readers without loading any setup entry point."""
 from pathlib import Path
 import argparse
 
@@ -14,15 +13,16 @@ def embed(check=False):
         text = target.read_text()
         is_ps = name.endswith('.ps1')
         policy = (ROOT / 'lib' / ('setup-policy.ps1' if is_ps else 'setup-policy.bash')).read_text().rstrip()
-        begin = '# BEGIN SETUP ENVIRONMENT POLICY'
-        end = '# END SETUP ENVIRONMENT POLICY'
+        marker = "$null = '" if is_ps else ": '"
+        begin = marker + "BEGIN_SETUP_ENVIRONMENT_POLICY'"
+        end = marker + "END_SETUP_ENVIRONMENT_POLICY'"
         block = begin + '\n' + policy + '\n' + end
         if begin in text:
             first = text.index(begin)
             last = text.index(end, first) + len(end)
             updated = text[:first] + block + text[last:]
         else:
-            marker = '# Create consolidated environment file' if is_ps else 'SETUP_ORIGINAL_PATH='
+            marker = "$null = 'BEGIN_SETUP_ENVIRONMENT_FILE'" if is_ps else 'SETUP_ORIGINAL_PATH='
             index = text.index(marker)
             updated = text[:index] + block + '\n\n' + text[index:]
         if updated != text:

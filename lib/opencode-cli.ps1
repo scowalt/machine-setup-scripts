@@ -1,4 +1,3 @@
-# Version 9 | Last changed: Report bounded secret-safe evidence at real PATH discovery
 function Test-OpenCodeCliAcl {
     param([string]$HomePath)
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -56,9 +55,6 @@ function Test-OpenCodeCliAcl {
     return $true
 }
 
-# One private pipe exchange keeps the existing Node transaction/rollback live
-# while this PowerShell session performs authoritative command discovery. No
-# installer files, second transaction, shell repair or application invocation.
 function Invoke-OpenCodeCliCore {
     param([string]$NodePath, [string]$Code)
     $bootstrap = @'
@@ -83,7 +79,6 @@ rl.once('line', source => {
     $started = $false
     try {
         $process.StartInfo.FileName = $NodePath
-        # Compatible with Windows PowerShell 5.1 (no ArgumentList property).
         $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($bootstrap))
         $process.StartInfo.Arguments = '-e "eval(Buffer.from(''' + $encoded + ''',''base64'').toString(''utf8''))"'
         $process.StartInfo.UseShellExecute = $false
@@ -125,8 +120,6 @@ rl.once('line', source => {
         if ($process.ExitCode -eq 0 -and -not $verified -and $output[0] -cne 'opencode-cli:unsupported') { throw 'selection' }
         return @{ Status = $process.ExitCode; Output = $output }
     } catch {
-        # EOF rejects a pending approval so the core can restore commands itself.
-        # Never attempt a second, less-informed rollback or print process output.
         if ($started) {
             try { $process.StandardInput.Close() } catch { }
             if (-not $process.WaitForExit(25000)) { $process.Kill(); $process.WaitForExit() }

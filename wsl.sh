@@ -1,24 +1,20 @@
 #!/bin/bash
 
-# Define colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
 GRAY='\033[0;90m'
 BOLD='\033[1m'
-NC='\033[0m' # No Color
+NC='\033[0m'  
 
-# Print functions for readability
 print_section() { printf "\n${BOLD}=== %s ===${NC}\n\n" "$1"; }
 print_message() { printf "${CYAN} %s${NC}\n" "$1"; }
 print_success() { printf "${GREEN} %s${NC}\n" "$1"; }
 print_warning() { printf "${YELLOW} %s${NC}\n" "$1"; }
 print_debug() { printf "${GRAY}  %s${NC}\n" "$1"; }
 
-# BEGIN SETUP ENVIRONMENT POLICY
-# Data-only environment policy. Embedded verbatim; no scheduling or runtime dependency.
-# Version 2 | Last changed: Restore ordinary provisioning and retain literal dotenv parsing
+: 'BEGIN_SETUP_ENVIRONMENT_POLICY'
 setup_environment_failure() {
     print_error "Failed: $1. Environment file preserved."
     return 1
@@ -54,13 +50,9 @@ setup_environment_value() {
         setup_trim "${value}"; value="${SETUP_TRIMMED}"
         case "${value}" in *[[:space:]]*|*\"*|*\'*) return 1 ;; *) ;; esac
     fi
-    # No escapes, interpolation, concatenation or multiline values. Backslashes
-    # are literal data; quoted command-looking text is never evaluated.
     SETUP_ENV_VALUE="${value}"
 }
 
-# The documented dotenv format is data, not shell code. No eval/source or expansion.
-# Unknown keys are ignored.
 setup_load_environment() {
     local environment_file="${HOME}/.env.local" line key value
     [[ -e "${environment_file}" || -L "${environment_file}" ]] || return 0
@@ -79,13 +71,11 @@ setup_load_environment() {
         setup_trim "${line#*=}"; value="${SETUP_TRIMMED}"
         setup_environment_value "${value}" || { setup_environment_failure 'unsupported environment-file value'; return 1; }
         value="${SETUP_ENV_VALUE}"
-        # BB_SERVER's explicit process value wins on Ubuntu, including 0.
-        # WSL's exact-1 headless gate also checks the file before this loader.
         [[ "${key}" != BB_SERVER || "${SETUP_ENTRY_PLATFORM:-}" != ubuntu || -z "${BB_SERVER:-}" ]] || continue
         export "${key}=${value}"
     done < "${environment_file}"
 }
-# END SETUP ENVIRONMENT POLICY
+: 'END_SETUP_ENVIRONMENT_POLICY'
 
 SETUP_ORIGINAL_PATH="${PATH}"
 SETUP_ORIGINAL_CLAUDE_COMMAND=$(command -v claude 2>/dev/null || true)
@@ -94,9 +84,6 @@ SETUP_LOG_TEE_PID=""
 SETUP_LOGGING_ACTIVE=0
 DOTFILES_ACCESS_METHOD=""
 
-# Acquire a non-blocking per-user setup lock so overlapping setup runs don't
-# corrupt shared global package directories (npm, Bun, Homebrew, etc.). The lock
-# is held by file descriptor 9 until the script exits.
 acquire_setup_lock() {
     local _lock_root="${XDG_RUNTIME_DIR:-${HOME}/.local/state}"
     local _lock_file="${_lock_root}/machine-setup.lock"
@@ -131,14 +118,12 @@ acquire_setup_lock() {
 }
 print_error() { printf "${RED} %s${NC}\n" "$1"; }
 
-# Migrate old token files (~/.gh_token, ~/.op_token) into ~/.env.local
 migrate_token_files() {
     local env_file="${HOME}/.env.local"
     local migrated=0
 
     for old_file in "${HOME}/.gh_token" "${HOME}/.op_token"; do
         if [[ -f "${old_file}" ]]; then
-            # Extract uncommented KEY=VALUE lines (strip 'export ' prefix if present)
             local values
             values=$(grep -v '^\s*#' "${old_file}" | grep -v '^\s*$' | sed 's/^export //') || true
             if [[ -n "${values}" ]]; then
@@ -162,7 +147,6 @@ migrate_token_files() {
     fi
 }
 
-# Create placeholder ~/.env.local if it doesn't exist
 create_env_local() {
     migrate_token_files
 
@@ -202,7 +186,6 @@ EOF
 }
 
 
-# Read KEY=1 guards from the process environment or an existing ~/.env.local without mutating it.
 env_local_flag_is_one() {
     local _name="$1"
     local _line=""
@@ -241,7 +224,6 @@ fail_unsupported_headless() {
     return 1
 }
 
-# Check if user has sudo access (cached result)
 _sudo_checked=""
 _has_sudo=""
 can_sudo() {
@@ -249,12 +231,9 @@ can_sudo() {
         _sudo_checked=1
         local _user_groups
         _user_groups=$(groups 2>/dev/null) || true
-        # Method 1: Check if credentials are already cached
         if sudo -n true 2>/dev/null; then
             _has_sudo=1
-        # Method 2: Check if user is in a sudo-capable group, then prompt
         elif echo "${_user_groups}" | grep -qE '\b(sudo|wheel|admin)\b'; then
-            # User is in sudo group but credentials aren't cached - prompt once
             # shellcheck disable=SC2024
             if sudo -v 2>/dev/null < /dev/tty; then
                 _has_sudo=1
@@ -268,7 +247,6 @@ can_sudo() {
     [[ "${_has_sudo}" == "1" ]]
 }
 
-# Ensure the script is not run as root
 ensure_not_root() {
     if [[ "${EUID}" -eq 0 ]]; then
         print_section "Root User Detected"
@@ -288,9 +266,7 @@ ensure_not_root() {
     fi
 }
 
-# Bootstrap SSH config for deploy key access to dotfiles
 bootstrap_ssh_config() {
-    # Ensure github-dotfiles host alias exists for deploy key access
     if ! awk 'tolower($1) == "host" { for (i=2; i<=NF; i++) if ($i == "github-dotfiles") found=1 } END { exit !found }' ~/.ssh/config 2>/dev/null; then
         print_message "Bootstrapping SSH config for dotfiles access..."
         mkdir -p ~/.ssh
@@ -309,7 +285,6 @@ EOF
     fi
 }
 
-# Interactive setup for dotfiles deploy key
 setup_dotfiles_deploy_key() {
     local key_file="${HOME}/.ssh/dotfiles-deploy-key"
 
@@ -319,7 +294,6 @@ setup_dotfiles_deploy_key() {
     echo -e "${BOLD}Let's set up a deploy key for read-only access to dotfiles.${NC}"
     echo ""
 
-    # Step 1: Generate deploy key if it doesn't exist
     if [[ ! -f "${key_file}" ]]; then
         echo -e "${CYAN}Step 1: Generating deploy key...${NC}"
         mkdir -p ~/.ssh
@@ -334,7 +308,6 @@ setup_dotfiles_deploy_key() {
         echo ""
     fi
 
-    # Step 2: Display public key and instructions
     echo -e "${CYAN}Step 2: Add this public key to GitHub${NC}"
     echo ""
     echo -e "  Go to: ${BOLD}https://github.com/scowalt/dotfiles/settings/keys${NC}"
@@ -345,28 +318,22 @@ setup_dotfiles_deploy_key() {
     echo -e "${GRAY}────────────────────────────────────────────────────────────────${NC}"
     echo ""
 
-    # Copy to clipboard via Windows clip.exe if available
     if command -v clip.exe &>/dev/null; then
         clip.exe < "${key_file}.pub" 2>/dev/null && print_success "Public key copied to clipboard!"
     fi
     echo ""
 
-    # Open GitHub in browser via Windows
     powershell.exe -Command "Start-Process 'https://github.com/scowalt/dotfiles/settings/keys'" 2>/dev/null || true
 
-    # Step 3: Wait for user confirmation (read from /dev/tty for curl|bash compatibility)
     echo -e "${YELLOW}Press Enter after you've added the key to GitHub...${NC}"
     read -r < /dev/tty
 
-    # Set up SSH config for the deploy key
     bootstrap_ssh_config
 
-    # Test the key with retry loop
     local max_retries=5
     local attempt=1
     while [[ ${attempt} -le ${max_retries} ]]; do
         echo -e "${CYAN}Step 3: Testing deploy key access (attempt ${attempt}/${max_retries})...${NC}"
-        # < /dev/null prevents ssh from consuming stdin (important for curl|bash)
         local _ssh_output
         _ssh_output=$(ssh -i "${key_file}" -o StrictHostKeyChecking=accept-new -T git@github.com < /dev/null 2>&1) || true
         if echo "${_ssh_output}" | grep -q "successfully authenticated"; then
@@ -397,13 +364,10 @@ setup_dotfiles_deploy_key() {
     done
 }
 
-# Check if we have access to scowalt/dotfiles via any available method
 check_dotfiles_access() {
     DOTFILES_ACCESS_METHOD=""
     print_message "Checking access to scowalt/dotfiles..."
 
-    # Method 1: SSH key (main user)
-    # < /dev/null prevents ssh from consuming stdin (important for curl|bash)
     local _ssh_output
     _ssh_output=$(ssh -T git@github.com < /dev/null 2>&1) || true
     if echo "${_ssh_output}" | grep -q "successfully authenticated"; then
@@ -412,12 +376,8 @@ check_dotfiles_access() {
         return 0
     fi
 
-    # Method 2: Deploy key at ~/.ssh/dotfiles-deploy-key
     if [[ -f ~/.ssh/dotfiles-deploy-key ]]; then
-        # Set up SSH config for github-dotfiles if not present
         bootstrap_ssh_config
-        # Test if the deploy key works
-        # < /dev/null prevents ssh from consuming stdin (important for curl|bash)
         local _deploy_ssh_output
         _deploy_ssh_output=$(ssh -i ~/.ssh/dotfiles-deploy-key -T git@github.com < /dev/null 2>&1) || true
         if echo "${_deploy_ssh_output}" | grep -q "successfully authenticated"; then
@@ -429,11 +389,9 @@ check_dotfiles_access() {
         fi
     fi
 
-    # No access method worked
     return 1
 }
 
-# Fix apt issues if they exist
 fix_apt_issues() {
     if ! can_sudo; then
         print_debug "No sudo access - skipping apt fix."
@@ -444,15 +402,12 @@ fix_apt_issues() {
     sudo apt-get install -f -y -qq
 }
 
-# Update and install core dependencies with error handling
 update_and_install_core() {
     print_message "Checking and installing core packages as needed..."
 
-    # Define an array of required packages
     local packages=("git" "curl" "jq" "fish" "tmux" "gh" "build-essential" "libssl-dev" "zlib1g-dev" "libbz2-dev" "libreadline-dev" "libsqlite3-dev" "wget" "llvm" "libncurses-dev" "xz-utils" "tk-dev" "libffi-dev" "liblzma-dev" "golang-go" "inotify-tools" "shellcheck" "gitleaks" "poppler-utils" "bubblewrap")
     local to_install=()
 
-    # Check each package and add missing ones to the to_install array
     for package in "${packages[@]}"; do
         if ! dpkg -s "${package}" &> /dev/null; then
             to_install+=("${package}")
@@ -461,7 +416,6 @@ update_and_install_core() {
         fi
     done
 
-    # Install any packages that are not yet installed
     if [[ "${#to_install[@]}" -gt 0 ]]; then
         if ! can_sudo; then
             print_warning "No sudo access - cannot install missing packages: ${to_install[*]}"
@@ -486,7 +440,6 @@ update_and_install_core() {
 }
 
 
-# Fetch GitHub SSH keys with bounded retries and reject empty responses.
 fetch_github_ssh_keys() {
     local _keys_url="${1:-https://github.com/scowalt.keys}"
     local _attempt=1
@@ -509,9 +462,7 @@ fetch_github_ssh_keys() {
     return 1
 }
 
-# Check and set up SSH key
 setup_ssh_key() {
-    # Skip SSH key setup for non-sudo users (they won't be making outbound SSH requests)
     if ! can_sudo; then
         print_debug "No sudo access - skipping SSH key setup."
         return
@@ -519,20 +470,16 @@ setup_ssh_key() {
 
     print_message "Checking for existing SSH key associated with GitHub..."
 
-    # Retrieve GitHub-associated keys and log for debug purposes
     local existing_keys
     if ! existing_keys=$(fetch_github_ssh_keys "https://github.com/scowalt.keys"); then
         print_error "Failed to download SSH keys from GitHub after three attempts; key registration could not be verified."
         return 1
     fi
 
-    # Check if a local SSH key exists
     if [[ -f ~/.ssh/id_rsa.pub ]]; then
-        # Extract only the actual key part from id_rsa.pub and log for debugging
         local local_key
         local_key=$(awk '{print $2}' ~/.ssh/id_rsa.pub)
 
-        # Verify if the extracted key part matches any of the GitHub keys
         if awk -v expected="${local_key}" 'NF >= 2 && $2 == expected { found=1 } END { exit !found }' <<< "${existing_keys}"; then
             print_success "Existing SSH key recognized by GitHub."
         else
@@ -544,7 +491,6 @@ setup_ssh_key() {
             return 1
         fi
     else
-        # Generate a new SSH key and log details
         print_warning "No SSH key found. Generating a new SSH key..."
         ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N "" -C "scowalt@wsl"
         print_success "SSH key generated."
@@ -556,7 +502,6 @@ setup_ssh_key() {
     fi
 }
 
-# Add GitHub to known hosts to avoid prompts
 add_github_to_known_hosts() {
     print_message "Ensuring GitHub is in known hosts..."
     local known_hosts_file=~/.ssh/known_hosts
@@ -577,7 +522,6 @@ add_github_to_known_hosts() {
     fi
 }
 
-# Install Homebrew if not installed
 install_homebrew() {
     if ! command -v brew &> /dev/null; then
         print_message "Installing Homebrew..."
@@ -598,7 +542,6 @@ install_homebrew() {
         eval "${brew_env}"
     fi
 
-    # Fix ownership if Cellar is not writable by current user (multi-user installs)
     local brew_prefix
     brew_prefix="$(brew --prefix 2>/dev/null)"
     if [[ -n "${brew_prefix}" ]] && [[ -d "${brew_prefix}/Cellar" ]] && [[ ! -w "${brew_prefix}/Cellar" ]]; then
@@ -613,7 +556,6 @@ install_homebrew() {
     fi
 }
 
-# Ensure Homebrew is available before using it
 ensure_brew_available() {
     if ! command -v brew &> /dev/null; then
         print_error "Homebrew not available. Previous installation may have failed."
@@ -621,9 +563,6 @@ ensure_brew_available() {
     fi
 }
 
-# Install Starship if not installed
-# NOTE: Uses Homebrew for WSL because it provides consistent Linux binary management
-# DO NOT change to curl installer - Homebrew integration is intentional for WSL
 install_starship() {
     if ! command -v starship &> /dev/null; then
         print_message "Installing Starship prompt..."
@@ -638,7 +577,6 @@ install_starship() {
     fi
 }
 
-# Install chezmoi if not installed
 install_chezmoi() {
     if ! command -v chezmoi &> /dev/null; then
         print_message "Installing chezmoi..."
@@ -653,11 +591,9 @@ install_chezmoi() {
     fi
 }
 
-# Initialize chezmoi if not already initialized
 initialize_chezmoi() {
     local chez_src="${HOME}/.local/share/chezmoi"
 
-    # Check if directory exists but is not a valid git repo
     if [[ -d "${chez_src}" ]] && [[ ! -d "${chez_src}/.git" ]]; then
         print_warning "chezmoi directory exists but is not a git repository. Reinitializing..."
         rm -rf "${chez_src}"
@@ -695,7 +631,6 @@ initialize_chezmoi() {
     fi
 }
 
-# Configure chezmoi for auto commit, push, and pull
 configure_chezmoi_git() {
     local chezmoi_config=~/.config/chezmoi/chezmoi.toml
     if [[ ! -f "${chezmoi_config}" ]]; then
@@ -713,14 +648,10 @@ EOF
     fi
 }
 
-# Update chezmoi dotfiles repository to latest version
 update_chezmoi() {
     local chez_src="${HOME}/.local/share/chezmoi"
     if [[ -d "${chez_src}" ]]; then
         print_message "Updating chezmoi dotfiles repository..."
-        # Reset any dirty state (merge conflicts, uncommitted changes) before pulling.
-        # The remote repo is the source of truth — local edits in the chezmoi source dir
-        # should never exist and are safe to discard.
         if [[ -d "${chez_src}/.git" ]]; then
             git -C "${chez_src}" reset --hard HEAD > /dev/null 2>&1
             git -C "${chez_src}" merge --abort > /dev/null 2>&1
@@ -736,7 +667,6 @@ update_chezmoi() {
     fi
 }
 
-# Set Fish as the default shell if it isn't already
 set_fish_as_default_shell() {
     local user_shell
     local passwd_entry
@@ -764,7 +694,6 @@ set_fish_as_default_shell() {
 
 
 
-# Install packages via Homebrew
 install_brew_packages() {
     if ! command -v brew &> /dev/null; then
         print_warning "Homebrew not available. Skipping brew packages."
@@ -790,7 +719,6 @@ install_brew_packages() {
 }
 
 
-# Install Gemini CLI (Google's AI coding agent)
 install_gemini_cli() {
     if command -v gemini &> /dev/null; then
         print_debug "Gemini CLI is already installed."
@@ -799,7 +727,6 @@ install_gemini_cli() {
 
     print_message "Installing Gemini CLI..."
 
-    # Ensure bun is available
     if [[ -d "${HOME}/.bun" ]]; then
         export PATH="${HOME}/.bun/bin:${PATH}"
     fi
@@ -817,9 +744,7 @@ install_gemini_cli() {
     fi
 }
 
-# Install/update Codex CLI with OpenAI's per-user standalone installer.
-# BEGIN GENERATED OPENCODE CLI
-# Version 9 | Last changed: Report bounded secret-safe evidence at real PATH discovery
+: 'BEGIN_GENERATED_OPENCODE_CLI'
 install_opencode_cli() {
     local result status=0 machine kind native_shell cached_command recovery=0
     machine=$(uname -m) || return 1
@@ -840,21 +765,15 @@ install_opencode_cli() {
     fi
     native_shell=$(type -P fish) || native_shell=''
     cached_command=$(hash -t opencode 2>/dev/null) || cached_command=''
-    # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
     {
         result=$(
             set -o pipefail
-            # Preserve extra records through command substitution. Translate NUL
-            # to a rejected control byte rather than letting Bash erase it.
             SETUP_OPENCODE_SHELL="${native_shell}" SETUP_OPENCODE_HASHED="${cached_command}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null |
                 LC_ALL=C tr '\000' '\001' || status=$?
             printf '.'
             exit "${status}"
         ) || status=$?
     } <<'OPENCODE_CLI_JS'
-// Embedded in all six entry points by tools/embed-opencode-cli.py.
-// Version 8 | Last changed: Report bounded secret-safe evidence at real PATH discovery.
-// Installation only: never import application code or inherit its environment.
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -875,9 +794,6 @@ class PolicyError extends Error {
         super(reason); this.reason = reason; this.operation = operation; diagnosticErrors.add(this);
     }
 }
-// Only actual discovery can attach evidence; public exception properties (or
-// objects with the same prototype) cannot forge it. Six decimal digits bound
-// the wire record. Larger positions still fail, with the legacy generic reason.
 const pathRefusals = new WeakMap();
 function rejectPathComponent(index, kind) {
     const error = new PolicyError('relative-path');
@@ -885,7 +801,7 @@ function rejectPathComponent(index, kind) {
         if (Number.isInteger(index) && index >= 1 && index <= 999999 && ['empty', 'relative'].includes(kind)) {
             pathRefusals.set(error, Object.freeze({index, kind}));
         }
-    } catch { /* Diagnostic construction must not replace the original refusal. */ }
+    } catch {   }
     throw error;
 }
 const fail = reason => { throw new PolicyError(reason); };
@@ -906,7 +822,6 @@ const digest = bytes => crypto.createHash('sha512').update(bytes).digest('base64
 function json(bytes) {
     const text = bytes.toString(); let value;
     try { value = JSON.parse(text); } catch { fail('metadata'); }
-    // JSON.parse accepts duplicate keys; that can otherwise erase an explicit pin.
     const stack = [];
     for (const match of text.matchAll(/"(?:\\.|[^"\\])*"|[{}[\],:]|[^\s{}[\],:]+/g)) {
         const token = match[0];
@@ -925,7 +840,6 @@ function json(bytes) {
 function target(platform = process.platform, machine = os.machine(), glibc = process.report.getReport().header.glibcVersionRuntime) {
     const arch = {x86_64: 'x64', AMD64: 'x64', x64: 'x64', arm64: 'arm64', ARM64: 'arm64', aarch64: 'arm64'}[machine];
     if (!arch || !['linux', 'darwin', 'win32'].includes(platform)) return null;
-    // Always use the official baseline on x64, including Rosetta. No AVX2 assumption.
     let result = `${platform === 'win32' ? 'windows' : platform}-${arch}${arch === 'x64' ? '-baseline' : ''}`;
     if (platform === 'linux' && !glibc) {
         if (!fs.readdirSync('/lib').some(n => /^ld-musl-(x86_64|aarch64)\.so\.1$/.test(n))) fail('libc');
@@ -933,7 +847,6 @@ function target(platform = process.platform, machine = os.machine(), glibc = pro
     }
     return result;
 }
-// Only these labels/statuses may cross the core-to-shell diagnostic boundary.
 class DownloadError extends Error {
     constructor(operation, status) { super('download'); this.operation = operation; this.status = status; diagnosticErrors.add(this); }
 }
@@ -963,7 +876,7 @@ function formatFailure(error, recovering) {
                 Number.isInteger(context.index) && context.index >= 1 && context.index <= 999999 && ['empty', 'relative'].includes(context.kind)) {
                 return `${generic}:command-discovery:${context.index}:${context.kind}`;
             }
-        } catch { /* Retain the controlled generic failure if evidence is unavailable. */ }
+        } catch {   }
         return generic;
     }
     return 'opencode-cli:failed';
@@ -972,8 +885,6 @@ function downloadOperation(parsed) {
     if (parsed.hostname === 'opencode.ai') return parsed.pathname === '/update/api/latest/cli/npm' ? 'latest-release' : 'download';
     let pathname;
     try { pathname = decodeURIComponent(parsed.pathname); } catch { fail('url'); }
-    // Scoped names may use either a literal or percent-encoded slash. Only whole
-    // package indexes support npm's abbreviated media type; versions require JSON.
     if (/^\/(?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+\/?$/.test(pathname)) return 'package-index';
     if (/^\/(?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+\/-\/[A-Za-z0-9_.-]+\.tgz$/.test(pathname)) return 'artifact-download';
     if (/^\/(?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/.test(pathname)) return 'package-version';
@@ -1041,7 +952,6 @@ async function artifact(name, release, get = fetchBytes) {
     return files;
 }
 function safePath(file, home, leafLink = false) {
-    // Resolve only the account HOME boundary (including Bazzite's system alias).
     const relative = path.relative(home, file);
     if (relative.startsWith('..') || path.isAbsolute(relative)) fail('outside-home');
     const chain = [home];
@@ -1081,13 +991,10 @@ function commands(home, env = process.env) {
     }
     return [...new Map(result.map(file => [process.platform === 'win32' ? file.toLowerCase() : file, file])).values()];
 }
-// Foreign commands are observations, never migration candidates. Stop at the
-// first foreign boundary: do not traverse its links, receipts or package store.
 function foreignCommand(file, home) {
     const relative = path.relative(home, file);
     if (!relative.startsWith('..') && !path.isAbsolute(relative)) return false;
     if (!path.isAbsolute(file)) fail('relative-path');
-    // Windows migration is HOME-only and retains the native ACL preflight.
     if (process.platform === 'win32') return true;
     const chain = [path.parse(file).root];
     for (const part of file.slice(chain[0].length).split(path.sep).filter(Boolean)) chain.push(path.join(chain.at(-1), part));
@@ -1105,7 +1012,6 @@ function verifySetupSelection(expected, home, homeInput, searchPath, brewTrust) 
         const normalized = cached.startsWith(homeInput + path.sep) ? path.join(home, path.relative(homeInput, cached)) : cached;
         if (!samePath(normalized, expected)) reject('command-conflict');
     }
-    // Include script/native extensions, not only the installer's migration names.
     const names = process.platform === 'win32' ? ['opencode.ps1', ...new Set((process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').map(ext => 'opencode' + ext.toLowerCase()))] : ['opencode'];
     for (const directory of searchPath.split(path.delimiter)) {
         if (!directory && process.platform === 'win32') continue;
@@ -1114,15 +1020,11 @@ function verifySetupSelection(expected, home, homeInput, searchPath, brewTrust) 
             const candidate = path.join(directory, name);
             let info;
             try { info = fs.lstatSync(candidate); } catch (error) { if (error.code === 'ENOENT') continue; reject('selection-unverified'); }
-            // Native shells ignore directories and non-executable regular files.
-            // Do not follow foreign links just to decide whether to ignore them;
-            // uncertain metadata and actual executable shadows still fail closed.
             if (info.isDirectory()) continue;
             if (process.platform !== 'win32' && info.isFile()) {
                 try { fs.accessSync(candidate, fs.constants.X_OK); }
                 catch (error) { if (error.code === 'EACCES') continue; reject('selection-unverified'); }
             }
-            // Resolve only the trusted HOME alias, never an arbitrary command link.
             const normalized = candidate.startsWith(homeInput + path.sep)
                 ? path.join(home, path.relative(homeInput, candidate)) : candidate;
             if (!samePath(normalized, expected)) reject(foreignCommand(candidate, home) ? 'foreign-command' : 'command-conflict');
@@ -1149,7 +1051,6 @@ function verifyFreshSelection(expected, home, homeInput) {
     if (process.platform === 'win32') {
         if (!['powershell.exe', 'pwsh.exe'].includes(path.basename(shell).toLowerCase()) || !env.SETUP_OPENCODE_FRESH_PATH) reject('selection-unverified');
         env.PATH = env.SETUP_OPENCODE_FRESH_PATH;
-        // Load the normal native profile. Only query resolution; never run the app.
         args = ['-NoLogo', '-NonInteractive', '-Command', `$ErrorActionPreference = 'Stop'; try { $c = Get-Command opencode -ErrorAction Stop; if ($c.CommandType -ne 'Application') { exit 2 }; [Console]::WriteLine("\`n${marker}" + $c.Source + "${marker}") } catch { exit 3 }`];
     } else {
         if (path.basename(shell) !== 'fish') reject('selection-unverified');
@@ -1161,8 +1062,6 @@ function verifyFreshSelection(expected, home, homeInput) {
         output = cp.execFileSync(shell, args, {cwd: home, env, timeout: 20000, maxBuffer: 65536,
             stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true}).toString();
     } catch (error) { reject(error.status === 2 ? 'command-conflict' : 'selection-unverified'); }
-    // Ordinary startup banners are not evidence. Accept exactly one fresh,
-    // framed query result; never surface other stdout or arbitrary stderr.
     const records = output.split(/\r?\n/).filter(line => line.startsWith(marker));
     if (records.length !== 1 || !records[0].endsWith(marker)) reject('selection-unverified');
     const selected = records[0].slice(marker.length, -marker.length);
@@ -1189,8 +1088,6 @@ function brewPermissions(file, info) {
     if (!info.isSymbolicLink() && (info.mode & 0o020)) {
         if (process.platform !== 'linux' || info.uid === 0 || info.uid !== process.getuid() ||
             !(file === '/home/linuxbrew/.linuxbrew' || file.startsWith('/home/linuxbrew/.linuxbrew/'))) fail('brew-path');
-        // Scoped single-human-user policy: group privacy is not a prerequisite.
-        // Keep ownership/mode/identity snapshots; do not infer exclusive access.
     }
 }
 function checkBrewTrust(trust, moved = false) {
@@ -1206,7 +1103,6 @@ function checkBrewTrust(trust, moved = false) {
 function checkBrewBackup(item, backup) {
     checkBrewTrust(item.brewTrust, true);
     const before = item.brewTrust.snapshots.get(item.file), now = fs.lstatSync(backup);
-    // Renaming can change ctime; every other link identity field must survive.
     if (!['dev', 'ino', 'uid', 'gid', 'mode', 'nlink', 'size', 'mtimeMs'].every(key => before[key] === now[key]) ||
         !now.isSymbolicLink() || fs.readlinkSync(backup) !== item.brewTrust.link) fail('brew-snapshot-changed');
 }
@@ -1249,8 +1145,6 @@ function inspectBrewCopy(file) {
     checkBrewTrust(trust);
     return {binary, release: match[1], route: 'homebrew', trust};
 }
-// Exact native (no-shebang) npm cmd-shim templates. Customized/older wrappers
-// remain conflicts rather than being interpreted or executed to discover identity.
 function windowsNpmShims() {
     const relative = 'node_modules/opencode-ai/bin/opencode.exe';
     const head = '@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n';
@@ -1322,10 +1216,7 @@ async function identify(file, home, nativeTarget, get) {
         fail('custom-prefix');
     }
     const bytes = boundedRead(binary);
-    // Package metadata is only a hint. Identity always requires official native bytes.
     const content = release ? '' : bytes.toString('latin1');
-    // Official Bun builds embed this execution argument. It is only a version
-    // hint: the native bytes must still match the published platform artifact.
     const hints = [...new Set([...content.matchAll(/--user-agent=opencode\/([1-9]\d*\.\d+\.\d+)(?=[\x00\s"'\\])/g)].map(match => match[1]))];
     let candidates = release ? [release] : hints.length === 1 ? hints : [...new Set(content.match(/\b[1-9]\d?\.\d{1,4}\.\d{1,4}\b/g) || [])];
     if (!release && hints.length !== 1) {
@@ -1338,7 +1229,6 @@ async function identify(file, home, nativeTarget, get) {
     if (nativeTarget.startsWith('linux-')) {
         for (const variant of [...variants]) variants.push(variant.endsWith('-musl') ? variant.slice(0, -5) : variant + '-musl');
     } else if (/^(darwin|windows)-arm64$/.test(nativeTarget)) {
-        // Old x64 copies can be present under Rosetta/Windows ARM emulation.
         variants.push(nativeTarget.replace('arm64', 'x64-baseline'), nativeTarget.replace('arm64', 'x64'));
     }
     for (const candidate of candidates) {
@@ -1368,8 +1258,6 @@ async function installChecked(options) {
     const receipt = path.join(home, '.local/bin/.setup-opencode-cli.json');
     safePath(destination, home, true); safePath(receipt, home);
     const found = (options.commands || commands(home)).filter(file => !foreignCommand(file, home));
-    // Bun can publish a native hardlink rather than a symlink. Preserve its
-    // explicit global selection even when command identity comes from bytes.
     if (found.some(file => samePath(path.dirname(file), path.join(home, '.bun/bin')))) {
         const manifest = path.join(home, '.bun/install/global/package.json');
         safePath(manifest, home);
@@ -1383,10 +1271,8 @@ async function installChecked(options) {
         verifySetupSelection(expected, home, homeInput, options.path ?? process.env.PATH ?? '', brewTrust);
         verifyFreshSelection(expected, home, homeInput);
         if (process.platform === 'win32') {
-            // PowerShell's own session (aliases/functions and native discovery)
-            // must approve before receipt commit while rollback is still live.
             let selected;
-            try { selected = await options.verifySessionSelection?.(expected); } catch { /* fail closed below */ }
+            try { selected = await options.verifySessionSelection?.(expected); } catch {   }
             if (selected !== true) throw new PolicyError(selected === false ? 'command-conflict' : 'selection-unverified', 'setup-selection');
         }
     };
@@ -1426,7 +1312,6 @@ async function installChecked(options) {
         await verifySelection(destination);
         safePath(destination, home);
         if (!boundedRead(destination).equals(installedBytes)) fail('changed-copy');
-        // A newer official version is preserved, never rewritten or downgraded.
         if (compare(installed, release) > 0) return 'newer';
         const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'setup-opencode-'));
         let probeError;
@@ -1452,7 +1337,6 @@ async function installChecked(options) {
         fs.mkdirSync(lock, {mode: 0o700}); locked = true;
         fs.writeFileSync(staged, bytes, {mode: 0o755, flag: 'wx'});
         runProbe(staged, release, stage);
-        // Preflight ALL copies before moving any commands. Never remove package stores/data.
         for (const item of old) {
             if (item.route === 'homebrew') checkBrewTrust(item.brewTrust);
             else safePath(item.file, home, !!item.link);
@@ -1469,20 +1353,16 @@ async function installChecked(options) {
             const backup = item.route === 'homebrew'
                 ? path.join(path.dirname(item.file), `.opencode-setup-recovery-${crypto.randomBytes(12).toString('hex')}`)
                 : path.join(stage, `previous-${backups.length}`);
-            // Journal each intended move before it occurs, for interruption recovery.
             fs.writeFileSync(path.join(stage, 'recovery.json'), JSON.stringify([...backups, [item.file, backup]]), {mode: 0o600});
             fs.renameSync(item.file, backup); backups.push([item.file, backup]);
         }
-        // Recheck the read-only Homebrew boundaries even after command quarantine.
         for (const [original, backup] of backups) {
             const item = old.find(entry => entry.file === original);
             if (item?.route === 'homebrew') checkBrewBackup(item, backup);
         }
-        // Atomic no-clobber publication: a concurrent/custom destination is never overwritten.
         fs.linkSync(staged, destination); promoted = true;
         fs.unlinkSync(staged);
         runProbe(destination, release, stage);
-        // Verify the effective command, not mere PATH membership. Failure rolls back.
         await verifySelection(destination);
         safePath(destination, home);
         if (!boundedRead(destination).equals(bytes)) fail('changed-copy');
@@ -1513,7 +1393,6 @@ async function installChecked(options) {
                 }
             } catch { throw new RecoveryError(originalError); }
         }
-        // Retain old commands privately for manual recovery after a successful migration.
         try {
             if (completed && backups.length) fs.chmodSync(stage, 0o700);
             else fs.rmSync(stage, {recursive: true, force: true});
@@ -1560,8 +1439,7 @@ OPENCODE_CLI_JS
     esac
 }
 
-# Keep retained legacy Homebrew registrations from being upgraded/relinked by the
-# later blanket upgrade. Own only this temporary pin; preserve user pins.
+: 'BEGIN_OPENCODE_HOMEBREW_GUARD'
 opencode_guarded_brew_upgrade() (
     local formulae pins added=0 status=0
     formulae=$(brew list --formula -1 2>/dev/null) || return 1
@@ -1582,8 +1460,6 @@ opencode_guarded_brew_upgrade() (
     return "${status}"
 )
 
-# An unrecognized distro-owned command is not ours to update or hold. This also
-# runs before Pi/Ubuntu's early blanket upgrades, before native prerequisites.
 opencode_apt_upgrade_safe() {
     local candidates candidate resolved owner_status
     candidates=$(type -ap opencode 2>/dev/null) || candidates=''
@@ -1613,7 +1489,7 @@ opencode_apt_upgrade_safe() {
     done <<< "${candidates}"
     return 0
 }
-# END GENERATED OPENCODE CLI
+: 'END_GENERATED_OPENCODE_CLI'
 
 install_codex_cli() {
     local bun_packages=""
@@ -1656,9 +1532,6 @@ install_codex_cli() {
         return 1
     fi
 
-    # The native installer has no skip-profile flag. Its HOME is disposable;
-    # explicit destinations keep the CLI/data in the account, not the sandbox.
-    # Chezmoi alone owns the real shell profiles. Keep the trusted tool PATH.
     chmod 700 "${installer}"
     if claude_code_run_safely /usr/bin/env CODEX_NON_INTERACTIVE=1 \
         HOME="${installer_home}" CODEX_INSTALL_DIR="${HOME}/.local/bin" \
@@ -1694,7 +1567,6 @@ install_codex_cli() {
     print_success "Codex CLI installed/updated (${version_output})."
 }
 
-# Install/update Notion CLI.
 install_ntn_cli() {
     local os
     local arch
@@ -1744,8 +1616,6 @@ install_ntn_cli() {
 
 
 
-# Install Portless CLI (Tailscale HTTPS tunnel helper)
-# Standalone installer shared verbatim with the other setup entry points.
 install_portless_cli() {
     if command -v portless &> /dev/null; then
         print_debug "Portless CLI is already installed."
@@ -1754,7 +1624,6 @@ install_portless_cli() {
 
     print_message "Installing Portless CLI..."
 
-    # Ensure bun is available
     if [[ -d "${HOME}/.bun" ]]; then
         export PATH="${HOME}/.bun/bin:${PATH}"
     fi
@@ -1776,7 +1645,6 @@ install_portless_cli() {
     fi
 }
 
-# Install/update Claude Code CLI (Anthropic's AI coding agent)
 claude_code_native_path() {
     printf '%s/.local/bin/claude' "${HOME}"
 }
@@ -2102,7 +1970,6 @@ install_claude_code() {
 }
 
 
-# Remove the managed footprint of the retired RTK tool.
 rtk_binary_is_token_killer() {
     local _binary="$1"
     local _output=""
@@ -2485,7 +2352,6 @@ remove_rtk_resources() {
     fi
 }
 
-# Pi needs Node >=22.19 and fs.globSync; the shared skills CLI needs >=22.20.
 pi_node_runtime_ready() {
     command -v node &> /dev/null || return 1
     node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major > 22 || (major === 22 && minor >= 19)) && typeof require("node:fs").globSync === "function" ? 0 : 1)' >/dev/null 2>&1
@@ -2496,7 +2362,6 @@ shared_node_runtime_ready() {
     "${_node}" -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major > 22 || (major === 22 && minor >= 20)) && typeof require("node:fs").globSync === "function" ? 0 : 1)' >/dev/null 2>&1
 }
 
-# Only select releases with official binaries. Never fall back to a source build.
 shared_node_fallback() {
     local _os _arch _bits
     _os=$(uname -s) || return 1
@@ -2516,8 +2381,6 @@ shared_node_fallback() {
     esac
 }
 
-# Test the normal chezmoi-owned fish activation, not setup's inherited runtime PATH.
-# An optional argument also verifies the canonical Pi command after installation.
 verify_shared_node_shell() {
     local _fish="" _variable
     _fish=$(command -v fish) || return 1
@@ -2530,7 +2393,6 @@ verify_shared_node_shell() {
             esac
         done
         unset NODE_PATH NODE_OPTIONS BASH_ENV __setup_shared_node_activation
-        # Fish, not Bash, expands $argv in this probe.
         # shellcheck disable=SC2016
         env PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" MISE_AUTO_INSTALL=false "${_fish}" -l -c '
             test "$__setup_shared_node_activation" = 1; or exit 1
@@ -2549,7 +2411,6 @@ verify_shared_node_shell() {
     ) >/dev/null 2>&1
 }
 
-# A compatible inherited Node is not evidence of a durable shared mise selection.
 ensure_shared_node_runtime() {
     local _inventory="" _count="" _install_path="" _version="" _runtime="" _mise_env="" _attempt
     export PATH="${HOME}/.local/bin:${HOME}/.mise/bin:${PATH}"
@@ -2558,16 +2419,12 @@ ensure_shared_node_runtime() {
         return 1
     fi
 
-    # Preserve legacy fnm project pins when mise becomes the sole selector.
-    # Native additive settings preserve other enabled tools and unrelated config.
     if ! MISE_AUTO_INSTALL=false mise settings add -C / idiomatic_version_file_enable_tools node < /dev/null >/dev/null 2>&1 ||
         ! MISE_AUTO_INSTALL=false mise settings set -C / activate_aggressive true < /dev/null >/dev/null 2>&1; then
         print_warning "Cannot configure mise PATH precedence and legacy Node pins; leaving dependent setup blocked."
         return 1
     fi
 
-    # Query outside HOME: --global filters active sources, so a HOME override can
-    # otherwise hide a valid global default. Activation below still honors HOME.
     for _attempt in 1 2; do
         if ! _inventory=$(MISE_AUTO_INSTALL=false mise ls -C / --global --json node < /dev/null) ||
             ! _inventory=$(jq -ce 'if type == "array" then . elif type == "object" then (.node // []) else error("Invalid mise inventory") end' <<< "${_inventory}"); then
@@ -2591,8 +2448,6 @@ ensure_shared_node_runtime() {
             print_warning "No supported prebuilt Node runtime for this platform; leaving Pi unchanged."
             return 1
         fi
-        # Preserve an absent compatible selection when this platform has binaries.
-        # ARMv7 has official Node 22 binaries, not Node 24+ binaries.
         _version=$(jq -r '.[0].version // empty' <<< "${_inventory}") || return 1
         if [[ -z "${_install_path}" || ! -f "${_install_path}/bin/node" ]] &&
             jq -e '.[0].version // "" | select(test("^[0-9]+(\\.[0-9]+){0,2}$")) | split(".") | map(tonumber) | .[0] > 22 or (.[0] == 22 and (length == 1 or .[1] >= 20))' <<< "${_inventory}" > /dev/null &&
@@ -2611,7 +2466,6 @@ ensure_shared_node_runtime() {
         fi
     done
 
-    # No explicit node@ argument: HOME overrides must not be hidden by setup.
     if ! _mise_env=$(MISE_AUTO_INSTALL=false mise env -C "${HOME}" -s bash < /dev/null) || ! eval "${_mise_env}"; then
         print_warning "Failed to activate the shared mise environment; leaving Pi unchanged."
         return 1
@@ -2621,8 +2475,6 @@ ensure_shared_node_runtime() {
         return 1
     fi
     if ! verify_shared_node_shell; then
-        # Repair the managed profile, not this probe's PATH. Limit apply to the
-        # fish file: unrelated dotfiles and run_ scripts must not run here.
         print_message "Refreshing chezmoi-managed fish activation for the shared Node runtime..."
         if ! command -v chezmoi >/dev/null 2>&1 ||
             ! chezmoi apply --force --include=files "${HOME}/.config/fish/config.fish" < /dev/null >/dev/null 2>&1; then
@@ -2641,7 +2493,6 @@ ensure_pi_node_runtime() {
     ensure_shared_node_runtime && pi_node_runtime_ready
 }
 
-# Remove the managed footprint of the retired Attention-kind guidance.
 attention_span_cleanup_prepare_file_mode() {
     local _staged_file="$1"
     local _target_file="$2"
@@ -2824,7 +2675,6 @@ remove_attention_span_resources() {
         _managed_files+=("${_dir}/APPEND_SYSTEM.md")
     done
 
-    # Preflight every target before changing any file.
     for _dir in "${_claude_dirs[@]}"; do
         attention_span_cleanup_style_is_safe "${_dir}/output-styles/attention-kind.md" || return 1
         attention_span_cleanup_settings_is_safe "${_dir}/settings.json" || return 1
@@ -2848,7 +2698,6 @@ remove_attention_span_resources() {
     fi
 }
 
-# Pi and the skills CLI share one durable Node selection.
 skills_cli_node_runtime_ready() {
     shared_node_runtime_ready
 }
@@ -2857,7 +2706,6 @@ ensure_skills_cli_node_runtime() {
     ensure_shared_node_runtime
 }
 
-# Install/update one copied global skill for every supported AI coding harness.
 install_managed_agent_skill() {
     local _repository=$1
     local _skill_name=$2
@@ -2869,7 +2717,6 @@ install_managed_agent_skill() {
     local _relative_file=""
     local _skill_file=""
     local _artifact_path=""
-    # Codex, Gemini CLI, and Pi discover the skills CLI's shared user copy.
     local -a _skill_dirs=(
         "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/skills/${_skill_name}"
         "${HOME}/.agents/skills/${_skill_name}"
@@ -2902,7 +2749,6 @@ install_managed_agent_skill() {
         for _relative_file in "${_required_files[@]}"; do
             _skill_file="${_skill_dir}/${_relative_file}"
             _artifact_path=${_skill_file}
-            # Reject links in the file and every directory inside the skill copy.
             while :; do
                 if [[ -L "${_artifact_path}" ]]; then
                     print_warning "${_display_name} validation failed: copied artifact is a symlink at ${_artifact_path}."
@@ -2922,22 +2768,18 @@ install_managed_agent_skill() {
     print_debug "${_install_output}"
 }
 
-# Retire Simple English from global skill copies and skills CLI update records.
 remove_simple_english_skill() {
     matt_pocock_skill_policy remove-simple-english
 }
 
-# Retire global show-me copies on the next setup run.
 remove_show_me_skill() {
     matt_pocock_skill_policy remove-show-me
 }
 
-# Retire PR Lens from global skill copies and skills CLI update records.
 remove_pr_lens_skill() {
     matt_pocock_skill_policy remove-pr-lens
 }
 
-# Remove setup-managed Impeccable resources without affecting sibling agent tooling.
 remove_impeccable_resources() {
     local -a _paths=(
         "${HOME}/.claude/skills/impeccable"
@@ -2982,7 +2824,6 @@ remove_impeccable_resources() {
     fi
 }
 
-# Resolve the Pi command target across Linux, macOS, and WSL.
 pi_command_target() {
     local _pi_cmd=""
     local _link_target=""
@@ -3017,7 +2858,6 @@ pi_command_target() {
     fi
 }
 
-# Remove stale Pi installs from Bun-managed global locations.
 cleanup_noncanonical_pi_installs() {
     local _new_package="${1}"
     local _old_package="${2}"
@@ -3085,8 +2925,6 @@ cleanup_noncanonical_pi_installs() {
     fi
 }
 
-# Native Go auth only. Success also verifies the installed catalog offline.
-# Keep the embedded Node body identical in all six setup scripts.
 configure_pi_opencode_go() {
     local _result="" _status=0
     local _operations='preflight|home|pi-package|pi-dependency|go-catalog|environment-file|active-profile|models-json|auth-lock|lock-dependency|auth-preflight|profile-create|lock-acquire|auth-read|auth-write|auth-cleanup|lock-release'
@@ -3095,7 +2933,6 @@ configure_pi_opencode_go() {
         print_warning "Pi Go setup failed: shared Node runtime unavailable."
         return 1
     fi
-    # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
     {
         _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${HOME}" "${PI_CODING_AGENT_DIR:-}" sync 2>/dev/null) || _status=$?
     } <<'PI_OPENCODE_GO_JS'
@@ -3472,9 +3309,6 @@ PI_OPENCODE_GO_JS
     return 0
 }
 
-# Force Pi defaults: GPT-6 Astra (OpenAI Codex) with xhigh thinking on all machines.
-# Chezmoi owns ~/.pi/agent/settings.json long-term; this seeds the desired
-# state on fresh machines and repairs drift where dotfiles are not applied.
 configure_pi_defaults() {
     local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
     local _settings_file="${_agent_dir}/settings.json"
@@ -3521,7 +3355,6 @@ configure_pi_defaults() {
 }
 
 # shellcheck disable=SC2312
-# Read a KEY=VALUE pair from ~/.env.local (strips optional export/quotes).
 read_env_local_value() {
     local _key="$1"
     local _env_file="${HOME}/.env.local"
@@ -3538,7 +3371,6 @@ read_env_local_value() {
     printf '%s\n' "${_value}"
 }
 
-# Remove the retired Synthetic provider without touching other providers or auth.json.
 remove_pi_synthetic_models() {
     local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
     local _models_file="${_agent_dir}/models.json"
@@ -3563,7 +3395,6 @@ remove_pi_synthetic_models() {
         return 1
     fi
 
-    # Write through existing symlinks, including chezmoi-managed files.
     if jq 'del(.providers.synthetic)' "${_models_file}" > "${_tmp}" \
         && cat "${_tmp}" > "${_models_file}" && chmod 600 "${_models_file}"; then
         rm -f "${_tmp}"
@@ -3574,11 +3405,6 @@ remove_pi_synthetic_models() {
     print_warning "Failed to remove the Synthetic provider from ${_models_file}."
     return 1
 }
-# Seed the z.ai provider block (GLM Coding Plan) into Pi's models.json.
-# The API key comes from ZAI_API_KEY in ~/.env.local; it is never stored in
-# this repository. Existing z.ai keys are preserved. Seeding follows key
-# presence: any machine with the key gets the provider, and only work
-# machines are warned when the key is missing.
 seed_pi_zai_models() {
     local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
     local _models_file="${_agent_dir}/models.json"
@@ -3702,9 +3528,6 @@ seed_pi_zai_models() {
     return 1
 }
 
-# Validate and repair npm's effective user configuration before setup mutates
-# any npm-owned package tree. npm handles registry-scoped auth migration without
-# exposing configuration values in the setup log.
 NPM_CONFIGURATION_COMMAND=""
 ensure_npm_configuration() {
     local _npm_command=""
@@ -3728,7 +3551,6 @@ ensure_npm_configuration() {
     print_debug "npm configuration validated."
 }
 
-# Install/update Pi coding agent
 install_pi_cli() {
     local _new_package="@earendil-works/pi-coding-agent"
     local _old_package="@mariozechner/pi-coding-agent"
@@ -3749,7 +3571,6 @@ install_pi_cli() {
 
     mkdir -p "${_canonical_bin}"
     export PATH="${_canonical_bin}:${PATH}"
-    # Chezmoi owns persistent shell PATH configuration.
     if ! ensure_pi_node_runtime; then
         print_warning "Skipping Pi installation and extension setup because the Pi Node.js runtime is not ready."
         return 1
@@ -3764,7 +3585,6 @@ install_pi_cli() {
 
     ensure_npm_configuration || return 1
 
-    # Remove old npm-package ownership before installing so npm can claim ~/.local/bin/pi.
     npm uninstall -g --prefix "${_local_prefix}" "${_old_package}" > /dev/null 2>&1 || true
     if [[ -L "${_canonical_pi}" ]]; then
         _pi_target=$(pi_command_target 2>/dev/null || true)
@@ -3856,7 +3676,7 @@ install_pi_cli() {
     print_success "Pi coding agent ${_pi_version} installed/updated at ${_canonical_pi}."
 }
 
-# Remove Pi subagents extension
+: 'BEGIN_PI_SUBAGENT_REMOVAL'
 remove_pi_subagents() {
     local _had_failure=0
     local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
@@ -3879,8 +3699,6 @@ remove_pi_subagents() {
         return "${_had_failure}"
     fi
 
-    # Fallback when the pi CLI is unavailable: strip both package sources
-    # directly from settings.json.
     if [[ ! -f "${_settings_file}" ]]; then
         print_debug "Pi settings not found; Pi subagents extension not installed."
         return 0
@@ -3913,14 +3731,12 @@ remove_pi_subagents() {
     return 0
 }
 
-# Retire Backlog MCP from global agent configuration. Keep this block identical in the Bash setup scripts.
 retire_global_backlog_mcp() {
     local _result=""
     if ! ensure_shared_node_runtime; then
         print_error "Node.js is required to retire global Backlog MCP registrations."
         return 1
     fi
-    # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
     if ! {
         _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${HOME}" "${PI_CODING_AGENT_DIR:-}" "${CLAUDE_CONFIG_DIR:-}" "${CODEX_HOME:-}" "${GEMINI_CLI_HOME:-}" 2>/dev/null)
     } <<'BACKLOG_MCP_RETIREMENT_JS'
@@ -4355,17 +4171,15 @@ BACKLOG_MCP_RETIREMENT_JS
         *) print_error "Global Backlog MCP retirement returned an invalid result."; return 1 ;;
     esac
 }
-# End global Backlog MCP retirement.
+: 'END_GLOBAL_BACKLOG_MCP_RETIREMENT'
 
-# Pi prose retirement. Keep this block identical in the Bash setup scripts.
-# Secure only managed Pi directory boundaries; metadata remains with its validators.
+: 'BEGIN_PI_PROSE_RETIREMENT'
 prepare_pi_profile_permissions() {
     local _result="" _status=0
     if ! ensure_shared_node_runtime; then
         print_warning "Pi profile permissions failed: shared-runtime-unavailable."
         return 1
     fi
-    # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
     {
         _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${HOME}" "${PI_CODING_AGENT_DIR:-}" 2>/dev/null) || _status=$?
     } <<'PI_PROFILE_PERMISSIONS_JS'
@@ -4749,7 +4563,6 @@ PI_PROFILE_PERMISSIONS_JS
         print_debug "Pi profile directories are private."
         return 0
     fi
-    # Unknown output is never logged: it may contain a path or credential.
     case "${_result}" in
         failed:unsafe-path|failed:missing-ancestor|failed:linked-or-nondirectory|failed:foreign-owner|failed:unsafe-ancestor|failed:outside-home|failed:directory-changed|failed:directory-create-unavailable|failed:permission-unverified|failed:acl-unverified|failed:operation-failed|failed:EACCES|failed:EPERM|failed:EROFS|failed:ENOSPC|failed:EDQUOT|failed:ENOENT|failed:ENOTDIR|failed:ELOOP|failed:EEXIST|failed:EIO)
             print_warning "Pi profile permissions ${_result}." ;;
@@ -4758,7 +4571,6 @@ PI_PROFILE_PERMISSIONS_JS
     return 1
 }
 
-# Disable only the delegation tool; retain the Claude Bridge provider and settings.
 disable_pi_askclaude() {
     local _result=""
     if ! command -v node &> /dev/null; then
@@ -4873,7 +4685,6 @@ try {
 // END PI_ASKCLAUDE_POLICY
 PI_ASKCLAUDE_POLICY_JS
     ); then
-        # Do not echo arbitrary helper output, exceptions, paths, or settings.
         print_warning "AskClaude policy failed; review global claude-bridge.json paths, JSON, and permissions."
         return 1
     fi
@@ -4883,7 +4694,7 @@ PI_ASKCLAUDE_POLICY_JS
         *) print_warning "AskClaude policy failed: unrecognized-result."; return 1 ;;
     esac
 }
-# End Pi AskClaude policy.
+: 'END_PI_ASKCLAUDE_POLICY'
 
 remove_pi_prose() {
     local _default_dir="${HOME}/.pi/agent"
@@ -4897,7 +4708,6 @@ remove_pi_prose() {
         print_error "Node.js is required to retire pi-prose from existing Pi profiles."
         return 1
     fi
-    # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
     if ! {
         _result=$(node --input-type=commonjs - "${HOME}" "${_active_dir}")
     } <<'PI_PROSE_RETIREMENT_JS'
@@ -5065,9 +4875,8 @@ PI_PROSE_RETIREMENT_JS
         *) print_error "Pi prose retirement did not return a valid result."; return 1 ;;
     esac
 }
-# End Pi prose retirement.
+: 'END_PI_PROSE_RETIREMENT'
 
-# Remove retired Pi RPIV packages (ask-user-question and todo)
 remove_pi_rpiv_packages() {
     local _had_failure=0
     local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
@@ -5090,8 +4899,6 @@ remove_pi_rpiv_packages() {
         return "${_had_failure}"
     fi
 
-    # Fallback when the pi CLI is unavailable: strip both package sources
-    # directly from settings.json.
     if [[ ! -f "${_settings_file}" ]]; then
         print_debug "Pi settings not found; Pi RPIV packages not installed."
         return 0
@@ -5124,7 +4931,6 @@ remove_pi_rpiv_packages() {
     return 0
 }
 
-# Refresh packages registered in the active global Pi profile after a read-only safety preflight.
 refresh_pi_packages() {
     local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
     local _result=""
@@ -5254,7 +5060,6 @@ PI_PACKAGE_REFRESH_JS
     return 1
 }
 
-# Repair only the active profile's managed adapter metadata; npm owns lockfiles.
 prepare_pi_mcp_adapter() {
     local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
     if ! command -v node &> /dev/null; then
@@ -5396,9 +5201,7 @@ prepare_pi_mcp_adapter() {
 PI_ADAPTER_POLICY_JS
 }
 
-# Install/update Pi MCP adapter extension
 setup_pi_mcp_adapter() {
-    # 2.33.0 uses remote preview dependencies rejected by managed npm policy.
     local _package="npm:pi-mcp-adapter@2.32.1"
     local _output=""
     local _list_output=""
@@ -5435,7 +5238,6 @@ setup_pi_mcp_adapter() {
     fi
 }
 
-# Install/update Pi Claude bridge extension
 setup_pi_claude_bridge() {
     local _package="npm:pi-claude-bridge"
     local _output=""
@@ -5466,7 +5268,6 @@ setup_pi_claude_bridge() {
     fi
 }
 
-# Remove legacy Pi Ask User and install/update the Pi companion packages
 setup_pi_companion_packages() {
     local _had_failure=0
     local _legacy_package="npm:pi-ask-user"
@@ -5520,13 +5321,11 @@ setup_pi_companion_packages() {
     return "${_had_failure}"
 }
 
-# Keep shared skills canonical for Pi and suppress stale direct/package collisions.
 configure_pi_skill_ownership() {
     [[ "${PI_PROFILE_MUTATIONS_BLOCKED:-0}" -eq 1 ]] && return 0
     matt_pocock_skill_policy ownership
 }
 
-# Configure pi-autoresearch without overriding Pi transcript search.
 configure_pi_autoresearch_shortcut() {
     local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
     local _config_dir="${_agent_dir}/extensions"
@@ -5551,7 +5350,6 @@ configure_pi_autoresearch_shortcut() {
     fi
 }
 
-# Remove Pi goal/autoresearch package sources from settings when disabled
 remove_pi_goal_autoresearch_settings() {
     local _settings_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
     local _settings_file="${_settings_dir}/settings.json"
@@ -5588,7 +5386,6 @@ remove_pi_goal_autoresearch_settings() {
     fi
 }
 
-# Install/update Pi goal and autoresearch extensions
 setup_pi_goal_autoresearch() {
     local _package=""
     local _output=""
@@ -5630,7 +5427,6 @@ setup_pi_goal_autoresearch() {
 }
 
 
-# Shared policy for full-suite inventory, safe retirement, and Pi ownership.
 matt_pocock_skill_policy() {
     if ! command -v node &> /dev/null; then
         print_warning "Node.js is unavailable; managed skill policy cannot run."
@@ -5952,7 +5748,6 @@ matt_pocock_skill_policy() {
 MANAGED_SKILL_POLICY_JS
 }
 
-# The full repository is selected by the installer. This inventory is for cleanup.
 matt_pocock_skills() {
     matt_pocock_skill_policy names
 }
@@ -5978,7 +5773,6 @@ remove_obsolete_matt_pocock_skills() {
     matt_pocock_skill_policy remove-obsolete
 }
 
-# Install all upstream categories, including experimental skills, for four agents.
 setup_matt_pocock_skills() {
     local _stage="" _npm_userconfig="" _npm_globalconfig=""
     local _matt_failed=0
@@ -5995,8 +5789,6 @@ setup_matt_pocock_skills() {
         return 1
     fi
     matt_pocock_skill_policy preflight || return 1
-    # Preserve the effective npm policy while the native CLI writes only to a
-    # disposable HOME. Keep cwd and all other npm configuration unchanged.
     if ! _npm_userconfig=$(npm config get userconfig 2>/dev/null) || [[ -z "${_npm_userconfig}" ]] ||
         ! _npm_globalconfig=$(npm config get globalconfig 2>/dev/null) || [[ -z "${_npm_globalconfig}" ]]; then
         print_warning "Cannot preserve npm configuration for staged skill installation."
@@ -6028,7 +5820,6 @@ setup_matt_pocock_skills() {
 }
 
 
-# Remove legacy Compound Engineering resources without affecting unrelated agent tooling.
 compound_path_is_within() {
     local _path="$1"
     local _root="$2"
@@ -6059,10 +5850,6 @@ compound_link_target_is_within() {
         return 0
     fi
 
-    # Legacy installer links use an absolute target. This lexical check also
-    # removes a dangling link after a previous partial cleanup, while keeping
-    # the trailing slash boundary from matching sibling directories. Do not
-    # trust an unresolved target with traversal segments.
     case "${_link_target}" in
         */../*|*/..) return 1 ;;
         "${_root_path}"/*) return 0 ;;
@@ -6323,8 +6110,6 @@ remove_compound_engineering_resources() {
             done < <(compound_pi_agent_names || true)
         fi
 
-        # The Pi plugin installer leaves its install manifest behind. The
-        # manifest is part of the legacy installation and must be removed too.
         _resource_path="${_agent_dir}/compound-engineering"
         if [[ -e "${_resource_path}" || -L "${_resource_path}" ]]; then
             if [[ -d "${_resource_path}" || -L "${_resource_path}" ]]; then
@@ -6390,7 +6175,6 @@ remove_compound_engineering_resources() {
     return 0
 }
 
-# Enable loginctl lingering so systemd user services survive logout
 enable_user_lingering() {
     if { loginctl show-user "$(whoami || true)" --property=Linger 2>/dev/null || true; } | grep -q 'Linger=yes'; then
         print_debug "User lingering already enabled."
@@ -6412,7 +6196,6 @@ enable_user_lingering() {
 }
 
 
-# Install mise (runtime version manager, replaces fnm and pyenv)
 install_mise() {
     if command -v mise &> /dev/null; then
         print_debug "mise already installed."
@@ -6429,11 +6212,9 @@ install_mise() {
     print_success "mise installed. Shell configuration will be managed by chezmoi."
 }
 
-# Fix 1Password repository GPG key issues
 fix_1password_repository() {
     print_message "Checking for 1Password repository issues..."
     
-    # Check if 1Password repository exists and has key issues
     local apt_policy
     apt_policy=$(apt-cache policy 2>/dev/null || true)
     local apt_update_output
@@ -6441,7 +6222,6 @@ fix_1password_repository() {
     if echo "${apt_policy}" | grep -q "1password.com" && echo "${apt_update_output}" | grep -q "EXPKEYSIG.*1Password"; then
         print_message "Fixing expired 1Password repository key..."
         
-        # Remove the problematic repository
         sudo rm -f /etc/apt/sources.list.d/1password.list
         sudo rm -f /usr/share/keyrings/1password-archive-keyring.gpg
         
@@ -6451,7 +6231,6 @@ fix_1password_repository() {
     fi
 }
 
-# Install 1Password CLI
 install_1password_cli() {
     if command -v op >/dev/null; then
         print_debug "1Password CLI already installed."
@@ -6460,7 +6239,6 @@ install_1password_cli() {
 
     print_message "Installing 1Password CLI..."
     
-    # Fix any existing repository issues first
     fix_1password_repository
     
     ensure_brew_available
@@ -6471,12 +6249,10 @@ install_1password_cli() {
     print_success "1Password CLI installed."
 }
 
-# Install Tailscale
 install_tailscale() {
     print_message "Skipping Tailscale installation as it is not needed on WSL."
 }
 
-# Install Doppler CLI for secrets management (non-work machines)
 install_doppler() {
     if command -v doppler &>/dev/null; then
         print_debug "Doppler CLI already installed."
@@ -6490,17 +6266,14 @@ install_doppler() {
 
     print_message "Installing Doppler CLI..."
 
-    # Import signing key
     local signing_key
     signing_key=$(curl -sLf --retry 3 --tlsv1.2 --proto "=https" \
         'https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key')
     echo "${signing_key}" | sudo gpg --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
 
-    # Add repo
     echo "deb [signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" \
         | sudo tee /etc/apt/sources.list.d/doppler-cli.list >/dev/null
 
-    # Install package
     sudo apt-get update -qq
     if sudo apt-get install -y doppler; then
         print_success "Doppler CLI installed."
@@ -6509,14 +6282,12 @@ install_doppler() {
     fi
 }
 
-# Personal machines retain Doppler; work machines have no replacement.
 install_secrets_manager() {
     if [[ "${WORK_MACHINE:-}" != "1" ]]; then
         install_doppler
     fi
 }
 
-# Update Google Cloud CLI components when the component manager is available.
 update_gcloud_components() {
     if ! command -v gcloud &>/dev/null; then
         print_debug "Google Cloud CLI not installed; skipping component update."
@@ -6553,7 +6324,6 @@ update_gcloud_components() {
     fi
 }
 
-# Install Google Cloud CLI on work machines.
 install_gcloud_cli() {
     if [[ "${WORK_MACHINE:-}" != "1" ]]; then
         print_debug "Skipping Google Cloud CLI (not a work machine)."
@@ -6596,7 +6366,6 @@ install_gcloud_cli() {
     fi
 }
 
-# Install and configure unattended-upgrades for automatic security updates
 setup_unattended_upgrades() {
     if ! can_sudo; then
         print_debug "No sudo access - skipping unattended-upgrades setup."
@@ -6614,7 +6383,6 @@ setup_unattended_upgrades() {
         print_success "unattended-upgrades installed."
     fi
 
-    # Configure automatic updates
     local auto_upgrades_conf="/etc/apt/apt.conf.d/20auto-upgrades"
     if [[ ! -f "${auto_upgrades_conf}" ]] || ! grep -q "Unattended-Upgrade" "${auto_upgrades_conf}"; then
         print_message "Configuring automatic security updates..."
@@ -6628,7 +6396,6 @@ APT::Periodic::AutocleanInterval "7";'
         print_debug "Automatic updates already configured."
     fi
 
-    # Note: WSL doesn't use systemd by default, so we check if it's available
     if command -v systemctl &>/dev/null && systemctl is-system-running &>/dev/null; then
         if systemctl is-enabled unattended-upgrades &>/dev/null; then
             print_debug "unattended-upgrades service already enabled."
@@ -6643,7 +6410,6 @@ APT::Periodic::AutocleanInterval "7";'
     fi
 }
 
-# Install OpenTofu (open-source Terraform fork)
 install_opentofu() {
     if command -v tofu &> /dev/null; then
         print_debug "OpenTofu is already installed."
@@ -6659,7 +6425,6 @@ install_opentofu() {
     fi
 }
 
-# Install cloudflared (Cloudflare Tunnel client)
 install_cloudflared() {
     if command -v cloudflared &> /dev/null; then
         print_debug "cloudflared is already installed."
@@ -6675,7 +6440,6 @@ install_cloudflared() {
     fi
 }
 
-# Install Turso CLI (libSQL database platform)
 install_turso() {
     if command -v turso &> /dev/null; then
         print_debug "Turso CLI is already installed."
@@ -6691,7 +6455,6 @@ install_turso() {
     fi
 }
 
-# Install lefthook (git hooks manager)
 install_lefthook() {
     if command -v lefthook &> /dev/null; then
         print_debug "lefthook is already installed."
@@ -6706,7 +6469,6 @@ install_lefthook() {
     print_success "lefthook installed."
 }
 
-# Install act for running GitHub Actions locally
 install_act() {
     if ! command -v act &> /dev/null; then
         print_message "Installing act (GitHub Actions runner)..."
@@ -6721,7 +6483,6 @@ install_act() {
     fi
 }
 
-# Install uv (fast Python package manager)
 install_uv() {
     if command -v uv &> /dev/null; then
         print_debug "uv is already installed."
@@ -6737,7 +6498,6 @@ install_uv() {
     fi
 }
 
-# Install the Tea workstation client on work machines.
 install_gitea_client() {
     if [[ "${WORK_MACHINE:-}" != "1" ]]; then
         print_debug "Skipping Gitea client (not a work machine)."
@@ -6794,7 +6554,6 @@ install_gitea_client() {
     print_success "Gitea client is ready (${version_output})."
 }
 
-# Install Bun JavaScript runtime and package manager
 install_bun() {
     if command -v bun &> /dev/null; then
         print_debug "Bun is already installed."
@@ -6809,13 +6568,11 @@ install_bun() {
         return 1
     fi
 
-    # Add bun to PATH for current session
     export PATH="${HOME}/.bun/bin:${PATH}"
     
     print_success "Bun installed."
 }
 
-# Install Socket Firewall for supply chain security scanning
 install_sfw() {
     if [[ "${WORK_MACHINE:-}" != "1" ]]; then
         print_debug "Skipping Socket Firewall (not a work machine)."
@@ -6827,7 +6584,6 @@ install_sfw() {
         return
     fi
 
-    # Ensure bun is available
     if [[ -d "${HOME}/.bun" ]]; then
         export PATH="${HOME}/.bun/bin:${PATH}"
     fi
@@ -6846,7 +6602,6 @@ install_sfw() {
     fi
 }
 
-# Install tmux plugins for session persistence
 install_tmux_plugins() {
     local plugin_dir=~/.tmux/plugins
     if [[ ! -d "${plugin_dir}/tpm" ]]; then
@@ -6872,7 +6627,6 @@ install_tmux_plugins() {
     print_success "tmux plugins installed and updated."
 }
 
-# Install iTerm2 shell integration for automatic profile switching
 install_iterm2_shell_integration() {
     local shell_integration_file="${HOME}/.iterm2_shell_integration.fish"
     if [[ -f "${shell_integration_file}" ]]; then
@@ -6920,7 +6674,6 @@ update_packages() {
         print_error "Homebrew update failed."
         return 1
     fi
-    # Pin tmux during upgrades without changing a pre-existing user pin.
     _brew_pins=$(brew list --pinned 2>/dev/null || true)
     if ! grep -Fxq tmux <<< "${_brew_pins}" && brew pin tmux 2>/dev/null; then
         _brew_tmux_pin_added=1
@@ -6979,13 +6732,11 @@ update_packages() {
     fi
 }
 
-# Setup ~/Code directory
 setup_code_directory() {
     local code_dir="${HOME}/Code"
 
     print_message "Setting up \$HOME/Code directory..."
 
-    # Create ~/Code directory if it doesn't exist
     if [[ ! -d "${code_dir}" ]]; then
         mkdir -p "${code_dir}"
         print_success "Created \$HOME/Code directory."
@@ -6994,7 +6745,6 @@ setup_code_directory() {
     fi
 }
 
-# Upload log to centralized collector (non-fatal)
 upload_log() {
     local setup_hostname=""
 
@@ -7052,10 +6802,6 @@ finish_setup_log() {
     return "${setup_status}"
 }
 
-# Warn if the WSL instance has a restart pending. Informational only; never
-# affects the run's exit status. The pending-reboot state is for the WSL
-# instance, not the Windows host (win.ps1 reports host state). Note: an instance
-# restart cannot apply new kernels; the WSL kernel ships with Windows.
 check_pending_reboot() {
     if [[ ! -f /var/run/reboot-required ]]; then
         print_debug "No WSL instance restart pending."
@@ -7076,9 +6822,7 @@ check_pending_reboot() {
     fi
 }
 
-# BEGIN BB PLUGIN REFRESH
-# Native main-server plugin refresh only; independent of preparation and Pi gates.
-# Version 2 | Last changed: Report controlled BB plugin refresh refusal reasons
+: 'BEGIN_BB_PLUGIN_REFRESH'
 refresh_bb_plugins() {
     local _bb_refresh_output _bb_refresh_status=0 _bb_refresh_line
     local _bb_refresh_operation _bb_refresh_reason _bb_refresh_diagnostic=0
@@ -7087,7 +6831,6 @@ refresh_bb_plugins() {
         print_error 'BB plugin refresh failed: preflight / python-unavailable.'
         return 1
     fi
-    # No inherited CLI/server URL is used, and no BB executable is invoked.
     _bb_refresh_output=$(bb_plugin_refresh_payload "${1:-ready}" 2>/dev/null) || _bb_refresh_status=$?
     if [[ ${#_bb_refresh_output} -gt 16384 || -z "${_bb_refresh_output}" ]]; then
         print_error 'BB plugin refresh failed: helper-result / unverified-result.'
@@ -7103,7 +6846,6 @@ refresh_bb_plugins() {
             'BB_PLUGIN_REFRESH updated') print_message 'BB native plugin updates processed; final verification determines success.' ;;
             'BB_PLUGIN_REFRESH failed') print_error 'BB plugin refresh failed: helper-result / unverified-result.'; _bb_refresh_status=1; _bb_refresh_diagnostic=1 ;;
             'BB_PLUGIN_REFRESH failed '*)
-                # Validate both fields in full before displaying any helper bytes.
                 if [[ ! "${_bb_refresh_line}" =~ ^BB_PLUGIN_REFRESH\ failed\ (preflight|discovery|identity|inventory|source-check|update-check|update|verification)\ ([a-z-]+)$ ]]; then
                     print_error 'BB plugin refresh failed: helper-result / unverified-result.'
                     return 1
@@ -7133,12 +6875,6 @@ refresh_bb_plugins() {
 
 bb_plugin_refresh_payload() {
     /usr/bin/python3 -I -S - "${HOME}" "${1:-ready}" <<'BB_PLUGIN_REFRESH_PY'
-"""BB native plugin refresh. Never import BB code, start a server, or select a CLI.
-
-The HTTP peer is proved against an account-owned main-server process before each
-request. Native API responses are data, not diagnostics. See the source contract
-in docs/research/2026-10-01-bb-plugin-refresh-api.md.
-"""
 import ctypes
 import http.client
 import json
@@ -7162,7 +6898,6 @@ class Refusal(Exception):
 
 
 class Diagnostics:
-    """Keep the first failure, not exception text or native response contents."""
     def __init__(self):
         self.operation = 'preflight'
         self.first = None
@@ -7230,7 +6965,6 @@ def fingerprint(info):
 
 
 class LocalFiles:
-    """Read-only, parent-first checks. Only the account HOME alias is resolved."""
     def __init__(self, home, uid):
         self.original_home = Path(home)
         self.home = self.original_home.resolve(strict=True)
@@ -7262,14 +6996,11 @@ class LocalFiles:
             need(stat.S_ISDIR(info.st_mode) if is_dir else stat.S_ISREG(info.st_mode),
                  'unverified-local-state')
             need(info.st_uid in (0, self.uid), 'foreign-local-state')
-            # Native AppImage extraction can sit below the system sticky /tmp.
-            # No other writable ancestor is accepted; descendants remain checked.
             sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
             need(not info.st_mode & 0o022 or sticky_tmp, 'writable-local-state')
             if not is_dir:
                 need(info.st_nlink == 1, 'unverified-local-state')
             previous = self.seen.get(str(current))
-            # Directory mtime changes with unrelated work; pin its identity/mode.
             mark = fingerprint(info)[:5] if is_dir or volatile else fingerprint(info)
             need(previous is None or previous == mark, 'changed-local-state')
             self.seen[str(current)] = mark
@@ -7302,7 +7033,7 @@ class LocalFiles:
                 try:
                     os.close(fd)
                 except Exception:
-                    pass  # Preserve the original failed observation.
+                    pass   
 
     def json(self, path, optional=False):
         raw = self.read(path, optional)
@@ -7310,7 +7041,6 @@ class LocalFiles:
 
 
 def command(args, allow_missing=False):
-    """Only native inspection tools, never a caller-selected executable."""
     result = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, timeout=10, close_fds=True,
                             env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL': 'C'})
@@ -7332,8 +7062,6 @@ def parse_environment(raw):
 
 
 def darwin_uid(text):
-    # Darwin uid_t is unsigned 32-bit; ps can render its signed alias. -1 and
-    # UINT32_MAX are unknown identities, not accounts. Never use abs(uid).
     need(re.fullmatch(r'(?:[0-9]{1,10}|-[1-9][0-9]{0,9})', text) is not None,
          'process-proof-unavailable')
     value = int(text)
@@ -7360,8 +7088,6 @@ class Processes:
             need(len(parts) == 2, 'process-proof-unavailable')
             if self.system == 'darwin':
                 uid = darwin_uid(parts[0])
-                # pid_t is signed 32-bit, but a process-table PID has no signed
-                # UID alias. Retain PID 0 (the kernel); reject negative/overflow.
                 need(re.fullmatch(r'[0-9]{1,10}', parts[1]) is not None
                      and int(parts[1]) <= (1 << 31) - 1, 'process-proof-unavailable')
             else:
@@ -7378,23 +7104,16 @@ class Processes:
                 need(root.stat().st_uid == self.uid, 'foreign-process')
                 stamp = bounded_read(root / 'stat', 65536).rsplit(b')', 1)[1].split()[19]
                 argv = [x.decode('utf-8', 'strict') for x in bounded_read(root / 'cmdline', 2097152).split(b'\0') if x]
-                # Do not inventory credentials of unrelated account processes.
                 env = bounded_read(root / 'environ', 2097152) if main_entry(argv) is not None else b''
                 again = bounded_read(root / 'stat', 65536).rsplit(b')', 1)[1].split()[19]
             except (FileNotFoundError, ProcessLookupError):
                 return None
             need(stamp == again, 'changed-process')
             return (argv, parse_environment(env), stamp)
-        # KERN_PROCARGS2 preserves argv boundaries (ps eww does not). Values are
-        # kept in memory, never printed or put in command arguments.
         raw_rows = command(['/bin/ps', '-p', str(pid), '-o', 'uid=,lstart='], allow_missing=True)
         if not raw_rows:
             return None
         need(raw_rows.isascii(), 'process-proof-unavailable')
-        # ps lstart uses C-locale %c. Accept one complete UID/start row, not
-        # extra rows or arbitrary suffixes, before KERN_PROCARGS2 reads anything
-        # private. Keep the native start text (including internal whitespace)
-        # as identity evidence; do not reinterpret its calendar or timezone.
         row = re.fullmatch(
             r'[ \t]*(-?[0-9]{1,10})[ \t]+'
             r'((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[ \t]+'
@@ -7421,8 +7140,6 @@ class Processes:
         return argv, parse_environment(b'\0'.join(values[argc:])), stamp
 
     def database_open(self, path):
-        # A native main server holds its bb.db connection. A stopped-data
-        # deferral requires kernel evidence, not just absence of a known argv.
         if self.system == 'darwin':
             return bool(command(['/usr/sbin/lsof', '-nP', '-Fpu', '--', str(path)], allow_missing=True))
         expected = path.stat()
@@ -7446,8 +7163,6 @@ class Processes:
             raw = command(['/usr/sbin/lsof', '-nP', '-a', '-p', str(pid), '-iTCP', '-FpnT']).decode('utf-8')
             expected = f'n127.0.0.1:{port}->127.0.0.1:{client_port}'
             return f'p{pid}' in raw.splitlines() and expected + '\nTST=ESTABLISHED' in raw
-        # Match the accepted server-side socket, not merely a listening port.
-        # A same-account ssh tunnel cannot satisfy this proof for a BB process.
         expected_local = f'0100007F:{port:04X}'
         expected_peer = f'0100007F:{client_port:04X}'
         matches = set()
@@ -7486,18 +7201,14 @@ def verify_package(files, entry):
         metadata = files.json(root / 'package.json', optional=True)
     except (Refusal, OSError):
         if root.name != 'bb-app':
-            return False  # no positive BB evidence in an unrelated application
+            return False   
         raise
     if not isinstance(metadata, dict) or metadata.get('name') != 'bb-app':
         need(root.name != 'bb-app', 'unverified-main-server')
-        # Recognize BB's source-workspace server without treating every unrelated
-        # project named server/dist/index.js as a BB installation.
         workspace = files.json(entry.parents[1] / 'package.json', optional=True)
         need(not isinstance(workspace, dict) or workspace.get('name') != '@bb/server', 'unsupported-native-contract')
         return False
     version = metadata.get('version')
-    # Native contract inspected at 0.44.0. Unknown versions must be reviewed,
-    # rather than silently assuming source/disabled-state semantics are stable.
     need(version == '0.44.0', 'unsupported-native-contract')
     need(metadata.get('bin', {}).get('bb-server') == 'dist/bb-server.js', 'unverified-main-server')
     files.inspect(entry)
@@ -7522,12 +7233,11 @@ def discover(files, processes, configured_data=None, block_default=False):
         if not verify_package(files, entry):
             continue
         need(len(argv) == 2, 'ambiguous-process')
-        # UID is the account identity; a manual server can use a custom HOME.
         home = env.get('HOME') or str(files.home)
         need(Path(home).is_absolute(), 'unverified-home')
         data = files.normalize(env.get('BB_DATA_DIR') or str(Path(home) / '.bb'))
         if block_default and data == files.home / '.bb':
-            continue  # opted-in Ubuntu readiness failed; caller retains failure
+            continue   
         files.inspect(data, directory=True)
         need(data.stat().st_uid == files.uid, 'foreign-local-state')
         need(files.read(data / 'bb.db', header=True) == b'SQLite format 3\0'
@@ -7551,7 +7261,7 @@ def discover(files, processes, configured_data=None, block_default=False):
             continue
         db = files.read(data / 'bb.db', optional=True, header=True)
         if db is None:
-            continue  # prepared CLI / machine daemon is not a main server
+            continue   
         need(info.st_uid == files.uid and (data / 'bb.db').stat().st_uid == files.uid
              and db[:16] == b'SQLite format 3\0', 'unverified-main-server')
         moved = files.json(data / 'server-moved.json', optional=True)
@@ -7562,7 +7272,7 @@ def discover(files, processes, configured_data=None, block_default=False):
                          for k in ('moveId', 'fromHostId', 'toHostId', 'toHostName', 'serverUrl'))
                  and type(moved.get('movedAt')) is int and moved['movedAt'] >= 0
                  and isinstance(moved.get('oldCopyEntries'), list), 'unverified-local-state')
-            continue  # historical main data now belongs to a remote server
+            continue   
         need(files.read(data / 'server-import.json', optional=True) is None, 'server-move-in-progress')
         runtime = files.json(data / 'bb-app-runtime.json', optional=True)
         if runtime is not None:
@@ -7588,7 +7298,7 @@ class NativeApi:
         failed = True
         try:
             connection.connect()
-            connection.auto_open = 0  # never reconnect after proving a socket
+            connection.auto_open = 0   
             client_port = connection.sock.getsockname()[1]
             until = min(self.deadline, time.monotonic() + 2)
             while not self.processes.peer_owned(s['pid'], s['port'], client_port):
@@ -7608,9 +7318,9 @@ class NativeApi:
                 refusal = ('plugin safe mode is on; turn it off with `bb plugin safe-mode off` '
                            'before you update "' + identity + '"')
                 if isinstance(result, dict) and result.get('error') == refusal:
-                    failed = False  # A deferral cannot hide an independent close failure.
+                    failed = False   
                     raise Refusal('safe-mode')
-            need(response.status == 200, 'native-request-failed')  # no redirects or remote fallback
+            need(response.status == 200, 'native-request-failed')   
             failed = False
             return result
         except (TimeoutError, socket.timeout):
@@ -7619,7 +7329,6 @@ class NativeApi:
             if not failed:
                 connection.close()
             else:
-                # Closing a failed request must not replace its causal refusal.
                 try:
                     connection.close()
                 except Exception:
@@ -7736,8 +7445,6 @@ def refresh(api, diagnostics=None):
         except Refusal as error:
             if type(error) is Refusal and error.args == ('safe-mode',):
                 return 'safe-mode', failed
-            # Unknown completion (including timeout) must not be retried or
-            # converted to success by a later current result.
             diagnostics.record(error)
             failed = True
     diagnostics.operation = 'verification'
@@ -7757,8 +7464,6 @@ def refresh(api, diagnostics=None):
             need(new['status'] in (('running',) if new['enabled'] else ('disabled',)), 'activation-unverified')
         failure = new['updateState'].get('lastFailure')
         need(failure is None or failure == old['updateState'].get('lastFailure'), 'activation-failed')
-    # A fresh native check catches incomplete/rolled-back results and concurrent
-    # new candidates. Never treat unavailable/unknown as deliberate exclusion.
     final = api.request('POST', '/api/v1/plugins/updates/check', {})
     need(isinstance(final, dict) and isinstance(final.get('results'), list), 'malformed-result')
     remaining = final['results']
@@ -7776,15 +7481,13 @@ def refresh(api, diagnostics=None):
 
 
 def run():
-    # Diagnostics are finite, controlled labels only. No paths, URLs, process
-    # arguments, native errors, plugin output, settings or credentials escape.
     labels = {'safe-mode', 'checked', 'updated', 'stopped', 'absent', 'failed'}
     diagnostics = Diagnostics()
     try:
         need(os.getuid() != 0, 'unsupported-account')
         deadline = time.monotonic() + 1800
         signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(Refusal('operation-timeout')))
-        signal.alarm(1800)  # include discovery and local filesystem inspection
+        signal.alarm(1800)   
         files = LocalFiles(sys.argv[1], os.getuid())
         processes = Processes(os.getuid())
         policy = sys.argv[2] if len(sys.argv) > 2 else 'ready'
@@ -7822,10 +7525,9 @@ if __name__ == '__main__':
     raise SystemExit(run())
 BB_PLUGIN_REFRESH_PY
 }
-# END BB PLUGIN REFRESH
+: 'END_BB_PLUGIN_REFRESH'
 
-# Installation only: keep this block identical in the five Bash scripts.
-# A private npm prefix avoids global BB bins and the enrollment installer's fallback.
+: 'BEGIN_BB_MACHINE_PREPARATION'
 bb_machine_existing_role() {
     local _file
     [[ -z "${BB_DATA_DIR:-}" && -z "${BB_APP_NPM_PREFIX:-}" ]] || return 0
@@ -8249,7 +7951,6 @@ bb_machine_package_state() {
     local _record='^blocked:(home|runtime|process|directory|service|artifact):([^:]+):(unknown|[0-7]{4}):(unverified|linked-path|non-directory|unsafe-ownership|writable-boundary|unsafe-file|malformed-metadata|referenced-copy|unsupported-platform|unsupported-runtime|process-conflict)$'
     local _relative='^~/[A-Za-z0-9_.@/-]+$'
     case "${_mode}" in preflight|reserve|verify) ;; *) return 1 ;; esac
-    # Bound even malformed/addon output before storing it. Never forward stderr.
     _result=$(set -o pipefail; bb_machine_package_state_payload "${_mode}" 2>/dev/null | head -c 4097 |
         node -e 'let text=""; process.stdin.on("data", b => { text += b; if (text.length > 4096 || /[^\x20-\x7e\n]/.test(text)) process.exit(1); }); process.stdin.on("end", () => { if (!/^(?:[ -~]+\n)+$/.test(text)) process.exit(1); process.stdout.write(text); });' 2>/dev/null) || _status=$?
     if [[ "${_status}" -eq 0 && "${_result}" == ok ]]; then return 0; fi
@@ -8270,7 +7971,6 @@ bb_machine_package_state() {
             fi
         done <<< "${_result}"
         if [[ "${_valid}" -eq 1 && "${_terminal}" -eq 1 && "${_count}" -le 8 ]]; then
-            # Validate the ENTIRE protocol before logging any record.
             while IFS=: read -r _line _op _path _observed _reason; do
                 [[ "${_line}" == blocked ]] || continue
                 print_error "BB preparation ${_mode}: operation=${_op} path=${_path} mode=${_observed} reason=${_reason}"
@@ -8283,7 +7983,6 @@ bb_machine_package_state() {
     return 1
 }
 
-# Reuse the preparation platform gate before dotfiles, without Node/npm or lifecycle work.
 bb_machine_platform_ready() {
     local _platform="$1" _kernel _release
     _kernel=$(uname -s) || return 1
@@ -8295,8 +7994,6 @@ bb_machine_platform_ready() {
     fi
 }
 
-# Chezmoi alone owns target convergence. Keep native config precedence and the
-# caller's stricter mask; known roles receive no preparation-driven restriction.
 with_bb_dotfiles_umask() {
     (
         local _platform="$1" _selection=1 _protect=0
@@ -8339,9 +8036,6 @@ setup_bb_machine() {
     if (( BASH_REMATCH[1] < 11 || (BASH_REMATCH[1] == 11 && BASH_REMATCH[2] < 19) )); then
         print_error 'BB preparation requires npm >=11.19 with native-addon allowlisting.'; return 1
     fi
-    # npm derives its default globalconfig from prefix. Capture the original
-    # global-install context BEFORE selecting our destination; retain native
-    # user/environment value precedence instead of copying or replacing policy.
     if ! _npm_userconfig=$(npm --global config get userconfig 2>/dev/null) ||
         ! _npm_globalconfig=$(npm --global config get globalconfig 2>/dev/null) ||
         [[ "${_npm_userconfig}" != /* || "${_npm_globalconfig}" != /* || "${_npm_userconfig}${_npm_globalconfig}" == *$'\n'* ]]; then
@@ -8365,7 +8059,6 @@ setup_bb_machine() {
     if ! ( umask 077; npm install --global --prefix "${_prefix}" "${_npm_context[@]}" --engine-strict --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher bb-app@latest < /dev/null >/dev/null 2>&1 ); then
         print_error 'BB preparation npm install failed; the owned partial copy can be retried.'; return 1
     fi
-    # Rebuild only native addons, including when the shared Node ABI/prefix changed.
     if ! ( umask 077; npm rebuild --global --prefix "${_prefix}" "${_npm_context[@]}" --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher better-sqlite3 node-pty @parcel/watcher < /dev/null >/dev/null 2>&1 ); then
         print_error 'BB preparation native-addon rebuild failed; no BB lifecycle command was run.'; return 1
     fi
@@ -8374,9 +8067,9 @@ setup_bb_machine() {
     print_message "Preparation CLI: ${_prefix}/bin/bb (shared Node must be on PATH)."
     print_message 'Next: open your ONE chosen BB server over private Tailscale, use its Add machine instructions, and manually run its enrollment command in this machine. Do not run bb-app to pair.'
 }
-# End shared BB machine preparation.
+: 'END_BB_MACHINE_PREPARATION'
 
-# BEGIN BB DESKTOP WRAPPER -- keep identical in all Bash entry points.
+: 'BEGIN_BB_DESKTOP_WRAPPER'
 install_bb_desktop() {
     local entry="$1" platform arch kernel result status=0
     if [[ "${HEADLESS:-}" == "1" ]]; then
@@ -8394,7 +8087,6 @@ install_bb_desktop() {
         print_error "bb desktop: platform inspection failed."
         return 1
     fi
-    # Rosetta reports x86_64 even on an Apple Silicon host.
     if [[ "${entry}:${platform}:${arch}" == "macos:Darwin:x86_64" ]] &&
         [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" == "1" ]]; then
         arch=arm64
@@ -8431,7 +8123,6 @@ install_bb_desktop() {
             *) ;;
         esac
     fi
-    # Only controlled diagnostic tokens cross the helper boundary, never stderr.
     if [[ "${result}" =~ ^failed:[a-z]+(-[a-z]+)*$ && "${status}" -ne 0 ]]; then
         print_error "bb desktop ${result}. Existing app/user/server state preserved; see README recovery/prerequisites."
     else
@@ -8439,14 +8130,13 @@ install_bb_desktop() {
     fi
     return 1
 }
-# END BB DESKTOP WRAPPER
+: 'END_BB_DESKTOP_WRAPPER'
 
 run_setup_tasks() {
     local _setup_had_errors=0
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
-    # Run the setup tasks
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
     echo -e "${GRAY}Version 232 | Last changed: Reject malformed Darwin BB process identity rows${NC}"
 
@@ -8456,10 +8146,8 @@ run_setup_tasks() {
 
     fail_unsupported_headless || return 1
 
-    # Create ~/.env.local (migrating old token files if needed)
     create_env_local
 
-    # Read flags as literal data, never executable shell input.
     setup_load_environment || return 1
 
 
@@ -8503,17 +8191,11 @@ run_setup_tasks() {
     print_section "Shared Directories"
     print_section "Dotfiles Management"
 
-    # Check if we have access (via SSH or deploy key)
-    # If not, try interactive deploy key setup
     if check_dotfiles_access || setup_dotfiles_deploy_key; then
-        # We have access, proceed with chezmoi setup
         install_chezmoi
         if ! initialize_chezmoi; then
             _setup_had_errors=1
         fi
-        # chezmoi init --apply overwrites ~/.ssh/config, removing the
-        # github-dotfiles host alias needed for deploy key access.
-        # Re-bootstrap it before any further chezmoi network operations.
         bootstrap_ssh_config
         configure_chezmoi_git
         update_chezmoi
@@ -8521,7 +8203,6 @@ run_setup_tasks() {
             print_error "Failed to apply chezmoi dotfiles."
             _setup_had_errors=1
         fi
-        # The apply may replace ~/.ssh/config; leave the deploy alias durable.
         bootstrap_ssh_config
         tmux source ~/.tmux.conf 2>/dev/null || true
     else
@@ -8578,7 +8259,6 @@ run_setup_tasks() {
             PI_PROFILE_MUTATIONS_BLOCKED=1
             _setup_had_errors=1
         fi
-        # Re-pin the adapter before any operation resolves the shared npm tree.
         if [[ "${_pi_go_ready}" -eq 1 ]] && prepare_pi_mcp_adapter; then
             local _pi_package_maintenance_ok=1
             setup_pi_mcp_adapter || { _setup_had_errors=1; _pi_package_maintenance_ok=0; }
@@ -8596,7 +8276,6 @@ run_setup_tasks() {
             _setup_had_errors=1
         fi
     else
-        # Do not run Pi package cleanup after a failed runtime preflight.
         if [[ "${PI_RUNTIME_PREFLIGHT_PASSED:-0}" -eq 1 ]] && prepare_pi_mcp_adapter; then
             if [[ "${BAN_PI_MCP_ADAPTER:-}" == "1" ]]; then
                 setup_pi_mcp_adapter || _setup_had_errors=1

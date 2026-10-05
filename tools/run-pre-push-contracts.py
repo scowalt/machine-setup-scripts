@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Version 1: run the complete pre-push contract set through mandatory containment.
-
-Invoked by lefthook under env -i and Python isolated mode. Tool arguments select
-existing native executables only; never invoke a shim/package manager to find or
-install them. See --help for explicit selections when system tools are absent.
-"""
 import argparse
 import os
 from pathlib import Path
@@ -17,14 +11,12 @@ SYSTEM_PATH = '/usr/bin:/bin'
 TOOLS = {'node': 'SETUP_TEST_NODE', 'pwsh': 'PWSH_BIN',
          'mise': 'SETUP_TEST_MISE', 'chezmoi': 'SETUP_TEST_CHEZMOI',
          'bun': 'SETUP_TEST_BUN'}
-# The audited direct suites supplement (never replace/filter) tests/*.sh.
 DIRECT_SUITES = ('test_fixture_containment.py', 'test_pre_push_contracts.py',
                  'test_macos_clt.py', 'test_homebrew_results.py',
                  'test_managed_skill_suite.py')
 
 
 def native_tool(name, value):
-    """Resolve a bounded explicit/system path without running user startup code."""
     selected = value or shutil.which(name, path=SYSTEM_PATH)
     if not selected or not Path(selected).is_absolute():
         raise ValueError(f'{name}: set {TOOLS[name]} to an existing absolute native executable (not a shim)')
@@ -51,7 +43,7 @@ def suites():
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description='Version 1: run the complete pre-push contract set through mandatory containment.\n\nInvoked by lefthook under env -i and Python isolated mode. Tool arguments select\nexisting native executables only; never invoke a shim/package manager to find or\ninstall them. See --help for explicit selections when system tools are absent.\n')
     for name, variable in TOOLS.items():
         parser.add_argument('--' + name, default='', help=f'native {name}; hook override: {variable}; default: {SYSTEM_PATH}')
     args = parser.parse_args(argv)
@@ -62,9 +54,6 @@ def main(argv=None):
         selected = suites()
     except ValueError as error:
         parser.error(str(error))
-    # Expose only these three selected executables, not their entire user PATH.
-    # Node/npm and PowerShell retain adjacent runtime assets as required by the
-    # existing runner; fixtures copy native runtimes before writable-prefix use.
     with tempfile.TemporaryDirectory(prefix='setup-hook-tools-', dir='/tmp') as directory:
         tool_dir = Path(directory)
         for name in ('mise', 'chezmoi', 'bun'):
@@ -72,9 +61,6 @@ def main(argv=None):
         command = ['/usr/bin/python3', '-I', str(ROOT / 'tests/run-fixture-matrix.py'),
                    '--node', str(tools['node']), '--pwsh', str(tools['pwsh']),
                    '--tool-path', SYSTEM_PATH + ':' + directory, *selected]
-        # No credentials, agent controls, Git overrides, preload/Python startup
-        # controls or optional live-probe flags reach the runner. It creates its
-        # own private homes/configs/stdio and compiler + kernel self-test gate.
         try:
             return subprocess.call(command, cwd=ROOT, env={'PATH': SYSTEM_PATH},
                                    stdin=subprocess.DEVNULL, close_fds=True)

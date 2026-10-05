@@ -2,29 +2,26 @@ pre-commit:
   commands:
     gitleaks:
       run: gitleaks protect --staged --no-banner
-
     shellcheck:
-      glob: "*.sh"
+      glob: '*.sh'
       run: bunx shellcheck {staged_files}
       stage_fixed: true
-      fail_text: "Shellcheck found issues in shell scripts"
-    
+      fail_text: Shellcheck found issues in shell scripts
     markdownlint:
-      glob: "*.md"
+      glob: '*.md'
       run: bunx markdownlint-cli --fix {staged_files}
       stage_fixed: true
-      fail_text: "Markdownlint found issues in markdown files"
-      
+      fail_text: Markdownlint found issues in markdown files
+    no-comments:
+      run: uv run --no-project --python 3.14 --with-requirements .comment-policy/requirements.txt python .comment-policy/check.py --staged
 pre-push:
   commands:
     shellcheck-all:
       run: bunx shellcheck *.sh
-      fail_text: "Shellcheck found issues in shell scripts"
-
+      fail_text: Shellcheck found issues in shell scripts
     contract-tests:
       run: env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tools/run-pre-push-contracts.py --node "${SETUP_TEST_NODE:-}" --pwsh "${PWSH_BIN:-}" --mise "${SETUP_TEST_MISE:-}" --chezmoi "${SETUP_TEST_CHEZMOI:-}" --bun "${SETUP_TEST_BUN:-}"
-      fail_text: "Contract tests failed"
-    
+      fail_text: Contract tests failed
     markdownlint-all:
       run: bunx markdownlint-cli *.md
-      fail_text: "Markdownlint found issues in markdown files"
+      fail_text: Markdownlint found issues in markdown files

@@ -1,7 +1,3 @@
-"""Source and inert extracted-runner contracts: legacy Paseo is unmanaged.
-
-Never source setup, inventory a daemon, execute an app/skill, or apply dotfiles.
-"""
 import os
 from pathlib import Path
 import re
@@ -22,7 +18,6 @@ PASEO_MACOS_HEADLESS_CANARY=1
 PASEO_VALIDATED_CMD=/not/executed
 PASEO_MUSE_DEFER_DAEMON_SETUP=1
 '''
-# Deliberately malformed legacy configuration is not a setup prerequisite.
 SENTINELS = ('.paseo/config.json', '.paseo/paseo.pid', '.paseo/auth.json',
              '.paseo/plugin-settings/paseo-plain/settings.json',
              '.paseo/plugin-data/paseo-plain/data.json',
@@ -67,7 +62,6 @@ class NonManagement(unittest.TestCase):
         for name in (*BASH, 'win.ps1'):
             source = (ROOT / name).read_text()
             with self.subTest(script=name):
-                # Version history text is the only permitted mention in scripts.
                 executable = '\n'.join(line for line in source.splitlines() if ' | Last changed: ' not in line)
                 self.assertNotRegex(executable.lower(), r'paseo|@getpaseo|paseo-plain')
                 self.assertIn('OPENCODE_GO_API_KEY', executable)
@@ -79,8 +73,6 @@ class NonManagement(unittest.TestCase):
         for name in BASH:
             source = (ROOT / name).read_text()
             names = set(re.findall(r'^(\w+)\(\) \{', source, re.M))
-            # Only the runner, log-result propagation, and env-file creation are
-            # real. Every provisioner/installer is inert at its function boundary.
             code = '\n'.join(f'{n}() {{ :; }}' for n in names)
             code += '\n' + function(source, 'run_setup_tasks') + '\n' + function(source, 'main')
             code += '\n' + function(source, 'create_env_local')
@@ -149,8 +141,6 @@ print_warning() { :; }
     @unittest.skipUnless(PWSH, 'Set PWSH_BIN for Windows inert caller/state fixtures')
     def test_windows_runner_preserves_legacy_state_and_pi_failure_result(self):
         source = (ROOT / 'win.ps1').read_text()
-        # Include inline parameter declarations, notably Write-Section($message),
-        # so unresolved stub names cannot trigger native module discovery.
         names = set(re.findall(r'^function ([\w-]+)(?=\s|\()', source, re.M))
         self.assertIn('Write-Section', names)
         code = "$ErrorActionPreference='Stop'\n" + '\n'.join(f'function {n} {{ return $true }}' for n in names)
@@ -171,8 +161,6 @@ finally { Add-Content $env:EVENTS finalized }
                 before = snapshot(home)
                 events = Path(tmp) / 'events'
                 fixture = Path(tmp) / 'caller.ps1'; fixture.write_text(code)
-                # Keep engine/module caches outside the account snapshot while
-                # both HOME spellings still identify the preserved account.
                 runtime = Path(tmp) / 'runtime'; runtime.mkdir()
                 result = subprocess.run([PWSH, '-NoProfile', '-File', str(fixture)], cwd=tmp,
                                         env={'PATH': os.environ['PATH'], 'HOME': str(home), 'USERPROFILE': str(home),

@@ -1,5 +1,3 @@
-# Data-only environment policy. Embedded verbatim; no scheduling or runtime dependency.
-# Version 2 | Last changed: Restore ordinary provisioning and retain literal dotenv parsing
 setup_environment_failure() {
     print_error "Failed: $1. Environment file preserved."
     return 1
@@ -35,13 +33,9 @@ setup_environment_value() {
         setup_trim "${value}"; value="${SETUP_TRIMMED}"
         case "${value}" in *[[:space:]]*|*\"*|*\'*) return 1 ;; *) ;; esac
     fi
-    # No escapes, interpolation, concatenation or multiline values. Backslashes
-    # are literal data; quoted command-looking text is never evaluated.
     SETUP_ENV_VALUE="${value}"
 }
 
-# The documented dotenv format is data, not shell code. No eval/source or expansion.
-# Unknown keys are ignored.
 setup_load_environment() {
     local environment_file="${HOME}/.env.local" line key value
     [[ -e "${environment_file}" || -L "${environment_file}" ]] || return 0
@@ -60,8 +54,6 @@ setup_load_environment() {
         setup_trim "${line#*=}"; value="${SETUP_TRIMMED}"
         setup_environment_value "${value}" || { setup_environment_failure 'unsupported environment-file value'; return 1; }
         value="${SETUP_ENV_VALUE}"
-        # BB_SERVER's explicit process value wins on Ubuntu, including 0.
-        # WSL's exact-1 headless gate also checks the file before this loader.
         [[ "${key}" != BB_SERVER || "${SETUP_ENTRY_PLATFORM:-}" != ubuntu || -z "${BB_SERVER:-}" ]] || continue
         export "${key}=${value}"
     done < "${environment_file}"

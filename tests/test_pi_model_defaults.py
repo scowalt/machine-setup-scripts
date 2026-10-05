@@ -1,4 +1,3 @@
-"""Exercise extracted setup functions, never full setup or real credentials."""
 import json
 import os
 from pathlib import Path
@@ -74,7 +73,6 @@ class ModelDefaultsTests(unittest.TestCase):
                                                 ("export ZAI_API_KEY='fixture-zai'\n" if key else ""))
                             initial_env = env_file.read_bytes()
                             settings = agent / "settings.json"
-                            # Fresh installs and upgrades must yield the same defaults.
                             self.assertEqual(self.run_function(script, home, agent if custom else None,
                                                                "configure_pi_defaults", work).returncode, 0)
                             self.assertEqual(json.loads(settings.read_text()),
@@ -119,8 +117,6 @@ class ModelDefaultsTests(unittest.TestCase):
                     env_before = env_file.read_bytes()
                     result = self.run_function(script, home, argument, "remove_pi_synthetic_models")
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    # The private runner path itself contains "fixture-". Remove
-                    # only this known non-secret path; retain the credential-prefix check.
                     self.assertNotIn("fixture-", (result.stdout + result.stderr).replace(str(home), "<HOME>"))
                     del initial["providers"]["synthetic"]
                     self.assertEqual(json.loads(models.read_text()), initial)
@@ -139,7 +135,6 @@ class ModelDefaultsTests(unittest.TestCase):
                         self.assertEqual([m["id"] for m in providers["zai"]["models"]], ["glm-5.3", "glm-5-turbo", "glm-4.7"])
                     self.assertEqual(env_file.read_bytes(), env_before)
                     self.assertEqual((agent / "auth.json").read_bytes(), auth_before)
-                    # Existing z.ai keys remain intact, even when the env file differs.
                     providers["zai"]["apiKey"] = "fixture-existing"
                     write_json(models, {"providers": providers})
                     self.assertEqual(self.run_function(script, home, argument, "seed_pi_zai_models").returncode, 0)

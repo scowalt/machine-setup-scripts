@@ -1,7 +1,3 @@
-"""Rollback regressions: extracted wrappers and private paths, never live setup.
-
-Run through run-fixture-matrix.py. All lifecycle/transport/task effects are inert.
-"""
 import os
 from pathlib import Path
 import re
@@ -20,7 +16,7 @@ def function(source, name):
     start = source.index(f'\n{name}() {{\n') + 1
     end = source.index('\n}\n', start) + 3
     block = source[start:end]
-    validate_function(block)  # Reject swallowed top-level code before evaluation.
+    validate_function(block)   
     return block
 
 
@@ -30,7 +26,6 @@ class Rollback(unittest.TestCase):
             source = (ROOT / name).read_text()
             for task_status, log_status in ((0, 0), (23, 0), (0, 1)):
                 with self.subTest(script=name, task_status=task_status, log_status=log_status), tempfile.TemporaryDirectory() as tmp:
-                    # Unknown production helpers fail, rather than falling through to PATH.
                     names = re.findall(r'^([A-Za-z_][A-Za-z_0-9]*)\(\) \{', source, re.M)
                     code = '\n'.join(f'{n}() {{ echo unexpected:{n}; return 99; }}' for n in names)
                     code += '''
@@ -51,7 +46,7 @@ finish_setup_log() { echo "finalized:$1"; return "$1"; }
                 root = Path(tmp)
                 home = root / 'home'
                 home.mkdir(mode=0o775)
-                home.chmod(0o775)  # Private enclosing root; never change the real HOME.
+                home.chmod(0o775)   
                 code_dir = home / 'Code'
                 code_dir.mkdir()
                 code_dir.chmod(0o775)
@@ -61,7 +56,6 @@ finish_setup_log() { echo "finalized:$1"; return "$1"; }
                 for path in (home / '.local', home / '.local/log', logs):
                     path.chmod(0o775)
                 source = (ROOT / name).read_text()
-                # Load definitions only from the shared policy, if still present.
                 policy = (ROOT / 'lib/setup-policy.bash').read_text()
                 helpers = '\n'.join(function(source, n) for n in ('setup_code_directory', 'start_setup_log', 'finish_setup_log'))
                 code = policy + '\n' + helpers + '''

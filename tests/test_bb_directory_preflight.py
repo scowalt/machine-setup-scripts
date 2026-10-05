@@ -1,4 +1,3 @@
-"""Version 2: stop after the real directory preflight without later failure handling."""
 import os
 import pathlib
 import subprocess
@@ -57,7 +56,6 @@ class BbDirectoryPreflightTests(unittest.TestCase):
         self.helpers.write_text(source[start:end])
 
     def snapshot(self):
-        # lstat and non-following traversal also cover linked fixtures' targets.
         paths = [self.root]
         for directory, dirs, files in os.walk(self.root, followlinks=False):
             paths.extend(pathlib.Path(directory) / name for name in dirs + files)
@@ -150,7 +148,6 @@ class BbDirectoryPreflightTests(unittest.TestCase):
                     backup.rename(directory)
 
     def test_ownership_and_metadata_failures_use_controlled_diagnostics(self):
-        # Inert stat responses model foreign ownership/failure without sudo/chown.
         reasons = {"foreign": "not owned by the setup account",
                    "failed": "could not inspect permissions",
                    "malformed": "invalid ownership or mode metadata"}

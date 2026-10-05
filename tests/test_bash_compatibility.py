@@ -1,10 +1,3 @@
-"""Bash 3.2 parser and literal helper-input regressions; never execute setup.
-
-Use the native /bin/bash on macOS, or put an existing Bash 3.2 binary named
-bash3.2 on the fixture runner's explicit --tool-path. No runtime downloads.
-Helper execution uses only validated definitions and a fake Node that records
-stdin, never evaluates it. Linux Bash 3.2 coverage is not native macOS rollout.
-"""
 from pathlib import Path
 import re
 import shutil
@@ -28,8 +21,6 @@ HELPERS = (
 
 
 def helper(source, name, delimiter):
-    # Start at the real definition and find its close AFTER the complete heredoc,
-    # not a brace belonging to the embedded JavaScript/Python/PowerShell program.
     block = re.search(rf'^{name}\(\) \{{\n.*?^{delimiter}\n.*?^\}}\n', source, re.M | re.S)[0]
     validate_function(block)
     payload = block.split("<<'" + delimiter + "'\n", 1)[1].split('\n' + delimiter + '\n', 1)[0] + '\n'
@@ -38,7 +29,6 @@ def helper(source, name, delimiter):
 
 class Compatibility(unittest.TestCase):
     def check_syntax(self, shell):
-        # -n is mandatory for BOTH entry-point paths. Neither path runs setup.
         for name in SCRIPTS:
             file = ROOT / name
             for piped in (False, True):
@@ -70,7 +60,6 @@ class Compatibility(unittest.TestCase):
                 source = (ROOT / name).read_text()
                 for function, delimiter, success in HELPERS:
                     block, payload = helper(source, function, delimiter)
-                    # Even a valid success token must not conceal a failed child.
                     for reply, status, expected in ((success, 0, 0), (success, 17, 1), ('invalid-result', 0, 1)):
                         with self.subTest(shell=shell, script=name, helper=function, status=status, reply=reply):
                             self.check_wrapper(shell, block, payload, function, reply, status, expected)

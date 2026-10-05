@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Contract v4: ordinary bounded managed-shell repair in offline shared-Node fixtures."""
 
 import json
 import os
@@ -159,7 +158,6 @@ print(state.get('arch', 'x86_64') if sys.argv[1:] == ['-m'] else 'Linux')
     def run(self, script="ubuntu.sh", command="ensure_pi_node_runtime"):
         prelude = "\n".join(f'{name}() {{ printf "%s\\n" "$*"; }}' for name in
                             ("print_debug", "print_message", "print_success", "print_warning", "print_error"))
-        # Real extracted installer, with unrelated package configuration isolated.
         prelude += '\nensure_npm_configuration() { return 0; }\n'
         return subprocess.run(
             ["/bin/bash", "--noprofile", "--norc", "-c", prelude + "\n" + extract(script) + "\n" + command],
@@ -348,8 +346,6 @@ state.write_text(json.dumps(data))
 
     @unittest.skipUnless(MISE, "mise is required for the real activation fixture")
     def test_real_mise_and_fish_activate_shared_node_after_setup_exits(self):
-        # Copy the trusted runtime into the fixture; never expose a writable directory
-        # symlink through which a failed repair could change the real installation.
         version = subprocess.check_output([NODE, "-p", "process.versions.node"], text=True).strip()
         real_node = Path(subprocess.check_output([NODE, "-p", "process.execPath"], text=True).strip()).resolve()
         if tuple(map(int, version.split(".")[:2])) < (22, 20):
@@ -387,12 +383,10 @@ state.write_text(json.dumps(data))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn(f'[tools]\nnode = "{version}"\n', config.read_text())
             self.assertIn('idiomatic_version_file_enable_tools = ["node"]', config.read_text())
-            # The parent PATH still has no managed Node. A separate fish must activate it.
             fresh = subprocess.run([FISH, "-l", "-c", 'node -p process.execPath'], cwd=home, env=env,
                                    capture_output=True, text=True, timeout=20)
             self.assertEqual(fresh.returncode, 0, fresh.stdout + fresh.stderr)
             self.assertEqual(Path(fresh.stdout.strip()).resolve(), fixture_node)
-            # A minimal Pi-like module exercises the exact missing-export startup failure.
             cli = home / 'pi-fixture.mjs'
             cli.write_text('#!/usr/bin/env node\nimport { globSync } from "node:fs"; console.log(typeof globSync);\n')
             cli.chmod(0o755)
@@ -401,7 +395,6 @@ state.write_text(json.dumps(data))
                                     '\nverify_shared_node_shell "$HOME/.local/bin/pi"'],
                                    cwd=home, env=env, capture_output=True, text=True, timeout=20)
             self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
-            # Optional read-only smoke of an explicitly supplied installed Pi CLI.
             real_pi = os.environ.get('PI_RUNTIME_TEST_CLI')
             if real_pi:
                 supplied = Path(real_pi)
@@ -412,7 +405,6 @@ state.write_text(json.dumps(data))
                                         capture_output=True, text=True, timeout=20)
                 self.assertEqual(actual.returncode, 0, actual.stdout + actual.stderr)
                 self.assertTrue(actual.stdout.strip())
-            # Ordinary HOME pin precedence must not be masked by explicit mise env arguments.
             (home / '.mise.toml').write_text('[tools]\nnode = "18.19.1"\n')
             conflict = subprocess.run(["/bin/bash", "-c", prelude + '\n' + extract("ubuntu.sh") +
                                       '\nensure_pi_node_runtime'], cwd=home, env=env,

@@ -1,4 +1,3 @@
-"""Contract v4: independent Pi/Go/package orchestration and catalog safety gates."""
 import json
 import os
 from pathlib import Path
@@ -23,7 +22,6 @@ class WiringTests(unittest.TestCase):
         return main[begin:end]
 
     def run_bash(self, name, scenario, catalog_fixture=None):
-        # Only the selected main block is executed, never a full setup script.
         inert = (
             "remove_rtk_resources", "remove_attention_span_resources", "setup_matt_pocock_skills",
             "configure_pi_defaults", "remove_pi_synthetic_models", "seed_pi_zai_models",
@@ -131,7 +129,6 @@ function Install-PiCli { $script:calls += 'pi-install'; $env:SCENARIO -ne 'pi-fa
 function Prepare-PiMcpAdapter { $script:calls += 'packages'; $env:SCENARIO -ne 'package-failure' }
 function Set-PiOpenCodeGoProvider { $script:calls += 'go'; $env:SCENARIO -ne 'go-failure' }
 '''
-        # Real wrapper is installed only after all other effects are mocked.
         real_code = code + '\nfunction Write-Success {}\nfunction Write-Debug {}\n' + go.wrapper('win.ps1')
         finish = "\n@{failed=$piSetupFailed;ready=$piOpenCodeGoReady;calls=$script:calls} | ConvertTo-Json -Compress\n"
         real_code += '\n' + block + finish

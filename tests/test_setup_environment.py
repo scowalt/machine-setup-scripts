@@ -1,4 +1,3 @@
-"""Retained data-only dotenv contracts; use the contained fixture runner."""
 import os
 from pathlib import Path
 import subprocess
@@ -36,7 +35,8 @@ class Environment(unittest.TestCase):
             with self.subTest(script=name):
                 source = (ROOT / name).read_text()
                 policy = (ROOT / 'lib' / ('setup-policy.ps1' if name.endswith('.ps1') else 'setup-policy.bash')).read_text().rstrip()
-                self.assertIn('# BEGIN SETUP ENVIRONMENT POLICY\n' + policy + '\n# END SETUP ENVIRONMENT POLICY', source)
+                marker = "$null = '" if name.endswith('.ps1') else ": '"
+                self.assertIn(marker + "BEGIN_SETUP_ENVIRONMENT_POLICY'\n" + policy + '\n' + marker + "END_SETUP_ENVIRONMENT_POLICY'", source)
                 for obsolete in ('setup_require_maintenance', 'setup_safe_tasks', 'setup_safe_directory', 'setup_policy_init',
                                  'Assert-SetupMaintenance', 'Invoke-SetupSafeTasks', 'Initialize-SetupPolicy', 'Assert-SetupSafeDirectory'):
                     self.assertNotIn(obsolete, source)

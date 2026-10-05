@@ -1,8 +1,3 @@
-"""Copy only trusted Node/npm runtime files into a disposable fixture prefix.
-
-A directory symlink is NOT read-only isolation: mise repair could otherwise write
-through it to the real installation. Never copy or execute installed agent tools.
-"""
 from pathlib import Path
 import shutil
 

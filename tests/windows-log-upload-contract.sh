@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Version 1 | Last changed: Guard recoverable Windows setup log uploads
-# Offline fixtures only. Never run full setup or upload test logs.
 set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"

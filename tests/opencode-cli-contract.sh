@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Version 1 | Last changed: Verify isolated OpenCode native policy and caller contracts
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 python3 tools/embed-opencode-cli.py --check

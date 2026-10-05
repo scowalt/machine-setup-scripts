@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""Version 1: pre-push dispatch regressions; never execute the unsafe hook.
-
-Run the real hook command only in a synthetic repository with the production
-dispatcher and an inert recording runner. Fake ELF files are never executed.
-"""
 import importlib.util
 import json
 from pathlib import Path
@@ -73,7 +68,6 @@ class DispatchTests(unittest.TestCase):
 
     def dispatch(self):
         command = hook_command()
-        # A broken/old hook must fail the assertion, NEVER execute its loop.
         self.assertTrue(command.startswith(PREFIX), command)
         return subprocess.run(['/bin/sh', '-c', command], cwd=self.root, env=self.env,
                               stdin=subprocess.DEVNULL, capture_output=True, text=True)
@@ -82,7 +76,6 @@ class DispatchTests(unittest.TestCase):
         result = self.dispatch()
         self.assertEqual(result.returncode, 0, result.stderr)
         record = json.loads(self.record.read_text())
-        # Python may add only LC_CTYPE during locale coercion, not inherited state.
         self.assertEqual(set(record['env']) - {'LC_CTYPE'}, {'PATH'})
         self.assertEqual(record['env']['PATH'], '/usr/bin:/bin')
         argv = record['argv']

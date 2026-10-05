@@ -1,7 +1,3 @@
-"""Benign boundary-drift and socket-construction regressions; no destinations.
-
-Run only through run-fixture-matrix.py. No production setup entry point is run.
-"""
 import os
 from pathlib import Path
 import shutil
@@ -26,6 +22,13 @@ main() {
 
 
 class ExtractionBoundary(unittest.TestCase):
+    def test_literal_trailing_spaces_preserve_constants_without_expanding_execution(self):
+        selected = definitions('NC="color"  \n' + REQUIRED)
+        self.assertIn('NC="color"', selected)
+        for source in ('NC=$(touch escaped)', 'NC="color"; touch escaped', 'NC="color" && touch escaped'):
+            with self.subTest(source=source):
+                self.assertNotIn('escaped', definitions(source + '\n' + REQUIRED))
+
     def test_changed_entry_invocation_and_top_level_code_are_not_emitted(self):
         for invocation in ('main', 'main --changed-signature', 'main "$@" --new-argument'):
             source = 'printf BAD > "$HOME/before-mocks"\n' + REQUIRED + invocation + '\n'
@@ -38,8 +41,6 @@ class ExtractionBoundary(unittest.TestCase):
                 self.assertNotIn('explicit caller only', run.stdout)
 
     def test_unsupported_early_closing_brace_cannot_smuggle_top_level_code(self):
-        # All three required functions precede the drift; swallowing a following
-        # NON-required function must not evade the required-name check.
         for close in ('}; printf BAD > "$HOME/before-mocks"',
                       '    }; printf BAD > "$HOME/before-mocks"',
                       ':; }; printf BAD > "$HOME/before-mocks"',
@@ -79,7 +80,6 @@ class ExtractionBoundary(unittest.TestCase):
             with self.subTest(importer=name), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 (root / 'tests').mkdir()
-                # This is a synthetic script, not the actual setup implementation.
                 (root / 'win.ps1').write_text('''param([switch]$Maintenance)
 function Initialize-SetupPolicy { param([switch]$Maintenance) }
 function Initialize-WindowsEnvironment {

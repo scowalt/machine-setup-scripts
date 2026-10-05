@@ -1,5 +1,3 @@
-# Data-only environment policy; no scheduling or runtime dependency.
-# Version 2 | Last changed: Restore ordinary provisioning and retain literal dotenv parsing
 function ConvertFrom-SetupEnvironmentValue {
     param([string]$Value)
     if ($Value.StartsWith('"') -or $Value.StartsWith("'")) {
@@ -14,7 +12,6 @@ function ConvertFrom-SetupEnvironmentValue {
     }
     $Value = ($Value -replace '(^|\s)#.*$', '').Trim()
     if ($Value -match '[\s''"]') { throw 'Unsupported environment-file value' }
-    # Backslashes and command-looking text are literal data, never evaluated.
     return $Value
 }
 
@@ -38,7 +35,6 @@ function Read-SetupEnvironment {
         if ($key -cnotmatch '^[A-Za-z_][A-Za-z_0-9]*$') { throw 'Unsupported environment-file key' }
         if ($keys -cnotcontains $key) { continue }
         $value = ConvertFrom-SetupEnvironmentValue $parts[1].Trim()
-        # Windows retains its exact-1 OR policy across process and file flags.
         if ($key -eq 'HEADLESS' -and $env:HEADLESS -eq '1') { continue }
         [Environment]::SetEnvironmentVariable($key, $value, 'Process')
     }

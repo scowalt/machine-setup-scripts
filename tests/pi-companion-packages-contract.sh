@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Version 3 | Last changed: Isolate companion fixtures during Pi prose retirement
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -84,7 +83,6 @@ MOCK_PI
     install_count=$(grep -Fxc -- "install ${package}" "${command_log}" || true)
     [[ "${install_count}" -eq 2 ]] || fail "${file}: expected ${package} to update on both setup runs, found ${install_count} installs"
 
-    # Regression guard: removed packages must not return on the next setup run.
     for package in \
         'npm:pi-prose' \
         'npm:@juicesharp/rpiv-ask-user-question' \

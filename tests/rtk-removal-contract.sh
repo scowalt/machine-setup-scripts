@@ -4,7 +4,6 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
 
-# Never source production top-level code; keep static checks in the real cwd.
 repo_root=$(python3 tests/extract_setup_fixture.py "${repo_root}") || exit 1
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
@@ -229,7 +228,6 @@ for file in "${bash_setup_scripts[@]}"; do
     run_cleanup_fixture "${file}"
 done
 
-# Mixed shared content must stop cleanup without deleting the file.
 mixed_root=$(mktemp -d)
 mkdir -p "${mixed_root}/home/.gemini"
 cat > "${mixed_root}/home/.gemini/GEMINI.md" <<'MIXED_GEMINI'
@@ -250,7 +248,6 @@ SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${source_without_main
 ' || fail 'ubuntu.sh: mixed Gemini content was not preserved with a strict failure'
 rm -rf "${mixed_root}"
 
-# A user file without RTK text stays in place while the generated hook is removed.
 user_gemini_root=$(mktemp -d)
 mkdir -p "${user_gemini_root}/home/.gemini/hooks"
 printf '# Personal instructions\n\nKeep this user text.\n' > "${user_gemini_root}/home/.gemini/GEMINI.md"
@@ -265,7 +262,6 @@ SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${source_without_main
 ' || fail 'ubuntu.sh: unrelated Gemini instructions were not preserved'
 rm -rf "${user_gemini_root}"
 
-# An unrelated executable at the historical binary path stays in place.
 foreign_root=$(mktemp -d)
 mkdir -p "${foreign_root}/home/.local/bin"
 cat > "${foreign_root}/home/.local/bin/rtk" <<'FOREIGN_RTK'

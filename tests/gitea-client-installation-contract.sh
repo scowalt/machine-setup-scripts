@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Version 2 | Last changed: Keep macOS Tea failures fatal through final aggregation
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
 
-# Never source production top-level code; keep static checks in the real cwd.
 repo_root=$(python3 tests/extract_setup_fixture.py "${repo_root}") || exit 1
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
@@ -33,8 +31,6 @@ assert_not_contains() {
     fi
 }
 
-# Each supported setup entry point must expose the Gitea client installer and
-# treat its failure as fatal.
 for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '^install_gitea_client\(\)' 'Gitea client installer'
     if [[ "${file}" == mac.sh ]]; then
@@ -47,7 +43,6 @@ done
 assert_contains win.ps1 '^function Install-GiteaClient \{' 'Windows Gitea client installer'
 assert_contains win.ps1 '^[[:space:]]*Install-GiteaClient$' 'Windows Gitea client setup call'
 
-# Non-work-machine runs must not invoke an installation source.
 for file in "${bash_setup_scripts[@]}"; do
     test_root=$(mktemp -d)
     mutation_log="${test_root}/mutations"
@@ -62,8 +57,6 @@ for file in "${bash_setup_scripts[@]}"; do
     rm -rf "${test_root}"
 done
 
-# Homebrew-backed entry points install the formula and verify the managed
-# executable on a work machine.
 for file in mac.sh ubuntu.sh wsl.sh bazzite.sh; do
     test_root=$(mktemp -d)
     mkdir -p "${test_root}/brew/bin"
@@ -90,7 +83,6 @@ for file in mac.sh ubuntu.sh wsl.sh bazzite.sh; do
     rm -rf "${test_root}"
 done
 
-# Existing Homebrew installations update through the same owner.
 for file in mac.sh ubuntu.sh wsl.sh bazzite.sh; do
     test_root=$(mktemp -d)
     mkdir -p "${test_root}/brew/bin"
@@ -114,7 +106,6 @@ for file in mac.sh ubuntu.sh wsl.sh bazzite.sh; do
     rm -rf "${test_root}"
 done
 
-# Homebrew errors are fatal and never switch the installation source.
 for file in mac.sh ubuntu.sh wsl.sh bazzite.sh; do
     test_root=$(mktemp -d)
     mkdir -p "${test_root}/brew/bin"
@@ -141,8 +132,6 @@ for file in mac.sh ubuntu.sh wsl.sh bazzite.sh; do
     rm -rf "${test_root}"
 done
 
-# A foreign tea command on the original PATH stops setup before mutation and is
-# left in place for the user to remediate.
 for file in mac.sh ubuntu.sh wsl.sh bazzite.sh; do
     test_root=$(mktemp -d)
     mkdir -p "${test_root}/foreign/bin" "${test_root}/brew/bin"
@@ -171,7 +160,6 @@ for file in mac.sh ubuntu.sh wsl.sh bazzite.sh; do
     rm -rf "${test_root}"
 done
 
-# Raspberry Pi uses Homebrew on a supported 64-bit target.
 test_root=$(mktemp -d)
 mkdir -p "${test_root}/brew/bin"
 brew_log="${test_root}/brew-calls"
@@ -196,8 +184,6 @@ SETUP_SCRIPT="${repo_root}/pi.sh" TEST_ROOT="${test_root}" BREW_LOG="${brew_log}
 grep -Fxq 'install tea' "${brew_log}" || fail 'pi.sh: supported architecture did not install the Tea formula'
 rm -rf "${test_root}"
 
-# An unsupported Homebrew target installs the latest official Tea binary only
-# after its published SHA-256 digest matches.
 test_root=$(mktemp -d)
 mkdir -p "${test_root}/home" "${test_root}/tmp"
 fixture="${test_root}/tea-fixture"
@@ -244,8 +230,6 @@ temp_entry=$(find "${test_root}/tmp" -mindepth 1 -print -quit) || fail 'pi.sh: c
 [[ -z "${temp_entry}" ]] || fail 'pi.sh: standalone install left temporary files'
 rm -rf "${test_root}"
 
-# A checksum mismatch is fatal, leaves the managed path untouched, and cleans
-# downloaded temporary files.
 test_root=$(mktemp -d)
 mkdir -p "${test_root}/home/.local/bin" "${test_root}/tmp"
 curl_log="${test_root}/curl-calls"
@@ -283,10 +267,8 @@ temp_entry=$(find "${test_root}/tmp" -mindepth 1 -print -quit) || fail 'pi.sh: c
 [[ -z "${temp_entry}" ]] || fail 'pi.sh: checksum failure left temporary files'
 rm -rf "${test_root}"
 
-# Native Windows uses the official latest-release binary, verifies the
-# published SHA-256 digest, owns a user-local executable, and cleans downloads.
 assert_contains win.ps1 'https://gitea\.com/api/v1/repos/gitea/tea/releases/latest' 'latest stable Tea release query'
-# shellcheck disable=SC2016 # Match literal PowerShell variables.
+# shellcheck disable=SC2016
 assert_contains win.ps1 'tea-\$version-windows-\$releaseArch\.exe' 'architecture-specific official Tea asset'
 assert_contains win.ps1 'checksums\.txt' 'published Tea checksum download'
 assert_contains win.ps1 'Get-FileHash .*Algorithm SHA256' 'Tea SHA-256 verification'
@@ -294,14 +276,11 @@ assert_contains win.ps1 '\.local[\\/]bin' 'user-local Tea install directory'
 assert_contains win.ps1 'SetupOriginalTeaCommand' 'original PATH conflict capture'
 assert_contains win.ps1 'Remove-Item .*tempDir.*Recurse.*Force' 'Tea temporary download cleanup'
 
-# Setup leaves authentication, token storage, credential helpers, and extra
-# completion files outside its managed footprint. There is no Tea opt-out.
 for file in "${bash_setup_scripts[@]}" win.ps1; do
     assert_not_contains "${file}" 'BAN_TEA|BAN_GITEA' 'Gitea client opt-out flag'
     assert_not_contains "${file}" 'tea[[:space:]]+login|tea[.]exe[[:space:]]+login' 'automated Tea authentication'
 done
 
-# User-facing setup version metadata stays consistent across platforms.
 for file in "${bash_setup_scripts[@]}" win.ps1; do
     assert_contains "${file}" 'Version [0-9]+ \| Last changed: .+' 'current version banner'
 done

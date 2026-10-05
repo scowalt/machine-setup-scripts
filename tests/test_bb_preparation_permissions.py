@@ -1,7 +1,3 @@
-"""Arcane regression: real dotfiles callers + native apply + inert preparation.
-
-No real source, lifecycle, network, user config or installed BB is executed.
-"""
 import json
 import re
 import subprocess
@@ -29,14 +25,10 @@ class PreparationPermissions(unittest.TestCase):
             apply = re.search(r'^        if ! [^\n]*chezmoi apply --force; then\n.*?^        fi$', main, re.M | re.S).group()
             apply = '_setup_had_errors=0\n' + apply + '\nresult=$_setup_had_errors'
         (case.root / 'dotfiles.sh').write_text('\n'.join(helpers))
-        # Reuse the shared argv-checking fixture, including Pi's verbose apply.
-        # This suite uses native mode only for full apply, never init/update.
         for name, body in [('chezmoi', CHEZMOI_FIXTURE), ('git', GIT_FIXTURE)]:
             case.write_exe(name, '#!/usr/bin/python3\n' + body)
         case.write_exe('tmux', '#!/bin/bash\nexit 0\n')
         case.env['FIXTURE_CALLS'] = str(case.root / 'calls')
-        # Explicit temporary destinations and no source scripts, templates,
-        # includes, credentials or inherited Git controls.
         (case.root / 'chezmoi.toml').write_text('[git]\nautoCommit=false\nautoPush=false\nautoPull=false\n')
         for relative, text in [('dot_config/systemd/user/fixture.service', '[Service]\nExecStart=/usr/bin/true\n'),
                                ('Library/LaunchAgents/fixture.plist', '<plist/>\n')]:
@@ -114,15 +106,12 @@ umask "$1"
                 managed = case.home / '.config/systemd/user/fixture.service'
                 managed.write_text('[Service]\nExecStart=/usr/bin/true\n')
                 managed.chmod(0o664)
-                # Private Linux ancestry excludes other account writers already;
-                # native dotfiles must still converge their managed modes.
                 out = case.run_helper(expected=0 if sys.platform == 'linux' else 1)
                 self.assertIn('not enrolled' if sys.platform == 'linux' else 'preflight failed', out)
                 for attempt in range(2):
                     self.assertEqual(self.run_stage(case, apply, native=True).returncode, 0)
                     self.assertEqual(managed.stat().st_mode & 0o777, 0o644)
                     self.assertIn('not enrolled', case.run_helper(platform))
-                # Unmanaged files remain unchanged, not silently chmodded/adopted.
                 unit = managed.with_name('unmanaged.service')
                 unit.write_text('fixture-secret: unrelated service\n')
                 unit.chmod(0o664)
@@ -148,8 +137,6 @@ umask "$1"
         config = case.root / 'chezmoi.toml'
         config.write_text('umask=0o002\n' + config.read_text())
         before = config.read_bytes()
-        # Existing managed directories reproduce chmod convergence, not only
-        # mkdir's extra inherited process-mask restriction on first creation.
         (case.home / '.config/systemd/user').mkdir(parents=True)
         self.run_stage(case, apply, native=True)
         out = case.run_helper(expected=0 if sys.platform == 'linux' else 1)

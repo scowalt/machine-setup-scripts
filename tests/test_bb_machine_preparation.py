@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Extracted preparation helpers only; no installed BB code or lifecycle is executed."""
 import hashlib
 import io
 import json
@@ -16,12 +15,11 @@ import unittest
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = ["ubuntu", "mac", "pi", "bazzite", "wsl"]
 NODE = subprocess.check_output(["node", "-p", "process.execPath"], text=True).strip()
-# mise's npm executable is a shell wrapper; use its native JS entry in offline fixtures.
 NPM = str(Path(NODE).parent.parent / 'lib/node_modules/npm/bin/npm-cli.js')
 if not Path(NPM).is_file():
     NPM = str(Path(shutil.which("npm")).resolve())
-START = "# Installation only: keep this block identical in the five Bash scripts."
-END = "# End shared BB machine preparation."
+START = ": 'BEGIN_BB_MACHINE_PREPARATION'"
+END = ": 'END_BB_MACHINE_PREPARATION'"
 SOURCES = {n: (REPO / (n + ".sh")).read_text() for n in SCRIPTS}
 BLOCK = SOURCES["ubuntu"].split(START, 1)[1].split(END, 1)[0]
 BINS = {n: f"dist/{n}.js" for n in ("bb", "bb-app", "bb-server", "bb-host-daemon")}
@@ -100,8 +98,6 @@ const definitions = require(path.join(npmPath, 'node_modules/@npmcli/config/lib/
         self.write_exe("uname", '#!/bin/bash\nif [[ "$1" == -s ]]; then echo "${KERNEL:-Linux}"; else echo "${RELEASE:-6.6.0-microsoft-standard-WSL2}"; fi\n')
         for tool in ["systemctl", "launchctl", "tailscale", "curl", "wget", "bun", "sudo", "ssh", "nohup"]:
             self.write_exe(tool, '#!/bin/bash\necho "FORBIDDEN $0 $*" >> "$EVENTS"; exit 97\n')
-        # This is an inert native-npm command fixture, not a success-only stub.
-        # It validates every argv, destination and scoped policy before writing artifacts.
         self.write_exe("npm", f"#!{sys.executable}\n" + '''import json, os, pathlib, subprocess, sys
 root=pathlib.Path(os.environ['FIXTURE_ROOT']); actual=sys.argv[1:]
 with open(os.environ['EVENTS'],'a') as f: f.write('npm '+json.dumps(actual)+'\\n')
@@ -326,7 +322,6 @@ bb_machine_package_state preflight
             self.assertEqual(BLOCK, source.split(START, 1)[1].split(END, 1)[0])
 
     def test_system_home_alias_and_runtime_boundaries(self):
-        # Virtual filesystem only: never touch the host /home or simulate with sudo.
         code = BLOCK.split("<<'BB_MACHINE_STATE'\n", 1)[1].split('\nBB_MACHINE_STATE', 1)[0]
         driver = r'''
 const vm = require('node:vm');
@@ -384,7 +379,6 @@ process.exit(fakeProcess.exitCode);
                     self.assertEqual(snapshot(self.home), before)
                     self.assertEqual(self.log(), "")
                 p.unlink()
-                # Remove the test's empty enrollment root as it too is a deferral.
                 if (self.home / ".bb-machines").exists():
                     shutil.rmtree(self.home / ".bb-machines")
                 if (self.home / ".config/setup-bb-server").exists():
@@ -446,7 +440,6 @@ process.exit(fakeProcess.exitCode);
         target = self.home / 'other.service'
         target.write_text('[Service]\nExecStart=/usr/bin/true\n')
         unit.symlink_to(target)
-        # Homebrew-style LaunchAgent: a relative leaf link through an opt link.
         cellar = self.home / 'homebrew/Cellar/example/1.0'
         cellar.mkdir(parents=True)
         brew_target = cellar / 'example.plist'
@@ -460,7 +453,7 @@ process.exit(fakeProcess.exitCode);
         empty = unit.with_name('empty.service')
         empty.write_text('')
         before = snapshot(self.home)
-        self.run_helper()  # Fresh install, followed by safe rerun, leaves all links/targets alone.
+        self.run_helper()   
         self.run_helper()
         after = {row[0]: row for row in snapshot(self.home)}
         for row in before:
@@ -478,11 +471,10 @@ process.exit(fakeProcess.exitCode);
         self.assertNotIn('npm', self.log())
         self.assertEqual(snapshot(self.home), before)
         brew_target.write_text('<plist/>')
-        # Unknown or unsafe read targets cannot be treated as proven unrelated.
         target.unlink()
-        self.run_helper(expected=1)  # Dangling reference.
+        self.run_helper(expected=1)   
         os.mkfifo(target)
-        self.run_helper(expected=1)  # No blocking read of the FIFO.
+        self.run_helper(expected=1)   
         target.unlink()
         target.write_text('unrelated')
         target.chmod(0o666)
@@ -522,7 +514,6 @@ process.exit(fakeProcess.exitCode);
         self.globalconfig.write_text('ignore-scripts=false\nregistry=https://fixture.invalid/\nallow-git=none\nallow-remote=none\n')
         self.globalconfig.write_text(self.globalconfig.read_text() + '//fixture.invalid/:_authToken=inert-fixture-token\n')
         self.run_helper(NATIVE='1', ASSERT_FIXTURE_AUTH='1')
-        # Native user and environment value precedence must survive the path pin.
         self.globalconfig.write_text(self.globalconfig.read_text().replace('ignore-scripts=false', 'ignore-scripts=true'))
         self.userconfig.write_text('ignore-scripts=false\nregistry=https://user.fixture.invalid/\n')
         self.run_helper(NATIVE='1', ASSERT_FIXTURE_AUTH='1')
@@ -542,7 +533,6 @@ process.exit(fakeProcess.exitCode);
         self.assertNotIn('inert-fixture-token', self.log())
         selected_global = self.root / 'selected global.npmrc'
         selected_global.write_text(self.globalconfig.read_text().replace('fixture.invalid/', 'selected.fixture.invalid/'))
-        # Explicit config-path overrides are captured, not replaced by defaults.
         self.run_helper(NATIVE='1', NPM_CONFIG_GLOBALCONFIG=str(selected_global), NPM_CONFIG_USERCONFIG=str(self.root / 'absent-user.npmrc'), npm_config_ignore_scripts='false')
         last = [json.loads(line) for line in (self.root / 'native-config.jsonl').read_text().splitlines()][-2:]
         for item in last:
@@ -569,7 +559,7 @@ process.exit(fakeProcess.exitCode);
         manifest.write_bytes(original)
         manifest.unlink()
         os.mkfifo(manifest)
-        self.run_helper(expected=1)  # Must fail promptly rather than open the FIFO.
+        self.run_helper(expected=1)   
 
     @unittest.skipUnless(sys.platform == 'linux', 'Linux private-ancestor permission proof')
     def test_private_readonly_service_references_converge_without_chmod(self):
@@ -612,7 +602,6 @@ process.exit(fakeProcess.exitCode);
                     self.assertNotIn('npm', self.log())
                     self.assertEqual(snapshot(self.home), before)
                     p.chmod(0o700)
-        # Safe relative service names are useful diagnostics; their contents stay secret.
         for name in ['.config/systemd/user/ordinary.service', 'Library/LaunchAgents/ordinary.plist']:
             p = self.home / name
             p.write_text('fixture-secret: never print service contents\n')
@@ -655,7 +644,7 @@ process.exit(fakeProcess.exitCode);
         self.assertEqual(snapshot(self.home), before)
 
     def test_helper_terminal_protocol_fails_closed_without_echoing_unknown_output(self):
-        (self.tools / 'node').unlink()  # Never overwrite the actual Node symlink target.
+        (self.tools / 'node').unlink()   
         for output, status in [('fixture-secret', 1), ('ok\\nfixture-secret', 0),
                                ('ok', 1), ('', 0), ('process-inventory:account:process-conflict', 0),
                                ('process-inventory:account:fixture-secret', 1)]:
@@ -728,8 +717,6 @@ process.exit(fakeProcess.exitCode);
         self.run_helper(expected=1, KERNEL="MINGW64_NT")
 
     def test_native_npm_tarball_and_prefix_abi_transition(self):
-        # Actual native npm, entirely offline, with bundled inert addon fixtures.
-        # No BB code, real native build, network, live package tree or user npmrc.
         self.package(native=True)
         self.userconfig.write_text("ignore-scripts=true\n")
         self.run_helper(NATIVE="1", expected=1)
@@ -757,8 +744,6 @@ process.exit(fakeProcess.exitCode);
                 main = re.search(r"^run_setup_tasks\(\) \{\n.*?^\}", source, re.M | re.S).group()
                 names = set(re.findall(r"^(\w+)\(\)\s*\{", source, re.M))
                 stubs = "\n".join(f"{n}() {{ :; }}" for n in names if n != "run_setup_tasks")
-                # Every setup operation is inert. Only the real runner control flow
-                # and Ubuntu selection / WSL rejection are evaluated.
                 setup = stubs + "\n" + main + '''
 check_dotfiles_access() { return 1; }
 setup_dotfiles_deploy_key() { return 1; }
@@ -770,7 +755,6 @@ remove_compound_engineering_resources() { echo unrelated >> "$EVENTS"; }
 print_warning() { echo "$*"; }
 '''
                 if platform == "mac":
-                    # Installed brew is inert; SDK compatibility is not a prep gate.
                     setup += '''
 brew() { :; }
 command() {

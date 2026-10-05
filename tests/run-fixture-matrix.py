@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Linux-only, opt-in fixture runner with kernel-enforced outbound denial.
-
-Never fall back to an uncontained command. This is not a filesystem/process
-sandbox: fixtures must still extract real helpers, mock effects, and use temp
-roots. Optional live app/extension/catalog integration controls are NOT inherited.
-"""
 import argparse
 import json
 import os
@@ -17,7 +11,6 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def environment(home, path, sandbox=None, pwsh=None):
-    """Construct before launching even the dynamically linked compiler/launcher."""
     env = {
         'PATH': path, 'HOME': str(home), 'USERPROFILE': str(home),
         'USER': 'scowalt', 'LOGNAME': 'scowalt', 'USERNAME': 'scowalt',
@@ -52,7 +45,7 @@ def prepare_home(path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description='Linux-only, opt-in fixture runner with kernel-enforced outbound denial.\n\nNever fall back to an uncontained command. This is not a filesystem/process\nsandbox: fixtures must still extract real helpers, mock effects, and use temp\nroots. Optional live app/extension/catalog integration controls are NOT inherited.\n')
     parser.add_argument('--node', required=True, type=Path, help='Existing native Node binary, not a mise shim')
     parser.add_argument('--pwsh', type=Path, help='Existing PowerShell binary; never downloaded')
     parser.add_argument('--tool-path', default='/usr/bin:/bin', help='Explicit audited executable directories; no inherited PATH')
@@ -60,8 +53,6 @@ def main():
     parser.add_argument('--artifact-parent', type=Path, default=Path('/tmp'))
     parser.add_argument('tests', nargs='+', help='Explicit tests/*.sh or tests/test_*.py paths; no arbitrary command')
     args = parser.parse_args()
-    # Private fixture descendants too, not only the top-level suite HOME. Tests
-    # exercising other masks set them explicitly inside their isolated process.
     os.umask(0o077)
     if os.uname().sysname != 'Linux':
         parser.error('kernel sandbox requires Linux; no uncontained fallback')
@@ -93,8 +84,6 @@ def main():
     for stage, command, timeout in preflights:
         diagnostic = root / (stage + '.log')
         try:
-            # Private from creation; never inherit socket-backed harness stdio,
-            # even for compilation or mandatory kernel-filter verification.
             fd = os.open(diagnostic, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, 'w') as output:
                 result = subprocess.run(command, env=clean, cwd=build_home,
@@ -122,7 +111,6 @@ def main():
             try:
                 status = child.wait(timeout=args.timeout)
             except subprocess.TimeoutExpired:
-                # Only the new fixture process group, never an existing server.
                 import signal
                 os.killpg(child.pid, signal.SIGKILL)
                 child.wait()

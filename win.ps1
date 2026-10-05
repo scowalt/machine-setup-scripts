@@ -1,5 +1,3 @@
-# NOTE: starship installed via WinGet for Windows ecosystem integration
-# DO NOT change to other methods - WinGet provides automatic updates and system integration
 $wingetPackages = (
     "tailscale.tailscale",
     "Readdle.Spark",
@@ -31,12 +29,11 @@ $wingetPackages = (
     "Notion.ntn"
 )
 
-# Define Nerd Font symbols using Unicode code points
-$arrow = [char]0xf0a9      # Arrow icon for actions
-$success = [char]0xf00c    # Checkmark icon for success
-$warnIcon = [char]0xf071   # Warning icon for warnings
-$failIcon = [char]0xf00d   # Cross icon for errors
-$sparkles = [char]0x2728   # Sparkles for completion
+$arrow = [char]0xf0a9       
+$success = [char]0xf00c     
+$warnIcon = [char]0xf071    
+$failIcon = [char]0xf00d    
+$sparkles = [char]0x2728    
 
 $script:SetupOriginalPath = $env:PATH
 $script:SetupOriginalClaudeCommand = $null
@@ -59,7 +56,6 @@ try {
 }
 catch {}
 
-# Define print functions for consistency
 function Write-Section($message) {
     Write-Host "`n=== $message ===" -ForegroundColor White -BackgroundColor DarkBlue
     Write-Host ""
@@ -85,9 +81,7 @@ function Write-Debug($message) {
     Write-Host "  $message" -ForegroundColor DarkGray
 }
 
-# BEGIN SETUP ENVIRONMENT POLICY
-# Data-only environment policy; no scheduling or runtime dependency.
-# Version 2 | Last changed: Restore ordinary provisioning and retain literal dotenv parsing
+$null = 'BEGIN_SETUP_ENVIRONMENT_POLICY'
 function ConvertFrom-SetupEnvironmentValue {
     param([string]$Value)
     if ($Value.StartsWith('"') -or $Value.StartsWith("'")) {
@@ -102,7 +96,6 @@ function ConvertFrom-SetupEnvironmentValue {
     }
     $Value = ($Value -replace '(^|\s)#.*$', '').Trim()
     if ($Value -match '[\s''"]') { throw 'Unsupported environment-file value' }
-    # Backslashes and command-looking text are literal data, never evaluated.
     return $Value
 }
 
@@ -126,18 +119,16 @@ function Read-SetupEnvironment {
         if ($key -cnotmatch '^[A-Za-z_][A-Za-z_0-9]*$') { throw 'Unsupported environment-file key' }
         if ($keys -cnotcontains $key) { continue }
         $value = ConvertFrom-SetupEnvironmentValue $parts[1].Trim()
-        # Windows retains its exact-1 OR policy across process and file flags.
         if ($key -eq 'HEADLESS' -and $env:HEADLESS -eq '1') { continue }
         [Environment]::SetEnvironmentVariable($key, $value, 'Process')
     }
 }
-# END SETUP ENVIRONMENT POLICY
+$null = 'END_SETUP_ENVIRONMENT_POLICY'
 
-# Create consolidated environment file (~/.env.local) and migrate old token files
+$null = 'BEGIN_SETUP_ENVIRONMENT_FILE'
 function New-TokenPlaceholders {
     $envLocalPath = Join-Path $env:USERPROFILE ".env.local"
 
-    # Migrate old token files into ~/.env.local
     $oldTokenFiles = @(".gh_token", ".op_token")
     foreach ($oldFile in $oldTokenFiles) {
         $oldPath = Join-Path $env:USERPROFILE $oldFile
@@ -155,7 +146,6 @@ function New-TokenPlaceholders {
         }
     }
 
-    # Create placeholder ~/.env.local if it doesn't exist
     if (-not (Test-Path $envLocalPath)) {
         @"
 # Machine-specific environment variables
@@ -190,7 +180,6 @@ function New-TokenPlaceholders {
     }
 }
 
-# Read KEY=1 guards from the process environment or ~/.env.local.
 function Test-EnvLocalFlag {
     param([Parameter(Mandatory=$true)][string]$Name)
 
@@ -229,7 +218,6 @@ function Assert-HeadlessUnsupported {
     throw "Unsupported HEADLESS=1 setup on Windows"
 }
 
-# Install the Tea workstation client on work machines.
 function Install-GiteaClient {
     if (-not (Test-EnvLocalFlag "WORK_MACHINE")) {
         Write-Debug "Skipping Gitea client (not a work machine)."
@@ -326,7 +314,6 @@ function Install-GiteaClient {
     Write-Success "Gitea client is ready ($($versionOutput -join ' '))."
 }
 
-# Personal machines retain Doppler; work machines have no replacement.
 function Install-SecretsManager {
     if (-not (Test-EnvLocalFlag "WORK_MACHINE")) {
         if (Get-Command doppler -ErrorAction SilentlyContinue) {
@@ -343,7 +330,6 @@ function Install-SecretsManager {
     }
 }
 
-# Update Google Cloud CLI components when the component manager is available.
 function Update-GcloudComponents {
     if (-not (Get-Command gcloud -ErrorAction SilentlyContinue)) {
         Write-Debug "Google Cloud CLI not installed; skipping component update."
@@ -370,7 +356,6 @@ function Update-GcloudComponents {
     }
 }
 
-# Install Google Cloud CLI on work machines.
 function Install-GcloudCli {
     if (-not (Test-EnvLocalFlag "WORK_MACHINE")) {
         Write-Debug "Skipping Google Cloud CLI (not a work machine)."
@@ -403,7 +388,6 @@ function Install-Chezmoi {
         Write-Debug "chezmoi is already installed."
     }
 
-    # Initialize chezmoi if not already initialized
     $chezmoiConfigPath = "$HOME\AppData\Local\chezmoi"
     if (-not (Test-Path $chezmoiConfigPath)) {
         Write-Host "$arrow Initializing chezmoi with scowalt/dotfiles..." -ForegroundColor Cyan
@@ -414,7 +398,6 @@ function Install-Chezmoi {
         Write-Debug "chezmoi is already initialized."
     }
 
-    # Configure chezmoi for auto-commit, auto-push, and auto-pull
     $chezmoiTomlPath = "$HOME\.config\chezmoi\chezmoi.toml"
     if (-not (Test-Path $chezmoiTomlPath)) {
         Write-Host "$arrow Configuring chezmoi with auto-commit, auto-push, and auto-pull..." -ForegroundColor Cyan
@@ -436,13 +419,10 @@ autoPull = true
     Write-Host "$success chezmoi dotfiles applied." -ForegroundColor Green
 }
 
-# Function to update chezmoi dotfiles repository to latest version
 function Update-Chezmoi {
     $chezmoiConfigPath = "$HOME\AppData\Local\chezmoi"
     if (Test-Path $chezmoiConfigPath) {
         Write-Host "$arrow Updating chezmoi dotfiles repository..." -ForegroundColor Cyan
-        # Reset any dirty state (merge conflicts, uncommitted changes) before pulling.
-        # The remote repo is the source of truth — local edits are safe to discard.
         if (Test-Path "$chezmoiConfigPath\.git") {
             git -C $chezmoiConfigPath reset --hard HEAD 2>$null | Out-Null
             git -C $chezmoiConfigPath merge --abort 2>$null | Out-Null
@@ -466,7 +446,6 @@ $githubKeysUrl = "https://github.com/$githubUsername.keys"
 $localKeyPath = "$HOME\.ssh\id_rsa.pub"
 
 function Test-GithubSSHKeyAlreadyAdded {
-    # Fetch existing GitHub SSH keys
     try {
         $githubKeys = Invoke-RestMethod -Uri $githubKeysUrl -ErrorAction Stop
         $githubKeyPortions = $githubKeys -split "`n" | ForEach-Object { ($_ -split " ")[1] }
@@ -478,10 +457,8 @@ function Test-GithubSSHKeyAlreadyAdded {
 
     $localKeyContent = Get-Content -Path $localKeyPath
 
-    # Extract the actual key portion (second field in the file)
     $localKeyValue = ($localKeyContent -split " ")[1]
 
-    # Compare local key with each GitHub key portion
     if ($githubKeyPortions -contains $localKeyValue) {
         Write-Host "$success Existing SSH key is recognized by GitHub." -ForegroundColor Green
         return $true
@@ -496,19 +473,14 @@ function Test-GithubSSHKeyAlreadyAdded {
     }
 }
 
-# Function to check and set up SSH key for GitHub
 function Test-GitHubSSHKey {
     Write-Host "$arrow Checking for existing SSH key associated with GitHub..." -ForegroundColor Cyan
 
-    # Check for existing SSH key locally
     if (Test-Path $localKeyPath) {
-        # no need to generate
     }
     else {
-        # Generate a new SSH key if none exists
         Write-Host "$warnIcon No SSH key found. Generating a new SSH key..." -ForegroundColor Yellow
 
-        # Create the .ssh folder if it doesn't exist
         if (-not (Test-Path "$HOME\.ssh")) {
             New-Item -ItemType Directory -Force -Path "$HOME\.ssh"
         }
@@ -532,7 +504,6 @@ function Test-GitHubSSHKey {
     } while ($keyadded -eq $false)
 }
 
-# Function to add Starship initialization to PowerShell profile
 function Install-SocketFirewall {
     $envLocalFile = Join-Path $env:USERPROFILE ".env.local"
     $isWorkMachine = $false
@@ -554,7 +525,6 @@ function Install-SocketFirewall {
         return
     }
 
-    # Ensure bun is available
     $bunPath = "$env:USERPROFILE\.bun\bin"
     if (Test-Path $bunPath) {
         $env:PATH = "$bunPath;$env:PATH"
@@ -626,7 +596,6 @@ function Set-StarshipInit {
 }
 
 
-# Function to install Turso CLI (libSQL database platform)
 function Install-TursoCli {
     if (Get-Command turso -ErrorAction SilentlyContinue) {
         Write-Debug "Turso CLI is already installed."
@@ -635,13 +604,11 @@ function Install-TursoCli {
 
     Write-Host "$arrow Installing Turso CLI..." -ForegroundColor Cyan
 
-    # Create directory for turso if it doesn't exist
     $tursoPath = "$env:LOCALAPPDATA\turso"
     if (-not (Test-Path $tursoPath)) {
         New-Item -ItemType Directory -Force -Path $tursoPath | Out-Null
     }
 
-    # Download the latest Windows binary
     $downloadUrl = "https://github.com/tursodatabase/turso-cli/releases/latest/download/turso_cli-windows-amd64.exe"
     $binaryPath = "$tursoPath\turso.exe"
 
@@ -649,7 +616,6 @@ function Install-TursoCli {
         Write-Host "$arrow Downloading Turso CLI binary..." -ForegroundColor Cyan
         Invoke-WebRequest -Uri $downloadUrl -OutFile $binaryPath
 
-        # Add to PATH if not already there
         $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
         if ($currentPath -notlike "*$tursoPath*") {
             [Environment]::SetEnvironmentVariable("PATH", "$currentPath;$tursoPath", "User")
@@ -663,7 +629,6 @@ function Install-TursoCli {
     }
 }
 
-# Function to install/update Claude Code CLI (Anthropic's AI coding agent)
 function Get-ClaudeCodeNativePath {
     return (Join-Path (Join-Path $env:USERPROFILE ".local\bin") "claude.exe")
 }
@@ -1079,7 +1044,6 @@ function Install-ClaudeCode {
     }
 }
 
-# Function to install Gemini CLI (Google's AI coding agent)
 function Install-GeminiCli {
     if (Get-Command gemini -ErrorAction SilentlyContinue) {
         Write-Debug "Gemini CLI is already installed."
@@ -1088,7 +1052,6 @@ function Install-GeminiCli {
 
     Write-Host "$arrow Installing Gemini CLI..." -ForegroundColor Cyan
 
-    # Ensure bun is available
     $bunPath = "$env:USERPROFILE\.bun\bin"
     if (Test-Path $bunPath) {
         $env:PATH = "$bunPath;$env:PATH"
@@ -1114,10 +1077,7 @@ function Install-GeminiCli {
     }
 }
 
-# Function to install/update Codex CLI from OpenAI's native GitHub release
-# binary, so codex does not depend on Node.js/Bun being present at runtime.
-# BEGIN GENERATED OPENCODE CLI
-# Version 9 | Last changed: Report bounded secret-safe evidence at real PATH discovery
+$null = 'BEGIN_GENERATED_OPENCODE_CLI'
 function Test-OpenCodeCliAcl {
     param([string]$HomePath)
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -1175,9 +1135,6 @@ function Test-OpenCodeCliAcl {
     return $true
 }
 
-# One private pipe exchange keeps the existing Node transaction/rollback live
-# while this PowerShell session performs authoritative command discovery. No
-# installer files, second transaction, shell repair or application invocation.
 function Invoke-OpenCodeCliCore {
     param([string]$NodePath, [string]$Code)
     $bootstrap = @'
@@ -1202,7 +1159,6 @@ rl.once('line', source => {
     $started = $false
     try {
         $process.StartInfo.FileName = $NodePath
-        # Compatible with Windows PowerShell 5.1 (no ArgumentList property).
         $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($bootstrap))
         $process.StartInfo.Arguments = '-e "eval(Buffer.from(''' + $encoded + ''',''base64'').toString(''utf8''))"'
         $process.StartInfo.UseShellExecute = $false
@@ -1244,8 +1200,6 @@ rl.once('line', source => {
         if ($process.ExitCode -eq 0 -and -not $verified -and $output[0] -cne 'opencode-cli:unsupported') { throw 'selection' }
         return @{ Status = $process.ExitCode; Output = $output }
     } catch {
-        # EOF rejects a pending approval so the core can restore commands itself.
-        # Never attempt a second, less-informed rollback or print process output.
         if ($started) {
             try { $process.StandardInput.Close() } catch { }
             if (-not $process.WaitForExit(25000)) { $process.Kill(); $process.WaitForExit() }
@@ -1288,9 +1242,6 @@ function Install-OpenCodeCli {
         & $node.Source -e 'require("node:https"); require("node:zlib"); require("node:crypto"); if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)' 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'prerequisite' }
         $code = @'
-// Embedded in all six entry points by tools/embed-opencode-cli.py.
-// Version 8 | Last changed: Report bounded secret-safe evidence at real PATH discovery.
-// Installation only: never import application code or inherit its environment.
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -1311,9 +1262,6 @@ class PolicyError extends Error {
         super(reason); this.reason = reason; this.operation = operation; diagnosticErrors.add(this);
     }
 }
-// Only actual discovery can attach evidence; public exception properties (or
-// objects with the same prototype) cannot forge it. Six decimal digits bound
-// the wire record. Larger positions still fail, with the legacy generic reason.
 const pathRefusals = new WeakMap();
 function rejectPathComponent(index, kind) {
     const error = new PolicyError('relative-path');
@@ -1321,7 +1269,7 @@ function rejectPathComponent(index, kind) {
         if (Number.isInteger(index) && index >= 1 && index <= 999999 && ['empty', 'relative'].includes(kind)) {
             pathRefusals.set(error, Object.freeze({index, kind}));
         }
-    } catch { /* Diagnostic construction must not replace the original refusal. */ }
+    } catch {   }
     throw error;
 }
 const fail = reason => { throw new PolicyError(reason); };
@@ -1342,7 +1290,6 @@ const digest = bytes => crypto.createHash('sha512').update(bytes).digest('base64
 function json(bytes) {
     const text = bytes.toString(); let value;
     try { value = JSON.parse(text); } catch { fail('metadata'); }
-    // JSON.parse accepts duplicate keys; that can otherwise erase an explicit pin.
     const stack = [];
     for (const match of text.matchAll(/"(?:\\.|[^"\\])*"|[{}[\],:]|[^\s{}[\],:]+/g)) {
         const token = match[0];
@@ -1361,7 +1308,6 @@ function json(bytes) {
 function target(platform = process.platform, machine = os.machine(), glibc = process.report.getReport().header.glibcVersionRuntime) {
     const arch = {x86_64: 'x64', AMD64: 'x64', x64: 'x64', arm64: 'arm64', ARM64: 'arm64', aarch64: 'arm64'}[machine];
     if (!arch || !['linux', 'darwin', 'win32'].includes(platform)) return null;
-    // Always use the official baseline on x64, including Rosetta. No AVX2 assumption.
     let result = `${platform === 'win32' ? 'windows' : platform}-${arch}${arch === 'x64' ? '-baseline' : ''}`;
     if (platform === 'linux' && !glibc) {
         if (!fs.readdirSync('/lib').some(n => /^ld-musl-(x86_64|aarch64)\.so\.1$/.test(n))) fail('libc');
@@ -1369,7 +1315,6 @@ function target(platform = process.platform, machine = os.machine(), glibc = pro
     }
     return result;
 }
-// Only these labels/statuses may cross the core-to-shell diagnostic boundary.
 class DownloadError extends Error {
     constructor(operation, status) { super('download'); this.operation = operation; this.status = status; diagnosticErrors.add(this); }
 }
@@ -1399,7 +1344,7 @@ function formatFailure(error, recovering) {
                 Number.isInteger(context.index) && context.index >= 1 && context.index <= 999999 && ['empty', 'relative'].includes(context.kind)) {
                 return `${generic}:command-discovery:${context.index}:${context.kind}`;
             }
-        } catch { /* Retain the controlled generic failure if evidence is unavailable. */ }
+        } catch {   }
         return generic;
     }
     return 'opencode-cli:failed';
@@ -1408,8 +1353,6 @@ function downloadOperation(parsed) {
     if (parsed.hostname === 'opencode.ai') return parsed.pathname === '/update/api/latest/cli/npm' ? 'latest-release' : 'download';
     let pathname;
     try { pathname = decodeURIComponent(parsed.pathname); } catch { fail('url'); }
-    // Scoped names may use either a literal or percent-encoded slash. Only whole
-    // package indexes support npm's abbreviated media type; versions require JSON.
     if (/^\/(?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+\/?$/.test(pathname)) return 'package-index';
     if (/^\/(?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+\/-\/[A-Za-z0-9_.-]+\.tgz$/.test(pathname)) return 'artifact-download';
     if (/^\/(?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/.test(pathname)) return 'package-version';
@@ -1477,7 +1420,6 @@ async function artifact(name, release, get = fetchBytes) {
     return files;
 }
 function safePath(file, home, leafLink = false) {
-    // Resolve only the account HOME boundary (including Bazzite's system alias).
     const relative = path.relative(home, file);
     if (relative.startsWith('..') || path.isAbsolute(relative)) fail('outside-home');
     const chain = [home];
@@ -1517,13 +1459,10 @@ function commands(home, env = process.env) {
     }
     return [...new Map(result.map(file => [process.platform === 'win32' ? file.toLowerCase() : file, file])).values()];
 }
-// Foreign commands are observations, never migration candidates. Stop at the
-// first foreign boundary: do not traverse its links, receipts or package store.
 function foreignCommand(file, home) {
     const relative = path.relative(home, file);
     if (!relative.startsWith('..') && !path.isAbsolute(relative)) return false;
     if (!path.isAbsolute(file)) fail('relative-path');
-    // Windows migration is HOME-only and retains the native ACL preflight.
     if (process.platform === 'win32') return true;
     const chain = [path.parse(file).root];
     for (const part of file.slice(chain[0].length).split(path.sep).filter(Boolean)) chain.push(path.join(chain.at(-1), part));
@@ -1541,7 +1480,6 @@ function verifySetupSelection(expected, home, homeInput, searchPath, brewTrust) 
         const normalized = cached.startsWith(homeInput + path.sep) ? path.join(home, path.relative(homeInput, cached)) : cached;
         if (!samePath(normalized, expected)) reject('command-conflict');
     }
-    // Include script/native extensions, not only the installer's migration names.
     const names = process.platform === 'win32' ? ['opencode.ps1', ...new Set((process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').map(ext => 'opencode' + ext.toLowerCase()))] : ['opencode'];
     for (const directory of searchPath.split(path.delimiter)) {
         if (!directory && process.platform === 'win32') continue;
@@ -1550,15 +1488,11 @@ function verifySetupSelection(expected, home, homeInput, searchPath, brewTrust) 
             const candidate = path.join(directory, name);
             let info;
             try { info = fs.lstatSync(candidate); } catch (error) { if (error.code === 'ENOENT') continue; reject('selection-unverified'); }
-            // Native shells ignore directories and non-executable regular files.
-            // Do not follow foreign links just to decide whether to ignore them;
-            // uncertain metadata and actual executable shadows still fail closed.
             if (info.isDirectory()) continue;
             if (process.platform !== 'win32' && info.isFile()) {
                 try { fs.accessSync(candidate, fs.constants.X_OK); }
                 catch (error) { if (error.code === 'EACCES') continue; reject('selection-unverified'); }
             }
-            // Resolve only the trusted HOME alias, never an arbitrary command link.
             const normalized = candidate.startsWith(homeInput + path.sep)
                 ? path.join(home, path.relative(homeInput, candidate)) : candidate;
             if (!samePath(normalized, expected)) reject(foreignCommand(candidate, home) ? 'foreign-command' : 'command-conflict');
@@ -1585,7 +1519,6 @@ function verifyFreshSelection(expected, home, homeInput) {
     if (process.platform === 'win32') {
         if (!['powershell.exe', 'pwsh.exe'].includes(path.basename(shell).toLowerCase()) || !env.SETUP_OPENCODE_FRESH_PATH) reject('selection-unverified');
         env.PATH = env.SETUP_OPENCODE_FRESH_PATH;
-        // Load the normal native profile. Only query resolution; never run the app.
         args = ['-NoLogo', '-NonInteractive', '-Command', `$ErrorActionPreference = 'Stop'; try { $c = Get-Command opencode -ErrorAction Stop; if ($c.CommandType -ne 'Application') { exit 2 }; [Console]::WriteLine("\`n${marker}" + $c.Source + "${marker}") } catch { exit 3 }`];
     } else {
         if (path.basename(shell) !== 'fish') reject('selection-unverified');
@@ -1597,8 +1530,6 @@ function verifyFreshSelection(expected, home, homeInput) {
         output = cp.execFileSync(shell, args, {cwd: home, env, timeout: 20000, maxBuffer: 65536,
             stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true}).toString();
     } catch (error) { reject(error.status === 2 ? 'command-conflict' : 'selection-unverified'); }
-    // Ordinary startup banners are not evidence. Accept exactly one fresh,
-    // framed query result; never surface other stdout or arbitrary stderr.
     const records = output.split(/\r?\n/).filter(line => line.startsWith(marker));
     if (records.length !== 1 || !records[0].endsWith(marker)) reject('selection-unverified');
     const selected = records[0].slice(marker.length, -marker.length);
@@ -1625,8 +1556,6 @@ function brewPermissions(file, info) {
     if (!info.isSymbolicLink() && (info.mode & 0o020)) {
         if (process.platform !== 'linux' || info.uid === 0 || info.uid !== process.getuid() ||
             !(file === '/home/linuxbrew/.linuxbrew' || file.startsWith('/home/linuxbrew/.linuxbrew/'))) fail('brew-path');
-        // Scoped single-human-user policy: group privacy is not a prerequisite.
-        // Keep ownership/mode/identity snapshots; do not infer exclusive access.
     }
 }
 function checkBrewTrust(trust, moved = false) {
@@ -1642,7 +1571,6 @@ function checkBrewTrust(trust, moved = false) {
 function checkBrewBackup(item, backup) {
     checkBrewTrust(item.brewTrust, true);
     const before = item.brewTrust.snapshots.get(item.file), now = fs.lstatSync(backup);
-    // Renaming can change ctime; every other link identity field must survive.
     if (!['dev', 'ino', 'uid', 'gid', 'mode', 'nlink', 'size', 'mtimeMs'].every(key => before[key] === now[key]) ||
         !now.isSymbolicLink() || fs.readlinkSync(backup) !== item.brewTrust.link) fail('brew-snapshot-changed');
 }
@@ -1685,8 +1613,6 @@ function inspectBrewCopy(file) {
     checkBrewTrust(trust);
     return {binary, release: match[1], route: 'homebrew', trust};
 }
-// Exact native (no-shebang) npm cmd-shim templates. Customized/older wrappers
-// remain conflicts rather than being interpreted or executed to discover identity.
 function windowsNpmShims() {
     const relative = 'node_modules/opencode-ai/bin/opencode.exe';
     const head = '@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n';
@@ -1758,10 +1684,7 @@ async function identify(file, home, nativeTarget, get) {
         fail('custom-prefix');
     }
     const bytes = boundedRead(binary);
-    // Package metadata is only a hint. Identity always requires official native bytes.
     const content = release ? '' : bytes.toString('latin1');
-    // Official Bun builds embed this execution argument. It is only a version
-    // hint: the native bytes must still match the published platform artifact.
     const hints = [...new Set([...content.matchAll(/--user-agent=opencode\/([1-9]\d*\.\d+\.\d+)(?=[\x00\s"'\\])/g)].map(match => match[1]))];
     let candidates = release ? [release] : hints.length === 1 ? hints : [...new Set(content.match(/\b[1-9]\d?\.\d{1,4}\.\d{1,4}\b/g) || [])];
     if (!release && hints.length !== 1) {
@@ -1774,7 +1697,6 @@ async function identify(file, home, nativeTarget, get) {
     if (nativeTarget.startsWith('linux-')) {
         for (const variant of [...variants]) variants.push(variant.endsWith('-musl') ? variant.slice(0, -5) : variant + '-musl');
     } else if (/^(darwin|windows)-arm64$/.test(nativeTarget)) {
-        // Old x64 copies can be present under Rosetta/Windows ARM emulation.
         variants.push(nativeTarget.replace('arm64', 'x64-baseline'), nativeTarget.replace('arm64', 'x64'));
     }
     for (const candidate of candidates) {
@@ -1804,8 +1726,6 @@ async function installChecked(options) {
     const receipt = path.join(home, '.local/bin/.setup-opencode-cli.json');
     safePath(destination, home, true); safePath(receipt, home);
     const found = (options.commands || commands(home)).filter(file => !foreignCommand(file, home));
-    // Bun can publish a native hardlink rather than a symlink. Preserve its
-    // explicit global selection even when command identity comes from bytes.
     if (found.some(file => samePath(path.dirname(file), path.join(home, '.bun/bin')))) {
         const manifest = path.join(home, '.bun/install/global/package.json');
         safePath(manifest, home);
@@ -1819,10 +1739,8 @@ async function installChecked(options) {
         verifySetupSelection(expected, home, homeInput, options.path ?? process.env.PATH ?? '', brewTrust);
         verifyFreshSelection(expected, home, homeInput);
         if (process.platform === 'win32') {
-            // PowerShell's own session (aliases/functions and native discovery)
-            // must approve before receipt commit while rollback is still live.
             let selected;
-            try { selected = await options.verifySessionSelection?.(expected); } catch { /* fail closed below */ }
+            try { selected = await options.verifySessionSelection?.(expected); } catch {   }
             if (selected !== true) throw new PolicyError(selected === false ? 'command-conflict' : 'selection-unverified', 'setup-selection');
         }
     };
@@ -1862,7 +1780,6 @@ async function installChecked(options) {
         await verifySelection(destination);
         safePath(destination, home);
         if (!boundedRead(destination).equals(installedBytes)) fail('changed-copy');
-        // A newer official version is preserved, never rewritten or downgraded.
         if (compare(installed, release) > 0) return 'newer';
         const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'setup-opencode-'));
         let probeError;
@@ -1888,7 +1805,6 @@ async function installChecked(options) {
         fs.mkdirSync(lock, {mode: 0o700}); locked = true;
         fs.writeFileSync(staged, bytes, {mode: 0o755, flag: 'wx'});
         runProbe(staged, release, stage);
-        // Preflight ALL copies before moving any commands. Never remove package stores/data.
         for (const item of old) {
             if (item.route === 'homebrew') checkBrewTrust(item.brewTrust);
             else safePath(item.file, home, !!item.link);
@@ -1905,20 +1821,16 @@ async function installChecked(options) {
             const backup = item.route === 'homebrew'
                 ? path.join(path.dirname(item.file), `.opencode-setup-recovery-${crypto.randomBytes(12).toString('hex')}`)
                 : path.join(stage, `previous-${backups.length}`);
-            // Journal each intended move before it occurs, for interruption recovery.
             fs.writeFileSync(path.join(stage, 'recovery.json'), JSON.stringify([...backups, [item.file, backup]]), {mode: 0o600});
             fs.renameSync(item.file, backup); backups.push([item.file, backup]);
         }
-        // Recheck the read-only Homebrew boundaries even after command quarantine.
         for (const [original, backup] of backups) {
             const item = old.find(entry => entry.file === original);
             if (item?.route === 'homebrew') checkBrewBackup(item, backup);
         }
-        // Atomic no-clobber publication: a concurrent/custom destination is never overwritten.
         fs.linkSync(staged, destination); promoted = true;
         fs.unlinkSync(staged);
         runProbe(destination, release, stage);
-        // Verify the effective command, not mere PATH membership. Failure rolls back.
         await verifySelection(destination);
         safePath(destination, home);
         if (!boundedRead(destination).equals(bytes)) fail('changed-copy');
@@ -1949,7 +1861,6 @@ async function installChecked(options) {
                 }
             } catch { throw new RecoveryError(originalError); }
         }
-        // Retain old commands privately for manual recovery after a successful migration.
         try {
             if (completed && backups.length) fs.chmodSync(stage, 0o700);
             else fs.rmSync(stage, {recursive: true, force: true});
@@ -2011,13 +1922,11 @@ if (require.main === module || process.argv[1] === '-') install().then(result =>
         foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
     }
 }
-# END GENERATED OPENCODE CLI
+$null = 'END_GENERATED_OPENCODE_CLI'
 
 function Install-CodexCli {
     Write-Host "$arrow Installing/updating Codex CLI..." -ForegroundColor Cyan
 
-    # Remove the legacy Bun package so the node_modules symlink can no
-    # longer shadow the native binary (or vanish in a broken state).
     $bunPath = "$env:USERPROFILE\.bun\bin"
     if (Test-Path $bunPath) {
         $env:PATH = "$bunPath;$env:PATH"
@@ -2059,8 +1968,6 @@ function Install-CodexCli {
         }
         Copy-Item $downloaded.FullName $codexExe -Force
 
-        # Ensure the user-local bin directory is on the persistent user PATH
-        # without duplicating it.
         $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
         $userEntries = @()
         if ($userPath) {
@@ -2095,8 +2002,6 @@ function Install-CodexCli {
 
 
 
-# Function to install Portless CLI (Tailscale HTTPS tunnel helper)
-# Standalone installer shared verbatim with the Bash setup entry points.
 function Install-PortlessCli {
     if (Get-Command portless -ErrorAction SilentlyContinue) {
         Write-Debug "Portless CLI is already installed."
@@ -2105,7 +2010,6 @@ function Install-PortlessCli {
 
     Write-Host "$arrow Installing Portless CLI..." -ForegroundColor Cyan
 
-    # Ensure bun is available
     $bunPath = "$env:USERPROFILE\.bun\bin"
     if (Test-Path $bunPath) {
         $env:PATH = "$bunPath;$env:PATH"
@@ -2135,7 +2039,6 @@ function Install-PortlessCli {
     }
 }
 
-# Remove the managed footprint of the retired RTK tool.
 function Test-RtkTokenKiller {
     param([Parameter(Mandatory=$true)][string]$Binary)
 
@@ -2603,7 +2506,6 @@ function Remove-RtkResources {
     }
 }
 
-# Pi's package minimum is lower than the shared skills CLI minimum.
 function Test-PiNodeRuntimeReady {
     try {
         & node -e 'const [major, minor] = process.versions.node.split(''.'').map(Number); process.exit((major > 22 || (major === 22 && minor >= 19)) && typeof require(''node:fs'').globSync === ''function'' ? 0 : 1)' *> $null
@@ -2621,7 +2523,6 @@ function Test-SharedNodeRuntimeReady {
     catch { return $false }
 }
 
-# New selections must have an official Windows binary. Never compile a fallback.
 function Get-SharedNodeFallback {
     $architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and $architecture -in @('AMD64', 'ARM64')) {
@@ -2634,7 +2535,6 @@ function Get-SharedNodePowerShellHost {
     return (Get-Process -Id $PID -ErrorAction Stop).Path
 }
 
-# Kept separate so offline fixtures can inspect the child without loading live profiles.
 function Invoke-SharedNodeShellProcess {
     param([System.Diagnostics.ProcessStartInfo]$StartInfo)
     $process = [System.Diagnostics.Process]::new()
@@ -2657,7 +2557,6 @@ function Invoke-SharedNodeShellProcess {
     finally { $process.Dispose() }
 }
 
-# Test chezmoi-owned activation with the persisted Windows PATH, not setup's PATH.
 function Test-SharedNodeShell {
     param([string]$CanonicalPi = '')
     try {
@@ -2673,7 +2572,6 @@ function Test-SharedNodeShell {
             [Environment]::GetEnvironmentVariable('Path', 'Machine'),
             [Environment]::GetEnvironmentVariable('Path', 'User')
         ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-        # Expand registry PATH entries only after removing the inherited runtime PATH.
         $savedPath = $env:PATH
         try {
             $env:PATH = ''
@@ -2687,7 +2585,6 @@ function Test-SharedNodeShell {
         }
         $startInfo.EnvironmentVariables['MISE_AUTO_INSTALL'] = 'false'
         $startInfo.EnvironmentVariables['MISE_NODE_COMPILE'] = 'false'
-        # Encode the optional path separately so it cannot become PowerShell source.
         $encodedPi = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($CanonicalPi))
         $probe = @'
 $ErrorActionPreference = 'Stop'
@@ -2727,7 +2624,6 @@ catch { exit 1 }
     catch { return $false }
 }
 
-# Inherited Node is not evidence of a durable global mise selection.
 function Enable-SharedNodeRuntime {
     $savedCompile = [Environment]::GetEnvironmentVariable('MISE_NODE_COMPILE', 'Process')
     $savedAutoInstall = [Environment]::GetEnvironmentVariable('MISE_AUTO_INSTALL', 'Process')
@@ -2745,12 +2641,8 @@ function Enable-SharedNodeRuntime {
             Write-Warning 'mise is required to verify the shared Node runtime.'
             return $false
         }
-        # mise ls --global filters active sources. HOME overrides hide global rows,
-        # so inventory at the drive root, but activate and verify at HOME below.
         $inventoryRoot = [System.IO.Path]::GetPathRoot($env:USERPROFILE)
         if (-not $inventoryRoot) { throw 'USERPROFILE must be an absolute path.' }
-        # Preserve legacy fnm pins using mise's additive global setting; leave
-        # other enabled tools and unrelated configuration intact.
         & mise settings add -C $inventoryRoot idiomatic_version_file_enable_tools node *> $null
         if ($LASTEXITCODE -ne 0) { throw 'Cannot enable mise support for .node-version/.nvmrc pins.' }
         & mise settings set -C $inventoryRoot activate_aggressive true *> $null
@@ -2758,7 +2650,6 @@ function Enable-SharedNodeRuntime {
         for ($attempt = 1; $attempt -le 2; $attempt++) {
             $inventoryText = (& mise ls -C $inventoryRoot --global --json node 2>$null | Out-String).Trim()
             if ($LASTEXITCODE -ne 0 -or -not $inventoryText) { throw 'Cannot read global mise Node inventory.' }
-            # Wrap the JSON so PowerShell does not flatten empty or one-row arrays.
             $parsed = ConvertFrom-Json -InputObject ('{"inventory":' + $inventoryText + '}') -ErrorAction Stop
             $inventoryObject = $parsed.inventory
             if ($inventoryObject -is [array]) {
@@ -2797,7 +2688,6 @@ function Enable-SharedNodeRuntime {
             }
             if ($LASTEXITCODE -ne 0) { throw 'Failed to install/select the shared Node runtime.' }
         }
-        # No explicit node@ override: preserve and detect conflicting HOME pins.
         $miseEnv = (& mise env -C $env:USERPROFILE -s pwsh 2>$null | Out-String)
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($miseEnv)) { throw 'Failed to activate the shared mise environment.' }
         Invoke-Expression -Command $miseEnv -ErrorAction Stop | Out-Null
@@ -2805,8 +2695,6 @@ function Enable-SharedNodeRuntime {
         & npm --version *> $null
         if ($LASTEXITCODE -ne 0) { throw 'npm is unavailable under the shared Node runtime.' }
         if (-not (Test-SharedNodeShell)) {
-            # Apply only the known-folder-aware managed profile updater. Never
-            # write shell configuration here or run unrelated chezmoi scripts.
             Write-Message 'Refreshing chezmoi-managed PowerShell activation for the shared Node runtime...'
             $shellRepaired = $false
             try {
@@ -2844,7 +2732,6 @@ function Enable-PiNodeRuntime {
     return ((Enable-SharedNodeRuntime) -and (Test-PiNodeRuntimeReady))
 }
 
-# Remove the managed footprint of the retired Attention-kind guidance.
 function Get-AttentionSpanCleanupDirectories {
     param(
         [Parameter(Mandatory=$true)][string]$DefaultDirectory,
@@ -3056,7 +2943,6 @@ function Remove-AttentionSpanResources {
     }
     $script:AttentionSpanCleanupRemoved = $false
 
-    # Preflight every target before changing any file.
     foreach ($directory in $claudeDirs) {
         Assert-AttentionSpanStyleIsSafe -Path (Join-Path $directory "output-styles\attention-kind.md")
         Assert-AttentionSpanSettingsAreSafe -Path (Join-Path $directory "settings.json")
@@ -3081,7 +2967,6 @@ function Remove-AttentionSpanResources {
     }
 }
 
-# Skills and Pi must agree on the same durable shared Node selection.
 function Test-SkillsCliNodeRuntimeReady {
     return (Test-SharedNodeRuntimeReady)
 }
@@ -3090,7 +2975,6 @@ function Enable-SkillsCliNodeRuntime {
     return (Enable-SharedNodeRuntime)
 }
 
-# Install/update one copied global skill for every supported AI coding harness.
 function Install-ManagedAgentSkill {
     param(
         [Parameter(Mandatory = $true)][string]$Repository,
@@ -3132,7 +3016,6 @@ function Install-ManagedAgentSkill {
     }
 
     $claudeDir = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".claude" }
-    # Codex, Gemini CLI, and Pi discover the skills CLI's shared user copy.
     $skillDirs = @(
         (Join-Path $claudeDir "skills\$SkillName"),
         (Join-Path $env:USERPROFILE ".agents\skills\$SkillName")
@@ -3143,7 +3026,6 @@ function Install-ManagedAgentSkill {
         foreach ($relativeFile in $requiredFiles) {
             $skillFile = Join-Path $skillDir $relativeFile
             $artifactPath = $skillFile
-            # Reject links in the file and every directory inside the skill copy.
             while ($true) {
                 $artifactItem = Get-Item -LiteralPath $artifactPath -Force -ErrorAction SilentlyContinue
                 if ($null -ne $artifactItem -and (($artifactItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
@@ -3166,22 +3048,18 @@ function Install-ManagedAgentSkill {
     return $true
 }
 
-# Retire Simple English from global skill copies and skills CLI update records.
 function Remove-SimpleEnglishSkill {
     return (Invoke-MattPocockSkillPolicy -Mode remove-simple-english)
 }
 
-# Retire global show-me copies on the next setup run.
 function Remove-ShowMeSkill {
     return (Invoke-MattPocockSkillPolicy -Mode remove-show-me)
 }
 
-# Retire PR Lens from global skill copies and skills CLI update records.
 function Remove-PrLensSkill {
     return (Invoke-MattPocockSkillPolicy -Mode remove-pr-lens)
 }
 
-# Remove setup-managed Impeccable resources without affecting sibling agent tooling.
 function Remove-ImpeccableResources {
     $paths = @(
         (Join-Path $env:USERPROFILE ".claude\skills\impeccable"),
@@ -3232,7 +3110,6 @@ function Remove-ImpeccableResources {
     }
 }
 
-# Remove stale Pi installs from Bun-managed global locations.
 function Remove-NonCanonicalPiInstalls {
     param(
         [Parameter(Mandatory=$true)][string]$NewPackage,
@@ -3315,9 +3192,6 @@ function Remove-NonCanonicalPiInstalls {
     }
 }
 
-# Validate and repair npm's effective user configuration before setup mutates
-# any npm-owned package tree. npm performs registry-scoped auth migration while
-# all command output stays out of the setup transcript.
 function Repair-NpmConfiguration {
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
         Write-Warning "npm not found. Cannot validate npm configuration."
@@ -3342,13 +3216,11 @@ function Repair-NpmConfiguration {
     return $true
 }
 
-# Function to install/update Pi coding agent
 function Install-PiCli {
     $script:PiRuntimePreflightPassed = $false
     $newPackage = "@earendil-works/pi-coding-agent"
     $oldPackage = "@mariozechner/pi-coding-agent"
     $localPrefix = Join-Path $env:USERPROFILE ".local"
-    # npm places Windows global command shims directly in the prefix directory.
     $canonicalCandidates = @(
         (Join-Path $localPrefix "pi.ps1"),
         (Join-Path $localPrefix "pi.cmd"),
@@ -3383,7 +3255,6 @@ function Install-PiCli {
             return $false
         }
 
-        # Remove old npm-package ownership before installing so npm can claim the canonical shim.
         & npm uninstall -g --prefix $localPrefix $oldPackage *> $null
         foreach ($candidate in $canonicalCandidates) {
             if (Test-Path $candidate) {
@@ -3460,8 +3331,6 @@ function Install-PiCli {
     }
 }
 
-# Native Go auth only. -CheckCatalog reads installed metadata without credentials.
-# Keep the embedded Node body identical in all six setup scripts.
 function Set-PiOpenCodeGoProvider {
     param([switch]$CheckCatalog)
     $operations = 'preflight|home|pi-package|pi-dependency|go-catalog|environment-file|active-profile|models-json|auth-lock|lock-dependency|auth-preflight|profile-create|lock-acquire|auth-read|auth-write|auth-cleanup|lock-release'
@@ -3833,9 +3702,7 @@ main().then(result => console.log(result)).catch(error => {
         $env:NODE_OPTIONS = $null
         $env:NODE_PATH = $null
         $mode = if ($CheckCatalog) { 'check-catalog' } else { 'sync' }
-        # Windows PowerShell 5.1 drops empty native arguments; pass the full default.
         $active = if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { Join-Path $env:USERPROFILE '.pi/agent' }
-        # Only code and nonsecret paths cross stdin/argv; the key stays in Node memory.
         $global:LASTEXITCODE = 0
         $PSNativeCommandUseErrorActionPreference = $false
         $result = ($code | & $node.Source --input-type=commonjs - $env:USERPROFILE $active $mode 2>$null | Out-String).Trim()
@@ -3868,8 +3735,6 @@ main().then(result => console.log(result)).catch(error => {
     }
 }
 
-# Force Pi defaults: GPT-6 Astra (OpenAI Codex) with xhigh thinking on all machines.
-# Chezmoi owns settings.json long-term; this seeds fresh machines and repairs drift.
 function Set-PiDefaults {
     if ($env:PI_CODING_AGENT_DIR) {
         $agentDir = $env:PI_CODING_AGENT_DIR
@@ -3914,7 +3779,6 @@ function Set-PiDefaults {
     }
 }
 
-# Read a KEY=VALUE pair from ~/.env.local (strips optional export/quotes).
 function Get-EnvLocalValue {
     param([Parameter(Mandatory=$true)][string]$Name)
 
@@ -3937,7 +3801,6 @@ function Get-EnvLocalValue {
     return $null
 }
 
-# Remove the retired Synthetic provider without touching other providers or auth.json.
 function Remove-PiSyntheticModels {
     if ($env:PI_CODING_AGENT_DIR) {
         $agentDir = $env:PI_CODING_AGENT_DIR
@@ -3967,17 +3830,11 @@ function Remove-PiSyntheticModels {
         return $true
     }
     catch {
-        # Parser errors can contain credentials from the file. Do not print them.
         Write-Warning "Failed to remove the Synthetic provider from $modelsPath."
         return $false
     }
 }
 
-# Seed the z.ai provider block (GLM Coding Plan) into Pi's models.json.
-# The API key comes from ZAI_API_KEY in ~/.env.local; it is never stored in
-# this repository. Existing z.ai keys are preserved. Seeding follows key
-# presence: any machine with the key gets the provider, and only work
-# machines are warned when the key is missing.
 function Seed-PiZaiModels {
     if ($env:PI_CODING_AGENT_DIR) {
         $agentDir = $env:PI_CODING_AGENT_DIR
@@ -4112,7 +3969,6 @@ function Seed-PiZaiModels {
     }
 }
 
-# Function to set or remove JSON properties on a PSCustomObject
 function Set-JsonProperty {
     param(
         [Parameter(Mandatory=$true)]$Object,
@@ -4142,7 +3998,6 @@ function Remove-JsonProperty {
     }
 }
 
-# Function to remove the tintinweb Pi subagents extension (idempotent, non-fatal)
 function Remove-PiSubagents {
     $hadFailure = $false
     if (Get-Command pi -ErrorAction SilentlyContinue) {
@@ -4164,8 +4019,6 @@ function Remove-PiSubagents {
         return (-not $hadFailure)
     }
 
-    # Fallback when the pi CLI is unavailable: strip both package sources
-    # directly from settings.json.
     if ($env:PI_CODING_AGENT_DIR) {
         $agentDir = $env:PI_CODING_AGENT_DIR
     }
@@ -4234,7 +4087,6 @@ function Remove-PiSubagents {
     return $true
 }
 
-# Native Windows file transaction. No metadata snapshots are written to disk.
 function Invoke-BacklogMcpWindowsRetirement {
     param([string]$Program, [string[]]$Profiles)
     $ErrorActionPreference = 'Stop'
@@ -4242,7 +4094,6 @@ function Invoke-BacklogMcpWindowsRetirement {
     $pins = @{}
     $records = @()
     try {
-        # Import only inbox modules; do not load user profiles or custom modules.
         $PSModuleAutoLoadingPreference = 'None'
         Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
         if (-not ('BacklogNativeFiles' -as [type])) {
@@ -4484,7 +4335,6 @@ public static class BacklogNativeFiles {
         $targets[[IO.Path]::Combine($codex,'config.json')] = 'codex-json'
         $targets[[IO.Path]::Combine($homePath,'.cursor\mcp.json')] = 'editor-json'
         $targets[[IO.Path]::Combine($homePath,'.windsurf\mcp.json')] = 'editor-json'
-        # Windows Claude Desktop uses Roaming AppData, not the macOS Library path.
         $appData = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
         if ($appData -and [BacklogNativeFiles]::Below($appData,$homePath)) {
             $targets[[IO.Path]::Combine($appData,'Claude\claude_desktop_config.json')] = 'json'
@@ -4521,8 +4371,6 @@ public static class BacklogNativeFiles {
         if (-not (Pin-BacklogDirectory $workingDirectory $false)) { throw 'runtime' }
         $directory = $workingDirectory
         while ($directory) { $pins[$directory].CheckAcl($owner,$systemRoot,$true); $directory=[IO.Path]::GetDirectoryName($directory) }
-        # Prefer fixed WinGet/native Bun locations, never a project or PATH shim.
-        # Resolve only the runtime executable alias; all metadata links are rejected.
         $runtimeHome = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
         $runtimeRoots = @(
             [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData),'Microsoft\WinGet'),
@@ -4559,8 +4407,6 @@ public static class BacklogNativeFiles {
                 $writes += [pscustomobject]@{ record=$records[$i]; output=$plan[$i] }
             }
         }
-        # Preflight ALL mutation ACLs before the first write. Ordinary native
-        # permissive files without a Backlog registration remain an absent no-op.
         foreach ($write in $writes) {
             $write.record.pin.CheckAcl($owner,$homePath,$true)
             $directory = [IO.Path]::GetDirectoryName($write.record.file)
@@ -4583,7 +4429,6 @@ public static class BacklogNativeFiles {
     }
 }
 
-# Retire Backlog MCP from global agent configuration. The embedded program matches all five Bash scripts.
 function Remove-GlobalBacklogMcp {
     if (-not (Enable-SharedNodeRuntime)) { Write-Error "Node.js is required to retire global Backlog MCP registrations."; return $false }
     $program = @'
@@ -5034,10 +4879,9 @@ try {
         default { Write-Error "Global Backlog MCP retirement returned an invalid result."; return $false }
     }
 }
-# End global Backlog MCP retirement.
+$null = 'END_GLOBAL_BACKLOG_MCP_RETIREMENT'
 
-# Pi prose retirement. The embedded program matches all five Bash scripts.
-# Secure only managed Pi directory boundaries; metadata remains with its validators.
+$null = 'BEGIN_PI_PROSE_RETIREMENT'
 function Prepare-PiProfilePermissions {
     if (-not (Enable-SharedNodeRuntime)) {
         Write-Warning 'Pi profile permissions failed: shared-runtime-unavailable.'
@@ -5443,7 +5287,6 @@ try {
     }
 }
 
-# Disable only the delegation tool; retain the Claude Bridge provider and settings.
 function Disable-PiAskClaude {
     if (-not $env:USERPROFILE -or -not (Get-Command node -ErrorAction SilentlyContinue)) {
         Write-Warning 'AskClaude policy failed: home-or-node-unavailable.'
@@ -5585,7 +5428,7 @@ try {
         $OutputEncoding = $oldEncoding
     }
 }
-# End Pi AskClaude policy.
+$null = 'END_PI_ASKCLAUDE_POLICY'
 
 function Remove-PiProse {
     if (-not $env:USERPROFILE) {
@@ -5779,9 +5622,8 @@ try {
         return $false
     }
 }
-# End Pi prose retirement.
+$null = 'END_PI_PROSE_RETIREMENT'
 
-# Function to remove retired Pi RPIV packages (ask-user-question and todo)
 function Remove-PiRpivPackages {
     $hadFailure = $false
     if (Get-Command pi -ErrorAction SilentlyContinue) {
@@ -5803,8 +5645,6 @@ function Remove-PiRpivPackages {
         return (-not $hadFailure)
     }
 
-    # Fallback when the pi CLI is unavailable: strip both package sources
-    # directly from settings.json.
     if ($env:PI_CODING_AGENT_DIR) {
         $agentDir = $env:PI_CODING_AGENT_DIR
     }
@@ -5873,7 +5713,6 @@ function Remove-PiRpivPackages {
     return $true
 }
 
-# Repair only the active profile's managed adapter metadata; npm owns lockfiles.
 function Update-PiPackages {
     $agentDir = if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { Join-Path $HOME '.pi\agent' }
     if (-not (Get-Command node -ErrorAction SilentlyContinue) -or -not (Get-Command git -ErrorAction SilentlyContinue) -or -not (Get-Command pi -ErrorAction SilentlyContinue)) {
@@ -6136,7 +5975,6 @@ function Prepare-PiMcpAdapter {
 '@
     $output = $code | & node - $agentDir $disabled $Mode 2>&1
     if ($LASTEXITCODE -ne 0) {
-        # Forward only controlled diagnostics, never arbitrary Node output.
         $activationMessage = 'Pi MCP adapter enablement could not be verified. Existing filters were preserved. Use pi config in the active global profile to enable index.ts, or set BAN_PI_MCP_ADAPTER=1 for an intentional opt-out.'
         if (@($output | ForEach-Object { $_.ToString() }) -contains $activationMessage) {
             Write-Warning $activationMessage
@@ -6149,9 +5987,7 @@ function Prepare-PiMcpAdapter {
     return $true
 }
 
-# Function to install/update Pi MCP adapter extension
 function Setup-PiMcpAdapter {
-    # 2.33.0 uses remote preview dependencies rejected by managed npm policy.
     $package = "npm:pi-mcp-adapter@2.32.1"
 
     if (-not (Prepare-PiMcpAdapter)) { return $false }
@@ -6198,7 +6034,6 @@ function Setup-PiMcpAdapter {
     return $true
 }
 
-# Function to install/update Pi Claude bridge extension
 function Setup-PiClaudeBridge {
     $package = "npm:pi-claude-bridge"
 
@@ -6233,7 +6068,6 @@ function Setup-PiClaudeBridge {
     return $true
 }
 
-# Function to remove legacy Pi Ask User and install/update the Pi companion packages
 function Setup-PiCompanionPackages {
     $hadFailure = $false
     $legacyPackage = "npm:pi-ask-user"
@@ -6296,13 +6130,11 @@ function Setup-PiCompanionPackages {
     return (-not $hadFailure)
 }
 
-# Keep shared skills canonical for Pi and suppress stale direct/package collisions.
 function Set-PiSkillOwnership {
     if ($script:PiProfileMutationsBlocked) { return $true }
     return (Invoke-MattPocockSkillPolicy -Mode ownership)
 }
 
-# Configure pi-autoresearch without overriding Pi transcript search.
 function Set-PiAutoresearchShortcut {
     $agentDir = if ($env:PI_CODING_AGENT_DIR) { $env:PI_CODING_AGENT_DIR } else { Join-Path $env:USERPROFILE ".pi\agent" }
     $configDir = Join-Path $agentDir "extensions"
@@ -6325,7 +6157,6 @@ function Set-PiAutoresearchShortcut {
     return $true
 }
 
-# Function to remove Pi goal/autoresearch package sources from settings when disabled
 function Remove-PiGoalAutoresearchSettings {
     if ($env:PI_CODING_AGENT_DIR) {
         $agentDir = $env:PI_CODING_AGENT_DIR
@@ -6397,7 +6228,6 @@ function Remove-PiGoalAutoresearchSettings {
     return $true
 }
 
-# Function to install/update Pi goal and autoresearch extensions
 function Setup-PiGoalAutoresearch {
     $packages = @("npm:pi-goal", "npm:pi-autoresearch")
     $hadFailure = $false
@@ -6449,7 +6279,6 @@ function Test-MattPocockSkillsDisabled {
     return ((Test-EnvLocalFlag "BAN_MATT_POCOCK_SKILLS") -or (Test-EnvLocalFlag "BAN_MATT_POCKOCK_SKILLS"))
 }
 
-# Shared policy for full-suite inventory, safe retirement, and Pi ownership.
 function Invoke-MattPocockSkillPolicy {
     param([Parameter(Mandatory = $true)][string]$Mode, [string]$ReportFile = "")
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
@@ -6799,7 +6628,6 @@ function Remove-MattPocockSkills {
     return (Invoke-MattPocockSkillPolicy -Mode remove-matt)
 }
 
-# Install all upstream categories, including experimental skills, for four agents.
 function Setup-MattPocockSkills {
     if (Test-MattPocockSkillsDisabled) { return (Remove-MattPocockSkills) }
     if (-not (Enable-SkillsCliNodeRuntime)) {
@@ -6815,8 +6643,6 @@ function Setup-MattPocockSkills {
     $success = $false
     $savedEnvironment = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::Ordinal)
     try {
-        # Resolve npm's policy before isolating the native CLI's global targets.
-        # Keep cwd and all other npm configuration unchanged.
         $global:LASTEXITCODE = 0
         $npmUserConfig = & npm config get userconfig 2>$null
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($npmUserConfig)) { throw 'npm-config' }
@@ -6832,7 +6658,6 @@ function Setup-MattPocockSkills {
             XDG_DATA_HOME = (Join-Path $stage '.local/share')
             npm_config_userconfig = [string]$npmUserConfig; npm_config_globalconfig = [string]$npmGlobalConfig
         }
-        # Environment names are case-sensitive on Unix PowerShell, unlike Windows.
         if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
             foreach ($key in @('NPM_CONFIG_USERCONFIG', 'NPM_CONFIG_GLOBALCONFIG')) {
                 $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key)
@@ -6882,7 +6707,6 @@ function Setup-MattPocockSkills {
 }
 
 
-# Remove legacy Compound Engineering resources without affecting unrelated Windows agent tooling.
 function Test-PathWithin {
     param(
         [Parameter(Mandatory=$true)][string]$Path,
@@ -7118,8 +6942,6 @@ function Remove-CompoundEngineeringResources {
             }
         }
 
-        # The Pi plugin installer leaves its install manifest behind. The
-        # manifest is part of the legacy installation and must be removed too.
         $manifestDir = Join-Path $agentDir "compound-engineering"
         if (Test-Path -LiteralPath $manifestDir) {
             try {
@@ -7216,10 +7038,8 @@ function Remove-CompoundEngineeringResources {
 function Install-WingetPackages {
     Write-Host "$arrow Checking for missing winget packages..." -ForegroundColor Cyan
 
-    # Get installed packages
     $installedPackages = @()
     try {
-        # Export the list to a temporary JSON file to handle large outputs
         $tempFile = [System.IO.Path]::GetTempFileName()
         $null = winget export -o $tempFile --accept-source-agreements 2>&1
         
@@ -7236,7 +7056,6 @@ function Install-WingetPackages {
         Write-Host "$arrow Will check each package individually..." -ForegroundColor Cyan
     }
 
-    # Install missing packages
     foreach ($package in $wingetPackages) {
         if ($package -eq "Notion.ntn" -and $env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
             Write-Warning "Notion CLI supports Windows x64 only; skipping on $env:PROCESSOR_ARCHITECTURE."
@@ -7245,12 +7064,10 @@ function Install-WingetPackages {
 
         $isInstalled = $false
         
-        # First check our cached list
         if ($installedPackages -contains $package) {
             $isInstalled = $true
         }
         else {
-            # Fallback to direct check if cached list failed
             $searchResult = winget list --id $package --exact --accept-source-agreements
             $isInstalled = $searchResult -like "*$package*"
         }
@@ -7264,15 +7081,10 @@ function Install-WingetPackages {
                 Write-Host "$failIcon Failed to install $package." -ForegroundColor Red
             }
         }
-        # else {
-        #     Write-Host "$warnIcon $package is already installed." -ForegroundColor Yellow
-        # }
     }
 }
 
 function Install-WingetUpdates {
-    # WinGet has no per-invocation exclusion for --all. Defer that blanket update
-    # rather than change persistent pins or mutate an unmanaged OpenCode copy.
     winget list --id AnomalyCo.OpenCode --exact --accept-source-agreements --disable-interactivity 2>$null | Out-Null
     if ($LASTEXITCODE -ne -1978335212) {
         $script:OpenCodeWingetConflict = $true
@@ -7299,10 +7111,6 @@ function Install-WindowsUpdates {
     }
 }
 
-# Function to setup ~/Code directory
-# Report whether the machine has a reboot pending. Informational only; never
-# affects the run's exit status. Checks the standard pending-reboot registry
-# locations and reports which of them triggered.
 function Test-PendingReboot {
     $reasons = @()
     if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') {
@@ -7328,7 +7136,6 @@ function Setup-CodeDirectory {
 
     Write-Host "$arrow Setting up ~/Code directory..." -ForegroundColor Cyan
 
-    # Create ~/Code directory if it doesn't exist
     if (-not (Test-Path $codeDir)) {
         New-Item -ItemType Directory -Force -Path $codeDir | Out-Null
         Write-Host "$success Created ~/Code directory." -ForegroundColor Green
@@ -7342,7 +7149,6 @@ function Set-WindowsTerminalConfiguration {
     Write-Host "$arrow Configuring Windows Terminal settings..." -ForegroundColor Cyan
     $settingsPath = "$env:LocalAppData\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
     $settings = Get-Content -Path $settingsPath | ConvertFrom-Json
-    # Ensure profiles, defaults, and font objects exist
     if (-not $settings.profiles) {
         $settings | Add-Member -MemberType NoteProperty -Name profiles -Value @{}
     }
@@ -7353,7 +7159,6 @@ function Set-WindowsTerminalConfiguration {
         $settings.profiles.defaults | Add-Member -MemberType NoteProperty -Name font -Value @{}
     }
 
-    # Set the font face
     $settings.profiles.defaults.font.face = "JetBrainsMono Nerd Font Mono"
 
     $settings | ConvertTo-Json -Depth 10 | Set-Content -Path $settingsPath
@@ -7362,8 +7167,6 @@ function Set-WindowsTerminalConfiguration {
 
 
 
-# Logging uses .NET multipart support available in Windows PowerShell 5.1 as
-# well as PowerShell 7. It must not depend on tools installed by setup.
 function Get-SetupLogDirectory {
     return [IO.Path]::GetFullPath((Join-Path $env:USERPROFILE '.local\log\machine-setup'))
 }
@@ -7377,8 +7180,6 @@ function Assert-SetupLogPath {
          [IO.Path]::GetFileName($fullPath) -cnotmatch '^\d{4}-\d{2}-\d{2}-\d{6}-[0-9a-f]{32}\.log(?:\.upload\.json)?$')) {
         throw 'Unmanaged setup log path'
     }
-    # Inspect ancestors without resolving links into another tree. Missing
-    # components are allowed only when preparing our own log directory/files.
     $cursor = $fullPath
     while ($cursor) {
         try {
@@ -7401,8 +7202,6 @@ function Assert-SetupLogPath {
 function New-SetupLogHttpClient {
     Add-Type -AssemblyName System.Net.Http
     $handler = [Net.Http.HttpClientHandler]::new()
-    # Do not forward a transcript to a redirect destination. Keep normal proxy
-    # and certificate validation behavior; never install a validation callback.
     $handler.AllowAutoRedirect = $false
     return [Net.Http.HttpClient]::new($handler)
 }
@@ -7413,12 +7212,9 @@ function Send-SetupLogRequest {
     $originalProtocol = [Net.ServicePointManager]::SecurityProtocol
     try {
         Assert-SetupLogPath $LogPath
-        # Refuse a file still open for writing, including a running transcript.
         $file = [IO.File]::Open($LogPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
         $client = New-SetupLogHttpClient
         $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
-        # Old .NET installations can select TLS 1.0 explicitly. Add TLS 1.2
-        # only in that case, preserve SystemDefault, and restore caller state.
         if ($PSVersionTable.PSVersion.Major -le 5 -and [int]$originalProtocol -ne 0) {
             [Net.ServicePointManager]::SecurityProtocol = $originalProtocol -bor [Net.SecurityProtocolType]::Tls12
         }
@@ -7427,7 +7223,6 @@ function Send-SetupLogRequest {
         $request.Content = [Net.Http.MultipartFormDataContent]::new()
         $request.Content.Add([Net.Http.StreamContent]::new($file), 'file', [IO.Path]::GetFileName($LogPath))
         $response = $client.SendAsync($request, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
-        # Only status is needed. Never print or parse an untrusted response body.
         return [int]$response.StatusCode
     }
     finally {
@@ -7445,7 +7240,6 @@ function Get-SetupLogFailureCategory {
     for ($cause = $Exception; $null -ne $cause; $cause = $cause.InnerException) {
         if ($cause -is [Security.Authentication.AuthenticationException]) { return 'tls-validation' }
         if ($cause -is [OperationCanceledException] -or $cause -is [TimeoutException]) { $category = 'timeout' }
-        # The HttpClient assembly may not have loaded if opening the file failed.
         elseif ($cause.GetType().FullName -eq 'System.Net.Http.HttpRequestException' -and $category -ne 'timeout') { $category = 'network' }
         if ($cause -is [Net.WebException]) {
             if ($cause.Status -in @([Net.WebExceptionStatus]::TrustFailure, [Net.WebExceptionStatus]::SecureChannelFailure)) {
@@ -7508,8 +7302,6 @@ function Upload-Log {
         Assert-SetupLogPath $statePath -AllowMissing:(-not $Recovery)
         $existing = [IO.File]::Exists($statePath)
         $mode = if ($existing -or $Recovery) { [IO.FileMode]::Open } else { [IO.FileMode]::CreateNew }
-        # Keep the state file as an exclusive lease throughout all attempts.
-        # An uploaded record stays on disk, avoiding a close/delete/reopen race.
         $stateStream = [IO.File]::Open($statePath, $mode, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
         if ($existing -or $Recovery) {
             $state = Read-SetupLogUploadState $stateStream
@@ -7554,8 +7346,6 @@ function Upload-Log {
         Write-Warning "Upload status: $statePath. A later setup run will retry this pending log."
     }
     catch {
-        # Raw exceptions can contain server bodies, proxy URLs or secrets.
-        # Invalid/linked/locked metadata is preserved for manual review.
         Write-Warning "Setup log upload deferred (local-file-or-metadata). Local log remains at $LogPath."
         Write-Warning 'Check log permissions, linked paths, and upload state files. No unsafe file was replaced.'
     }
@@ -7570,7 +7360,6 @@ function Invoke-PendingSetupLogUploads {
     try {
         $directory = Get-SetupLogDirectory
         Assert-SetupLogPath $directory
-        # Enumerate lazily, with a 60-second budget shared by at most three logs.
         foreach ($path in [IO.Directory]::EnumerateFiles($directory, '*.log.upload.json')) {
             $remaining = [int][Math]::Floor(60 - $watch.Elapsed.TotalSeconds)
             if ($count -ge 3 -or $remaining -lt 1) { break }
@@ -7580,7 +7369,7 @@ function Invoke-PendingSetupLogUploads {
                 $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
                 $state = Read-SetupLogUploadState $stream
             }
-            catch { continue } # Leave malformed, linked or busy state untouched.
+            catch { continue }  
             finally { if ($stream) { $stream.Dispose() } }
             if ($state.state -ne 'pending') { continue }
             $count++
@@ -7629,13 +7418,12 @@ function Invoke-WindowsSetupTasks {
     $simpleEnglishSetupFailed = $false
     $showMeSetupFailed = $false
     $prLensSetupFailed = $false
-    $windowsIcon = [char]0xf17a  # Windows logo
+    $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
     Write-Host "Version 176 | Last changed: Report bounded secret-safe evidence at real PATH discovery"
 
     Assert-HeadlessUnsupported
 
-    # Create placeholder token files early, then read literal data only.
     New-TokenPlaceholders
     Read-SetupEnvironment
 
@@ -7647,7 +7435,7 @@ function Invoke-WindowsSetupTasks {
     Install-GcloudCli
 
     Write-Section "SSH Configuration"
-    Test-GitHubSSHKey # this needs to be run before chezmoi to get access to dotfiles
+    Test-GitHubSSHKey  
 
     if ($env:USERNAME -eq "scowalt") {
         Write-Section "Code Directory Setup"
@@ -7702,7 +7490,6 @@ function Invoke-WindowsSetupTasks {
         Seed-PiZaiModels
         if (Set-PiOpenCodeGoProvider) { $piOpenCodeGoReady = $true }
         else { $script:PiProfileMutationsBlocked = $true; $piSetupFailed = $true }
-        # Re-pin the adapter before any operation resolves the shared npm tree.
         if ($piOpenCodeGoReady -and (Prepare-PiMcpAdapter)) {
             $piPackageMaintenanceOk = $true
             if (-not (Setup-PiMcpAdapter)) { $piSetupFailed = $true; $piPackageMaintenanceOk = $false }
@@ -7754,7 +7541,7 @@ function Invoke-WindowsSetupTasks {
     } else {
         Install-WingetUpdates
     }
-    Install-WindowsUpdates # last: may prompt a system reboot
+    Install-WindowsUpdates  
 
     Test-PendingReboot
 
@@ -7783,7 +7570,6 @@ function Invoke-WindowsSetupTasks {
     Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen
 }
 
-# Main setup function to call all necessary steps
 function Initialize-WindowsEnvironment {
     $script:SetupLogFile = $null
     $script:SetupTranscriptStarted = $false
@@ -7811,5 +7597,4 @@ function Initialize-WindowsEnvironment {
     if ($null -ne $setupError) { throw $setupError }
 }
 
-# Run the main setup function
 Initialize-WindowsEnvironment

@@ -14,7 +14,6 @@ if ($parseErrors.Count -gt 0) {
     throw "win.ps1 parse errors:`n$($parseErrors -join "`n")"
 }
 
-# Functions only: entry-point changes must never make this fixture run setup.
 foreach ($definition in $ast.EndBlock.Statements) {
     if ($definition -is [System.Management.Automation.Language.FunctionDefinitionAst]) {
         . ([scriptblock]::Create($definition.Extent.Text))
@@ -27,7 +26,6 @@ function global:Write-Success($message) { $script:Messages.Add("SUCCESS: $messag
 function global:Write-Warning($message) { $script:Messages.Add("WARNING: $message") }
 function global:Write-Debug($message) { $script:Messages.Add("DEBUG: $message") }
 
-# Retired RTK cleanup removes the managed footprint and preserves unrelated state.
 $originalRtkUserProfile = $env:USERPROFILE
 $originalRtkLocalAppData = $env:LOCALAPPDATA
 $originalRtkAppData = $env:APPDATA
@@ -227,7 +225,6 @@ finally {
     Remove-Item -Recurse -Force $rtkTestRoot -ErrorAction SilentlyContinue
 }
 
-# Mixed Gemini instructions stop cleanup and retain the shared file.
 $mixedRtkUserProfile = $env:USERPROFILE
 $mixedRtkLocalAppData = $env:LOCALAPPDATA
 $mixedRtkAppData = $env:APPDATA
@@ -259,7 +256,6 @@ finally {
     Remove-Item -Recurse -Force $mixedRtkRoot -ErrorAction SilentlyContinue
 }
 
-# Legacy Impeccable cleanup removes only setup-owned paths and is idempotent.
 $originalCleanupUserProfile = $env:USERPROFILE
 $cleanupTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "impeccable-cleanup-$([guid]::NewGuid())"
 $env:USERPROFILE = Join-Path $cleanupTestRoot "home"
@@ -327,8 +323,6 @@ finally {
     Remove-Item -Recurse -Force $cleanupTestRoot -ErrorAction SilentlyContinue
 }
 
-# Required managed agent skills update on every run, use the canonical shared
-# path, honor custom harness locations, and reject incomplete or linked copies.
 $originalManagedSkillWorkMachine = $env:WORK_MACHINE
 $originalManagedSkillXdgStateHome = $env:XDG_STATE_HOME
 $originalManagedSkillUserProfile = $env:USERPROFILE
@@ -343,7 +337,6 @@ $env:CODEX_HOME = Join-Path $managedSkillTestRoot "codex-home"
 $env:PI_CODING_AGENT_DIR = Join-Path $managedSkillTestRoot "custom-pi"
 $script:ManagedSkillCalls = [System.Collections.Generic.List[string]]::new()
 
-# Inert generic skill fixture retains five-file validation and new-name ownership coverage.
 function Install-CopyFixtureSkill {
     return (Install-ManagedAgentSkill -Repository "example/fixture" -SkillName "tdd" -DisplayName "Copy fixture")
 }
@@ -500,8 +493,6 @@ try {
         throw "tdd symlink validation failure was not propagated"
     }
 
-    # Every required file, in both copies, must be regular, nonempty, and unlinked.
-    # Fixtures are inert text. Neither the real skills CLI nor Reference fixture runs here.
     $referenceFixtureFiles = @("SKILL.md", "LICENSE", "references/graph-document.md", "references/config.md", "references/example.graph.json")
     $referenceFixtureFixture = Join-Path $managedSkillTestRoot "code-review-fixture"
     foreach ($relativeFile in $referenceFixtureFiles) {
@@ -597,8 +588,6 @@ finally {
     Remove-Item -Recurse -Force $managedSkillTestRoot -ErrorAction SilentlyContinue
 }
 
-# Full-suite, opt-out, and retirement Windows wrappers are exercised by
-# test_managed_skill_suite.py with PWSH_BIN, including the real embedded policy.
 
 function global:gcloud {
     Write-Output "ERROR: The Google Cloud CLI"
@@ -616,9 +605,6 @@ if ($joinedMessages -match 'Failed to update Google Cloud CLI components') {
     throw "Wrapped gcloud output emitted a failure warning:`n$joinedMessages"
 }
 
-# Run the standalone logging fixture too. It extracts production functions and
-# exercises real multipart construction rather than a PowerShell-7-only -Form mock.
-# Its separate contract wrapper runs even when an earlier fixture here fails.
 & (Join-Path $PSScriptRoot 'windows-log-upload-powershell.ps1')
 
 Write-Output "✓ PowerShell setup reliability checks passed"

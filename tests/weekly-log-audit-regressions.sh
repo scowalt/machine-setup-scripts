@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
-# Version 4 | Last changed: Keep failed Tailscale fixture output in a private temporary root
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
 
-# Never source production top-level code; keep static checks in the real cwd.
 repo_root=$(python3 tests/extract_setup_fixture.py "${repo_root}") || exit 1
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
 apt_setup_scripts=(ubuntu.sh wsl.sh pi.sh)
 dotfiles_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
-# Only applied to the definitions-only tree, never production source.
 source_without_main='s/^main "\$@"$/:/'
 
 fail() {
@@ -37,8 +34,6 @@ assert_not_contains() {
     fi
 }
 
-# macOS must converge on the canonical Tailscale cask token and remove every
-# formula version before reporting a successful migration.
 tailscale_tmp=$(mktemp -d)
 tailscale_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" \
     CALL_LOG="${tailscale_tmp}/calls" bash -c '
@@ -65,9 +60,6 @@ tailscale_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${sou
 grep -q 'Tailscale cask installed' <<< "${tailscale_output}" || fail 'mac.sh: successful canonical Tailscale cask install was not reported'
 rm -rf "${tailscale_tmp}"
 
-# Setup owns explicit package installers; it must not blanket-update npm (and
-# npm itself) after validating Pi. npm configuration is repaired before Pi
-# performs its first npm mutation.
 for file in "${bash_setup_scripts[@]}"; do
     assert_not_contains "${file}" 'npm update -g' 'blanket global npm update'
     assert_contains "${file}" '^ensure_npm_configuration\(\)' 'npm configuration preflight helper'
@@ -80,19 +72,13 @@ assert_not_contains win.ps1 'npm update -g' 'blanket global npm update'
 assert_contains win.ps1 '^function Repair-NpmConfiguration' 'PowerShell npm configuration preflight helper'
 assert_contains win.ps1 'if \(-not \(Repair-NpmConfiguration\)\)' 'PowerShell npm preflight before Pi mutation'
 
-# Pi setup failure must be observable at the entry point and cannot end with a
-# green success banner.
 for file in mac.sh ubuntu.sh wsl.sh pi.sh; do
     assert_contains "${file}" 'Setup completed with errors' 'degraded completion warning'
 done
 assert_contains win.ps1 'Required Pi coding agent setup failed' 'fatal required Pi failure'
 
-# Full-suite, future-skill, opt-out, and retirement regressions supersede the
-# old eight-skill fixtures. These extract helpers rather than sourcing setup.
 python3 tests/test_managed_skill_suite.py
 
-# Ubuntu tmux service setup must reach a lingering user manager even when the
-# ordinary login-session D-Bus path is unavailable.
 tmux_tmp=$(mktemp -d)
 mkdir -p "${tmux_tmp}/home/.config/systemd/user"
 touch "${tmux_tmp}/home/.config/systemd/user/tmux.service"
@@ -128,8 +114,6 @@ fi
 grep -q 'tmux service started' <<< "${tmux_output}" || fail 'ubuntu.sh: tmux fallback success was not reported'
 rm -rf "${tmux_tmp}"
 
-# Formatted Tailscale preference JSON must be idempotent, and a mutation is not
-# successful until the resulting RunSSH state verifies as true.
 for file in ubuntu.sh pi.sh; do
     tailscale_pref_tmp=$(mktemp -d)
     tailscale_pref_output=$(SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" \
@@ -172,9 +156,6 @@ for file in ubuntu.sh pi.sh; do
     rm -rf "${tailscale_pref_tmp}"
 done
 
-# A successful `tailscale set` is still a failure if the preference does not
-# actually change. Reserve private output before redirection; never use a shared
-# fixed /tmp filename that could belong to another fixture or follow a link.
 unverified_tmp=$(mktemp -d)
 trap 'rm -rf "${unverified_tmp}"' EXIT
 if SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
@@ -193,8 +174,6 @@ grep -q 'RunSSH is still disabled' "${unverified_tmp}/output" || fail 'ubuntu.sh
 rm -rf "${unverified_tmp}"
 trap - EXIT
 
-# Reconcile the chezmoi remote in both directions and restore the deploy-key
-# alias after the final apply that can overwrite ~/.ssh/config.
 dotfiles_tmp=$(mktemp -d)
 mkdir -p "${dotfiles_tmp}/home/.local/share/chezmoi/.git" "${dotfiles_tmp}/home/.ssh"
 touch "${dotfiles_tmp}/home/.ssh/id_rsa" "${dotfiles_tmp}/home/.ssh/id_rsa.pub"
@@ -219,8 +198,6 @@ dotfiles_output=$(SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${s
 grep -q '^remote=git@github.com:scowalt/dotfiles.git$' <<< "${dotfiles_output}" || fail 'ubuntu.sh: personal SSH key did not restore the direct chezmoi remote'
 rm -rf "${dotfiles_tmp}"
 
-# Comments and similarly prefixed hosts must not masquerade as the actual SSH
-# alias restored after chezmoi applies dotfiles.
 alias_tmp=$(mktemp -d)
 mkdir -p "${alias_tmp}/home/.ssh"
 printf '%s\n' '# Host github-dotfiles' 'Host github-dotfiles-old' > "${alias_tmp}/home/.ssh/config"
@@ -231,8 +208,6 @@ SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${source_without_main
 awk 'tolower($1) == "host" { for (i=2; i<=NF; i++) if ($i == "github-dotfiles") found=1 } END { exit !found }' "${alias_tmp}/home/.ssh/config" || fail 'ubuntu.sh: exact github-dotfiles alias was not restored'
 rm -rf "${alias_tmp}"
 
-# Initial cloning must use the exact access method that was verified rather
-# than inferring credentials again from username or public-key registration.
 for file in "${dotfiles_setup_scripts[@]}"; do
     for method in ssh token deploy; do
         init_tmp=$(mktemp -d)
@@ -273,8 +248,6 @@ for file in "${dotfiles_setup_scripts[@]}"; do
     [[ -n "${apply_line}" && -n "${bootstrap_line}" && "${bootstrap_line}" -gt "${apply_line}" ]] || fail "${file}: github-dotfiles alias is not restored after the final chezmoi apply"
 done
 
-# Safe apt upgrades may add dependencies but not remove packages, and residual
-# kept-back packages must be surfaced instead of an unconditional success.
 for file in "${apt_setup_scripts[@]}"; do
     assert_contains "${file}" 'upgrade --with-new-pkgs' 'safe apt upgrade with new dependencies'
     assert_not_contains "${file}" '(dist-upgrade|full-upgrade)' 'package-removing apt upgrade policy'

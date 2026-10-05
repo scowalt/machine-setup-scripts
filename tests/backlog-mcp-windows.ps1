@@ -1,6 +1,3 @@
-# Native Windows contract for global Backlog MCP retirement.
-# On non-Windows hosts this parses the production/prototype helper and compiles
-# its native C# only. Native handle and ACL operations are explicitly skipped.
 [CmdletBinding()]
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot)
@@ -47,7 +44,6 @@ Assert-True ($functionSource -match "native-preflight-failed") 'controlled prefl
 Assert-True ($functionSource -match "write-failed") 'controlled write diagnostic missing'
 Assert-True ($functionSource -notmatch ('Write-(Host|Warning|Error).*' + [regex]::Escape('$_'))) 'raw exception logging is forbidden'
 
-# Add-Type compilation catches C# drift on Linux without invoking any P/Invoke.
 if (-not ('BacklogNativeFiles' -as [type])) { Add-Type -TypeDefinition $nativeSource -ErrorAction Stop }
 
 $runningOnWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
@@ -62,8 +58,6 @@ Invoke-Expression $functionSource
 Assert-True ($null -ne (Get-Command node.exe -CommandType Application -ErrorAction SilentlyContinue)) 'node.exe is required'
 Assert-True ($null -ne (Get-Command bun.exe -CommandType Application -ErrorAction SilentlyContinue)) 'bun.exe is required'
 
-# Test-only native identity reader. Production mutation remains exclusively in
-# BacklogNativeFiles; this helper proves the same file ID survives the write.
 if (-not ('BacklogTestIdentity' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
@@ -140,12 +134,10 @@ function Reset-Home {
     New-PrivateDirectory $root; New-PrivateDirectory $fixtureHome
 }
 try {
-    # Ordinary absent configuration is a successful no-op.
     Reset-Home
     Write-PrivateFile (Join-Path $fixtureHome '.config\mcp\mcp.json') '{"mcpServers":{"keep":{"env":{"TOKEN":"SENTINEL-SECRET"}}}}'
     $result = Invoke-Fixture; Assert-Controlled $result
     Assert-True ($result.Code -eq 0 -and $result.Status -eq 'absent') 'normal absent case failed'
-    # An unrelated project/PATH executable must never receive private snapshots.
     $shadow = Join-Path $root 'shadow'; New-PrivateDirectory $shadow
     Write-PrivateFile (Join-Path $shadow 'bun.exe') 'inert non-executable fixture; never launch'
     $originalPath = $env:PATH
@@ -155,7 +147,6 @@ try {
         Assert-True ($result.Code -eq 0 -and $result.Status -eq 'absent') 'PATH shadow selected as planner runtime'
     } finally { $env:PATH = $originalPath }
 
-    # Multi-file JSON/TOML retirement preserves unrelated/project/credential/task content.
     Reset-Home
     $json = Join-Path $fixtureHome '.config\mcp\mcp.json'
     $toml = Join-Path $fixtureHome '.codex\config.toml'
@@ -180,21 +171,17 @@ try {
     Assert-True ([BacklogTestIdentity]::Read($json) -eq $jsonIdentity) 'file identity was replaced'
     $again = Invoke-Fixture; Assert-True ($again.Code -eq 0 -and $again.Status -eq 'absent') 'repeat run not idempotent'
 
-    # Explicit selected profiles are covered alongside defaults.
     Reset-Home
     $selected = Join-Path $fixtureHome 'profiles\pi'; New-PrivateDirectory $selected
     Write-PrivateFile (Join-Path $selected 'mcp.json') '{"mcpServers":{"backlog":{},"keep":{}}}'
     $result = Invoke-Fixture -Profiles @($fixtureHome,$selected,'','',''); Assert-True ($result.Status -eq 'removed') 'selected profile not retired'
 
-    # Malformed second file blocks every write.
     Reset-Home
     $first = Join-Path $fixtureHome '.config\mcp\mcp.json'; $bad = Join-Path $fixtureHome '.agents\mcp.json'
     $before = '{"mcpServers":{"backlog":{},"keep":{}}}'; Write-PrivateFile $first $before; Write-PrivateFile $bad '{malformed SENTINEL-SECRET'
     $result = Invoke-Fixture; Assert-Controlled $result
     Assert-True ($result.Code -eq 1 -and (Get-Content -LiteralPath $first -Raw) -eq $before) 'malformed preflight wrote another file'
 
-    # Unsafe ACLs are tolerated for an absent read-only identification, but a
-    # positive removal refuses with no write and no secret in diagnostics.
     foreach ($unsafeAncestor in @($false,$true)) {
         Reset-Home
         $file = Join-Path $fixtureHome '.config\mcp\mcp.json'
@@ -212,7 +199,6 @@ try {
         Assert-True ($result.Code -eq 1 -and (Get-Content -LiteralPath $file -Raw) -eq $selectedText) 'unsafe writable ACL mutated selected metadata'
     }
 
-    # Reparse ancestors/leaves and hardlinks are rejected.
     Reset-Home
     $outside = Join-Path $root 'outside'; New-PrivateDirectory $outside
     $junction = Join-Path $fixtureHome '.config'; $null = New-Item -ItemType Junction -Path $junction -Target $outside
@@ -229,7 +215,6 @@ try {
     $null = New-Item -ItemType HardLink -Path (Join-Path $fixtureHome 'linked.json') -Target $file
     $result = Invoke-Fixture; Assert-True ($result.Code -eq 1) 'hardlink accepted'
 
-    # A concurrently open writer prevents the transaction from pinning the file.
     Reset-Home
     $file = Join-Path $fixtureHome '.config\mcp\mcp.json'; Write-PrivateFile $file '{"mcpServers":{"backlog":{}}}'
     $held = [IO.File]::Open($file,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::Read)

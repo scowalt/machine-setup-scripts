@@ -1,9 +1,3 @@
-"""BB native plugin refresh. Never import BB code, start a server, or select a CLI.
-
-The HTTP peer is proved against an account-owned main-server process before each
-request. Native API responses are data, not diagnostics. See the source contract
-in docs/research/2026-10-01-bb-plugin-refresh-api.md.
-"""
 import ctypes
 import http.client
 import json
@@ -27,7 +21,6 @@ class Refusal(Exception):
 
 
 class Diagnostics:
-    """Keep the first failure, not exception text or native response contents."""
     def __init__(self):
         self.operation = 'preflight'
         self.first = None
@@ -95,7 +88,6 @@ def fingerprint(info):
 
 
 class LocalFiles:
-    """Read-only, parent-first checks. Only the account HOME alias is resolved."""
     def __init__(self, home, uid):
         self.original_home = Path(home)
         self.home = self.original_home.resolve(strict=True)
@@ -127,14 +119,11 @@ class LocalFiles:
             need(stat.S_ISDIR(info.st_mode) if is_dir else stat.S_ISREG(info.st_mode),
                  'unverified-local-state')
             need(info.st_uid in (0, self.uid), 'foreign-local-state')
-            # Native AppImage extraction can sit below the system sticky /tmp.
-            # No other writable ancestor is accepted; descendants remain checked.
             sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
             need(not info.st_mode & 0o022 or sticky_tmp, 'writable-local-state')
             if not is_dir:
                 need(info.st_nlink == 1, 'unverified-local-state')
             previous = self.seen.get(str(current))
-            # Directory mtime changes with unrelated work; pin its identity/mode.
             mark = fingerprint(info)[:5] if is_dir or volatile else fingerprint(info)
             need(previous is None or previous == mark, 'changed-local-state')
             self.seen[str(current)] = mark
@@ -167,7 +156,7 @@ class LocalFiles:
                 try:
                     os.close(fd)
                 except Exception:
-                    pass  # Preserve the original failed observation.
+                    pass   
 
     def json(self, path, optional=False):
         raw = self.read(path, optional)
@@ -175,7 +164,6 @@ class LocalFiles:
 
 
 def command(args, allow_missing=False):
-    """Only native inspection tools, never a caller-selected executable."""
     result = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, timeout=10, close_fds=True,
                             env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL': 'C'})
@@ -197,8 +185,6 @@ def parse_environment(raw):
 
 
 def darwin_uid(text):
-    # Darwin uid_t is unsigned 32-bit; ps can render its signed alias. -1 and
-    # UINT32_MAX are unknown identities, not accounts. Never use abs(uid).
     need(re.fullmatch(r'(?:[0-9]{1,10}|-[1-9][0-9]{0,9})', text) is not None,
          'process-proof-unavailable')
     value = int(text)
@@ -225,8 +211,6 @@ class Processes:
             need(len(parts) == 2, 'process-proof-unavailable')
             if self.system == 'darwin':
                 uid = darwin_uid(parts[0])
-                # pid_t is signed 32-bit, but a process-table PID has no signed
-                # UID alias. Retain PID 0 (the kernel); reject negative/overflow.
                 need(re.fullmatch(r'[0-9]{1,10}', parts[1]) is not None
                      and int(parts[1]) <= (1 << 31) - 1, 'process-proof-unavailable')
             else:
@@ -243,23 +227,16 @@ class Processes:
                 need(root.stat().st_uid == self.uid, 'foreign-process')
                 stamp = bounded_read(root / 'stat', 65536).rsplit(b')', 1)[1].split()[19]
                 argv = [x.decode('utf-8', 'strict') for x in bounded_read(root / 'cmdline', 2097152).split(b'\0') if x]
-                # Do not inventory credentials of unrelated account processes.
                 env = bounded_read(root / 'environ', 2097152) if main_entry(argv) is not None else b''
                 again = bounded_read(root / 'stat', 65536).rsplit(b')', 1)[1].split()[19]
             except (FileNotFoundError, ProcessLookupError):
                 return None
             need(stamp == again, 'changed-process')
             return (argv, parse_environment(env), stamp)
-        # KERN_PROCARGS2 preserves argv boundaries (ps eww does not). Values are
-        # kept in memory, never printed or put in command arguments.
         raw_rows = command(['/bin/ps', '-p', str(pid), '-o', 'uid=,lstart='], allow_missing=True)
         if not raw_rows:
             return None
         need(raw_rows.isascii(), 'process-proof-unavailable')
-        # ps lstart uses C-locale %c. Accept one complete UID/start row, not
-        # extra rows or arbitrary suffixes, before KERN_PROCARGS2 reads anything
-        # private. Keep the native start text (including internal whitespace)
-        # as identity evidence; do not reinterpret its calendar or timezone.
         row = re.fullmatch(
             r'[ \t]*(-?[0-9]{1,10})[ \t]+'
             r'((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[ \t]+'
@@ -286,8 +263,6 @@ class Processes:
         return argv, parse_environment(b'\0'.join(values[argc:])), stamp
 
     def database_open(self, path):
-        # A native main server holds its bb.db connection. A stopped-data
-        # deferral requires kernel evidence, not just absence of a known argv.
         if self.system == 'darwin':
             return bool(command(['/usr/sbin/lsof', '-nP', '-Fpu', '--', str(path)], allow_missing=True))
         expected = path.stat()
@@ -311,8 +286,6 @@ class Processes:
             raw = command(['/usr/sbin/lsof', '-nP', '-a', '-p', str(pid), '-iTCP', '-FpnT']).decode('utf-8')
             expected = f'n127.0.0.1:{port}->127.0.0.1:{client_port}'
             return f'p{pid}' in raw.splitlines() and expected + '\nTST=ESTABLISHED' in raw
-        # Match the accepted server-side socket, not merely a listening port.
-        # A same-account ssh tunnel cannot satisfy this proof for a BB process.
         expected_local = f'0100007F:{port:04X}'
         expected_peer = f'0100007F:{client_port:04X}'
         matches = set()
@@ -351,18 +324,14 @@ def verify_package(files, entry):
         metadata = files.json(root / 'package.json', optional=True)
     except (Refusal, OSError):
         if root.name != 'bb-app':
-            return False  # no positive BB evidence in an unrelated application
+            return False   
         raise
     if not isinstance(metadata, dict) or metadata.get('name') != 'bb-app':
         need(root.name != 'bb-app', 'unverified-main-server')
-        # Recognize BB's source-workspace server without treating every unrelated
-        # project named server/dist/index.js as a BB installation.
         workspace = files.json(entry.parents[1] / 'package.json', optional=True)
         need(not isinstance(workspace, dict) or workspace.get('name') != '@bb/server', 'unsupported-native-contract')
         return False
     version = metadata.get('version')
-    # Native contract inspected at 0.44.0. Unknown versions must be reviewed,
-    # rather than silently assuming source/disabled-state semantics are stable.
     need(version == '0.44.0', 'unsupported-native-contract')
     need(metadata.get('bin', {}).get('bb-server') == 'dist/bb-server.js', 'unverified-main-server')
     files.inspect(entry)
@@ -387,12 +356,11 @@ def discover(files, processes, configured_data=None, block_default=False):
         if not verify_package(files, entry):
             continue
         need(len(argv) == 2, 'ambiguous-process')
-        # UID is the account identity; a manual server can use a custom HOME.
         home = env.get('HOME') or str(files.home)
         need(Path(home).is_absolute(), 'unverified-home')
         data = files.normalize(env.get('BB_DATA_DIR') or str(Path(home) / '.bb'))
         if block_default and data == files.home / '.bb':
-            continue  # opted-in Ubuntu readiness failed; caller retains failure
+            continue   
         files.inspect(data, directory=True)
         need(data.stat().st_uid == files.uid, 'foreign-local-state')
         need(files.read(data / 'bb.db', header=True) == b'SQLite format 3\0'
@@ -416,7 +384,7 @@ def discover(files, processes, configured_data=None, block_default=False):
             continue
         db = files.read(data / 'bb.db', optional=True, header=True)
         if db is None:
-            continue  # prepared CLI / machine daemon is not a main server
+            continue   
         need(info.st_uid == files.uid and (data / 'bb.db').stat().st_uid == files.uid
              and db[:16] == b'SQLite format 3\0', 'unverified-main-server')
         moved = files.json(data / 'server-moved.json', optional=True)
@@ -427,7 +395,7 @@ def discover(files, processes, configured_data=None, block_default=False):
                          for k in ('moveId', 'fromHostId', 'toHostId', 'toHostName', 'serverUrl'))
                  and type(moved.get('movedAt')) is int and moved['movedAt'] >= 0
                  and isinstance(moved.get('oldCopyEntries'), list), 'unverified-local-state')
-            continue  # historical main data now belongs to a remote server
+            continue   
         need(files.read(data / 'server-import.json', optional=True) is None, 'server-move-in-progress')
         runtime = files.json(data / 'bb-app-runtime.json', optional=True)
         if runtime is not None:
@@ -453,7 +421,7 @@ class NativeApi:
         failed = True
         try:
             connection.connect()
-            connection.auto_open = 0  # never reconnect after proving a socket
+            connection.auto_open = 0   
             client_port = connection.sock.getsockname()[1]
             until = min(self.deadline, time.monotonic() + 2)
             while not self.processes.peer_owned(s['pid'], s['port'], client_port):
@@ -473,9 +441,9 @@ class NativeApi:
                 refusal = ('plugin safe mode is on; turn it off with `bb plugin safe-mode off` '
                            'before you update "' + identity + '"')
                 if isinstance(result, dict) and result.get('error') == refusal:
-                    failed = False  # A deferral cannot hide an independent close failure.
+                    failed = False   
                     raise Refusal('safe-mode')
-            need(response.status == 200, 'native-request-failed')  # no redirects or remote fallback
+            need(response.status == 200, 'native-request-failed')   
             failed = False
             return result
         except (TimeoutError, socket.timeout):
@@ -484,7 +452,6 @@ class NativeApi:
             if not failed:
                 connection.close()
             else:
-                # Closing a failed request must not replace its causal refusal.
                 try:
                     connection.close()
                 except Exception:
@@ -601,8 +568,6 @@ def refresh(api, diagnostics=None):
         except Refusal as error:
             if type(error) is Refusal and error.args == ('safe-mode',):
                 return 'safe-mode', failed
-            # Unknown completion (including timeout) must not be retried or
-            # converted to success by a later current result.
             diagnostics.record(error)
             failed = True
     diagnostics.operation = 'verification'
@@ -622,8 +587,6 @@ def refresh(api, diagnostics=None):
             need(new['status'] in (('running',) if new['enabled'] else ('disabled',)), 'activation-unverified')
         failure = new['updateState'].get('lastFailure')
         need(failure is None or failure == old['updateState'].get('lastFailure'), 'activation-failed')
-    # A fresh native check catches incomplete/rolled-back results and concurrent
-    # new candidates. Never treat unavailable/unknown as deliberate exclusion.
     final = api.request('POST', '/api/v1/plugins/updates/check', {})
     need(isinstance(final, dict) and isinstance(final.get('results'), list), 'malformed-result')
     remaining = final['results']
@@ -641,15 +604,13 @@ def refresh(api, diagnostics=None):
 
 
 def run():
-    # Diagnostics are finite, controlled labels only. No paths, URLs, process
-    # arguments, native errors, plugin output, settings or credentials escape.
     labels = {'safe-mode', 'checked', 'updated', 'stopped', 'absent', 'failed'}
     diagnostics = Diagnostics()
     try:
         need(os.getuid() != 0, 'unsupported-account')
         deadline = time.monotonic() + 1800
         signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(Refusal('operation-timeout')))
-        signal.alarm(1800)  # include discovery and local filesystem inspection
+        signal.alarm(1800)   
         files = LocalFiles(sys.argv[1], os.getuid())
         processes = Processes(os.getuid())
         policy = sys.argv[2] if len(sys.argv) > 2 else 'ready'

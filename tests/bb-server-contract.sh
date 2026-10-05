@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-# Version 2 | Last changed: Cover managed-service drop-in refusals and caller preservation
 set -euo pipefail
 cd "$(dirname "$0")/.."
 tmp=$(mktemp -d)
 trap 'rm -rf -- "${tmp}"' EXIT
-# Resolve Python before redirecting HOME; inherited mise shims may consult the
-# real account's config using the disposable home's separate trust state.
 python_bin=$(python3 -c 'import sys; print(sys.executable)')
 mkdir -p "${tmp}/interpreters"
 ln -s "${python_bin}" "${tmp}/interpreters/python3"
@@ -18,16 +15,11 @@ end = source.index('\nrun_setup_tasks() {', start)
 pathlib.Path(sys.argv[1], 'helpers.sh').write_text(source[start:end])
 PY
 
-# Controlled failures through extracted helpers and the real aggregate caller.
 python3 tests/test_bb_server_diagnostics.py
-# Report unsafe setup directories before any package or lifecycle operation.
 python3 tests/test_bb_directory_preflight.py
-# Existing local/loaded overrides refuse with controlled diagnostics and no mutation.
 python3 tests/test_bb_service_preflight.py
-# Exercise the earlier dotfile apply, including native Chezmoi when available.
 PYTHONDONTWRITEBYTECODE=1 python3 tests/test_bb_dotfiles_umask.py
 
-# Opt-in and platform gates are deliberately independent of machine identity.
 for value in '' 0 1 invalid; do
     case "${value}" in ''|0) expected=1;; 1) expected=0;; *) expected=2;; esac
     result=0
@@ -74,8 +66,6 @@ for process in '' 0 1 bogus; do
     [[ "${effective}" == "${process:-1}" ]] || exit 1
 done
 
-# Tests use only temporary homes and inert native-command shims; they never
-# start a real BB server or mutate Tailscale Serve state.
 mkdir -p "${tmp}/bin" "${tmp}/proc"
 printf 'sl\n' > "${tmp}/proc/tcp"
 printf 'sl\n' > "${tmp}/proc/tcp6"
@@ -201,7 +191,6 @@ exec env -i "${unit_env[@]}" "${fixture_env[@]}" "${command[@]}"
 RUN_UNIT
 chmod +x "${tmp}/bin/"*
 
-# Exercise actual generated lifecycle commands with fixed endpoint state.
 BB_TEST_ROOT="${tmp}" BB_TEST_HELPERS="${tmp}/helpers.sh" PATH="${tmp}/bin:${PATH}" bash <<'GUARD_FIXTURE'
 set -euo pipefail
 source "$BB_TEST_HELPERS"
@@ -275,8 +264,6 @@ result=0; wait "$guard_pid" || result=$?
 grep -qx 'killed' "$BB_TEST_ROOT/serve.log"
 GUARD_FIXTURE
 
-# End-to-end setup flow: install, stop ingress before the app, then restart
-# ingress only after the generated app readiness hook succeeds.
 BB_TEST_ROOT="${tmp}" BB_TEST_HELPERS="${tmp}/helpers.sh" PATH="${tmp}/bin:${PATH}" bash <<'SETUP_FIXTURE'
 set -euo pipefail
 source "$BB_TEST_HELPERS"
@@ -472,9 +459,6 @@ printf 'renamed.example.ts.net\n' > "$BB_TEST_DNS_FILE"
 [[ "$(<"$HOME/.config/setup-bb-server/endpoint")" == 'test.example.ts.net 443 https://test.example.ts.net' ]]
 SETUP_FIXTURE
 
-# A genuinely fresh HOME has no local BB files. Keep the real identity
-# preflight and post-launch native readiness helpers; only package, systemd,
-# and network boundaries are inert fixtures.
 BB_TEST_ROOT="${tmp}/fresh-setup" BB_TEST_TOOLS_DIR="${tmp}/bin" BB_TEST_RUNNER="${tmp}/bin/run-systemd-unit" BB_TEST_HELPERS="${tmp}/helpers.sh" PATH="${tmp}/bin:${PATH}" BB_READY_ATTEMPTS=5 BB_READY_INTERVAL=0 bash <<'FRESH_SETUP_FIXTURE'
 set -euo pipefail
 source "$BB_TEST_HELPERS"
@@ -569,8 +553,6 @@ ln -s "$BB_TEST_ROOT/identity-target" "$HOME/.bb/auth.json"
 HOME="$saved_home"
 FRESH_SETUP_FIXTURE
 
-# Exercise BB's native managed-JSON lock contract in an inert package fixture.
-# A competing writer is simulated between a failed tryLock and our acquisition.
 BB_TEST_ROOT="${tmp}" BB_TEST_HELPERS="${tmp}/helpers.sh" PATH="${tmp}/bin:${PATH}" bash <<'NATIVE_CONFIG_FIXTURE'
 set -euo pipefail
 source "$BB_TEST_HELPERS"
@@ -612,8 +594,6 @@ rm "$HOME/.bb/config.json"; printf '{broken\n' > "$HOME/.bb/config.json"; chmod 
 if bb_config_merge_native 'https://fixture.example.ts.net:38443'; then exit 1; fi
 NATIVE_CONFIG_FIXTURE
 
-# Native npm policy and artifact verification. The registry and lifecycle are
-# never used; this fixture accepts only the exact stable install arguments.
 BB_TEST_ROOT="${tmp}" BB_TEST_HELPERS="${tmp}/helpers.sh" PATH="${tmp}/bin:${PATH}" bash <<'PACKAGE_FIXTURE'
 set -euo pipefail
 source "$BB_TEST_HELPERS"
@@ -722,8 +702,6 @@ BB_TEST_NPM_FAIL=1
 [[ "$(grep -c '^install$' "$NPM_FAIL_BEFORE")" == 7 ]]
 PACKAGE_FIXTURE
 
-# Source-verified native foreground behavior: occupied ports and stale ETags
-# reject ownership changes; these are model-only tests, not daemon fixtures.
 python3 <<'RACE_FIXTURE'
 class Daemon:
     def __init__(self): self.ports, self.etag = {}, 0

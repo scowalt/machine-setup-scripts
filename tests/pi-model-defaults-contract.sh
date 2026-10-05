@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Contract version 1: GPT-6 Astra defaults and Synthetic removal.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)

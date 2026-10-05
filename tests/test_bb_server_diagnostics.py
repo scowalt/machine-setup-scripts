@@ -1,7 +1,3 @@
-"""Version 1: secret-safe BB diagnostics through extracted helpers and inert callers.
-
-Run only with run-fixture-matrix.py. Never execute setup entry points or BB apps.
-"""
 import json
 import os
 from pathlib import Path
@@ -15,8 +11,6 @@ from extract_setup_fixture import definitions, validate_function
 ROOT = Path(__file__).resolve().parents[1]
 SECRET = 'DO-NOT-LOG-FIXTURE-SECRET'
 
-# All definitions load before these inert boundaries, then only an explicit
-# tested helper/caller runs. No production top-level statement is evaluated.
 MOCKS = r'''
 print_error() { printf 'ERROR: %s\n' "$1"; }
 print_success() { printf 'SUCCESS: %s\n' "$1"; }
@@ -310,7 +304,6 @@ class BbServerDiagnostics(unittest.TestCase):
                 if label == 'restore.readiness':
                     self.assertEqual(events.count('wait'), 30)
                     self.assertEqual(result.stderr.count('[readiness.health]'), 1)
-        # These stops were always best-effort: logging must not change that.
         for service in ('ingress', 'app'):
             with self.subTest(best_effort=service):
                 result = self.run_code(call, env={'FAIL_SYSTEMD': '--user stop setup-bb-' + service + '.service'})
@@ -405,8 +398,6 @@ mv() {
         native = self.package / 'node_modules/fs-native-extensions'
         native.mkdir(parents=True, exist_ok=True)
         (native / 'index.js').write_text(module)
-        # This helper includes JS heredocs: obtain its complete definition from
-        # the already validated definitions-only tree, not a brace regex.
         extra = 'source "$HELPERS"\nprint_error() { printf "ERROR: %s\\n" "$1"; }\nBB_PACKAGE_PATH="$HOME/.local/share/mise/installs/node/24.20.0/lib/node_modules/bb-app"\n'
         return self.run_code('bb_config_merge_native https://fixture.example.ts.net', extra=extra)
 
@@ -419,7 +410,6 @@ mv() {
         result = self.native_config('exports.tryLock=()=>{throw new Error("' + SECRET + '")};exports.unlock=()=>{};')
         self.assertEqual(result.returncode, 1, result)
         self.assertIn('[config.locks]', result.stderr)
-        # Cleanup failure must not replace the original parse failure.
         result = self.native_config('exports.tryLock=()=>true;exports.unlock=()=>{throw new Error("' + SECRET + '")};')
         self.assertEqual(result.returncode, 1, result)
         self.assertIn('[config.read]', result.stderr)
@@ -430,7 +420,6 @@ mv() {
         self.assertIn('[config.validate]', result.stderr)
         self.seed('.bb/config.json', '{"config":{}}')
         self.seed('.bb/env.json', '{"env":{"BB_APP_URL":"old","KEY":"' + SECRET + '"}}')
-        # Fail second-file promotion after config.json has already changed.
         (self.home / '.bb/.env.json.tmp').mkdir()
         result = self.native_config(good)
         self.assertEqual(result.returncode, 1, result)
@@ -466,7 +455,7 @@ node() {
         names = re.findall(r'^(\w+)\(\) \{', self.source, re.M)
         stubs = '\n'.join(n + '() { return 0; }' for n in names)
         tail = simple_function(self.source, 'run_setup_tasks')
-        start = tail.index('    # BB is an independent native Ubuntu opt-in')
+        start = tail.index("    : 'BEGIN_BB_SERVER_CALLER'")
         caller = 'run_setup_tasks() {\nlocal _bb_selection_status=0 _setup_had_errors=0 _pi_go_ready=0 PI_PROFILE_MUTATIONS_BLOCKED=0\n' + tail[start:]
         validate_function(caller)
         main = simple_function(self.source, 'main')
@@ -485,8 +474,6 @@ finish_setup_log() { printf 'LOG-FINAL:%s\n' "$1"; return "$1"; }
         self.assertIn('UNRELATED-CONTINUED', result.stdout)
         self.assertIn('LOG-FINAL:1', result.stdout)
         self.assertNotIn('was preserved', result.stdout)
-        # Real tee/finalization too: the transport is an inert file copy, so no
-        # collector or credential is contacted and stderr reaches the closed log.
         logging = '\n'.join(simple_function(self.source, name) for name in ('start_setup_log', 'finish_setup_log'))
         logging += '\nprint_debug() { :; }\nupload_log() { cp -- "$SETUP_LOG_FILE" "$EVENTS.uploaded"; }\n'
         result = self.run_code('main', extra=extra + '\n' + logging, log_paths=True)

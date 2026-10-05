@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""Definitions-only refresh policy/callers, synthetic files and inert native APIs.
-
-No process inventory, socket, application, plugin, service or installed BB code
-is used. Run only through run-fixture-matrix.py and its mandatory kernel filter.
-"""
 import ast
 import copy
 import contextlib
@@ -148,7 +143,6 @@ class FakeApi:
 
 
 class DarwinInputs:
-    """Inert ps/sysctl/lsof bytes; the production parser and identity proof run."""
     def __init__(self, table, records, uids=None):
         self.table = table
         self.records = records
@@ -375,8 +369,6 @@ class Discovery(unittest.TestCase):
 
     @contextlib.contextmanager
     def darwin_http(self, api, fault=None):
-        # Only the transport is replaced: NativeApi still revalidates process,
-        # package, data, accepted-socket, health and native configuration proof.
         requests = []
         def connection(host, port, **_kwargs):
             self.assertEqual((host, port), ('127.0.0.1', 39001))
@@ -536,8 +528,6 @@ class Discovery(unittest.TestCase):
         self.assertFalse(second.mutations())
 
     def test_darwin_observed_signed_uid_inventory_and_minimized_row_allow_discovery(self):
-        # Observed PID/UID bytes, with successful native status and no stderr.
-        # Keep the real command validator, table parser, discovery and policy.
         for uid in ('-2', '4294967294'):
             for pids in ((53750, 53752), (53750,)):
                 with self.subTest(uid=uid, pids=pids):
@@ -586,8 +576,6 @@ class Discovery(unittest.TestCase):
 
     def test_darwin_mixed_inventory_updates_only_verified_account_server_and_preserves_intent(self):
         data = self.server()
-        # A foreign row may even name the same BB entry; it is not a candidate
-        # and its environment must never be inspected to decide that.
         self.records[53750] = self.records[100]
         self.records[53752] = self.records[100]
         before = (data / 'bb.db').read_bytes(), (self.package / 'package.json').read_bytes()
@@ -842,7 +830,7 @@ class Discovery(unittest.TestCase):
         with patch.object(self.proc, 'read', side_effect=P.Refusal('foreign-process')):
             with self.assertRaises(P.Refusal):
                 P.discover(self.files(), self.proc)
-        self.records[100][1]['HOME'] = str(self.root)  # same UID, custom HOME is not foreign
+        self.records[100][1]['HOME'] = str(self.root)   
         self.assertEqual(len(P.discover(self.files(), self.proc)[0]), 1)
         (data / 'bb.db').unlink()
         (data / 'bb.db').symlink_to(self.entry)
@@ -1093,7 +1081,6 @@ class Callers(unittest.TestCase):
         end = caller.index('    if ! prepare_pi_profile_permissions; then', start)
         seam = caller[start:end]
         cases = [
-            # selection, platform failure, server failure, prep failure, earlier, expected refresh
             (0, 0, 0, 0, 0, 'ready'), (0, 0, 1, 0, 0, 'block-default'),
             (0, 1, 0, 0, 0, None), (1, 0, 0, 0, 0, 'ready'),
             (1, 0, 0, 1, 0, 'ready'), (1, 0, 0, 0, 1, 'ready'),
@@ -1132,7 +1119,7 @@ run_fixture
         wrapper = (ROOT / 'lib/bb-plugin-refresh.bash').read_text().replace('@@PYTHON@@', (ROOT / 'lib/bb-plugin-refresh.py').read_text().rstrip()).rstrip()
         for script in SCRIPTS:
             source = (ROOT / (script + '.sh')).read_text()
-            block = source.split('# BEGIN BB PLUGIN REFRESH\n', 1)[1].split('\n# END BB PLUGIN REFRESH', 1)[0]
+            block = source.split(": 'BEGIN_BB_PLUGIN_REFRESH'\n", 1)[1].split("\n: 'END_BB_PLUGIN_REFRESH'", 1)[0]
             self.assertEqual(block, wrapper)
             selected = EXTRACT.definitions(source)
             main = re.search(r'^run_setup_tasks\(\) \{\n.*?^\}', selected, re.M | re.S).group()
@@ -1173,8 +1160,6 @@ DOTFILES_ACCESS_METHOD=none
                             'bun', 'pi', 'bb', 'chezmoi', 'sudo', 'kill', 'pkill', 'tailscale'):
                     code += f'\n{cmd}() {{ echo FORBIDDEN:{cmd}; return 99; }}'
                 code += '\nmain\n'
-                # Only real caller + refresh wrapper execute. The payload and
-                # every unrelated helper are inert before intentional invocation.
                 cases = [('BB_PLUGIN_REFRESH checked', 0, 0, 0),
                          ('BB_PLUGIN_REFRESH stopped', 0, 0, 0),
                          ('BB_PLUGIN_REFRESH safe-mode', 0, 0, 0),
@@ -1205,8 +1190,6 @@ DOTFILES_ACCESS_METHOD=none
         self.assertNotIn('refresh_bb_plugins', (ROOT / 'win.ps1').read_text())
 
     def test_early_failure_survives_success_deferral_reboot_and_completed_log(self):
-        # Existing caller seam, now with real log draining/finalization. All setup
-        # helpers and the upload transport are inert before either caller runs.
         selected = EXTRACT.definitions((ROOT / 'mac.sh').read_text())
         real = ('run_setup_tasks', 'main', 'refresh_bb_plugins', 'start_setup_log', 'finish_setup_log')
         names = re.findall(r'^([A-Za-z_][A-Za-z_0-9]*)\(\) \{', selected, re.M)
@@ -1248,7 +1231,6 @@ upload_log() { cp -- "$SETUP_LOG_FILE" "$HOME/completed-upload.log"; }
                     logs = list((Path(home) / '.local/log/machine-setup').glob('*.log'))
                     self.assertEqual(len(logs), 1)
                     log = logs[0].read_text()
-                    # Upload sees the complete drained log, not an early snapshot.
                     self.assertEqual((Path(home) / 'completed-upload.log').read_text(), log)
                     summary = 'Setup completed with errors' if failed != 'none' else '✨ Setup complete!'
                     milestones = ['desktop-operation', 'opencode-operation', 'independent-success', diagnostic,

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Embed identical native BB plugin refresh helpers; never load setup sources."""
 import argparse
 from pathlib import Path
 
@@ -10,7 +9,7 @@ SCRIPTS = ('mac.sh', 'ubuntu.sh', 'pi.sh', 'bazzite.sh', 'wsl.sh')
 def embed(check=False):
     policy = (ROOT / 'lib/bb-plugin-refresh.py').read_text().rstrip()
     wrapper = (ROOT / 'lib/bb-plugin-refresh.bash').read_text().rstrip()
-    begin, end = '# BEGIN BB PLUGIN REFRESH', '# END BB PLUGIN REFRESH'
+    begin, end = ": 'BEGIN_BB_PLUGIN_REFRESH'", ": 'END_BB_PLUGIN_REFRESH'"
     block = begin + '\n' + wrapper.replace('@@PYTHON@@', policy) + '\n' + end
     stale = []
     for name in SCRIPTS:
@@ -20,7 +19,7 @@ def embed(check=False):
             first = text.index(begin)
             last = text.index(end, first) + len(end)
         else:
-            first = last = text.index('# Installation only: keep this block identical in the five Bash scripts.')
+            first = last = text.index(": 'BEGIN_BB_MACHINE_PREPARATION'")
             block_for_insert = block + '\n\n'
         updated = text[:first] + (block if begin in text else block_for_insert) + text[last:]
         if updated != text:

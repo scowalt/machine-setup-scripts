@@ -1,5 +1,3 @@
-# Offline only: extract logging functions, use temporary homes, and replace HTTP
-# with an in-memory handler. Never source win.ps1 or contact the real collector.
 $ErrorActionPreference = 'Stop'
 $scriptPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'win.ps1'
 $tokens = $null
@@ -56,8 +54,6 @@ function Write-Debug($message) { $script:Messages.Add([string]$message) }
 function Write-Warning($message) { $script:Messages.Add([string]$message) }
 function Start-Sleep { param([int]$Seconds) $script:Sleeps.Add($Seconds) }
 function New-SetupLogHttpClient { [Net.Http.HttpClient]::new([SetupUploadFixtureHandler]::new()) }
-# Regression guard: this mock deliberately has the Windows PowerShell 5.1
-# parameter set, which has no -Form. Any old call fails before reaching HTTP.
 function Invoke-RestMethod {
     [CmdletBinding()]
     param($Uri, $Method, $Body, $ContentType, $TimeoutSec)
@@ -89,7 +85,6 @@ try {
 
     function New-FixtureLog {
         $path = Join-Path (Get-SetupLogDirectory) ("2026-09-12-120000-" + [guid]::NewGuid().ToString('N') + '.log')
-        # Include UTF-16, non-ASCII, CRLF, and a NUL to catch text re-encoding.
         [IO.File]::WriteAllBytes($path, [Text.Encoding]::Unicode.GetPreamble() + [Text.Encoding]::Unicode.GetBytes("log: $([char]0x2713)`r`n`0"))
         return $path
     }
@@ -135,7 +130,6 @@ try {
         $expected = if ($failure -eq -3) { 'tls-validation' } else { "http-$failure" }
         Assert-Log ($state.reason -eq $expected -and $state.attempts -eq 1) 'Persistent diagnostics must contain a safe failure category and count'
         Assert-NoSecrets
-        # Clear pending state through a successful upload so other scenarios are isolated.
         Reset-Transport
         Upload-Log -LogPath $path -Recovery
     }
@@ -158,8 +152,6 @@ try {
     Upload-Log -LogPath $path -Recovery
     Write-Output 'PASS: Multipart bytes, safe diagnostics, retry policy, and real HTTP cancellation'
 
-    # Only marked logs are retried, at most three in one recovery pass. A
-    # successful record is not re-uploaded and original host attribution stays.
     $unmarked = New-FixtureLog
     $pending = @(1..4 | ForEach-Object { $file = New-FixtureLog; Set-FixturePending $file; $file })
     Reset-Transport
@@ -175,7 +167,6 @@ try {
     Assert-Log ([SetupUploadFixtureHandler]::Calls -eq 0) 'Uploaded logs must not be sent again'
     foreach ($file in $pending) { Assert-Log ([IO.File]::Exists($file)) 'Recovery must not delete source logs' }
 
-    # A new setup run must replay a pending closed log even if setup then fails.
     $path = New-FixtureLog
     Set-FixturePending $path
     Reset-Transport
@@ -225,7 +216,6 @@ try {
     Reset-Transport
     Upload-Log -LogPath $path -Recovery
 
-    # Symlink tests use only temporary paths; no real account directories.
     $target = Join-Path $root 'unrelated-private-file'
     [IO.File]::WriteAllText($target, 'unrelated sentinel')
     $linkSupported = $true
@@ -263,7 +253,6 @@ try {
     }
     Write-Output 'PASS: Unmarked, malformed, locked, and linked files remain protected'
 
-    # All network failures must leave the original setup error authoritative.
     Reset-Transport @(503, 503, 503)
     $caught = $null
     try { Initialize-WindowsEnvironment } catch { $caught = $_ }
@@ -278,7 +267,6 @@ try {
     Reset-Transport
     Invoke-PendingSetupLogUploads
 
-    # Closing failure must skip upload, not mark an active log for recovery.
     function Invoke-WindowsSetupTasks { throw 'UNIQUE-SETUP-FAILURE-7491' }
     function Stop-Transcript { [CmdletBinding()] param() throw 'DO-NOT-PRINT-SECRET close failure' }
     Reset-Transport
@@ -291,8 +279,6 @@ try {
     $script:SetupTranscriptStarted = $false
     Assert-NoSecrets
 
-    # Start-Transcript can create a partial file before failing. It must never
-    # be labeled closed or queued, nor may setup tasks run without logging.
     function Start-Transcript {
         [CmdletBinding()]
         param($Path, [switch]$NoClobber)
