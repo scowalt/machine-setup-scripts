@@ -1,4 +1,3 @@
-# Exercise only the placeholder function, never the full Windows setup script.
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $source = Get-Content -Raw (Join-Path $repoRoot 'win.ps1')

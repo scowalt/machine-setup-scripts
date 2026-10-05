@@ -1,4 +1,3 @@
-# Contract version 1: exercise extracted functions, never full Windows setup.
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $source = Get-Content -Raw (Join-Path $repoRoot 'win.ps1')

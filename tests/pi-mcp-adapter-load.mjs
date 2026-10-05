@@ -1,4 +1,3 @@
-// Explicitly invoked by the registry fixture, never against a live profile.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,8 +17,6 @@ assert.ok(path.basename(cwd).startsWith('pi-maintenance-'));
 assert.deepEqual(fs.readdirSync(os.homedir()), ['.pi']);
 const packageDir = path.join(agentDir, 'npm/node_modules/pi-mcp-adapter');
 assert.equal(JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'))).version, '2.32.1');
-// Empty, test-owned HOME and cwd contain no MCP config. Also fail if anything
-// tries to contact an MCP server, model provider, telemetry or update endpoint.
 const blocked = () => { throw new Error('Network is forbidden in the adapter load fixture'); };
 globalThis.fetch = blocked;
 net.Socket.prototype.connect = blocked;

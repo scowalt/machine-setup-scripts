@@ -1,4 +1,3 @@
-"""Exact headless classification and retained platform policy; inert commands only."""
 import os
 from pathlib import Path
 import re
@@ -30,7 +29,6 @@ class Headless(unittest.TestCase):
                     self.assertEqual(result.returncode, int(value == '1'), result.stdout + result.stderr)
                     self.assertNotIn('Paseo', result.stdout)
                     if value == '1': self.assertIn('no-login headless', result.stdout)
-        # Preserve existing OR policy: explicit 1 in either source rejects.
         self.assertEqual(self.run_bash(code, {'HEADLESS': '0'}, "HEADLESS='1'\n").returncode, 1)
         self.assertEqual(self.run_bash(code, {'HEADLESS': '1'}, 'HEADLESS=0\n').returncode, 1)
         main = function(source, 'run_setup_tasks')
@@ -58,7 +56,6 @@ is_container_environment() { [[ "$PLATFORM" == container ]]; }
     def test_ubuntu_passwordless_sudo_requires_both_exact_opt_ins(self):
         source = (ROOT / 'ubuntu.sh').read_text()
         body = function(source, 'setup_headless_sudo')
-        # No /etc reads/writes: substitute the sole sudoers path and intercept sudo.
         self.assertEqual(body.count('/etc/sudoers.d/'), 1)
         body = body.replace('/etc/sudoers.d/', '${HOME}/sudoers/')
         code = '''print_message() { :; }; print_debug() { :; }; print_success() { :; }

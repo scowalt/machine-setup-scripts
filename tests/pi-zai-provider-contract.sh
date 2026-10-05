@@ -42,7 +42,6 @@ assert_order() {
     [[ "${first_line}" -lt "${second_line}" ]] || fail "${file}: wrong order for ${description}"
 }
 
-# z.ai API keys have no stable public prefix, so there is no hardcoded-key guard here.
 
 for file in "${bash_setup_scripts[@]}"; do
     bash -n "${file}"

@@ -1,5 +1,3 @@
-# Native main-server plugin refresh only; independent of preparation and Pi gates.
-# Version 2 | Last changed: Report controlled BB plugin refresh refusal reasons
 refresh_bb_plugins() {
     local _bb_refresh_output _bb_refresh_status=0 _bb_refresh_line
     local _bb_refresh_operation _bb_refresh_reason _bb_refresh_diagnostic=0
@@ -8,7 +6,6 @@ refresh_bb_plugins() {
         print_error 'BB plugin refresh failed: preflight / python-unavailable.'
         return 1
     fi
-    # No inherited CLI/server URL is used, and no BB executable is invoked.
     _bb_refresh_output=$(bb_plugin_refresh_payload "${1:-ready}" 2>/dev/null) || _bb_refresh_status=$?
     if [[ ${#_bb_refresh_output} -gt 16384 || -z "${_bb_refresh_output}" ]]; then
         print_error 'BB plugin refresh failed: helper-result / unverified-result.'
@@ -24,7 +21,6 @@ refresh_bb_plugins() {
             'BB_PLUGIN_REFRESH updated') print_message 'BB native plugin updates processed; final verification determines success.' ;;
             'BB_PLUGIN_REFRESH failed') print_error 'BB plugin refresh failed: helper-result / unverified-result.'; _bb_refresh_status=1; _bb_refresh_diagnostic=1 ;;
             'BB_PLUGIN_REFRESH failed '*)
-                # Validate both fields in full before displaying any helper bytes.
                 if [[ ! "${_bb_refresh_line}" =~ ^BB_PLUGIN_REFRESH\ failed\ (preflight|discovery|identity|inventory|source-check|update-check|update|verification)\ ([a-z-]+)$ ]]; then
                     print_error 'BB plugin refresh failed: helper-result / unverified-result.'
                     return 1

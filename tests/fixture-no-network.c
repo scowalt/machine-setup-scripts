@@ -1,7 +1,3 @@
-/* Version 1: Linux-only fail-closed outbound containment for inert fixtures.
- * This is NOT a filesystem/process sandbox. No network namespace is assumed.
- * Compile with the system C compiler; run from a sanitized, temporary environment.
- */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -34,9 +30,6 @@ static int fail(const char *reason) {
     return 125;
 }
 
-/* Inspect standard descriptors and close EVERYTHING else before untrusted code.
- * Inheritable network sockets cannot survive via exec or a nonstandard FD.
- */
 static int close_inherited_fds(void) {
     int unsafe = 0;
     for (int fd = 0; fd < 3; fd++) {
@@ -50,7 +43,6 @@ static int close_inherited_fds(void) {
             unsafe = 1;
         }
     }
-    /* Never print even a refusal diagnostic onto an inherited network socket. */
     if (unsafe) { close(STDERR_FILENO); return -1; }
 #ifdef SYS_close_range
     if (syscall(SYS_close_range, 3U, ~0U, 0U) == 0) return 0;
@@ -72,7 +64,6 @@ static int contain(void) {
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
 #if defined(__x86_64__)
-        /* x32 shares the audit architecture but uses different syscall numbers. */
         BPF_JUMP(BPF_JMP | BPF_JSET | BPF_K, 0x40000000U, 0, 1),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
 #endif
@@ -96,7 +87,6 @@ static int contain(void) {
     return prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program);
 }
 
-/* No connect target, DNS, bind, listener or packet: socket construction only. */
 static int assert_socket_denied(void) {
     const int families[] = { AF_INET, AF_INET6 };
     for (unsigned i = 0; i < sizeof(families) / sizeof(families[0]); i++) {
@@ -109,10 +99,7 @@ static int assert_socket_denied(void) {
 }
 
 int main(int argc, char **argv) {
-    /* Even argument/probe refusal paths must not retain a socket-backed stderr. */
     if (close_inherited_fds()) return 125;
-    /* This probe is deliberately separate: descendants must demonstrate the
-     * inherited parent filter, not install a fresh filter and hide a gap. */
     if (argc == 2 && strcmp(argv[1], "--assert-inherited-denial") == 0)
         return assert_socket_denied();
     if (argc < 2) return fail("expected --self-test or -- command");

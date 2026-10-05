@@ -4,7 +4,6 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
 
-# Never source production top-level code; keep static checks in the real cwd.
 repo_root=$(python3 tests/extract_setup_fixture.py "${repo_root}") || exit 1
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
@@ -156,7 +155,6 @@ for file in "${bash_setup_scripts[@]}"; do
     run_cleanup_fixture "${file}"
 done
 
-# Malformed markers must fail before any managed target changes.
 malformed_root=$(mktemp -d)
 mkdir -p "${malformed_root}/home/.claude/output-styles" "${malformed_root}/custom-codex"
 printf '%s\n' style > "${malformed_root}/home/.claude/output-styles/attention-kind.md"
@@ -176,7 +174,6 @@ SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${source_without_main
 ' || fail 'ubuntu.sh: malformed markers did not produce a safe preflight failure'
 rm -rf "${malformed_root}"
 
-# Invalid Claude JSON is unsafe and remains unchanged.
 invalid_json_root=$(mktemp -d)
 mkdir -p "${invalid_json_root}/home/.claude"
 printf '%s\n' '{not-json' > "${invalid_json_root}/home/.claude/settings.json"
@@ -191,7 +188,6 @@ SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${source_without_main
 ' || fail 'ubuntu.sh: invalid Claude JSON was not preserved with strict failure'
 rm -rf "${invalid_json_root}"
 
-# A symlinked shared file is unsafe. Cleanup does not follow or remove it.
 shared_link_root=$(mktemp -d)
 mkdir -p "${shared_link_root}/home/.gemini"
 printf '%s\n' 'keep target' > "${shared_link_root}/gemini-target.md"
@@ -208,7 +204,6 @@ SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${source_without_main
 ' || fail 'ubuntu.sh: symlinked shared instructions were not preserved with strict failure'
 rm -rf "${shared_link_root}"
 
-# A directory at the managed Claude style path fails without recursive deletion.
 style_dir_root=$(mktemp -d)
 mkdir -p "${style_dir_root}/home/.claude/output-styles/attention-kind.md"
 printf '%s\n' keep > "${style_dir_root}/home/.claude/output-styles/attention-kind.md/sentinel"

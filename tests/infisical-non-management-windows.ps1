@@ -1,4 +1,3 @@
-# Version 1 | Extract only the approved task/logging/secrets-manager caller seam.
 param([string]$SourcePath)
 $ErrorActionPreference = 'Stop'
 $tokens = $null; $errors = $null
@@ -13,8 +12,6 @@ foreach ($name in $required) {
     if ($errors.Count -or $part.EndBlock.Statements.Count -ne 1 -or $part.EndBlock.Statements[0] -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) { throw 'Non-definition selected' }
     . ([scriptblock]::Create($selected[0].Extent.Text))
 }
-# Stub all unrelated dependencies before intentional wrapper invocation. Obsolete
-# retirement calls on red source are recorded and fail, never inspect a registry.
 foreach ($definition in $definitions) {
     $name = $definition.Name
     if ($name -in $required) { continue }

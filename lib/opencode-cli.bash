@@ -1,4 +1,3 @@
-# Version 9 | Last changed: Report bounded secret-safe evidence at real PATH discovery
 install_opencode_cli() {
     local result status=0 machine kind native_shell cached_command recovery=0
     machine=$(uname -m) || return 1
@@ -19,12 +18,9 @@ install_opencode_cli() {
     fi
     native_shell=$(type -P fish) || native_shell=''
     cached_command=$(hash -t opencode 2>/dev/null) || cached_command=''
-    # Bash 3.2 misparses quoted heredocs inside $(); redirect the group instead.
     {
         result=$(
             set -o pipefail
-            # Preserve extra records through command substitution. Translate NUL
-            # to a rejected control byte rather than letting Bash erase it.
             SETUP_OPENCODE_SHELL="${native_shell}" SETUP_OPENCODE_HASHED="${cached_command}" env -u NODE_OPTIONS -u NODE_PATH node - 2>/dev/null |
                 LC_ALL=C tr '\000' '\001' || status=$?
             printf '.'
@@ -66,8 +62,7 @@ OPENCODE_CLI_JS
     esac
 }
 
-# Keep retained legacy Homebrew registrations from being upgraded/relinked by the
-# later blanket upgrade. Own only this temporary pin; preserve user pins.
+: 'BEGIN_OPENCODE_HOMEBREW_GUARD'
 opencode_guarded_brew_upgrade() (
     local formulae pins added=0 status=0
     formulae=$(brew list --formula -1 2>/dev/null) || return 1
@@ -88,8 +83,6 @@ opencode_guarded_brew_upgrade() (
     return "${status}"
 )
 
-# An unrecognized distro-owned command is not ours to update or hold. This also
-# runs before Pi/Ubuntu's early blanket upgrades, before native prerequisites.
 opencode_apt_upgrade_safe() {
     local candidates candidate resolved owner_status
     candidates=$(type -ap opencode 2>/dev/null) || candidates=''

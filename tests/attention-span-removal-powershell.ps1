@@ -13,7 +13,6 @@ if ($parseErrors.Count -gt 0) {
     throw "win.ps1 parse errors:`n$($parseErrors -join "`n")"
 }
 
-# Functions only: never execute a changed top-level entry point or argument list.
 foreach ($definition in $ast.EndBlock.Statements) {
     if ($definition -is [System.Management.Automation.Language.FunctionDefinitionAst]) {
         . ([scriptblock]::Create($definition.Extent.Text))
@@ -138,7 +137,6 @@ finally {
     Remove-Item -Recurse -Force $testRoot -ErrorAction SilentlyContinue
 }
 
-# Malformed markers fail during preflight, before another target changes.
 $malformedRoot = Join-Path ([System.IO.Path]::GetTempPath()) "attention-malformed-$([guid]::NewGuid())"
 try {
     $env:USERPROFILE = Join-Path $malformedRoot "home"

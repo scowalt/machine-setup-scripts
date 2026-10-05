@@ -1,4 +1,3 @@
-// Version 9 | Last changed: Cover bounded real discovery evidence and untrusted diagnostics
 'use strict';
 process.umask(0o077);
 const {test} = require('node:test');
@@ -10,11 +9,8 @@ const zlib = require('node:zlib');
 const crypto = require('node:crypto');
 const policy = require('../lib/opencode-cli.cjs');
 const nativeExecFileSync = require('node:child_process').execFileSync;
-// Native shell boundary only: default fixtures never load any real profile.
 process.env.SETUP_OPENCODE_SHELL = '/fixture/fish';
 const sha = bytes => crypto.createHash('sha512').update(bytes).digest('base64');
-// Encode inert native resolution evidence like the real shell query. Actual
-// fish uses its real stdout, including any private-profile banner noise.
 function selectionOutput(file, args, output) {
     if (file === '/usr/bin/fish') return output;
     const marker = args.join(' ').match(/opencode-selection-[a-f0-9]+:/)?.[0];
@@ -234,8 +230,6 @@ for (const kind of ['nonexecutable-file', 'directory']) test(`native shells skip
             return object[key];
         }}),
     });
-    // Prove actual Bash selection independently before asking the installer to
-    // accept a current copy; no command execution, aliases or startup files.
     f.receipt('2.0.18', f.binary);
     f.options.commands.push(noncommand);
     assert.equal(nativeExecFileSync('/bin/bash', ['--noprofile', '--norc', '-c', 'command -v opencode'],
@@ -502,7 +496,6 @@ test('real HTTP helper requires verified TLS, rejects redirects/foreign URLs and
     status = 302; await assert.rejects(api.fetchBytes('https://registry.npmjs.org/fixture'), /download/);
     status = 200; await assert.rejects(api.fetchBytes('https://registry.npmjs.org/fixture', 1), /download/);
 });
-// Model npm's content negotiation at the HTTPS boundary, not by replacing fetchBytes.
 function httpPolicy(f, replies = new Map(), overrides = {}, log) {
     const {EventEmitter} = require('node:events'), requests = [];
     const expected = new Map([
@@ -579,7 +572,6 @@ for (const [operation, url] of [
     ['artifact-download', 'https://registry.npmjs.org/@opencode/cli-linux-x64-baseline/-/cli-linux-x64-baseline-2.0.18.tgz'],
 ]) test(`real HTTP ${operation} failures retain only controlled status and operation`, async t => {
     const f = fixture(t);
-    // Force index discovery on the same actual installation path.
     if (operation === 'package-index') f.legacy();
     const replies = new Map(), h = httpPolicy(f, replies);
     for (const reply of [{status: 406}, {status: 302}, {status: 503}, {networkError: true}, {streamError: true}]) {
@@ -671,7 +663,6 @@ test('forged evidence and hostile exceptions never become trusted PATH diagnosti
         {message: 'recovery-required'}, {get message() { throw new Error('GETTER_SECRET'); }}, revoked.proxy]) {
         assert.equal(api.failureResult(error), 'opencode-cli:failed');
     }
-    // A relative path from a different validation boundary has no PATH proof.
     await assert.rejects(api.install({...f.options, commands: ['SECRET/relative/opencode']}), error => {
         error.context = fields;
         assert.equal(api.failureResult(error), 'opencode-cli:policy-failed:installation:relative-path'); return true;
@@ -727,7 +718,6 @@ for (const output of ['2.0.21\n', 'opencode v2.0.21\r\n']) test(`verified staged
     options.commands = [f.dest];
     assert.equal(await api.install(options), 'current');
     assert.equal(probed.length, 3); assert.equal(probed[2], f.dest);
-    // Receipt alone is insufficient: byte mismatch must fail before another probe.
     fs.writeFileSync(f.dest, 'INERT custom bytes');
     await assert.rejects(api.install(options));
     assert.equal(probed.length, 3);
@@ -752,8 +742,6 @@ for (const phase of ['staged', 'promoted']) for (const failedProcess of [false, 
         assert.deepEqual(fs.readFileSync(f.dest), previous); assert.deepEqual(fs.readFileSync(receipt), before);
     });
 }
-// Synthetic system state only. The installer may not inspect accounts/procfs,
-// proof runtimes or ACLs; its only external operation is an inert verified probe.
 function homebrewFixture(t, platform = 'linux') {
     const f = fixture(t), prefix = '/home/linuxbrew/.linuxbrew', calls = [], observed = [];
     const command = prefix + '/bin/opencode', cellar = prefix + '/Cellar/opencode/1.18.33';
@@ -822,7 +810,6 @@ function homebrewFixture(t, platform = 'linux') {
     f.options.commands = [command];
     f.options.probe = undefined;
     t.after(() => {
-        // A caught boundary error must not conceal an attempted privacy proof.
         assert.ok(calls.every(call => call.operation === 'execFileSync'), 'privacy-proof external operations forbidden');
         assert.ok(observed.every(([, file]) => !/^\/(etc|proc|usr)(\/|$)/.test(file)), 'privacy-proof system access forbidden');
     });
@@ -842,7 +829,6 @@ test('verified newer account-owned Homebrew command is preserved with native byt
     assert.equal(fs.readlinkSync(f.mapped(f.command)), '../Cellar/opencode/3.0.0/bin/opencode');
     assert.deepEqual(fs.readFileSync(f.mapped(newer + '/bin/opencode')), bytes);
     assert.deepEqual(fs.readdirSync(path.dirname(f.dest)), []);
-    // A fresh-shell boundary cannot invalidate route trust after identification.
     f.shellBoundary = () => {
         f.put(newer + '/INSTALL_RECEIPT.json', '{"source":{"tap":"custom/tap"}}', 0o664);
         return Buffer.from(f.command + '\n');
@@ -909,8 +895,6 @@ test('higher-priority foreign command cannot be hidden by account-local PATH mem
 });
 test('busy-system 0775/0664 Homebrew migration does not require a quiet process inventory', async t => {
     const f = homebrewFixture(t);
-    // Model unrelated processes/threads starting, exiting and reusing IDs during
-    // staging and quarantine, without ever observing the host's process table.
     const churn = () => {
         fs.rmSync(f.mapped('/proc/123'), {recursive: true, force: true});
         f.put('/proc/789/task/790/status', 'changing unrelated process');
@@ -942,8 +926,6 @@ for (const state of ['service-primary', 'service-supplementary', 'stale-service-
         if (state === 'disappeared-process') fs.rmSync(f.mapped('/proc/123'), {recursive: true});
         if (state === 'disappeared-thread') fs.rmSync(f.mapped('/proc/123/task/123'), {recursive: true});
         if (state === 'unavailable-proof-dependencies') {
-            // No interpreter, NSS databases, procfs or ACL-query tool is available
-            // in the synthetic system. All external proof operations are forbidden.
             for (const dir of ['/etc', '/proc', '/usr']) fs.rmSync(f.mapped(dir), {recursive: true});
         }
         const preserved = [f.mapped(f.cellar + '/bin/opencode'), f.mapped(f.cellar + '/INSTALL_RECEIPT.json')];
@@ -1041,8 +1023,6 @@ for (const phase of ['before-quarantine', 'before-publication', 'recovery']) {
                 changed = boundary;
                 if (change === 'owner') f.statOverrides.set(boundary, {uid: process.getuid()+1});
                 if (change === 'group') f.statOverrides.set(boundary, {gid: process.getgid()+1});
-                // Both old and new modes are individually eligible. A change
-                // still invalidates the transaction's original filesystem evidence.
                 if (change === 'mode') fs.chmodSync(f.mapped(boundary), 0o755);
                 if (change === 'path-identity') {
                     fs.renameSync(f.mapped(boundary), f.mapped(boundary + '-saved'));

@@ -1,8 +1,3 @@
-"""Exercise all five real dotfile call sites; native Chezmoi uses inert fixtures.
-
-Set CHEZMOI_BIN to a native binary to override discovery. No real dotfiles source,
-Git configuration, source scripts, network, services, or setup entry point run.
-"""
 import json
 import os
 import pathlib
@@ -24,9 +19,6 @@ if CHEZMOI:
     CHEZMOI = str(pathlib.Path(CHEZMOI).resolve())
 DIRECTORIES = (".config", ".config/systemd", ".config/systemd/user")
 
-# Record the process boundary, not a test-only reimplementation of umask policy.
-# Native mode uses only an inert local repository, config, state and destination.
-# Authentication URLs are recorded, then removed for offline native init.
 CHEZMOI_FIXTURE = r'''
 import json, os, pathlib, sys
 mask = os.umask(0)
@@ -108,7 +100,6 @@ class BbDotfilesUmaskTests(unittest.TestCase):
             binary = self.bin / name
             binary.write_text('#!/bin/bash\nprintf "%s\\n" "$0" >> "$FIXTURE_ROOT/unexpected"\nexit 97\n')
             binary.chmod(0o700)
-        # No inherited GIT_*, BASH_ENV, credentials, hooks, XDG paths or tool controls.
         self.env = {"PATH": f"{self.bin}:/usr/bin:/bin", "HOME": str(self.home), "LC_ALL": "C",
                     "XDG_CONFIG_HOME": str(self.root / "xdg-config"),
                     "XDG_CACHE_HOME": str(self.root / "xdg-cache"),
@@ -130,8 +121,6 @@ class BbDotfilesUmaskTests(unittest.TestCase):
         self.platform = platform
         source = (ROOT / (platform + '.sh')).read_text()
         helpers = [BLOCK] + [function(source, name) for name in ("initialize_chezmoi", "update_chezmoi")]
-        # Allow the pre-fix version to reach the actual native regression, not
-        # fail on a missing new symbol before it can reproduce the user's bug.
         if "with_bb_dotfiles_umask() {" in source:
             helpers.insert(0, function(source, "with_bb_dotfiles_umask"))
         server = (ROOT / 'ubuntu.sh').read_text()
@@ -163,7 +152,6 @@ class BbDotfilesUmaskTests(unittest.TestCase):
                 self.native_git(env)
         checkout = self.home / ".local/share/chezmoi"
         if stage == "init" and checkout.exists():
-            # Only empty fixture directories; never discard a real checkout.
             (checkout / ".git").rmdir()
             checkout.rmdir()
         if stage == "update":
@@ -226,14 +214,12 @@ umask "$2"
         result = subprocess.run(["bash", "--noprofile", "--norc", "-c", RUN_PREFLIGHT,
                                  "_", str(self.helpers), str(self.home), "", ""],
                                 env=self.env, text=True, capture_output=True, timeout=10)
-        # The fixture stops at the next gate after the *real* directory checks.
         self.assertEqual(result.returncode, 1, result)
         self.assertEqual(result.stderr, "", result)
         self.assertNotIn("UNEXPECTED_COMMAND", result.stdout)
         return result.stdout
 
     def test_native_preparation_only_apply_keeps_directories_and_files_safe(self):
-        # Remove the server fixture role: this is an ordinary preparation account.
         shutil.rmtree(self.home / '.bb')
         self.protected = [p for p in self.protected if '.bb' not in p.parts]
         (self.source / 'dot_config/systemd/user/tmux.service').write_text('inert service\n')
@@ -253,7 +239,6 @@ umask "$2"
                     (self.home / relative).chmod(0o755)
                 result = self.run_stage(native=True)
                 self.assertEqual(result.returncode, 0, result)
-                # Assert the user's symptom through the actual setup preflight.
                 self.assertEqual(self.preflight(), "DIRECTORY_PREFLIGHT_PASSED\n")
                 self.assertEqual([((self.home / p).stat().st_mode & 0o777) for p in DIRECTORIES],
                                  [0o755, 0o755, 0o755])
@@ -290,8 +275,6 @@ umask "$2"
                     self.assertIn("Failed to", result.stdout)
                     if stage != "update":
                         self.assertEqual(result.returncode, 1, result)
-                    # Update historically warns and continues. Do not hide the
-                    # failure by reporting a successful update after the wrapper.
                     self.assertNotIn("SUCCESS:", result.stdout)
 
     def test_native_apply_converges_existing_writable_and_missing_managed_directories(self):
@@ -301,7 +284,6 @@ umask "$2"
             result = self.run_stage(native=True)
             self.assertEqual(result.returncode, 0, result)
             self.assertEqual(self.preflight(), "DIRECTORY_PREFLIGHT_PASSED\n")
-        # A new source-only directory models first provisioning, not just repair.
         (self.source / "dot_config/new-managed-dir").mkdir()
         result = self.run_stage(native=True)
         self.assertEqual(result.returncode, 0, result)
@@ -328,7 +310,6 @@ umask "$2"
                                  [expected, expected, expected])
 
     def test_native_without_opt_in_retains_inherited_umask_behavior(self):
-        # This class retains an existing .bb role; preparation is deferred.
         for selection in (None, "", "0", "invalid"):
             with self.subTest(selection=selection):
                 result = self.run_stage(selection=selection, native=True)
@@ -387,9 +368,6 @@ bb_machine_package_state preflight
                     with self.subTest(platform=platform, stage=stage, method=method, attempt=attempt):
                         if not CHEZMOI:
                             self.skipTest('Native Chezmoi unavailable')
-                        # Establish the ordinary inherited-0002 state natively.
-                        # This avoids fabricating an external edit conflict that
-                        # Pi's intentionally non-force update would prompt about.
                         baseline = subprocess.run(['bash', '-c', 'umask 0002; "$1" apply --force',
                                                    '_', str(self.bin / 'chezmoi')],
                                                   env=self.env | {'FIXTURE_NATIVE': '1', 'FIXTURE_NATIVE_BIN': CHEZMOI},
@@ -397,8 +375,6 @@ bb_machine_package_state preflight
                         self.assertEqual(baseline.returncode, 0, baseline)
                         unit = self.home / '.config/systemd/user/tmux.service'
                         self.assertEqual(unit.stat().st_mode & 0o777, 0o664)
-                        # Private Linux ancestry already excludes other writers;
-                        # managed modes must still converge through native apply.
                         self.preparation(expected=0 if sys.platform == 'linux' else 1)
                         result = self.run_stage(stage, selection='0', method=method, native=True)
                         self.assertEqual(result.returncode, 0, result)
@@ -471,7 +447,7 @@ setup_bb_machine "$2"
                 del self.env[key]
 
     def test_early_boundary_needs_no_node_npm_or_process_inventory(self):
-        (self.bin / 'node').unlink()  # Unlink the fixture link, never its native target.
+        (self.bin / 'node').unlink()   
         for name in ['node', 'ps']:
             binary = self.bin / name
             binary.write_text('#!/bin/bash\necho forbidden >> "$FIXTURE_ROOT/unexpected"\nexit 97\n')
@@ -552,8 +528,6 @@ setup_bb_machine "$2"
                 with self.subTest(platform=platform, process=process, saved=saved):
                     (self.home / '.env.local').write_text(saved + '\n')
                     (self.root / 'calls').unlink(missing_ok=True)
-                    # All setup functions are inert except the real full-apply
-                    # call site, policy and the runner's own flag resolution.
                     result = subprocess.run(['bash', '-c', script], env=self.env | process,
                                             cwd=self.home, capture_output=True, text=True, timeout=10)
                     self.assertEqual(result.stderr, '', result)

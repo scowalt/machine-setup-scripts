@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Contract version 2: shared-shell repair and isolated full-suite convergence fixtures.
 set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"

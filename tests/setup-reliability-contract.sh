@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Version 6 | Last changed: Drop obsolete secrets-manager retirement assertions
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
 
-# Never source production top-level code; keep static checks in the real cwd.
 repo_root=$(python3 tests/extract_setup_fixture.py "${repo_root}") || exit 1
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
@@ -35,13 +33,10 @@ assert_not_contains() {
     fi
 }
 
-# Only applied to the definitions-only tree, never production source.
 source_without_main='s/^main "\$@"$/:/'
 
 python3 tests/test_macos_clt.py || fail 'macOS CLT readiness fixtures failed'
 
-# GitHub key downloads must retry transient/empty responses without confusing
-# transport failures with a successfully fetched list that lacks the local key.
 for file in "${github_key_bash_scripts[@]}"; do
     assert_contains "${file}" '^fetch_github_ssh_keys\(\)' 'bounded GitHub SSH-key fetch helper'
     assert_contains "${file}" 'curl --fail --silent --show-error --location' 'failing GitHub key curl request'
@@ -131,7 +126,6 @@ grep -q 'SSH key not recognized by GitHub' <<< "${mismatch_output}" || fail 'ubu
 [[ -e "${key_test_root}/mismatch-opened" ]] || fail 'ubuntu.sh: valid key mismatch did not open GitHub key settings'
 rm -rf "${key_test_root}"
 
-# Completion colors must be emitted as actual escape bytes, never literal \033.
 for file in "${bash_setup_scripts[@]}"; do
     completion_line=$(grep '✨ Setup complete' "${file}" | tail -n 1)
     completion_output=$(GREEN='\033[0;32m' BOLD='\033[1m' NC='\033[0m' bash -c "${completion_line}")
@@ -141,8 +135,6 @@ for file in "${bash_setup_scripts[@]}"; do
     fi
 done
 
-# Every Bash entry point must flush and upload a failed run exactly once while
-# preserving the setup task's original status.
 for file in "${bash_setup_scripts[@]}"; do
     log_test_root=$(mktemp -d)
     mkdir -p "${log_test_root}/home"
@@ -182,7 +174,6 @@ for file in "${bash_setup_scripts[@]}"; do
     rm -rf "${log_test_root}"
 done
 
-# Successful runs use the same single finalization path.
 log_test_root=$(mktemp -d)
 mkdir -p "${log_test_root}/home"
 success_output=$(SETUP_SCRIPT="${repo_root}/wsl.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" \
@@ -211,7 +202,6 @@ upload_count=$(wc -l < "${log_test_root}/upload-calls") || fail 'wsl.sh: could n
 [[ "${upload_count}" -eq 1 ]] || fail 'wsl.sh: successful run did not upload exactly once'
 rm -rf "${log_test_root}"
 
-# Collector failures warn with the local fallback without masking setup status.
 log_test_root=$(mktemp -d)
 mkdir -p "${log_test_root}/home"
 upload_failure_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" \
@@ -235,8 +225,6 @@ upload_count=$(wc -l < "${log_test_root}/upload-calls") || fail 'mac.sh: could n
 [[ "${upload_count}" -eq 1 ]] || fail 'mac.sh: collector failure triggered multiple attempts'
 rm -rf "${log_test_root}"
 
-# Apt-managed gcloud installations must skip the slow Python CLI startup. The
-# system package upgrade earlier in each script already updates this package.
 for file in "${linux_apt_scripts[@]}"; do
     output=$(SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
         source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
@@ -260,7 +248,6 @@ for file in "${linux_apt_scripts[@]}"; do
     fi
 done
 
-# Reproduce gcloud's wrapped package-manager message at the real function seam.
 for file in "${bash_setup_scripts[@]}"; do
     output=$(SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
         source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
@@ -277,7 +264,6 @@ for file in "${bash_setup_scripts[@]}"; do
     fi
 done
 
-# Completed macOS policy and SSH setup must not request sudo again.
 upload_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
     source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
     WORK_MACHINE=1
@@ -314,7 +300,6 @@ if grep -q 'unexpected' <<< "${ssh_output}"; then
     fail 'mac.sh: completed SSH setup still requested sudo'
 fi
 
-# Missing state still follows the existing privilege and mutation paths.
 upload_tmp=$(mktemp -d)
 upload_missing_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" CALL_LOG="${upload_tmp}/calls" bash -c '
     source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
@@ -393,7 +378,6 @@ if grep -q 'unexpected sudo' <<< "${no_sudo_output}"; then
     fail 'mac.sh: unavailable sudo still attempted a privileged mutation'
 fi
 
-# These regexes intentionally use single quotes to preserve PowerShell variable syntax.
 # shellcheck disable=SC2016
 assert_contains win.ps1 '\$normalizedUpdateText[[:space:]]*=' 'normalized gcloud update output'
 # shellcheck disable=SC2016
@@ -404,16 +388,13 @@ if command -v pwsh &>/dev/null; then
     pwsh -NoLogo -NoProfile -File tests/setup-reliability-powershell.ps1
 fi
 
-# Obsolete virtual package names must not re-enter apt package inventories.
 for file in "${linux_apt_scripts[@]}"; do
     assert_not_contains "${file}" 'libncurses5-dev|libncursesw5-dev' 'deprecated ncurses package names'
     assert_contains "${file}" 'libncurses-dev' 'canonical ncurses development package'
 done
 
-# Extracted helper + caller coverage also checks final status and log finalization.
 python3 tests/test_homebrew_results.py
 
-# A failed brew phase must not produce success, and tmux must always be unpinned.
 brew_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
     source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
     brew() {
@@ -442,9 +423,6 @@ if grep -q 'Homebrew updated\.' <<< "${brew_output}"; then
 fi
 grep -q '^unpin tmux$' <<< "${brew_output}" || fail 'mac.sh: tmux was not unpinned after brew failure'
 
-# Homebrew can return success while skipping packages that remain outdated.
-# Ignore setup's temporary tmux pin and user-pinned packages, but report every
-# other residual item instead of printing a false success.
 residual_brew_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
     source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
     brew() {
@@ -498,7 +476,6 @@ assert_contains mac.sh 'ensure_brew_item_trusted cask "soren-starck/tap/sessionw
 assert_not_contains mac.sh 'brew trust "\$\{tap\}"' 'whole-tap trust'
 assert_contains mac.sh 'Unmanaged Homebrew .* remains untrusted and may be skipped' 'actionable unmanaged-tap item warning'
 
-# Bazzite trusts only managed formulae and recognizes casks idempotently.
 assert_contains bazzite.sh 'brew trust --formula "\$\{item\}"' 'Bazzite item-level formula trust'
 assert_contains bazzite.sh 'ensure_brew_formula_trusted "libsql/sqld/sqld"' 'Bazzite libsql trust'
 assert_contains bazzite.sh 'ensure_brew_formula_trusted "tursodatabase/tap/turso"' 'Bazzite Turso trust'
@@ -543,9 +520,6 @@ bazzite_trust_output=$(SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAI
 ')
 grep -q '^trust --formula dopplerhq/doppler/doppler$' <<< "${bazzite_trust_output}" || fail 'bazzite.sh: Doppler trust was not formula-scoped'
 
-# The native Codex migration removes Bun ownership, installs a per-user
-# standalone binary, and executes successfully with a PATH that cannot resolve
-# Node.js.
 codex_tmp=$(mktemp -d)
 mkdir -p "${codex_tmp}/home"
 cat > "${codex_tmp}/codex-binary" <<'EOF'
@@ -632,7 +606,6 @@ fi
 grep -q 'smoke test failed without Node.js' "${codex_tmp}/failure-output" || fail 'bazzite.sh: failed Codex smoke test lacked diagnosis'
 rm -rf "${codex_tmp}"
 
-# Bazzite path aliases are canonicalized before Pi provenance checks.
 path_tmp=$(mktemp -d)
 mkdir -p "${path_tmp}/var/home/tester/.local/bin"
 touch "${path_tmp}/var/home/tester/.local/bin/pi"
@@ -644,7 +617,6 @@ SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_mai
 ' || fail 'bazzite.sh: /home and /var/home aliases were not treated as the same Pi prefix'
 rm -rf "${path_tmp}"
 
-# Tailscale preference parsing accepts formatted JSON and verifies the mutation.
 tailscale_output=$(SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
     source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
     TAILSCALE_ENABLED=false
@@ -661,7 +633,6 @@ tailscale_output=$(SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="$
 ')
 grep -q 'Tailscale SSH enabled' <<< "${tailscale_output}" || fail 'bazzite.sh: Tailscale SSH was not verified after mutation'
 
-# Failed Bazzite Brew upgrades are fatal, truthful, and still unpin tmux.
 bazzite_brew_output=$(SETUP_SCRIPT="${repo_root}/bazzite.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
     source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
     brew() {
@@ -729,7 +700,6 @@ fi
 grep -q 'Login shell verification failed' "${shell_tmp}/failure-output" || fail 'bazzite.sh: shell verification failure lacked diagnosis'
 rm -rf "${shell_tmp}"
 
-# Prove the portable lock uses one namespace and rejects a second process.
 assert_not_contains mac.sh 'command -v flock' 'PATH-dependent split lock namespace'
 lock_root=$(mktemp -d)
 mock_bin=$(mktemp -d)

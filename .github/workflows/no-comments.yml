@@ -1,0 +1,22 @@
+name: Comment-free source
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  no-comments:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff
+        with:
+          version: '0.11.32'
+          enable-cache: true
+          cache-dependency-glob: .comment-policy/requirements.txt
+      - name: Reject source comments and docstrings
+        run: uv run --no-project --python 3.14 --with-requirements .comment-policy/requirements.txt python .comment-policy/check.py
+      - name: Test comment-policy adapters and staged snapshots
+        run: uv run --no-project --python 3.14 --with-requirements .comment-policy/requirements.txt python -m unittest discover -s .comment-policy -p 'test_*.py'

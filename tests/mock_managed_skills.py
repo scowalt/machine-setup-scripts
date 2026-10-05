@@ -1,4 +1,3 @@
-"""Inert skills CLI fixture. Only called with test-owned HOME and explicit paths."""
 import json
 import os
 from pathlib import Path

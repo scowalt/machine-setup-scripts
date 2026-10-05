@@ -1,8 +1,3 @@
-"""Real extracted macOS bootstrap/caller tests; inert commands and private paths.
-
-CLT compatibility is not an orchestration gate. Actual operations still fail.
-Run only through the audited run-fixture-matrix.py containment runner.
-"""
 import fcntl
 import os
 from pathlib import Path

@@ -1,16 +1,12 @@
 #!/usr/bin/env bash
-# Contract version 27: check managed-skill terminology in GLOSSARY.md.
-# Historical filename retained for existing test runners.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
 
-# Never source production top-level code; keep static checks in the real cwd.
 repo_root=$(python3 tests/extract_setup_fixture.py "${repo_root}") || exit 1
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
-# Only applied to the definitions-only tree, never production source.
 source_without_main='s/^main "\$@"$/:/'
 
 fail() {
@@ -166,12 +162,12 @@ for agent in claude-code codex gemini-cli; do
 done
 assert_powershell_function_not_contains win.ps1 Install-ManagedAgentSkill '"--agent", "pi"|opencode' 'redundant or retired target'
 assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill '"--global"' 'global installation'
-# shellcheck disable=SC2016 # Preserve literal PowerShell variable syntax.
+# shellcheck disable=SC2016
 assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill '"--skill", \$SkillName' 'specific skill selection'
 assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill '"--copy"' 'copied installation mode'
-# shellcheck disable=SC2016 # Preserve literal PowerShell variable syntax.
+# shellcheck disable=SC2016
 assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill '\$env:CLAUDE_CONFIG_DIR' 'CLAUDE_CONFIG_DIR support'
-# shellcheck disable=SC2016 # Preserve literal PowerShell variable syntax.
+# shellcheck disable=SC2016
 assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill '\.agents\\skills\\\$SkillName' 'shared artifact validation'
 assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill 'FileAttributes]::ReparsePoint' 'directory and file symlink rejection'
 assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill 'FileInfo.*Length -le 0' 'missing, empty, and non-regular artifact rejection'
@@ -187,8 +183,6 @@ assert_order win.ps1 '^[[:space:]]+elseif \(Install-PiCli\) \{$' '^[[:space:]]+i
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Remove-SimpleEnglishSkill\)\) \{$' '^[[:space:]]+if \(-not \(Remove-ShowMeSkill\)\) \{$' 'PowerShell Simple English before show-me'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Remove-ShowMeSkill\)\) \{$' '^[[:space:]]+if \(-not \(Set-PiSkillOwnership\)\) \{$' 'PowerShell show-me before Pi ownership'
 
-# Mock the upstream installer. This proves repeat updates, exact targets, custom
-# Claude paths, failure propagation, artifact validation, and copy enforcement.
 for file in "${bash_setup_scripts[@]}"; do
     test_root=$(mktemp -d)
     test_home="${test_root}/home"

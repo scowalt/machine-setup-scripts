@@ -54,8 +54,6 @@ with tempfile.TemporaryDirectory() as raw:
     shared.write_text(json.dumps({"settings": {"keep": True}, "mcpServers": {
         "backlog-alias": {"command": "/usr/local/bin/backlog", "args": ["mcp", "start", "--cwd", "/repo"], "env": {"TOKEN": "secret"}},
         "keep": {"command": "keep-mcp", "args": []}}}, indent=2) + "\n")
-    # Managed adapter import paths are global-only here; project-relative imports
-    # are deliberately not scanned.
     for relative in [".claude/mcp.json", ".claude/claude_desktop_config.json", ".cursor/mcp.json", ".windsurf/mcp.json", ".codex/config.json"]:
         imported = home / relative; imported.parent.mkdir(parents=True, exist_ok=True)
         imported.write_text(json.dumps({"mcpServers": {"backlog": {}, "keep": {}}}) + "\n")
@@ -95,8 +93,6 @@ with tempfile.TemporaryDirectory() as raw:
     file = home / ".config/mcp/mcp.json"; text = '{"mcpServers":{"backlog":{},"backlog":{"command":"other"}}}\n'; file.write_text(text)
     run(home, ok=False); assert file.read_text() == text
 
-# TOML syntax must be validated before any candidate is changed, and table bounds
-# must not consume arrays-of-tables or text that merely resembles a header.
 toml_cases = {
     "array-table": ('[mcp_servers.backlog]\ncommand = "backlog"\nargs = ["mcp", "start"]\n\n[[unrelated]]\nkeep = "yes"\n', '[[unrelated]]\nkeep = "yes"\n'),
     "multiline-string": ('custom = """\n[mcp_servers.backlog]\nthis is NOT a server\n"""\n\n[other]\nkeep = true\n', None),
@@ -118,14 +114,12 @@ for name, (text, preserved) in toml_cases.items():
         else:
             assert file.read_text() == text
 
-# Source-span removal preserves unrelated numeric literals without normalization.
 for number in ["9007199254740993", "1e400", "1.0000000000000001", "0.25", "-0"]:
     with tempfile.TemporaryDirectory() as raw:
         home = Path(raw); file = home / ".config/mcp/mcp.json"; file.parent.mkdir(parents=True)
         text = '{"unrelated":' + number + ',"mcpServers":{"backlog":{},"keep":{}}}\n'; file.write_text(text)
         run(home); assert file.read_text() == text.replace('"backlog":{},', '')
 
-# Native compatibility imports use their own top-level server-map spellings.
 with tempfile.TemporaryDirectory() as raw:
     home = Path(raw)
     for relative, key in [('.codex/config.json', 'mcp_servers'), ('.cursor/mcp.json', 'mcp-servers'), ('.windsurf/mcp.json', 'mcp-servers')]:
@@ -136,7 +130,6 @@ with tempfile.TemporaryDirectory() as raw:
         value = json.loads((home / relative).read_text())
         assert set(value[key]) == {'keep'} and value['projects']['backlog']['keep']
 
-# Python must run isolated from cwd, PYTHONPATH, and startup hooks.
 with tempfile.TemporaryDirectory() as raw:
     root = Path(raw); home = root / "home"; home.mkdir(); codex = home / ".codex/config.toml"; codex.parent.mkdir(parents=True)
     codex.write_text('[mcp_servers.backlog]\ncommand="backlog"\nargs=["mcp","start"]\n')
@@ -146,8 +139,6 @@ with tempfile.TemporaryDirectory() as raw:
     result = run(home, cwd=poison, extra_env={"PYTHONPATH": str(poison)})
     assert result.stdout.strip() == "removed" and not sentinel.exists()
 
-# A legacy system Python without tomllib falls back to a verified managed
-# runtime, without PATH shims, project pins, or changing the caller's selection.
 with tempfile.TemporaryDirectory() as raw:
     home = Path(raw)
     codex = home / '.codex/config.toml'; codex.parent.mkdir()
@@ -163,8 +154,6 @@ fixtureProcess.spawnSync=(command,args,options)=>{if(args.includes('import tomll
     assert run(home, code=prelude + reference).stdout.strip() == 'absent'
     assert codex.read_text() == original and runtime.is_symlink()
 
-# Native group-writable defaults are a valid absent no-op, but a selected
-# registration under the same mutation boundary is refused without changes.
 with tempfile.TemporaryDirectory() as raw:
     home = Path(raw); directory = home / ".config/mcp"; directory.mkdir(parents=True); os.chmod(home / ".config", 0o775); os.chmod(directory, 0o775)
     file = directory / "mcp.json"; file.write_text('{"mcpServers":{"keep":{}}}\n'); file.chmod(0o664)
@@ -172,8 +161,6 @@ with tempfile.TemporaryDirectory() as raw:
     text = '{"mcpServers":{"backlog":{},"keep":{}}}\n'; file.write_text(text); file.chmod(0o664)
     run(home, ok=False, prepare=False); assert file.read_text() == text
 
-# Preflight is all-or-nothing across candidates, and in-place descriptor writes
-# preserve the credential-bearing file's mode and inode.
 with tempfile.TemporaryDirectory() as raw:
     home = Path(raw); shared = home / ".config/mcp/mcp.json"; shared.parent.mkdir(parents=True)
     shared.write_text('{"mcpServers":{"backlog":{},"keep":{}}}\n'); shared.chmod(0o600)
@@ -183,8 +170,6 @@ with tempfile.TemporaryDirectory() as raw:
     codex.write_text('[other]\nkeep=true\n'); run(home)
     assert shared.stat().st_ino == before_inode and (shared.stat().st_mode & 0o777) == 0o600
 
-# A linked HOME, hardlinked/oversized files, and unsafe writable ancestors fail
-# before any other candidate is changed.
 with tempfile.TemporaryDirectory() as raw:
     root = Path(raw); actual = root / "actual"; actual.mkdir(); alias = root / "alias"; alias.symlink_to(actual, target_is_directory=True)
     run(alias, ok=False)
@@ -200,8 +185,6 @@ with tempfile.TemporaryDirectory() as raw:
     shared = unsafe / "mcp/mcp.json"; shared.parent.mkdir(); shared.write_text('{"mcpServers":{"backlog":{}}}\n')
     before = shared.read_text(); run(home, ok=False, prepare=False); assert shared.read_text() == before
 
-# A simulated Bazzite boundary accepts only the documented root-owned exact
-# /home alias; the production flow must inspect the logical boundary first.
 assert "logicalBoundary = safeBoundary(logicalHome)" in reference
 alias_code = reference[reference.index("function trustedHomeAlias"):reference.index("function jsonDocument")]
 alias_fixture = r'''const path=require('node:path');
@@ -213,7 +196,6 @@ if(!trustedHomeAlias('/home',map['/home'])) process.exit(1); target='/tmp/home';
 '''
 subprocess.run(["node", "-e", alias_fixture], check=True)
 
-# Short descriptor writes are completed in a loop rather than truncating output.
 with tempfile.TemporaryDirectory() as raw:
     home = Path(raw); file = home / ".config/mcp/mcp.json"; file.parent.mkdir(parents=True)
     file.write_text('{"mcpServers":{"backlog":{},"keep":{}}}\n')
@@ -221,8 +203,6 @@ with tempfile.TemporaryDirectory() as raw:
     run(home, code=prelude + reference)
     assert set(json.loads(file.read_text())["mcpServers"]) == {"keep"}
 
-# Swap a second candidate on its already-open inode during the final bounded
-# reread. No candidate may be written after the mismatch is detected.
 with tempfile.TemporaryDirectory() as raw:
     home = Path(raw); first = home / ".config/mcp/mcp.json"; first.parent.mkdir(parents=True)
     second = home / ".agents/mcp.json"; second.parent.mkdir(parents=True)

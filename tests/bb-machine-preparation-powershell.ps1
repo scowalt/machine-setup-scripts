@@ -1,6 +1,4 @@
 $ErrorActionPreference = 'Stop'
-# Parse the real runner, replacing every referenced setup command with an inert
-# function. Never dot-source win.ps1 or provision/install anything on the host.
 $source = Get-Content (Join-Path $PSScriptRoot '../win.ps1') -Raw
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
@@ -33,7 +31,6 @@ try { $null = Invoke-WindowsSetupTasks } catch { $blocked = $true }
 if (-not $blocked -or $script:Messages.Count) { throw 'HEADLESS rejection must precede BB guidance' }
 exit 0
 '@
-# Isolated child process: avoid changing the caller's environment/functions.
 & (Get-Process -Id $PID).Path -NoProfile -Command $code
 if ($LASTEXITCODE -ne 0) { throw 'BB Windows guidance fixture failed' }
 Write-Output 'BB Windows guidance and early HEADLESS gate passed (no native install).'

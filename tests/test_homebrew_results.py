@@ -1,4 +1,3 @@
-"""Contract v4: ordinary Homebrew/OpenCode caller seams; no live setup/brew."""
 from pathlib import Path
 import re
 import subprocess

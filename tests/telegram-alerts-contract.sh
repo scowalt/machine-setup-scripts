@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Exercise only environment-file functions. Never run full setup or contact Telegram.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -28,7 +27,6 @@ assert_placeholders() {
             fail "${file}: active alert credential in template"
         fi
     done
-    # The tilde is literal documentation text, not a shell path.
     # shellcheck disable=SC2088
     grep -Fq '~/.config/agent-docs/telegram-alerts.md' "${file}" || fail "${file}: missing guide reference"
     grep -Fq "Work-machine alerts require Scott's explicit permission" "${file}" || fail "${file}: missing work permission policy"
@@ -45,12 +43,10 @@ for file in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh; do
 
     (
         export HOME="${home}"
-        # These callbacks are used by the extracted setup functions.
         # shellcheck disable=SC2317
         print_debug() { :; }
         # shellcheck disable=SC2317
         print_message() { :; }
-        # Only trusted functions from the repository are evaluated, never credential files.
         eval "${migrate_body}"
         eval "${create_body}"
         source "${repo_root}/lib/setup-policy.bash"
@@ -76,10 +72,8 @@ for file in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh; do
     printf 'PASS: %s environment creation and preservation\n' "${file}"
 done
 
-# Always inspect the Windows template; execute its function when PowerShell is available.
 awk '/^function New-TokenPlaceholders \{/ { printing=1 } printing { print } printing && /^}$/ { exit }' win.ps1 > "${tmp_root}/windows-function"
 assert_placeholders "${tmp_root}/windows-function"
-# Match literal PowerShell syntax.
 # shellcheck disable=SC2016
 grep -Fq 'if (-not (Test-Path $envLocalPath))' "${tmp_root}/windows-function" || fail 'Windows: missing create-only guard'
 if command -v pwsh >/dev/null 2>&1; then

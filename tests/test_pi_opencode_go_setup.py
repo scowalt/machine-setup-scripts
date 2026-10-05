@@ -1,4 +1,3 @@
-"""Offline Go credential fixtures. No Pi runtime, setup entry point, or network."""
 import json
 import os
 from pathlib import Path

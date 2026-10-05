@@ -1,7 +1,3 @@
-# Version 5 | Last changed: Exercise ordinary setup without maintenance authorization
-# Offline only: AST-extracted setup functions, temporary homes, mocked tools and
-# persisted environment storage. Child probes run with -NoProfile and fixture
-# activation, never a user's profile. No real Pi, mise installs, or registry writes.
 param([switch]$LegacyNativeArguments)
 if ($LegacyNativeArguments) { $PSNativeCommandArgumentPassing = 'Legacy' }
 $ErrorActionPreference = 'Stop'
@@ -22,8 +18,6 @@ Get-ChildItem Env: | ForEach-Object { $originalEnvironment[$_.Name] = $_.Value }
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "shared node fixture $([guid]::NewGuid())"
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 
-# Static Environment calls are redirected before extracting any installer code.
-# Process changes are real and restored. User/Machine changes are only recorded.
 Add-Type @'
 using System;
 using System.Collections.Generic;
@@ -54,7 +48,6 @@ foreach ($name in $loadedNames) {
     if (-not $definitions.ContainsKey($name)) { throw "Missing function: $name" }
     . ([scriptblock]::Create($definitions[$name].Replace('[Environment]::', '[SharedNodeFixtureEnvironment]::')))
 }
-# Keep the real process runner for safe, explicitly profile-free fixture children.
 . ([scriptblock]::Create($definitions['Invoke-SharedNodeShellProcess'].Replace('function Invoke-SharedNodeShellProcess', 'function Invoke-FixtureProcess')))
 $script:Assertions = 0
 $script:AssertionFailures = [Collections.Generic.List[string]]::new()
@@ -71,10 +64,8 @@ function Write-Message($Message) { $script:Messages.Add($Message) }
 function Write-Warning($Message) { $script:Messages.Add($Message) }
 function Write-Debug($Message) { $script:Messages.Add($Message) }
 function Write-Success($Message) { $script:Messages.Add($Message) }
-function Write-Host { } # Keep fixture output quiet; the final result uses Write-Output.
+function Write-Host { }  
 
-# Run each real JavaScript readiness expression in a VM with a fixture Node/API.
-# This tests its logic, not a reimplementation of the version predicate in a mock.
 $nodeMock = {
 function node {
     if ($args[0] -eq '--version') { $global:LASTEXITCODE = 0; return "v$($script:State.ActiveVersion)" }
@@ -151,7 +142,6 @@ function Set-Inventory([string]$Version = '24.20.0', [bool]$Installed = $true, [
     $row = @{ version = $Version; install_path = (Join-Path $testRoot 'mise install') }
     $script:State.Inventory = if ($OldShape) { @{ node = @($row) } | ConvertTo-Json -Depth 4 -Compress } else { ConvertTo-Json -InputObject @($row) -Depth 4 -Compress }
 }
-# Mock command discovery. No uncontrolled application can satisfy a setup probe.
 function Get-Command {
     param([string]$Name, [switch]$All, $ErrorAction)
     if ($Name -eq 'mise') { if (-not $script:State.MiseMissing) { return [pscustomobject]@{ Source = 'fixture-mise' } }; return }
@@ -160,8 +150,6 @@ function Get-Command {
     if ($Name -eq 'pi') { return [pscustomobject]@{ Source = (Join-Path $env:USERPROFILE '.local/pi.ps1') } }
     throw "Unexpected command discovery: $Name"
 }
-# Explicit installed paths are intercepted, not executed (Windows node.exe cannot
-# run on the Linux test host). The original JS predicate still runs via node mock.
 $originalSharedReady = ${function:Test-SharedNodeRuntimeReady}
 function Test-SharedNodeRuntimeReady {
     param([string]$Node = 'node')

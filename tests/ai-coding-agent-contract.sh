@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
-# Version 8 | Last changed: Verify macOS callers without a compiler readiness gate
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
 
-# Never source production top-level code; keep static checks in the real cwd.
 repo_root=$(python3 tests/extract_setup_fixture.py "${repo_root}") || exit 1
 
 bash_setup_scripts=(mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh)
@@ -113,8 +111,6 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '_resource_path="\$\{_agent_dir\}/compound-engineering"' 'legacy Compound Engineering install manifest cleanup path'
 done
 
-# The OpenCode v2 CLI is install-only. Go credentials and native agent-skill
-# targets remain separate; installation must not restore old integrations.
 for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '^install_opencode_cli\(\)' 'verified OpenCode v2 native installer'
     assert_contains "${file}" '^[[:space:]]+install_opencode_cli \|\| _setup_had_errors=1$' 'aggregated OpenCode installation result'

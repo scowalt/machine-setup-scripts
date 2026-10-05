@@ -1,4 +1,3 @@
-"""Full-suite/retirement contracts: extracted helpers, inert CLI, temporary homes only."""
 import hashlib
 import json
 import os
@@ -190,7 +189,7 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
                 self.assertIn('Required show-me skill removal failed.', text)
                 self.assertIn('if (-not (Remove-ShowMeSkill))', text)
         powershell = functions('win.ps1')
-        self.assertNotIn('$IsWindows', powershell)  # Absent on Windows PowerShell 5.1.
+        self.assertNotIn('$IsWindows', powershell)   
         self.assertIn('[Environment]::OSVersion.Platform', powershell)
         self.assertNotIn('Remove-Item -LiteralPath $stage -Recurse', powershell)
         self.assertEqual(len(KNOWN), 37)
@@ -244,7 +243,6 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
         for script in ('mac.sh', 'win.ps1'):
             if script == 'win.ps1' and not PWSH:
                 continue
-            # No prior inventory or native lock may be necessary to own history.
             for file in (self.home / '.agents/.setup-matt-pocock-skills.json', self.home / '.agents/.skill-lock.json'):
                 file.unlink(missing_ok=True)
             for base in self.all_dirs():
@@ -256,7 +254,6 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
                 self.assertEqual((base / name / 'SKILL.md').read_text(), expected)
             inventory = json.loads((self.home / '.agents/.setup-matt-pocock-skills.json').read_text())
             self.assertIn(name, inventory['skills'])
-            # Also exercise exclusions on machines lacking inventory/lock records.
             (self.home / '.agents/.setup-matt-pocock-skills.json').unlink()
             self.wrapper(script, 'ownership')
             self.assertFalse((self.default_pi / 'skills' / name).exists())
@@ -430,7 +427,6 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
                     (self.shared / 'show-me').symlink_to(sentinel.parent, target_is_directory=True)
                     for profile in (self.default_pi, self.custom_pi):
                         for skill in retired:
-                            # Also cover dangling direct Markdown links without following targets.
                             (profile / 'skills' / (skill + '.md')).symlink_to(self.home / 'missing-target.md')
                     expected_locks = {}
                     for lock in locks:
@@ -439,7 +435,6 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
                         expected_locks[lock] = json.loads(json.dumps(data))
                         data['skills'].update({skill: {'source': source} for skill, (_, source) in retired.items()})
                         self.put(lock, json.dumps(data))
-                    # Retirement does not need a skills CLI runtime or permission to install skills.
                     self.env['SKILL_TEST_MODE'] = 'bad-runtime'
                     for _ in range(2):
                         for operation, _source in retired.values():
@@ -556,7 +551,6 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
         self.policy('dispose', argument=stage)
         self.assertFalse(stage.exists())
         self.assertEqual(self.snapshot(), before)
-        # A swapped root must also be unlinked, never recursively followed.
         stage = Path(self.policy('stage').stdout.strip())
         stage.rmdir(); stage.symlink_to(target, target_is_directory=True)
         self.policy('dispose', argument=stage)
@@ -669,7 +663,6 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
         system_paths = [root, alias, root / 'var', root / 'var/home']
         for directory in (root, root / 'var', root / 'var/home'):
             directory.chmod(0o755)
-        # Map only the helper's literal system paths. No real /home tree is used.
         code = embedded('bazzite.sh')
         for literal in ('/var/home', '/home', '/var', '/'):
             code = code.replace(repr(literal), json.dumps(str(root / literal.lstrip('/'))))
@@ -781,7 +774,6 @@ require('node:module').syncBuiltinESMExports();
         config = self.put(self.root / 'gitconfig',
                           f'[core]\n\thooksPath = {hooks}\n[url "{source.as_uri()}"]\n'
                           '\tinsteadOf = https://github.com/mattpocock/skills.git\n')
-        # Clear every inherited Git control, then add only fixture-owned values.
         env = {k: v for k, v in self.env.items() if not k.startswith('GIT_') and k not in ('GH_TOKEN', 'GITHUB_TOKEN')}
         env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=str(config), GIT_TEMPLATE_DIR=str(hooks),
                    GIT_TERMINAL_PROMPT='0', GIT_ALLOW_PROTOCOL='file', DISABLE_TELEMETRY='1')
@@ -833,8 +825,6 @@ require('node:module').syncBuiltinESMExports();
             self.policy('promote', argument=stage, success=False)
             self.assertEqual(self.snapshot(), before)
             collision.unlink()
-            # Advancing the source after discovery cannot introduce an unchecked
-            # destination name or change the bytes of the promoted snapshot.
             self.put(source / 'skills/in-progress/another-future-name/SKILL.md',
                      '---\nname: another-future-name\ndescription: New fixture.\n---\nNever execute.\n')
             self.put(source / 'skills/in-progress/tdd/references/guide.md', 'changed upstream')

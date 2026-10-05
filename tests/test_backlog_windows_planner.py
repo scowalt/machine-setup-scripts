@@ -1,4 +1,3 @@
-"""Isolated Windows planner/pipe tests; no native handles, live configs, or MCPs."""
 import base64
 import json
 import os
@@ -26,7 +25,6 @@ class WindowsPlannerTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.system = self.root / 'System32'
         self.system.mkdir()
-        # Linux equivalent of the Windows null device used as an empty bunfig.
         if os.name != 'nt':
             (self.system / 'NUL').write_text('')
         self.env = {'HOME': str(self.system), 'USERPROFILE': str(self.system),
@@ -102,8 +100,6 @@ class WindowsPlannerTests(unittest.TestCase):
 
     @unittest.skipUnless(PWSH and os.name != 'nt', 'Linux PowerShell needed for isolated production pipe probe')
     def test_actual_native_backend_pipe_code_and_environment_isolation(self):
-        # Calls the production managed Plan method, not its Win32 methods. The
-        # exact C# process runner executes Bun; all input/output stays in pipes.
         native_file = self.root / 'native.cs'; native_file.write_text(NATIVE)
         runner = self.root / 'runner.ps1'
         runner.write_text('param($Native,$Bun,$Root)\n$ErrorActionPreference="Stop"\n'

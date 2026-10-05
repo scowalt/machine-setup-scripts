@@ -1,4 +1,3 @@
-"""Contract v10: real discovery refusals cross native wrappers without disclosing PATH."""
 import base64
 import hashlib
 import json
@@ -81,15 +80,12 @@ DIAGNOSTICS += [(result, 1, None) for result in [
 ]]
 DIAGNOSTICS += [(PATH_RECORD, 0, None)]
 
-# Obsolete helper replies are unrecognized failures, even with a nonzero status.
 DIAGNOSTICS += [(f'opencode-cli:policy-failed:homebrew-preflight:{reason}', status, None)
                 for reason in ('brew-group-shared', 'brew-identity-source', 'brew-acl-present', 'brew-acl-unverified',
                                'brew-proof-unverified', 'brew-proof-tool', 'brew-process-churn', 'brew-readiness')
                 for status in (0, 1)]
 
 
-# Literal expectations at the real installer -> wrapper -> finalization seam.
-# '|' is substituted with the native delimiter by the inert VM driver only.
 DISCOVERY_CASES = {
     'path-empty': ('', (1, 'empty'), 'unreachable'),
     'path-absent': (None, (1, 'empty'), 'unreachable'),
@@ -161,8 +157,8 @@ exit "${MOCK_STATUS:-0}"
         blocks = []
         for name in BASH:
             text = (ROOT / name).read_text()
-            blocks.append(text.split('# BEGIN GENERATED OPENCODE CLI\n')[1].split('# END GENERATED OPENCODE CLI')[0])
-            helper = blocks[-1].split('# Keep retained legacy Homebrew')[0]
+            blocks.append(text.split(": 'BEGIN_GENERATED_OPENCODE_CLI'\n")[1].split(": 'END_GENERATED_OPENCODE_CLI'")[0])
+            helper = blocks[-1].split(": 'BEGIN_OPENCODE_HOMEBREW_GUARD'")[0]
             for result, status in [('opencode-cli:installed', 0), ('opencode-cli:migrated', 0),
                                    ('opencode-cli:current', 0), ('opencode-cli:newer', 0),
                                    ('opencode-cli:unsupported', 0), ('unexpected-secret-output', 0),
@@ -185,14 +181,13 @@ exit "${MOCK_STATUS:-0}"
                     self.assertEqual('rollback needs manual recovery' in run.stdout, result in RECOVERY_RESULTS)
             run = self.exercise(helper, 'install_opencode_cli', {'MOCK_NODE_PREREQUISITE': '1'})
             self.assertEqual(run.returncode, 1, run.stdout)
-            # Legacy readiness state/helper cannot block the native operation.
             run = self.exercise('macos_existing_prerequisites() { return 1; }\n' + helper,
                                 'install_opencode_cli', {'MACOS_DEVELOPER_TOOLS_STATE': 'incompatible'})
             self.assertEqual(run.returncode, 0, run.stdout)
         self.assertTrue(all(block == blocks[0] for block in blocks))
 
     def test_setup_wrapper_supplies_native_shell_and_actual_cached_selection(self):
-        helper = (ROOT / 'lib/opencode-cli.bash').read_text().split('# Keep retained legacy Homebrew')[0]
+        helper = (ROOT / 'lib/opencode-cli.bash').read_text().split(": 'BEGIN_OPENCODE_HOMEBREW_GUARD'")[0]
         before = '''
 mkdir -p "${HOME}/foreign"
 printf '#!/bin/sh\\nexit 99\\n' > "${HOME}/fish"
@@ -205,7 +200,7 @@ hash -p "${HOME}/foreign/opencode" opencode
         self.assertNotIn('SECRET', run.stdout + run.stderr)
 
     def test_setup_alias_or_function_is_a_controlled_unexecuted_conflict(self):
-        helper = (ROOT / 'lib/opencode-cli.bash').read_text().split('# Keep retained legacy Homebrew')[0]
+        helper = (ROOT / 'lib/opencode-cli.bash').read_text().split(": 'BEGIN_OPENCODE_HOMEBREW_GUARD'")[0]
         for conflict in ['opencode() { echo SECRET; }', "shopt -s expand_aliases; alias opencode='echo SECRET'"]:
             run = self.exercise(helper, conflict + '\ninstall_opencode_cli')
             self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
@@ -221,7 +216,6 @@ hash -p "${HOME}/foreign/opencode" opencode
             tail = main[main.index('    check_pending_reboot'):]
             if name == 'mac.sh':
                 tail = tail.replace('    macos_clt_summary', '    :')
-            # Preserve the real final aggregation and main log-finalization seams.
             fixture = ('install_opencode_cli() { return 1; }\ncheck_pending_reboot() { echo independent-reboot; }\n'
                        'print_message() { :; }; print_debug() { :; }; print_section() { :; }\n'
                        'start_setup_log() { echo log-started; }; finish_setup_log() { echo "log-finalized:$1"; return "$1"; }\n'
@@ -237,7 +231,7 @@ hash -p "${HOME}/foreign/opencode" opencode
         driver = ROOT / 'tests/fixtures/opencode-cli-driver.cjs'
         for name in BASH:
             source = (ROOT / name).read_text()
-            wrapper = source.split('# BEGIN GENERATED OPENCODE CLI\n')[1].split('# Keep retained legacy Homebrew')[0]
+            wrapper = source.split(": 'BEGIN_GENERATED_OPENCODE_CLI'\n")[1].split(": 'BEGIN_OPENCODE_HOMEBREW_GUARD'")[0]
             main = function(source, 'run_setup_tasks')
             call = re.search(r'^    install_opencode_cli \|\| _setup_had_errors=1$', main, re.M)[0]
             tail = main[main.index('    check_pending_reboot'):]
@@ -355,7 +349,7 @@ opencode_apt_upgrade_safe() { return 1; }
 
     @unittest.skipUnless(PWSH, 'No existing PWSH_BIN/pwsh: PowerShell wrapper execution not claimed')
     def test_powershell_wrapper_result_validation_and_environment_restoration(self):
-        block = (ROOT / 'win.ps1').read_text().split('# BEGIN GENERATED OPENCODE CLI\n')[1].split('# END GENERATED OPENCODE CLI')[0]
+        block = (ROOT / 'win.ps1').read_text().split("$null = 'BEGIN_GENERATED_OPENCODE_CLI'\n")[1].split("$null = 'END_GENERATED_OPENCODE_CLI'")[0]
         wrapper = 'function Install-OpenCodeCli {' + block.split('function Install-OpenCodeCli {', 1)[1]
         with tempfile.TemporaryDirectory() as home:
             fake = Path(home) / 'node-fixture.ps1'
@@ -502,8 +496,6 @@ try { Initialize-WindowsEnvironment; exit 0 } catch {
 
     @unittest.skipUnless(PWSH, 'No existing PowerShell: native selection transaction not claimed')
     def test_powershell_selection_transaction_restores_prior_state_and_preserves_races(self):
-        # Linux PowerShell performs real discovery of inert .exe filenames. Only
-        # Windows suffix inference and ACLs are adapted; never invoke a command.
         script = r'''param([string]$SourcePath)
 $ErrorActionPreference='Stop'
 $tokens=$null; $errors=$null
@@ -620,8 +612,6 @@ if (Install-OpenCodeCli) { exit 0 } else { exit 1 }
 
     @unittest.skipUnless(PWSH, 'No existing PWSH_BIN/pwsh: native Windows/PowerShell execution not claimed')
     def test_powershell_caller_aggregation(self):
-        # Select the real task caller and logging wrapper by AST, replacing all
-        # other setup definitions before either caller can run. No whole-file eval.
         script = '''param([string]$SourcePath)
 $ErrorActionPreference='Stop'
 $tokens=$null; $errors=$null
