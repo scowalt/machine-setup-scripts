@@ -1554,8 +1554,10 @@ const sameBrew = (a, b) => JSON.stringify(brewFingerprint(a)) === JSON.stringify
 function brewPermissions(file, info) {
     if (![0, process.getuid()].includes(info.uid) || (!info.isSymbolicLink() && (info.mode & 0o002))) fail('brew-path');
     if (!info.isSymbolicLink() && (info.mode & 0o020)) {
-        if (process.platform !== 'linux' || info.uid === 0 || info.uid !== process.getuid() ||
-            !(file === '/home/linuxbrew/.linuxbrew' || file.startsWith('/home/linuxbrew/.linuxbrew/'))) fail('brew-path');
+        const linuxBrew = process.platform === 'linux' &&
+            (file === '/home/linuxbrew/.linuxbrew' || file.startsWith('/home/linuxbrew/.linuxbrew/'));
+        const darwinBin = process.platform === 'darwin' && file === '/opt/homebrew/bin' && info.isDirectory();
+        if (info.uid === 0 || info.uid !== process.getuid() || !(linuxBrew || darwinBin)) fail('brew-path');
     }
 }
 function checkBrewTrust(trust, moved = false) {
@@ -7420,7 +7422,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 176 | Last changed: Report bounded secret-safe evidence at real PATH discovery"
+    Write-Host "Version 177 | Last changed: Accept account-owned Darwin Homebrew bin group write only"
 
     Assert-HeadlessUnsupported
 

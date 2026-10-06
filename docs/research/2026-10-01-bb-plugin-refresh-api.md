@@ -44,6 +44,8 @@ Multiple references to one data-directory inode do not produce repeated refresh.
 
 Stopped deferral requires no verified running main, no live launcher claim, and no observed account process holding the native database (macOS uses `lsof`). Only the database's SQLite header and file identity are read; normal database content/mtime changes are not treated as immutable package metadata. No SQL, database mutation, store surgery or permission repair is performed. Kernel/process inspection and path checks are conservative local evidence, not a defense against a malicious process with the same UID or root privileges.
 
+Darwin process-argument reads use a validated native `kern.argmax`, not a fixed buffer size; oversized requests can fail with `EINVAL` before PID lookup. See the [native sizing reproduction and repair](2026-10-05-bb-plugin-procargs-buffer.md). This does not make other inspection errors skippable or establish complete native refresh recovery.
+
 Operations have socket timeouts, bounded response/inventory sizes and a 30-minute helper deadline. Timing out a request never cancels/restarts the server, retries an uncertain update, or terminates threads; the native server operation may still finish. Its result remains failed/unverified for that setup run. Native safe-mode refusal is recognized without turning unrelated errors into deliberate deferral.
 
 ## Offline execution boundary

@@ -248,10 +248,16 @@ class Processes:
         uid, stamp = row.groups()
         need(darwin_uid(uid) == self.uid, 'foreign-process')
         libc = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
+        maximum = ctypes.c_int()
+        maximum_size = ctypes.c_size_t(ctypes.sizeof(maximum))
+        need(libc.sysctlbyname(b'kern.argmax', ctypes.byref(maximum), ctypes.byref(maximum_size), None, 0) == 0
+             and maximum_size.value == ctypes.sizeof(maximum)
+             and ctypes.sizeof(ctypes.c_int) < maximum.value <= MAX_BYTES, 'process-proof-unavailable')
         mib = (ctypes.c_int * 3)(1, 49, pid)
-        size = ctypes.c_size_t(2097152)
+        size = ctypes.c_size_t(maximum.value)
         buffer = ctypes.create_string_buffer(size.value)
-        need(libc.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0) == 0, 'process-proof-unavailable')
+        need(libc.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0) == 0
+             and ctypes.sizeof(ctypes.c_int) <= size.value <= maximum.value, 'process-proof-unavailable')
         raw = buffer.raw[:size.value]
         argc = int.from_bytes(raw[:4], sys.byteorder, signed=True)
         need(0 < argc <= 4096, 'ambiguous-process')
