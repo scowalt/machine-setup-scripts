@@ -327,17 +327,16 @@ class BbServicePreflightTests(unittest.TestCase):
         self.assertNotIn('rm ', result.stdout)
 
     def test_reviewed_tmpdir_reaches_next_boundary_through_ordinary_caller_unchanged(self):
-        dropins = self.add_dropin(UNITS[0], 'empty')
-        target = self.home / '.cache/bb/tmp'
-        target.mkdir(parents=True, mode=0o700)
-        override = dropins / '10-tmpdir.conf'
-        override.write_text('[Service]\nEnvironment=TMPDIR=' + str(target) + '\n')
-        override.chmod(0o600)
+        _, _, target = self.reviewed()
         (target / 'existing-work').write_text('preserve temporary work\n')
-        for _ in range(2):
-            result = self.run_preflight(mode='caller', systemd='reviewed', status=73)
-            self.assertIn('NEXT_INERT_GATE', result.stderr)
-            self.assertNotIn('BB server setup incomplete', result.stdout)
+        for ingress_empty in (False, True):
+            if ingress_empty:
+                self.add_dropin(UNITS[1], 'empty')
+            for attempt in range(2):
+                with self.subTest(ingress_empty=ingress_empty, attempt=attempt):
+                    result = self.run_preflight(mode='caller', systemd='reviewed', status=73)
+                    self.assertIn('NEXT_INERT_GATE', result.stderr)
+                    self.assertNotIn('BB server setup incomplete', result.stdout)
 
     def test_broad_environment_override_needs_explicit_migration_and_stays_incomplete(self):
         dropins = self.add_dropin(UNITS[0], 'empty')
@@ -487,6 +486,22 @@ class BbServicePreflightTests(unittest.TestCase):
             with self.subTest(inspection=inspection):
                 self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed', inspection=inspection))
 
+    def test_reviewed_tmpdir_shell_inspection_failures_keep_ordinary_caller_incomplete(self):
+        self.reviewed()
+        for ingress_empty in (False, True):
+            if ingress_empty:
+                self.add_dropin(UNITS[1], 'empty')
+            for inspection in ('foreign', 'failed', 'malformed', 'changed',
+                               'enumeration-failed', 'enumeration-missing'):
+                with self.subTest(ingress_empty=ingress_empty, inspection=inspection):
+                    first = self.run_preflight(mode='caller', systemd='reviewed', inspection=inspection)
+                    second = self.run_preflight(mode='caller', systemd='reviewed', inspection=inspection)
+                    self.assertEqual((first.stdout, first.stderr), (second.stdout, second.stderr))
+                    self.assert_caller_refusal(first)
+                    self.assert_diagnostic(first, UNITS[0])
+                    self.assertIn('[preflight.unit-dropins]', first.stderr)
+                    self.assertNotIn('SYSTEMD_SHOW', first.stderr)
+
     def test_short_file_reads_cannot_hide_extra_directives(self):
         _, override, _ = self.reviewed()
         override.write_bytes(override.read_bytes() + b'EnvironmentFile=/fixture-secret\n')
@@ -526,19 +541,20 @@ class BbServicePreflightTests(unittest.TestCase):
                             target.rmdir()
 
     def test_verified_empty_dropin_directories_reach_next_inert_gate_unchanged(self):
-        for unit in UNITS:
-            path = self.add_dropin(unit, 'empty')
+        for selected in ((UNITS[0],), (UNITS[1],), UNITS):
+            paths = [self.add_dropin(unit, 'empty') for unit in selected]
             try:
                 for mode in ('setup', 'caller'):
-                    with self.subTest(unit=unit, mode=mode):
-                        result = self.run_preflight(unit, mode=mode, status=73)
+                    with self.subTest(empty_units=selected, mode=mode):
+                        result = self.run_preflight(mode=mode, status=73)
                         self.assertIn('NEXT_INERT_GATE', result.stderr)
                         for checked in UNITS:
                             self.assertIn('SYSTEMD_SHOW: ' + checked, result.stderr)
                         self.assertNotIn('[preflight.unit-dropins]', result.stderr)
                         self.assertNotIn('BB server setup incomplete', result.stdout)
             finally:
-                path.rmdir()
+                for path in paths:
+                    path.rmdir()
 
     def test_any_dropin_entry_including_hidden_or_dangling_blocks_unchanged(self):
         for unit in UNITS:
@@ -623,11 +639,15 @@ class BbServicePreflightTests(unittest.TestCase):
                 self.assertIn('SYSTEMD_SHOW: ' + unit, result.stderr)
 
     def test_no_dropins_reach_next_inert_gate(self):
-        result = self.run_preflight(status=73)
-        self.assertEqual(result.stdout, '')
-        self.assertIn('NEXT_INERT_GATE', result.stderr)
-        for unit in UNITS:
-            self.assertIn('SYSTEMD_SHOW: ' + unit, result.stderr)
+        for mode in ('setup', 'caller'):
+            with self.subTest(mode=mode):
+                result = self.run_preflight(mode=mode, status=73)
+                if mode == 'setup':
+                    self.assertEqual(result.stdout, '')
+                self.assertNotIn('BB server setup incomplete', result.stdout)
+                self.assertIn('NEXT_INERT_GATE', result.stderr)
+                for unit in UNITS:
+                    self.assertIn('SYSTEMD_SHOW: ' + unit, result.stderr)
 
     def test_duplicate_systemd_properties_cannot_hide_loaded_overrides(self):
         for metadata in ('duplicate-fragment', 'duplicate-dropins'):
