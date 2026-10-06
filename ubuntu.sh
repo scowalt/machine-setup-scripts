@@ -9088,9 +9088,14 @@ bb_unit_dropins_empty() {
     [[ -n "${_before}" ]] || return 1
     bb_owned_safe_directory "${_directory}" || return 1
     _entries=$(find "${_directory}" -mindepth 1 -maxdepth 1 -printf x -quit 2>/dev/null) || return 1
-    [[ -z "${_entries}" && -d "${_directory}" && ! -L "${_directory}" ]] || return 1
+    [[ -d "${_directory}" && ! -L "${_directory}" ]] || return 1
     _after=$(stat -c '%d:%i:%u:%g:%f:%y:%z' -- "${_directory}" 2>/dev/null) || return 1
-    [[ "${_before}" == "${_after}" ]]
+    [[ "${_before}" == "${_after}" ]] || return 1
+    case "${_entries}" in
+        '') return 0 ;;
+        x) return 2 ;;
+        *) return 1 ;;
+    esac
 }
 
 bb_tmpdir_snapshot() {
@@ -9176,7 +9181,7 @@ BB_TMPDIR
 }
 
 bb_unit_dropins_snapshot() {
-    local _name="$1" _directory="${HOME}/.config/systemd/user/$1.d" _snapshot _parent
+    local _name="$1" _directory="${HOME}/.config/systemd/user/$1.d" _snapshot _parent _inspection_status
     for _parent in "${HOME}" "${HOME}/.config" "${HOME}/.config/systemd" "${HOME}/.config/systemd/user"; do
         bb_setup_directory_preflight "${_parent}" >/dev/null || return 1
     done
@@ -9186,15 +9191,15 @@ bb_unit_dropins_snapshot() {
         _snapshot=$(stat -c '%d:%i:%u:%g:%f:%y:%z' -- "${_directory}" 2>/dev/null) || return 1
         [[ -n "${_snapshot}" ]] || return 1
         printf 'empty:%s\n' "${_snapshot}"
-    elif [[ "${_name}" == setup-bb-app.service ]]; then
+    else
+        _inspection_status=$?
+        [[ "${_inspection_status}" -eq 2 && "${_name}" == setup-bb-app.service ]] || return 1
         _snapshot=$(bb_tmpdir_snapshot) || {
             [[ "${_snapshot}" != unsupported-environment-file ]] || printf '%s\n' "${_snapshot}"
             return 1
         }
         [[ "${_snapshot}" =~ ^tmpdir:[a-f0-9]{64}$ ]] || return 1
         printf '%s\n' "${_snapshot}"
-    else
-        return 1
     fi
 }
 
@@ -10466,7 +10471,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 310 | Last changed: Preserve the reviewed private BB TMPDIR customization"
+    echo -e "${GRAY}Version 311 | Last changed: Preserve BB drop-in inspection failures before TMPDIR validation"
 
     if ! acquire_setup_lock; then
         return 1
