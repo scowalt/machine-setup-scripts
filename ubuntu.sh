@@ -1671,8 +1671,8 @@ function inspectBrewCopy(file) {
     inspect(file, 'link');
     const link = fs.readlinkSync(file);
     const binary = path.resolve(path.dirname(file), link);
-    const match = binary.match(new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/Cellar/opencode/([0-9.]+)/bin/opencode$`));
-    if (!match) fail('brew-command');
+    const match = binary.match(new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/Cellar/opencode/([0-9.]+)(?:_([1-9][0-9]*))?/bin/opencode$`));
+    if (!match || (match[2] !== undefined && !Number.isSafeInteger(Number(match[2])))) fail('brew-command');
     version(match[1]);
     const receiptPath = path.join(path.dirname(path.dirname(binary)), 'INSTALL_RECEIPT.json');
     inspect(binary, 'file'); inspect(receiptPath, 'file');
@@ -10266,7 +10266,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 305 | Last changed: Honor native Darwin process argument limits"
+    echo -e "${GRAY}Version 306 | Last changed: Recognize verified OpenCode Homebrew revisions"
 
     if ! acquire_setup_lock; then
         return 1
