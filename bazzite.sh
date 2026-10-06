@@ -1526,8 +1526,10 @@ const sameBrew = (a, b) => JSON.stringify(brewFingerprint(a)) === JSON.stringify
 function brewPermissions(file, info) {
     if (![0, process.getuid()].includes(info.uid) || (!info.isSymbolicLink() && (info.mode & 0o002))) fail('brew-path');
     if (!info.isSymbolicLink() && (info.mode & 0o020)) {
-        if (process.platform !== 'linux' || info.uid === 0 || info.uid !== process.getuid() ||
-            !(file === '/home/linuxbrew/.linuxbrew' || file.startsWith('/home/linuxbrew/.linuxbrew/'))) fail('brew-path');
+        const linuxBrew = process.platform === 'linux' &&
+            (file === '/home/linuxbrew/.linuxbrew' || file.startsWith('/home/linuxbrew/.linuxbrew/'));
+        const darwinBin = process.platform === 'darwin' && file === '/opt/homebrew/bin' && info.isDirectory();
+        if (info.uid === 0 || info.uid !== process.getuid() || !(linuxBrew || darwinBin)) fail('brew-path');
     }
 }
 function checkBrewTrust(trust, moved = false) {
@@ -7150,10 +7152,16 @@ class Processes:
         uid, stamp = row.groups()
         need(darwin_uid(uid) == self.uid, 'foreign-process')
         libc = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
+        maximum = ctypes.c_int()
+        maximum_size = ctypes.c_size_t(ctypes.sizeof(maximum))
+        need(libc.sysctlbyname(b'kern.argmax', ctypes.byref(maximum), ctypes.byref(maximum_size), None, 0) == 0
+             and maximum_size.value == ctypes.sizeof(maximum)
+             and ctypes.sizeof(ctypes.c_int) < maximum.value <= MAX_BYTES, 'process-proof-unavailable')
         mib = (ctypes.c_int * 3)(1, 49, pid)
-        size = ctypes.c_size_t(2097152)
+        size = ctypes.c_size_t(maximum.value)
         buffer = ctypes.create_string_buffer(size.value)
-        need(libc.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0) == 0, 'process-proof-unavailable')
+        need(libc.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0) == 0
+             and ctypes.sizeof(ctypes.c_int) <= size.value <= maximum.value, 'process-proof-unavailable')
         raw = buffer.raw[:size.value]
         argc = int.from_bytes(raw[:4], sys.byteorder, signed=True)
         need(0 < argc <= 4096, 'ambiguous-process')
@@ -8788,7 +8796,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 152 | Last changed: Reject malformed Darwin BB process identity rows"
+    echo -e "${GRAY}Version 154 | Last changed: Honor native Darwin process argument limits"
 
     if ! acquire_setup_lock; then
         return 1

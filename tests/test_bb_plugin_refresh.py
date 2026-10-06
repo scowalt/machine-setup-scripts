@@ -149,6 +149,13 @@ class DarwinInputs:
         self.uids = uids or {}
         self.identity_rows = {}
         self.private_reads = []
+        self.argmax = 1048576
+        self.argmax_status = 0
+        self.argmax_width = P.ctypes.sizeof(P.ctypes.c_int)
+        self.argmax_reads = 0
+        self.procargs_capacities = []
+        self.procargs_error = 0
+        self.procargs_length = None
         self.queries = []
         self.peer = True
         self.on_query = lambda _: None
@@ -178,21 +185,40 @@ class DarwinInputs:
             raise AssertionError('unexpected native command')
         return types.SimpleNamespace(returncode=status, stdout=raw, stderr=b'')
 
+    def sysctlbyname(self, name, value, size, new, new_length):
+        assert (name, size._obj.value, new, new_length) == (b'kern.argmax', P.ctypes.sizeof(P.ctypes.c_int), None, 0)
+        self.argmax_reads += 1
+        value._obj.value = self.argmax
+        size._obj.value = self.argmax_width
+        return self.argmax_status
+
     def sysctl(self, mib, length, buffer, size, new, new_length):
         assert (mib[0], mib[1], length, new, new_length) == (1, 49, 3, None, 0)
         pid = mib[2]
         self.private_reads.append(pid)
+        capacity = size._obj.value
+        assert P.ctypes.sizeof(buffer) == capacity
+        self.procargs_capacities.append(capacity)
+        if capacity - P.ctypes.sizeof(P.ctypes.c_int) > self.argmax:
+            P.ctypes.set_errno(22)
+            return -1
+        if self.procargs_error:
+            P.ctypes.set_errno(self.procargs_error)
+            return -1
         argv, env, _ = self.records[pid]
         values = [arg.encode() for arg in argv] + [f'{key}={value}'.encode() for key, value in env.items()]
         raw = len(argv).to_bytes(4, P.sys.byteorder) + argv[0].encode() + b'\0\0' + b'\0'.join(values) + b'\0'
+        if len(raw) > capacity:
+            P.ctypes.set_errno(12)
+            return -1
         P.ctypes.memmove(buffer, raw, len(raw))
-        size._obj.value = len(raw)
+        size._obj.value = len(raw) if self.procargs_length is None else self.procargs_length
         return 0
 
     @contextlib.contextmanager
     def installed(self):
         with patch.object(P.subprocess, 'run', side_effect=self.command), \
-                patch.object(P.ctypes, 'CDLL', return_value=types.SimpleNamespace(sysctl=self.sysctl)), \
+                patch.object(P.ctypes, 'CDLL', return_value=types.SimpleNamespace(sysctl=self.sysctl, sysctlbyname=self.sysctlbyname)), \
                 patch.object(P.os, 'kill', side_effect=AssertionError('process mutation forbidden')):
             yield self
 
@@ -526,6 +552,73 @@ class Discovery(unittest.TestCase):
         self.assertIn('BB_PLUGIN_REFRESH failed update operation-timeout\n', output)
         self.assertIn('BB_PLUGIN_REFRESH safe-mode\n', output)
         self.assertFalse(second.mutations())
+
+    def test_darwin_native_argmax_reaches_verified_refresh_and_preserves_disabled_intent(self):
+        self.server(613)
+        api = FakeApi([plugin(enabled=False)])
+        with self.darwin_inventory(f'{os.getuid()} 613\n'.encode()) as native, self.darwin_http(api):
+            self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH updated\n'))
+        self.assertGreater(native.argmax_reads, 1, 'native limit is honored during revalidation too')
+        self.assertEqual(native.argmax_reads, len(native.private_reads))
+        self.assertEqual(native.procargs_capacities, [1048576] * len(native.private_reads))
+        self.assertEqual(set(native.private_reads), {613})
+        self.assertFalse(api.plugins['tracking']['enabled'])
+        self.assertEqual(api.plugins['tracking']['source'], 'npm:fixture@^1')
+
+    def test_darwin_unverified_argmax_refuses_before_allocation_private_reads_or_requests(self):
+        self.server()
+        cases = [('status', -1), ('width', 0), ('width', 3), ('width', 8)]
+        cases += [('limit', value) for value in (-1, 0, 4, P.MAX_BYTES + 1, (1 << 31) - 1)]
+        for kind, value in cases:
+            with self.subTest(kind=kind, value=value):
+                api = FakeApi()
+                with self.darwin_inventory(f'{os.getuid()} 100\n'.encode()) as native, self.darwin_http(api) as requests:
+                    if kind == 'status':
+                        native.argmax_status = value
+                    elif kind == 'width':
+                        native.argmax_width = value
+                    else:
+                        native.argmax = value
+                    with patch.object(P.ctypes, 'create_string_buffer', side_effect=AssertionError('unverified allocation')):
+                        result = self.run_policy(native_api=True)
+                self.assertEqual(result, (1, 'BB_PLUGIN_REFRESH failed discovery process-proof-unavailable\n'))
+                self.assertEqual(native.argmax_reads, 1)
+                self.assertEqual(native.private_reads, [])
+                self.assertEqual(requests, [])
+
+    def test_darwin_argmax_revalidation_failure_cannot_reach_later_requests(self):
+        self.server()
+        for at_read in (2, 3, 4):
+            with self.subTest(at_read=at_read):
+                api = FakeApi()
+                with self.darwin_inventory(f'{os.getuid()} 100\n'.encode()) as native, self.darwin_http(api) as requests:
+                    def change(args):
+                        if args[:2] == ['/bin/ps', '-p'] and native.argmax_reads == at_read - 1:
+                            native.argmax_status = -1
+                    native.on_query = change
+                    result = self.run_policy(native_api=True)
+                self.assertEqual(result, (1, 'BB_PLUGIN_REFRESH failed identity process-proof-unavailable\n'))
+                self.assertEqual(native.private_reads, [100] * (at_read - 1))
+                self.assertEqual(requests, [('GET', '/health', None)] if at_read == 4 else [])
+                self.assertEqual(api.calls, [])
+
+    def test_darwin_native_query_errors_and_invalid_return_sizes_remain_fatal(self):
+        self.server()
+        cases = [('errno', code) for code in (1, 3, 12, 22)]
+        cases += [('length', count) for count in (0, 3, 1048577)]
+        for kind, value in cases:
+            with self.subTest(kind=kind, value=value):
+                api = FakeApi()
+                with self.darwin_inventory(f'{os.getuid()} 100\n'.encode()) as native, self.darwin_http(api) as requests:
+                    if kind == 'errno':
+                        native.procargs_error = value
+                    else:
+                        native.procargs_length = value
+                    result = self.run_policy(native_api=True)
+                self.assertEqual(result, (1, 'BB_PLUGIN_REFRESH failed discovery process-proof-unavailable\n'))
+                self.assertEqual(native.argmax_reads, 1)
+                self.assertEqual(native.private_reads, [100], 'no fallback or ignored native failure')
+                self.assertEqual(requests, [])
 
     def test_darwin_observed_signed_uid_inventory_and_minimized_row_allow_discovery(self):
         for uid in ('-2', '4294967294'):
@@ -955,6 +1048,18 @@ class Discovery(unittest.TestCase):
 
 
 class NativeEvidence(unittest.TestCase):
+    def test_darwin_captured_and_other_native_argmax_values_determine_buffer_size(self):
+        records = {613: (['/inert/other'], {}, b'Mon Oct 5 00:00:00 2026')}
+        for maximum in (262144, 1048576, P.MAX_BYTES):
+            with self.subTest(maximum=maximum), patch.object(P.sys, 'platform', 'darwin'):
+                processes = P.Processes(501)
+                native = DarwinInputs(b'501 613\n', records, {613: 501})
+                native.argmax = maximum
+                with native.installed():
+                    self.assertEqual(processes.read(613), (records[613][0], {}, 'Mon Oct 5 00:00:00 2026'))
+                self.assertEqual(native.argmax_reads, 1)
+                self.assertEqual(native.procargs_capacities, [maximum])
+
     def test_darwin_account_signed_and_unsigned_identity_is_equivalent_at_both_queries(self):
         records = {99: (['/inert/node', '/inert/bb-app/server/dist/index.js'],
                         {'HOME': '/inert', 'SECRET': 'must-not-escape'}, b'Thu Oct 1 00:00:00 2026')}
@@ -1062,7 +1167,8 @@ class NativeEvidence(unittest.TestCase):
         with patch.object(P.sys, 'platform', 'darwin'):
             processes = P.Processes(1234)
         with patch.object(P, 'command', return_value=b'1234 Thu Oct 1 00:00:00 2026'), \
-                patch.object(P.ctypes, 'CDLL', return_value=types.SimpleNamespace(sysctl=sysctl)):
+                patch.object(P.ctypes, 'CDLL', return_value=types.SimpleNamespace(
+                    sysctl=sysctl, sysctlbyname=DarwinInputs(b'', {}).sysctlbyname)):
             args, selected, _ = processes.read(99)
         self.assertEqual(args, [a.decode() for a in argv])
         self.assertEqual(selected, {'HOME': '/inert home', 'BB_DATA_DIR': '/inert home/custom data', 'BB_SERVER_PORT': '39001'})
