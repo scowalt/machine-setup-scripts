@@ -27,7 +27,21 @@ const rows = new Map(capture.map(([file, uid, gid, mode, kind, nlink, dev, ino])
     [file, {uid, gid, mode, kind, nlink, dev, ino}]));
 const variant = process.argv[2];
 assert.ok(['captured', 'minimal', 'mode-only', 'root-owner', 'foreign-owner', 'root-account',
-    'world-write', 'file', 'symlink', 'prefix-write', 'usr-local', 'linux', 'freebsd'].includes(variant));
+    'world-write', 'file', 'symlink', 'prefix-write', 'usr-local', 'linux', 'freebsd',
+    'target-capture'].includes(variant));
+const receipt = '/opt/homebrew/Cellar/opencode/1.18.30_2/INSTALL_RECEIPT.json';
+if (variant.startsWith('target-')) {
+    for (const [file, mode, kind, nlink, ino, size] of [
+        ['/opt/homebrew/Cellar', 0o40775, 'Directory', 196, 2397643, 6272],
+        ['/opt/homebrew/Cellar/opencode', 0o40755, 'Directory', 4, 2477932, 128],
+        ['/opt/homebrew/Cellar/opencode/1.18.30_2', 0o40755, 'Directory', 9, 13569910, 288],
+        ['/opt/homebrew/Cellar/opencode/1.18.30_2/bin', 0o40755, 'Directory', 3, 13569915, 96],
+        ['/opt/homebrew/Cellar/opencode/1.18.30_2/bin/opencode', 0o100555, 'Regular File', 1, 13569916, 216231490],
+        [receipt, 0o100644, 'Regular File', 1, 13607751, 1406],
+        ['/opt/homebrew/var', 0o40775, 'Directory', 9, 2792192, 288],
+        ['/opt/homebrew/var/homebrew', 0o40775, 'Directory', 6, 2792211, 192],
+    ]) rows.set(file, {uid: 501, gid: 80, mode, kind, nlink, dev: 16777229, ino, size});
+}
 if (variant === 'minimal') {
     for (const row of rows.values()) {
         for (const key of ['gid', 'nlink', 'dev', 'ino']) delete row[key];
@@ -56,7 +70,9 @@ function strict(object, label) {
     }});
 }
 const noLinkTarget = new Error('uncaptured-link-target');
+const noReceipt = new Error('uncaptured-receipt');
 const mockedFs = strict({
+    constants: {O_RDONLY: 0, O_NONBLOCK: 4, O_NOFOLLOW: 256},
     lstatSync(file) {
         trace.push(['lstat', file]);
         if (!rows.has(file)) return unknown('lstat-path');
@@ -70,7 +86,13 @@ const mockedFs = strict({
     readlinkSync(file) {
         trace.push(['readlink', file]);
         assert.equal(file, command);
+        if (variant.startsWith('target-')) return '../Cellar/opencode/1.18.30_2/bin/opencode';
         throw noLinkTarget;
+    },
+    openSync(file) {
+        trace.push(['open', file]);
+        assert.equal(file, receipt);
+        throw noReceipt;
     },
 }, 'fs');
 const modules = {
@@ -97,8 +119,8 @@ let error;
 try { api.brewCopy(command); }
 catch (caught) { error = caught; }
 assert.ok(error, 'this incomplete capture cannot establish full preflight success');
-const result = error === noLinkTarget ? 'uncaptured-link-target' : api.failureResult(error);
-assert.ok(['uncaptured-link-target', 'opencode-cli:policy-failed:homebrew-preflight:brew-path'].includes(result),
+const result = error === noLinkTarget ? 'uncaptured-link-target' : error === noReceipt ? 'uncaptured-receipt' : api.failureResult(error);
+assert.ok(['uncaptured-link-target', 'uncaptured-receipt', 'opencode-cli:policy-failed:homebrew-preflight:brew-path'].includes(result),
     'unknown operations must fail, never silently become fixture evidence');
 console.log(JSON.stringify({variant, result, trace}));
 """
@@ -136,19 +158,28 @@ class MacPreflightCapture(unittest.TestCase):
                     ['readlink', '/opt/homebrew/bin/opencode'],
                 ])
 
+    def test_target_capture_reaches_uncaptured_receipt_without_claiming_success(self):
+        observed = replay('target-capture')
+        self.assertEqual(observed['result'], 'uncaptured-receipt')
+        self.assertEqual(observed['trace'][-1],
+                         ['open', '/opt/homebrew/Cellar/opencode/1.18.30_2/INSTALL_RECEIPT.json'])
+
     def test_other_owners_modes_types_paths_and_platforms_still_refuse(self):
         for variant in ('root-owner', 'foreign-owner', 'root-account', 'world-write',
-                        'file', 'symlink', 'prefix-write', 'usr-local', 'linux', 'freebsd'):
+                        'file', 'symlink', 'linux', 'freebsd'):
             with self.subTest(variant=variant):
                 observed = replay(variant)
                 self.assertEqual(observed['result'],
                                  'opencode-cli:policy-failed:homebrew-preflight:brew-path')
                 expected = ['/', '/opt', '/opt/homebrew', '/opt/homebrew/bin']
-                if variant == 'prefix-write':
-                    expected.pop()
-                if variant == 'usr-local':
-                    expected = ['/', '/usr', '/usr/local', '/usr/local/bin']
                 self.assertEqual(observed['trace'], [['lstat', file] for file in expected])
+
+    def test_account_owned_group_writable_prefix_and_intel_bin_are_accepted(self):
+        for variant in ('prefix-write', 'usr-local'):
+            with self.subTest(variant=variant):
+                observed = replay(variant)
+                self.assertEqual(observed['result'], 'uncaptured-link-target')
+                self.assertEqual(observed['trace'][-1][0], 'readlink')
 
     def test_mode_only_variation_reaches_uncaptured_target_not_success(self):
         observed = replay('mode-only')

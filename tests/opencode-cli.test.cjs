@@ -980,20 +980,25 @@ test('group-write allowances exclude standalone paths and unapproved macOS prefi
     const f = fixture(t); const command = f.legacy(); fs.chmodSync(path.dirname(command), 0o775);
     await assert.rejects(policy.install(f.options), /unsafe-path/); assert.equal(f.probes.length, 0);
 });
+function darwinBrewDirectories(f) {
+    return [f.prefix, f.prefix + '/bin', f.prefix + '/Cellar', f.prefix + '/Cellar/opencode',
+        f.cellar, f.cellar + '/bin', f.prefix + '/var', f.prefix + '/var/homebrew', f.prefix + '/var/homebrew/pinned'];
+}
 function darwinHomebrewFixture(t, release = '1.18.33', revision = '', prefix = '/opt/homebrew') {
     const f = homebrewFixture(t, 'darwin', prefix, release, revision);
-    for (const dir of [f.prefix + '/Cellar', f.prefix + '/Cellar/opencode', f.cellar, f.cellar + '/bin']) {
-        fs.chmodSync(f.mapped(dir), 0o755);
-    }
+    f.put(prefix + '/var/homebrew/pinned/inert-sentinel', 'INERT unrelated pin');
+    for (const dir of darwinBrewDirectories(f)) fs.chmodSync(f.mapped(dir), 0o775);
     fs.chmodSync(f.mapped(f.cellar + '/INSTALL_RECEIPT.json'), 0o644);
-    fs.chmodSync(f.mapped(f.prefix + '/bin'), prefix === '/opt/homebrew' ? 0o775 : 0o755);
-    f.publish('opencode-darwin-arm64', release);
-    f.publish('@opencode/cli-darwin-arm64', '2.0.18');
-    f.options.target = 'darwin-arm64';
+    f.options.target = prefix === '/usr/local' ? 'darwin-x64-baseline' : 'darwin-arm64';
+    f.publish('opencode-' + f.options.target, release);
+    f.publish('@opencode/cli-' + f.options.target, '2.0.18');
     return f;
 }
-test('owner Homebrew 1.18.30_2 link migrates using upstream bytes and verifies on repeat', async t => {
+test('owner Homebrew 1.18.30_2 capture migrates with group-writable bin Cellar and var ancestors', async t => {
     const f = darwinHomebrewFixture(t, '1.18.30', '_2');
+    const writable = new Set([f.prefix + '/bin', f.prefix + '/Cellar', f.prefix + '/var', f.prefix + '/var/homebrew']);
+    for (const dir of darwinBrewDirectories(f)) fs.chmodSync(f.mapped(dir), writable.has(dir) ? 0o775 : 0o755);
+    fs.rmSync(f.mapped(f.prefix + '/var/homebrew/pinned'), {recursive: true});
     const preserved = [f.mapped(f.cellar + '/bin/opencode'), f.mapped(f.cellar + '/INSTALL_RECEIPT.json')];
     for (const file of ['.config/opencode/config.json', '.local/share/opencode/auth.json', '.bashrc', 'project/opencode.json']) {
         const target = path.join(f.home, file);
@@ -1057,23 +1062,58 @@ for (const [release, revision, reason] of [
     assert.equal(f.probes.length, 0);
     assert.deepEqual(fs.readdirSync(path.dirname(f.dest)), []);
 });
-test('Darwin account-owned bin group write permits only verified command migration and repeat verification', async t => {
-    const f = darwinHomebrewFixture(t), bin = f.mapped(f.prefix + '/bin');
-    const receipt = f.mapped(f.cellar + '/INSTALL_RECEIPT.json'), before = fs.readFileSync(receipt);
-    assert.equal(await f.api.install(f.options), 'migrated');
-    assert.equal(fs.statSync(bin).mode & 0o777, 0o775, 'no permission repair');
-    assert.deepEqual(fs.readFileSync(receipt), before);
-    assert.equal(fs.existsSync(f.mapped(f.command)), false);
-    assert.deepEqual(fs.readFileSync(f.dest), f.binary);
-    f.options.commands = [f.dest];
-    assert.equal(await f.api.install(f.options), 'current');
-});
-for (const relative of ['', '/Cellar', '/Cellar/opencode', '/Cellar/opencode/1.18.33_2',
-    '/Cellar/opencode/1.18.33_2/bin', '/Cellar/opencode/1.18.33_2/bin/opencode',
-    '/Cellar/opencode/1.18.33_2/INSTALL_RECEIPT.json', '/var', '/var/homebrew', '/var/homebrew/pinned']) {
-    test(`Darwin bin allowance does not extend to group-writable ${relative || 'prefix'}`, async t => {
+for (const prefix of ['/opt/homebrew', '/usr/local']) {
+    test(`Darwin ${prefix} account-owned group-writable directories permit verified migration and repeat without chmod`, async t => {
+        const f = darwinHomebrewFixture(t, '1.18.30', '_2', prefix);
+        const snapshot = () => darwinBrewDirectories(f).map(file => {
+            const s = fs.lstatSync(f.mapped(file));
+            return [file, s.dev, s.ino, s.uid, s.gid, s.mode];
+        });
+        const directories = snapshot();
+        const receipt = f.mapped(f.cellar + '/INSTALL_RECEIPT.json'), before = fs.readFileSync(receipt);
+        assert.equal(await f.api.install(f.options), 'migrated');
+        assert.deepEqual(snapshot(), directories, 'no permission, owner or directory identity repair');
+        assert.deepEqual(fs.readFileSync(receipt), before);
+        assert.equal(fs.existsSync(f.mapped(f.command)), false);
+        assert.deepEqual(fs.readFileSync(f.dest), f.binary);
+        f.options.commands = [f.dest];
+        assert.equal(await f.api.install(f.options), 'current');
+        assert.deepEqual(snapshot(), directories);
+    });
+    test(`Darwin ${prefix} root-owned non-writable prefix remains valid with account-owned writable descendants`, async t => {
+        const f = darwinHomebrewFixture(t, '1.18.30', '_2', prefix);
+        fs.chmodSync(f.mapped(prefix), 0o755); f.statOverrides.set(prefix, {uid: 0});
+        assert.equal(await f.api.install(f.options), 'migrated');
+    });
+    for (const relative of ['', '/bin', '/Cellar', '/Cellar/opencode', '/Cellar/opencode/1.18.33_2',
+        '/Cellar/opencode/1.18.33_2/bin', '/var', '/var/homebrew', '/var/homebrew/pinned']) {
+        for (const change of ['world-write', 'root-group-write', 'foreign-owner', 'linked-ancestor']) {
+            test(`Darwin ${prefix}${relative} rejects ${change} before reading descendants`, t => {
+                const f = darwinHomebrewFixture(t, '1.18.33', '_2', prefix), boundary = prefix + relative;
+                if (change === 'world-write') fs.chmodSync(f.mapped(boundary), 0o777);
+                if (change === 'root-group-write') f.statOverrides.set(boundary, {uid: 0});
+                if (change === 'foreign-owner') f.statOverrides.set(boundary, {uid: process.getuid() + 1});
+                if (change === 'linked-ancestor') {
+                    fs.renameSync(f.mapped(boundary), f.mapped(boundary + '-saved'));
+                    fs.symlinkSync(path.basename(boundary) + '-saved', f.mapped(boundary));
+                }
+                assert.throws(() => f.api.brewCopy(f.command), /brew-path/);
+                assert.equal(f.observed.some(([, file]) => file.startsWith(boundary + '/')), false);
+                assert.equal(f.calls.length, 0);
+            });
+        }
+    }
+    test(`Darwin ${prefix} does not accept group write on its system parent`, t => {
+        const f = darwinHomebrewFixture(t, '1.18.33', '_2', prefix);
+        fs.chmodSync(f.mapped(path.dirname(prefix)), 0o775);
+        assert.throws(() => f.api.brewCopy(f.command), /brew-path/);
+        assert.equal(f.observed.some(([, file]) => file.startsWith(prefix + '/')), false);
+    });
+}
+for (const relative of ['/Cellar/opencode/1.18.33_2/bin/opencode',
+    '/Cellar/opencode/1.18.33_2/INSTALL_RECEIPT.json']) {
+    test(`Darwin directory allowance does not extend to group-writable files: ${relative}`, async t => {
         const f = darwinHomebrewFixture(t, '1.18.33', '_2'), boundary = f.prefix + relative;
-        if (relative.startsWith('/var')) f.put(f.prefix + '/var/homebrew/pinned/inert-sentinel', 'INERT');
         fs.chmodSync(f.mapped(boundary), fs.lstatSync(f.mapped(boundary)).mode | 0o020);
         await assert.rejects(f.api.install(f.options), error => {
             assert.equal(f.api.failureResult(error), 'opencode-cli:policy-failed:homebrew-preflight:brew-path'); return true;
@@ -1084,7 +1124,7 @@ for (const relative of ['', '/Cellar', '/Cellar/opencode', '/Cellar/opencode/1.1
         assert.equal(f.calls.length, 0);
     });
 }
-test('Darwin bin allowance does not recognize lexical near matches or nested commands', t => {
+test('Darwin directory allowance does not recognize lexical near matches or nested commands', t => {
     const f = darwinHomebrewFixture(t);
     for (const command of ['/opt/homebrew/bin-extra/opencode', '/opt/homebrew/binary/opencode',
         '/opt/homebrew/bin/child/opencode', '/opt/homebrew/bin//opencode', '/opt/homebrew/./bin/opencode',
@@ -1095,7 +1135,7 @@ test('Darwin bin allowance does not recognize lexical near matches or nested com
 });
 for (const [change, reason] of [['pin', 'pinned'], ['custom-tap', 'brew-origin'],
     ['custom-link', 'brew-command'], ['custom-bytes', 'unverified-copy']]) {
-    test(`Darwin approved bin retains ${change} refusal before any probe or migration`, async t => {
+    test(`Darwin group-writable directories retain ${change} refusal before any probe or migration`, async t => {
         const f = darwinHomebrewFixture(t, '1.18.33', '_2');
         if (change === 'pin') f.put(f.prefix + '/var/homebrew/pinned/opencode', 'INERT pin');
         if (change === 'custom-tap') f.put(f.cellar + '/INSTALL_RECEIPT.json', '{"source":{"tap":"custom/tap"}}');
@@ -1116,14 +1156,16 @@ for (const [change, reason] of [['pin', 'pinned'], ['custom-tap', 'brew-origin']
         assert.equal(fs.statSync(f.mapped(f.prefix + '/bin')).mode & 0o777, 0o775);
     });
 }
-for (const phase of ['staged', 'quarantined', 'recovery']) for (const change of ['mode', 'group', 'identity']) {
-    test(`Darwin approved bin ${change} change invalidates ${phase} snapshots`, async t => {
-        const f = darwinHomebrewFixture(t, '1.18.33', '_2'), boundary = f.prefix + '/bin';
+for (const relative of ['', '/bin', '/Cellar', '/Cellar/opencode', '/Cellar/opencode/1.18.33_2',
+    '/Cellar/opencode/1.18.33_2/bin', '/var', '/var/homebrew', '/var/homebrew/pinned'])
+for (const phase of ['staged', 'quarantined', 'recovery']) for (const change of ['mode', 'group', 'identity', 'owner']) {
+    test(`Darwin directory ${relative || 'prefix'} ${change} change invalidates ${phase} snapshots`, async t => {
+        const f = darwinHomebrewFixture(t, '1.18.33', '_2'), boundary = f.prefix + relative;
         const native = f.mapped(f.cellar + '/bin/opencode'), before = fs.readFileSync(native);
         const mutate = () => {
             if (change === 'mode') fs.chmodSync(f.mapped(boundary), 0o755);
             else {
-                const key = change === 'group' ? 'gid' : 'ino';
+                const key = change === 'owner' ? 'uid' : change === 'group' ? 'gid' : 'ino';
                 f.statOverrides.set(boundary, {[key]: fs.lstatSync(f.mapped(boundary))[key] + 1});
             }
         };
@@ -1171,7 +1213,7 @@ test('revision-bearing Homebrew command is restored exactly after an independent
     assert.deepEqual(fs.readdirSync(f.mapped(f.prefix + '/bin')), ['opencode']);
     assert.deepEqual(fs.readdirSync(path.dirname(f.dest)), ['opencode']);
 });
-for (const phase of ['staged', 'promoted']) test(`Darwin bin exception preserves rollback after ${phase} probe failure`, async t => {
+for (const phase of ['staged', 'promoted']) test(`Darwin directory exception preserves rollback after ${phase} probe failure`, async t => {
     const f = darwinHomebrewFixture(t, '1.18.33', '_2'), before = fs.readlinkSync(f.mapped(f.command));
     f.duringProbe = count => { if (count === (phase === 'staged' ? 1 : 2)) throw new Error('INERT failed probe'); };
     await assert.rejects(f.api.install(f.options), /version-probe/);
