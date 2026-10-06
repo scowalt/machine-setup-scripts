@@ -56,6 +56,10 @@ _Avoid_: BBEdit server, bb execution machine
 A bb server hosted on the machine being configured and belonging to the account being configured. A connection to a remote server does not make that server local.
 _Avoid_: Any reachable bb server, enrolled execution machine
 
+**bb server customization**:
+An intentional, account-specific choice about how a local bb server runs. A customization does not by itself transfer responsibility for maintaining the server away from setup.
+_Avoid_: Unmanaged server, Plugin setting
+
 **bb plugin**:
 An installed extension of a bb server's capabilities. Plugins belong to that server, not independently to each enrolled execution machine or connected desktop client.
 _Avoid_: BB installation, machine package
