@@ -82,7 +82,16 @@ systemctl() {
     local args="$*"
     [[ ${FAIL_SYSTEMD:-} != "$args" ]] || { noisy_failure; return 1; }
     case "$args" in
-        *' show '*) printf '%s\n' "${UNIT_DETAILS:-FragmentPath=}" 'DropInPaths=' ;;
+        *' show '*)
+            if [[ ${RACE_PARENT:-0} == 1 && ! -L "$HOME/.config/systemd/user" ]]; then
+                mv "$HOME/.config/systemd/user" "$HOME/.config/systemd/renamed"
+                ln -s "$HOME/.config/systemd/renamed" "$HOME/.config/systemd/user"
+            fi
+            if [[ ${TMPDIR_CUSTOMIZATION:-0} == 1 && $3 == setup-bb-app.service ]]; then
+                printf 'FragmentPath=%s\nDropInPaths=%s\n' "$HOME/.config/systemd/user/$3" "$HOME/.config/systemd/user/$3.d/10-tmpdir.conf"
+            else
+                printf '%s\n' "${UNIT_DETAILS:-FragmentPath=}" 'DropInPaths='
+            fi ;;
         *' is-enabled '*) printf 'enabled\n' ;;
         *' is-active '*setup-bb-app.service)
             [[ ${FAIL_READY:-} != app-active || $installed == 0 ]] && [[ $app_active == 1 ]] ;;
@@ -99,6 +108,9 @@ systemctl() {
     esac
 }
 loginctl() {
+    if [[ ${RACE_OVERRIDE:-0} == 1 ]]; then
+        printf '[Service]\nEnvironment=TMPDIR=/unsupported-fixture\n' > "$HOME/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf"
+    fi
     [[ ${FAIL_LINGER:-} != query ]] || { noisy_failure; return 1; }
     printf '%s\n' "${LINGER:-yes}"
 }
@@ -165,9 +177,12 @@ class BbServerDiagnostics(unittest.TestCase):
                 os.readlink(p) if p.is_symlink() else p.read_bytes() if p.is_file() else None)
                 for p in self.home.rglob('*')}
 
-    def run_code(self, code='setup_bb_server', extra='', env=None, log_paths=False):
+    def run_code(self, code='setup_bb_server', extra='', env=None, log_paths=False, native_config=False):
+        mocks = MOCKS
+        if native_config:
+            mocks = mocks.replace('bb_config_merge_native() { event config; return 0; }', '')
         result = subprocess.run(['/bin/bash', '--noprofile', '--norc'],
-                                input='source "$HELPERS"\n' + MOCKS + '\n' + extra + '\n' + code,
+                                input='source "$HELPERS"\n' + mocks + '\n' + extra + '\n' + code,
                                 env=dict(self.env, **(env or {})), cwd=self.root,
                                 text=True, capture_output=True, timeout=20)
         output = result.stdout + result.stderr
@@ -189,6 +204,128 @@ class BbServerDiagnostics(unittest.TestCase):
             self.assertEqual(self.snapshot(), before)
             self.assertNotRegex(self.events.read_text(), r'(?m)^(install|config|stop-|start-|sudo)')
         return result
+
+    def customize(self):
+        self.active()
+        self.env['TMPDIR_CUSTOMIZATION'] = '1'
+        directory = self.home / '.config/systemd/user/setup-bb-app.service.d'
+        directory.mkdir(mode=0o700)
+        target = self.home / '.cache/bb/tmp'
+        target.mkdir(parents=True, mode=0o700)
+        self.seed('.cache/bb/tmp/keep', 'existing temporary data\n')
+        return self.seed('.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf',
+                         '[Service]\nEnvironment=TMPDIR=' + str(target) + '\n')
+
+    def ordinary_caller(self):
+        names = re.findall(r'^(\w+)\(\) [({]', self.source, re.M)
+        retained = {'setup_bb_server', 'run_setup_tasks', 'main',
+                    'print_error', 'print_warning', 'print_message', 'print_success'}
+        stubs = '\n'.join(name + '() { :; }' for name in names
+                          if not name.startswith('bb_') and name not in retained)
+        return stubs + r'''
+BB_SERVER=1 BOLD='' NC='' GRAY='' GREEN=''
+check_dotfiles_access() { return 1; }
+setup_dotfiles_deploy_key() { return 1; }
+refresh_bb_plugins() { printf 'PLUGIN_REFRESH:%s\n' "$1"; }
+setup_matt_pocock_skills() { printf 'INDEPENDENT_WORK\n'; }
+start_setup_log() { printf 'LOG_STARTED\n'; }
+finish_setup_log() { printf 'FINAL_STATUS=%s\n' "$1"; return "$1"; }
+'''
+
+    def test_changed_customization_before_mutation_keeps_caller_incomplete(self):
+        override = self.customize()
+        before = self.snapshot()
+        expected_content = b'[Service]\nEnvironment=TMPDIR=/unsupported-fixture\n'
+        before[str(override.relative_to(self.home))] = (override.stat().st_mode, expected_content)
+        result = self.run_code('main', extra=self.ordinary_caller(), env={'RACE_OVERRIDE': '1'})
+        self.assertEqual(result.returncode, 1, result)
+        self.assertNotRegex(self.events.read_text(), r'(?m)^(install|config|stop-|start-|sudo)')
+        self.assertEqual(self.snapshot(), before)
+        self.assertIn('PLUGIN_REFRESH:block-default', result.stdout)
+        self.assertIn('INDEPENDENT_WORK', result.stdout)
+        self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
+
+    def test_replaced_parent_refuses_before_dropin_enumeration(self):
+        override = self.customize()
+        content = override.read_bytes()
+        extra = self.ordinary_caller() + r'''
+find() {
+    if [[ -L "$HOME/.config/systemd/user" ]]; then
+        event forbidden-parent-traversal
+        return 97
+    fi
+    builtin command find "$@"
+}
+'''
+        result = self.run_code('main', extra=extra, env={'RACE_PARENT': '1'})
+        self.assertEqual(result.returncode, 1, result)
+        self.assertNotIn('forbidden-parent-traversal', self.events.read_text())
+        self.assertNotRegex(self.events.read_text(), r'(?m)^(install|config|stop-|start-|sudo)')
+        parent = self.home / '.config/systemd/user'
+        self.assertTrue(parent.is_symlink())
+        self.assertEqual((parent.with_name('renamed') / 'setup-bb-app.service.d/10-tmpdir.conf').read_bytes(), content)
+        self.assertIn('PLUGIN_REFRESH:block-default', result.stdout)
+        self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
+
+    def test_reviewed_customization_completes_caller_with_native_config_preserved(self):
+        override = self.customize()
+        self.package.mkdir()
+        self.seed(str(self.package.relative_to(self.home)) + '/package.json', '{"name":"bb-app"}')
+        native = self.package / 'node_modules/fs-native-extensions'
+        native.mkdir(parents=True)
+        (native / 'index.js').write_text('exports.tryLock=()=>true;exports.unlock=()=>{};')
+        self.seed('.bb/config.json', '{"config":{"BB_APP_URL":"https://fixture.example.ts.net"},"providers":{"keep":"native"}}')
+        self.seed('.bb/env.json', '{"env":{"KEY":"' + SECRET + '"}}')
+        self.seed('.bb/auth.json', '{"private":"' + SECRET + '"}')
+        self.seed('.env.local', 'UNRELATED=' + SECRET + '\n')
+        protected = [override, self.home / '.cache/bb/tmp/keep', self.home / '.env.local',
+                     self.home / '.bb/auth.json', self.home / '.bb/config.json',
+                     self.home / '.bb/env.json', self.home / '.config/setup-bb-server/endpoint']
+        before = {p: (p.stat().st_mode, p.read_bytes()) for p in protected}
+        extra = self.ordinary_caller()
+        for _ in range(2):
+            self.events.write_text('')
+            result = self.run_code('main', extra=extra, native_config=True)
+            self.assertEqual(result.returncode, 0, result)
+            self.assertEqual(result.stderr, '')
+            self.assertIn('private TMPDIR override verified', result.stdout)
+            self.assertIn('PLUGIN_REFRESH:ready', result.stdout)
+            self.assertIn('INDEPENDENT_WORK', result.stdout)
+            self.assertTrue(result.stdout.endswith('FINAL_STATUS=0\n'))
+            self.assertEqual({p: (p.stat().st_mode, p.read_bytes()) for p in protected}, before)
+            events = self.events.read_text().splitlines()
+            order = [events.index(e) for e in ('stop-ingress', 'stop-app', 'install', 'start-app')]
+            self.assertEqual(order, sorted(order))
+        self.events.write_text('')
+        result = self.run_code('main', extra=extra, env={'FAIL_INSTALL': '1'}, native_config=True)
+        self.assertEqual(result.returncode, 1, result)
+        self.assertIn('[npm.install]', result.stderr)
+        self.assertIn('start-ingress', self.events.read_text())
+        self.assertIn('PLUGIN_REFRESH:block-default', result.stdout)
+        self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
+        self.assertEqual({p: (p.stat().st_mode, p.read_bytes()) for p in protected}, before)
+
+    def test_captured_two_override_refusal_survives_real_log_finalization(self):
+        override = self.customize()
+        broad = self.seed('.config/systemd/user/setup-bb-app.service.d/20-env-local.conf',
+                          '[Service]\nEnvironmentFile=%h/.env.local\n')
+        broad.chmod(0o664)
+        auth = self.seed('.bb/auth.json', '{"private":"' + SECRET + '"}')
+        environment = self.seed('.env.local', 'UNRELATED=' + SECRET + '\n')
+        protected = [override, broad, auth, environment, self.home / '.cache/bb/tmp/keep']
+        before = {p: (p.stat().st_mode, p.read_bytes()) for p in protected}
+        logging = '\n'.join(simple_function(self.source, name) for name in ('start_setup_log', 'finish_setup_log'))
+        logging += '\nupload_log() { cp -- "$SETUP_LOG_FILE" "$EVENTS.uploaded"; }\n'
+        result = self.run_code('main', extra=self.ordinary_caller() + '\n' + logging, log_paths=True)
+        self.assertEqual(result.returncode, 1, result)
+        self.assertEqual({p: (p.stat().st_mode, p.read_bytes()) for p in protected}, before)
+        self.assertEqual(self.events.read_text(), '')
+        uploaded = Path(str(self.events) + '.uploaded').read_text()
+        for expected in ('[preflight.unit-dropins]', 'whole-file environment override',
+                         'PLUGIN_REFRESH:block-default', 'INDEPENDENT_WORK',
+                         'Setup completed with errors', 'Run log saved to:'):
+            self.assertIn(expected, uploaded)
+        self.assertNotIn(SECRET, uploaded)
 
     def test_early_command_and_unit_failures_are_identified_without_mutation(self):
         cases = [

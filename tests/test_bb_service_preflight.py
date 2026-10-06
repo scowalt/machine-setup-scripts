@@ -12,15 +12,98 @@ from extract_setup_fixture import validate_function
 ROOT = Path(__file__).resolve().parents[1]
 UNITS = ('setup-bb-app.service', 'setup-bb-ingress.service')
 REAL = ('bb_server_failure', 'bb_setup_directory_preflight', 'bb_owned_metadata_file', 'bb_owned_file',
-        'bb_owned_script', 'bb_owned_safe_directory', 'bb_unit_dropins_empty', 'bb_unit_preflight', 'setup_bb_server',
+        'bb_owned_script', 'bb_owned_safe_directory', 'bb_unit_dropins_empty', 'bb_tmpdir_snapshot',
+        'bb_unit_dropins_snapshot', 'bb_unit_preflight', 'setup_bb_server',
         'bb_server_selection', 'bb_server_restore_process_override',
         'run_setup_tasks', 'main')
+PYTHON_ADAPTER = r'''
+import os
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+
+assert sys.argv[1:4] == ['-I', '-S', '-']
+home = sys.argv[4]
+assert home == os.environ['HOME']
+program = sys.stdin.read()
+sys.argv = ['-', home]
+inspection = os.environ.get('FIXTURE_INSPECTION', '')
+real_open, real_stat, real_fstat = os.open, os.stat, os.fstat
+real_listdir, real_read = os.listdir, os.read
+paths = {}
+reads = 0
+stats = {}
+
+def checked(name, parent=None):
+    path = str(Path(paths[parent]) / name) if parent is not None else str(name)
+    assert path == home or path.startswith(home + '/'), 'outside fixture HOME'
+    return path
+
+def metadata(value, path):
+    selected = home + '/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf'
+    if inspection == 'tmpdir-foreign-target':
+        selected = home + '/.cache/bb/tmp'
+    elif inspection == 'tmpdir-foreign-ancestor':
+        selected = home + '/.cache'
+    if path != selected:
+        return value
+    if inspection == 'tmpdir-inspection-failed':
+        raise OSError('fixture-secret')
+    fields = {key: getattr(value, key) for key in dir(value) if key.startswith('st_')}
+    if inspection in ('tmpdir-foreign', 'tmpdir-foreign-target', 'tmpdir-foreign-ancestor'):
+        fields['st_uid'] += 1
+    if inspection == 'tmpdir-identity-race':
+        fields['st_ino'] += stats.get(path, 0)
+        stats[path] = stats.get(path, 0) + 1
+    return SimpleNamespace(**fields)
+
+def open_fixture(name, flags, *, dir_fd=None):
+    path = checked(name, dir_fd)
+    assert flags & os.O_NOFOLLOW and not flags & (os.O_CREAT | os.O_TRUNC | os.O_RDWR | os.O_WRONLY)
+    fd = real_open(name, flags, dir_fd=dir_fd)
+    paths[fd] = path
+    return fd
+
+def stat_fixture(name, *, dir_fd=None, follow_symlinks=True):
+    assert follow_symlinks is False
+    path = checked(name, dir_fd)
+    return metadata(real_stat(name, dir_fd=dir_fd, follow_symlinks=False), path)
+
+def listdir_fixture(fd):
+    assert paths[fd] == home + '/.config/systemd/user/setup-bb-app.service.d', 'unexpected directory enumeration'
+    if inspection == 'tmpdir-enumeration-failed':
+        raise OSError('fixture-secret')
+    return real_listdir(fd)
+
+def read_fixture(fd, size):
+    global reads
+    assert paths[fd] == home + '/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf', 'unrelated content read'
+    result = real_read(fd, size)
+    reads += 1
+    if inspection == 'tmpdir-content-race' and reads > 1:
+        return result + b'changed'
+    if inspection == 'tmpdir-short-read':
+        return b'\n'.join(result.split(b'\n')[:2]) + b'\n'
+    return result
+
+os.open = open_fixture
+os.stat = stat_fixture
+os.fstat = lambda fd: metadata(real_fstat(fd), paths[fd])
+os.listdir = listdir_fixture
+os.read = read_fixture
+try:
+    exec(compile(program, 'extracted-tmpdir-policy', 'exec'))
+except AssertionError:
+    os.write(3, b'FORBIDDEN_PYTHON_BOUNDARY\n')
+    raise SystemExit(97)
+'''
 HARNESS = r'''
 set -uo pipefail
 # Keep fixture events on the private captured stderr even when the real helper
 # suppresses systemctl stderr. No inherited nonstandard descriptor is used.
 exec 3>&2
 source "$1"
+/usr/bin/python3() { builtin command /usr/bin/python3 -I -S "$FIXTURE_PYTHON_ADAPTER" "$@"; }
 print_error() { printf 'ERROR: %s\n' "$1"; }
 print_message() { printf 'INFO: %s\n' "$1"; }
 print_warning() { printf 'WARNING: %s\n' "$1"; }
@@ -86,9 +169,18 @@ systemctl() {
             loaded) dropins='/fixture-secret/external/override.conf /fixture-secret/second.conf' ;;
             foreign) fragment='/fixture-secret/foreign.service' ;;
             absent) fragment='' ;;
+            duplicate-fragment)
+                printf 'FragmentPath=/fixture-secret/foreign.service\n' ;;
+            duplicate-dropins)
+                printf 'DropInPaths=/fixture-secret/unknown.conf\n' ;;
+            reviewed-duplicate)
+                printf 'DropInPaths=/fixture-secret/unknown.conf\n'
+                dropins="$HOME/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf" ;;
             missing) printf 'FragmentPath=%s\n' "$fragment"; return 0 ;;
             malformed) printf 'fixture-secret-invalid-property\n'; return 0 ;;
             failed) printf 'fixture-secret-systemd-error\n' >&2; return 1 ;;
+            reviewed)
+                dropins="$HOME/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf" ;;
             clean) ;;
             *) exit 97 ;;
         esac
@@ -133,8 +225,12 @@ def snapshot(root):
         if stat.S_ISLNK(info.st_mode):
             value = os.readlink(path)
         elif stat.S_ISREG(info.st_mode):
-            value = hashlib.sha256(path.read_bytes()).hexdigest()
-        result[str(path.relative_to(root))] = (info.st_mode, info.st_uid, info.st_gid,
+            try:
+                value = hashlib.sha256(path.read_bytes()).hexdigest()
+            except PermissionError:
+                value = 'unreadable'
+        result[str(path.relative_to(root))] = (info.st_dev, info.st_ino, info.st_size,
+                                             info.st_mode, info.st_uid, info.st_gid,
                                              info.st_nlink, info.st_mtime_ns,
                                              info.st_ctime_ns, value)
     return result
@@ -177,6 +273,8 @@ class BbServicePreflightTests(unittest.TestCase):
         self.helpers = self.root / 'definitions.sh'
         self.helpers.write_text(self.definitions)
         self.helpers.chmod(0o600)
+        self.python_adapter = self.root / 'python-adapter.py'
+        self.python_adapter.write_text(PYTHON_ADAPTER)
         self.empty_path = self.root / 'empty-bin'
         self.empty_path.mkdir()
 
@@ -206,7 +304,8 @@ class BbServicePreflightTests(unittest.TestCase):
             ['/bin/bash', '--noprofile', '--norc', '-c', HARNESS, '_', str(self.helpers)],
             env={'PATH': str(self.empty_path), 'HOME': str(self.home), 'LANG': 'C',
                  'FIXTURE_UID': str(os.getuid()), 'FIXTURE_UNIT': unit,
-                 'FIXTURE_MODE': mode, 'FIXTURE_SYSTEMD': systemd, 'FIXTURE_INSPECTION': inspection},
+                 'FIXTURE_MODE': mode, 'FIXTURE_SYSTEMD': systemd, 'FIXTURE_INSPECTION': inspection,
+                 'FIXTURE_PYTHON_ADAPTER': str(self.python_adapter)},
             cwd=self.home, stdin=subprocess.DEVNULL, capture_output=True,
             text=True, close_fds=True, timeout=5,
         )
@@ -226,6 +325,180 @@ class BbServicePreflightTests(unittest.TestCase):
         self.assertNotIn('NEXT_INERT_GATE', result.stderr)
         self.assertNotIn('chmod', result.stdout)
         self.assertNotIn('rm ', result.stdout)
+
+    def test_reviewed_tmpdir_reaches_next_boundary_through_ordinary_caller_unchanged(self):
+        dropins = self.add_dropin(UNITS[0], 'empty')
+        target = self.home / '.cache/bb/tmp'
+        target.mkdir(parents=True, mode=0o700)
+        override = dropins / '10-tmpdir.conf'
+        override.write_text('[Service]\nEnvironment=TMPDIR=' + str(target) + '\n')
+        override.chmod(0o600)
+        (target / 'existing-work').write_text('preserve temporary work\n')
+        for _ in range(2):
+            result = self.run_preflight(mode='caller', systemd='reviewed', status=73)
+            self.assertIn('NEXT_INERT_GATE', result.stderr)
+            self.assertNotIn('BB server setup incomplete', result.stdout)
+
+    def test_broad_environment_override_needs_explicit_migration_and_stays_incomplete(self):
+        dropins = self.add_dropin(UNITS[0], 'empty')
+        target = self.home / '.cache/bb/tmp'
+        target.mkdir(parents=True, mode=0o700)
+        broad = dropins / '20-env-local.conf'
+        broad.write_text('[Service]\nEnvironmentFile=%h/.env.local\n')
+        broad.chmod(0o664)
+        for with_tmpdir in (False, True):
+            if with_tmpdir:
+                override = dropins / '10-tmpdir.conf'
+                override.write_text('[Service]\nEnvironment=TMPDIR=' + str(target) + '\n')
+                override.chmod(0o600)
+            for _ in range(2):
+                result = self.run_preflight(mode='caller')
+                self.assert_diagnostic(result, UNITS[0])
+                self.assertIn('whole-file environment', result.stdout)
+                self.assertIn('separately authorized migration', result.stdout)
+                for expected in ('PLUGIN_REFRESH: block-default', 'UNAFFECTED_SKILLS',
+                                 'UNAFFECTED_PI_REFRESH', 'REBOOT_CHECK', 'FINAL_STATUS=1'):
+                    self.assertIn(expected, result.stdout)
+                self.assertNotIn('SYSTEMD_SHOW', result.stderr)
+
+    def reviewed(self):
+        dropins = self.add_dropin(UNITS[0], 'empty')
+        target = self.home / '.cache/bb/tmp'
+        target.mkdir(parents=True, mode=0o700)
+        override = dropins / '10-tmpdir.conf'
+        override.write_text('[Service]\nEnvironment=TMPDIR=' + str(target) + '\n')
+        override.chmod(0o600)
+        return dropins, override, target
+
+    def assert_caller_refusal(self, result):
+        self.assertNotIn('NEXT_INERT_GATE', result.stderr)
+        self.assertIn('BB server setup incomplete', result.stdout)
+        self.assertIn('PLUGIN_REFRESH: block-default', result.stdout)
+        self.assertIn('UNAFFECTED_SKILLS', result.stdout)
+        self.assertIn('UNAFFECTED_PI_REFRESH', result.stdout)
+        self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
+
+    def test_tmpdir_content_is_a_narrow_literal_contract(self):
+        _, override, target = self.reviewed()
+        original = override.read_bytes()
+        cases = (
+            b'', b'[Service]\n', original + b'Environment=OTHER=fixture-secret\n',
+            original + b'Environment=TMPDIR=/other\n', original + original,
+            original.replace(b'[Service]', b'[Unit]'),
+            original.replace(str(target).encode(), b'%h/.cache/bb/tmp'),
+            original.replace(str(target).encode(), b'$HOME/.cache/bb/tmp'),
+            original.replace(str(target).encode(), b'/tmp'),
+            original.replace(b'Environment=', b'EnvironmentFile='),
+            original + b'ExecStart=/fixture-secret\n', original + b'\x00',
+            original + b'\xff', original + b'\\\n', b'x' * 8192,
+            original.replace(b'Environment=', b'Environment="').rstrip() + b' OTHER=fixture-secret"\n',
+        )
+        for content in cases:
+            with self.subTest(content=content[:80]):
+                override.write_bytes(content)
+                result = self.run_preflight(mode='caller', systemd='reviewed')
+                self.assert_caller_refusal(result)
+                self.assert_diagnostic(result, UNITS[0])
+                self.assertNotIn('SYSTEMD_SHOW', result.stderr)
+        override.write_bytes(original.replace(b'Environment=TMPDIR=', b'Environment="TMPDIR=').rstrip() + b'"\n')
+        self.run_preflight(mode='caller', systemd='reviewed', status=73)
+
+    def test_tmpdir_selection_cannot_extend_to_ingress_or_extra_entries(self):
+        dropins, override, _ = self.reviewed()
+        for name in ('unknown.conf', '.hidden', '20-extra.conf'):
+            with self.subTest(name=name):
+                extra = dropins / name
+                extra.write_text('fixture-secret\n')
+                self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed'))
+                extra.unlink()
+        renamed = dropins / 'other.conf'
+        override.rename(renamed)
+        self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed'))
+        renamed.rename(override)
+        ingress = self.add_dropin(UNITS[1], 'empty')
+        override.rename(ingress / override.name)
+        self.assert_caller_refusal(self.run_preflight(unit=UNITS[1], mode='caller'))
+
+    def test_tmpdir_artifact_types_and_permissions_never_trigger_repair(self):
+        _, override, target = self.reviewed()
+        content = override.read_bytes()
+        for mode in (0o644, 0o664, 0o620, 0o666, 0o000, 0o1600):
+            with self.subTest(mode=oct(mode)):
+                override.chmod(mode)
+                self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed'))
+        override.chmod(0o600)
+        self.assertEqual(override.read_bytes(), content)
+        saved = self.root / 'saved-override'
+        override.rename(saved)
+        for kind in ('link', 'dangling', 'directory', 'fifo', 'hardlink'):
+            with self.subTest(kind=kind):
+                if kind == 'link':
+                    override.symlink_to(saved)
+                elif kind == 'dangling':
+                    override.symlink_to(self.root / 'missing')
+                elif kind == 'directory':
+                    override.mkdir()
+                elif kind == 'fifo':
+                    os.mkfifo(override)
+                else:
+                    os.link(saved, override)
+                self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed'))
+                if kind == 'directory':
+                    override.rmdir()
+                else:
+                    override.unlink()
+                self.assertEqual(saved.read_bytes(), content)
+        saved.rename(override)
+        for path in (override.parent, self.home / '.cache', target.parent, target):
+            with self.subTest(path=path.name):
+                path.chmod(0o770)
+                self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed'))
+                path.chmod(0o700)
+        target.chmod(0o755)
+        self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed'))
+        target.chmod(0o700)
+        target.rmdir()
+        self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed'))
+        self.assertFalse(target.exists())
+
+    def test_tmpdir_ancestors_and_target_are_not_followed_or_scanned(self):
+        _, _, target = self.reviewed()
+        (target / 'private-data').write_text('fixture-secret\n')
+        (target / 'unrelated-link').symlink_to(self.root / 'missing')
+        os.mkfifo(target / 'unrelated-fifo')
+        self.run_preflight(mode='caller', systemd='reviewed', status=73)
+        for path in (self.home / '.cache', target.parent, target,
+                     self.home / '.config/systemd/user/setup-bb-app.service.d',
+                     self.home / '.config/systemd/user', self.home / '.config/systemd',
+                     self.home / '.config'):
+            with self.subTest(path=str(path.relative_to(self.home))):
+                saved = path.with_name(path.name + '-saved')
+                path.rename(saved)
+                path.symlink_to(saved, target_is_directory=True)
+                self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed'))
+                path.unlink()
+                saved.rename(path)
+
+    def test_tmpdir_inspection_uncertainty_and_changes_refuse_without_effects(self):
+        self.reviewed()
+        for inspection in ('tmpdir-foreign', 'tmpdir-foreign-target', 'tmpdir-foreign-ancestor',
+                           'tmpdir-inspection-failed', 'tmpdir-enumeration-failed',
+                           'tmpdir-identity-race', 'tmpdir-content-race'):
+            with self.subTest(inspection=inspection):
+                self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed', inspection=inspection))
+
+    def test_short_file_reads_cannot_hide_extra_directives(self):
+        _, override, _ = self.reviewed()
+        override.write_bytes(override.read_bytes() + b'EnvironmentFile=/fixture-secret\n')
+        self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed',
+                                                     inspection='tmpdir-short-read'))
+
+    def test_tmpdir_local_evidence_does_not_override_loaded_selection(self):
+        self.reviewed()
+        for metadata in ('clean', 'loaded', 'foreign', 'absent', 'missing', 'malformed', 'failed',
+                         'duplicate-fragment', 'duplicate-dropins', 'reviewed-duplicate'):
+            with self.subTest(metadata=metadata):
+                self.assert_caller_refusal(self.run_preflight(mode='caller', systemd=metadata))
 
     def test_local_dropin_paths_refuse_explain_and_preserve_without_systemd(self):
         for unit in UNITS:
@@ -355,6 +628,14 @@ class BbServicePreflightTests(unittest.TestCase):
         self.assertIn('NEXT_INERT_GATE', result.stderr)
         for unit in UNITS:
             self.assertIn('SYSTEMD_SHOW: ' + unit, result.stderr)
+
+    def test_duplicate_systemd_properties_cannot_hide_loaded_overrides(self):
+        for metadata in ('duplicate-fragment', 'duplicate-dropins'):
+            with self.subTest(metadata=metadata):
+                result = self.run_preflight(mode='caller', systemd=metadata)
+                self.assertNotIn('NEXT_INERT_GATE', result.stderr)
+                self.assertIn('PLUGIN_REFRESH: block-default', result.stdout)
+                self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
 
     def test_unit_identity_checks_remain_fail_closed(self):
         for unit in UNITS:

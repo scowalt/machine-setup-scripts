@@ -111,6 +111,7 @@ MOCK
 cat > "${tmp}/bin/bb-app" <<'MOCK'
 #!/usr/bin/env bash
 printf 'bb-app %s\n' "$*" >> "${BB_TEST_APP_LOG}"
+if [[ -n "${TMPDIR:-}" ]]; then printf 'tmpdir:%s\n' "${TMPDIR}" >> "${BB_TEST_APP_LOG}"; fi
 if [[ "${BB_TEST_GENERATE_ID:-0}" == 1 ]]; then
     mkdir -p "${HOME}/.bb"; chmod 700 "${HOME}/.bb"
     if [[ ! -e "${HOME}/.bb/host-id" ]]; then (umask 077; set -C; printf 'fresh-fixture-host-id\n' > "${HOME}/.bb/host-id") 2>/dev/null || [[ -f "${HOME}/.bb/host-id" ]]; fi
@@ -133,6 +134,7 @@ unit_home="${HOME}"
 unit_file="${unit_home}/.config/systemd/user/setup-bb-${kind}.service"
 parsed=$(python3 - "${unit_file}" "${directive}" "${kind}" <<'PY'
 import re, sys
+from pathlib import Path
 unit, directive, kind = sys.argv[1:]
 env = {}
 command = None
@@ -160,6 +162,12 @@ for key in ("HOME", "PATH", "BB_PACKAGE_BINARY", "BB_TAILSCALE_BIN"):
         raise SystemExit("missing generated systemd environment: " + key)
 if command[0] != env["HOME"] + "/.config/setup-bb-server/bb-guard":
     raise SystemExit("generated command does not use the managed guard")
+override = Path(unit + '.d/10-tmpdir.conf')
+if override.exists():
+    expected = '[Service]\nEnvironment=TMPDIR=' + env['HOME'] + '/.cache/bb/tmp\n'
+    if kind != 'app' or override.read_text() != expected:
+        raise SystemExit('unsupported fixture drop-in')
+    env['TMPDIR'] = env['HOME'] + '/.cache/bb/tmp'
 for key, value in env.items():
     print("E\t" + key + "\t" + value)
 for value in command:
@@ -333,7 +341,12 @@ tailscale() {
 systemctl() {
     case " $* " in
         *' show '*MainPID*) cat "$BB_TEST_ROOT/main-pid";;
-        *' show '*) printf 'FragmentPath=\nDropInPaths=\n';;
+        *' show '*)
+            if [[ "$3" == setup-bb-app.service && -f "$HOME/.config/systemd/user/$3.d/10-tmpdir.conf" ]]; then
+                printf 'FragmentPath=%s\nDropInPaths=%s\n' "$HOME/.config/systemd/user/$3" "$HOME/.config/systemd/user/$3.d/10-tmpdir.conf"
+            else
+                printf 'FragmentPath=\nDropInPaths=\n'
+            fi;;
         *' is-active '*setup-bb-app.service*) [[ -e "$BB_TEST_ROOT/app-active" ]];;
         *' is-active '*setup-bb-ingress.service*) [[ -e "$BB_TEST_ROOT/ingress-active" ]];;
         *' stop setup-bb-ingress.service '*) printf 'stop-ingress\n' >> "$BB_TEST_EVENTS"; rm -f "$BB_TEST_ROOT/ingress-active";;
@@ -397,8 +410,13 @@ grep -qx 'TimeoutStartSec=180' "$HOME/.config/systemd/user/setup-bb-app.service"
 ! grep -Eq -- '--bg|serve off|serve reset|Funnel' "$HOME/.config/systemd/user/setup-bb-ingress.service"
 [[ "$(<"$HOME/.config/setup-bb-server/package-owner")" == "$HOME/.local/share/mise/installs/node/24.20.0/lib/node_modules/bb-app" ]]
 
-# A running update has a stopped transaction boundary: ingress, then app,
-# then package/config changes, then app readiness re-creates ingress.
+mkdir -p "$HOME/.config/systemd/user/setup-bb-app.service.d" "$HOME/.cache/bb/tmp"
+chmod 700 "$HOME/.config/systemd/user/setup-bb-app.service.d" "$HOME/.cache" "$HOME/.cache/bb" "$HOME/.cache/bb/tmp"
+printf '[Service]\nEnvironment=TMPDIR=%s/.cache/bb/tmp\n' "$HOME" > "$HOME/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf"
+chmod 600 "$HOME/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf"
+printf 'preserved temporary data\n' > "$HOME/.cache/bb/tmp/keep"
+cp "$HOME/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf" "$BB_TEST_ROOT/prior-tmpdir"
+print_message() { :; }
 : > "$BB_TEST_EVENTS"
 setup_bb_server
 stop_ingress=$(grep -n '^stop-ingress$' "$BB_TEST_EVENTS" | head -1 | cut -d: -f1)
@@ -406,6 +424,9 @@ stop_app=$(grep -n '^stop-app$' "$BB_TEST_EVENTS" | head -1 | cut -d: -f1)
 install=$(grep -n '^install$' "$BB_TEST_EVENTS" | head -1 | cut -d: -f1)
 start_app=$(grep -n '^start-app$' "$BB_TEST_EVENTS" | head -1 | cut -d: -f1)
 (( stop_ingress < stop_app && stop_app < install && install < start_app ))
+grep -Fx "tmpdir:${HOME}/.cache/bb/tmp" "$BB_TEST_APP_LOG"
+cmp "$BB_TEST_ROOT/prior-tmpdir" "$HOME/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf"
+[[ "$(<"$HOME/.cache/bb/tmp/keep")" == 'preserved temporary data' ]]
 # A native-lock timeout during an update leaves metadata byte-for-byte intact,
 # then restores the formerly running app and ingress without a stale rollback.
 cp "$HOME/.bb/config.json" "$BB_TEST_ROOT/locked-config"
