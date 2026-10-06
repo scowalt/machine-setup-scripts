@@ -586,6 +586,133 @@ class Discovery(unittest.TestCase):
         custom.chmod(0o775)
         self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery writable-local-state\n'))
 
+    @contextlib.contextmanager
+    def database_activity(self, data, kind):
+        database = data / 'bb.db'
+        directory_activity = kind in ('directory', 'opening-directory')
+        target = data / ('active-log' if directory_activity else kind)
+        if kind != 'bb.db' and not directory_activity:
+            target.write_bytes(b'inert sidecar')
+        native_stat = os.stat
+        identity = native_stat(data if kind == 'opening-directory' else database)
+        writes = []
+        def metadata(path, *args, **kwargs):
+            info = native_stat(path, *args, **kwargs)
+            if (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino):
+                with target.open('ab') as stream:
+                    stream.write(b'inert activity')
+                if directory_activity:
+                    target.unlink()
+                writes.append(kind)
+            return info
+        with patch.object(P.os, 'stat', side_effect=metadata):
+            yield writes
+
+    def test_verified_live_database_activity_does_not_require_negative_snapshot_stability(self):
+        data = self.server()
+        database = data / 'bb.db'
+        original = database.stat()
+        for kind in ('bb.db', 'bb.db-wal', 'bb.db-shm', 'directory'):
+            with self.subTest(kind=kind):
+                api = FakeApi([plugin(enabled=False)])
+                with self.database_activity(data, kind) as writes, self.darwin_http(api) as requests:
+                    result = self.run_policy(native_api=True)
+                self.assertTrue(writes, 'synthetic database activity must occur in red and green')
+                self.assertEqual(result, (0, 'BB_PLUGIN_REFRESH updated\n'))
+                self.assertEqual(requests[:2], [('GET', '/health', None), ('GET', '/api/v1/system/config', None)])
+                self.assertEqual(len(api.mutations()), 1)
+                self.assertFalse(api.plugins['tracking']['enabled'])
+                self.assertEqual(api.plugins['tracking']['source'], 'npm:fixture@^1')
+                current = database.stat()
+                self.assertEqual((current.st_dev, current.st_ino, current.st_uid, current.st_gid, current.st_mode),
+                                 (original.st_dev, original.st_ino, original.st_uid, original.st_gid, original.st_mode))
+                self.assertEqual(database.read_bytes()[:16], b'SQLite format 3\0')
+
+    def test_verified_live_server_does_not_require_directory_read_access(self):
+        data = self.server()
+        native_open = os.open
+        def open_path(path, flags, *args, **kwargs):
+            if flags & os.O_DIRECTORY:
+                raise PermissionError('directory-open-secret-sentinel')
+            return native_open(path, flags, *args, **kwargs)
+        api = FakeApi()
+        with patch.object(P.os, 'open', side_effect=open_path), self.darwin_http(api) as requests:
+            result = self.run_policy(native_api=True)
+        self.assertEqual(result, (0, 'BB_PLUGIN_REFRESH updated\n'))
+        self.assertEqual(len(api.mutations()), 1)
+        self.assertEqual(requests[:2], [('GET', '/health', None), ('GET', '/api/v1/system/config', None)])
+        self.assertEqual((data / 'bb.db').read_bytes()[:16], b'SQLite format 3\0')
+
+    def test_positive_probe_retains_database_identity_ownership_permissions_links_and_header_guards(self):
+        data = self.data()
+        database = data / 'bb.db'
+        native_stat = os.stat
+        original = native_stat(database)
+        fields = ('st_dev', 'st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_size',
+                  'st_mtime_ns', 'st_ctime_ns', 'st_nlink')
+        for fault in ('st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_nlink', 'header'):
+            self.data(data)
+            observed = False
+            def metadata(path, *args, **kwargs):
+                nonlocal observed
+                info = native_stat(path, *args, **kwargs)
+                if (info.st_dev, info.st_ino) == (original.st_dev, original.st_ino):
+                    if fault == 'header':
+                        database.write_bytes(b'invalid header')
+                    elif observed:
+                        info = types.SimpleNamespace(**{key: getattr(info, key) for key in fields})
+                        setattr(info, fault, getattr(info, fault) + 1)
+                    observed = True
+                return info
+            with self.subTest(fault=fault), patch.object(P.os, 'stat', side_effect=metadata):
+                api = FakeApi()
+                result = self.run_policy(api)
+            self.assertTrue(observed)
+            self.assertEqual(result, (1, 'BB_PLUGIN_REFRESH failed discovery ' +
+                ('unverified-main-server' if fault == 'header' else 'changed-local-state') + '\n'))
+            self.assertFalse(api.verified)
+            self.assertFalse(api.calls)
+
+    def test_live_deduplication_retains_strict_directory_revalidation(self):
+        data = self.server()
+        native_stat = os.stat
+        original = native_stat(data)
+        fields = ('st_dev', 'st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_size',
+                  'st_mtime_ns', 'st_ctime_ns', 'st_nlink')
+        for fault in ('st_ino', 'st_uid', 'st_gid', 'st_mode'):
+            changed = False
+            def metadata(path, *args, **kwargs):
+                nonlocal changed
+                try:
+                    info = native_stat(path, *args, **kwargs)
+                except FileNotFoundError:
+                    if Path(path) == data / 'server-import.json':
+                        changed = True
+                    raise
+                if changed and (info.st_dev, info.st_ino) == (original.st_dev, original.st_ino):
+                    info = types.SimpleNamespace(**{key: getattr(info, key) for key in fields})
+                    setattr(info, fault, getattr(info, fault) + (0o020 if fault == 'st_mode' else 1))
+                return info
+            with self.subTest(fault=fault), patch.object(P.os, 'stat', side_effect=metadata), \
+                    self.darwin_http(FakeApi()) as requests:
+                status, output = self.run_policy(native_api=True)
+            self.assertTrue(changed)
+            self.assertEqual(status, 1, output)
+            self.assertIn('BB_PLUGIN_REFRESH failed discovery ', output)
+            self.assertFalse(requests)
+
+    def test_positive_database_activity_keeps_strict_stopped_classification_without_absence_claim(self):
+        data = self.data()
+        for kind in ('bb.db', 'bb.db-wal', 'bb.db-shm', 'directory', 'opening-directory'):
+            with self.subTest(kind=kind):
+                api = FakeApi()
+                with self.database_activity(data, kind) as writes:
+                    result = self.run_policy(api)
+                self.assertTrue(writes)
+                self.assertEqual(result, (0, 'BB_PLUGIN_REFRESH stopped\n'))
+                self.assertFalse(api.verified)
+                self.assertFalse(api.calls)
+
     def test_changed_negative_snapshot_is_refused_and_all_handles_close(self):
         original_home = self.home
         native_stat, native_fstat, native_open, native_close, native_chmod = os.stat, os.fstat, os.open, os.close, os.chmod

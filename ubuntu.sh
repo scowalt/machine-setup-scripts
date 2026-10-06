@@ -7654,7 +7654,7 @@ class LocalFiles:
                 need(previous is None or previous == fingerprint(info)[:5], 'changed-local-state')
                 fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
                 handles.append((fd, parent, name, info, leaf))
-                need(fingerprint(os.fstat(fd)) == fingerprint(info), 'changed-local-state')
+                need(fingerprint(os.fstat(fd))[:5] == fingerprint(info)[:5], 'changed-local-state')
             def probe():
                 evidence = []
                 for name in names:
@@ -7663,9 +7663,10 @@ class LocalFiles:
                     except FileNotFoundError:
                         evidence.append(None)
                     else:
-                        evidence.append(fingerprint(info))
+                        evidence.append(fingerprint(info)[:5] + (info.st_nlink,))
                 return evidence
             before = probe() if missing is None else []
+            present = any(item is not None for item in before)
             if missing is not None:
                 try:
                     os.stat(missing[1], dir_fd=missing[0], follow_symlinks=False)
@@ -7676,12 +7677,12 @@ class LocalFiles:
             else:
                 need(probe() == before, 'changed-local-state')
             for fd, parent, name, info, leaf in handles:
-                expected = fingerprint(info) if leaf else fingerprint(info)[:5]
+                expected = fingerprint(info) if leaf and not present else fingerprint(info)[:5]
                 for observed in (os.fstat(fd), os.stat(name, dir_fd=parent, follow_symlinks=False)):
-                    mark = fingerprint(observed) if leaf else fingerprint(observed)[:5]
+                    mark = fingerprint(observed) if leaf and not present else fingerprint(observed)[:5]
                     need(mark == expected, 'changed-local-state')
             completed = True
-            return any(item is not None for item in before)
+            return present
         except (OSError, NotImplementedError):
             raise Refusal('unverified-local-state') from None
         finally:
@@ -7948,6 +7949,9 @@ def discover(files, processes, configured_data=None, block_default=False):
     stopped = 0
     for data in data_dirs:
         if block_default and data == files.home / '.bb':
+            continue
+        if any(s['data'] == data for s in servers):
+            files.inspect(data, directory=True)
             continue
         if not files.main_evidence(data):
             continue
@@ -10334,7 +10338,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 306 | Last changed: Exclude default BB non-server state without granting trust"
+    echo -e "${GRAY}Version 307 | Last changed: Preserve volatile BB server evidence during discovery"
 
     if ! acquire_setup_lock; then
         return 1
