@@ -1,6 +1,6 @@
 # BB server customizations: design discussion
 
-Status: Q1–Q6 agreed. At the user's request, the synthesized spec was published as [GitHub issue #197](https://github.com/scowalt/machine-setup-scripts/issues/197), labeled `ready-for-agent`. That issue is the authoritative implementation contract; these notes retain the design history. No implementation has been performed in this thread. Live remediation, service restarts and setup execution require separate authorization.
+Status: Q1–Q6 agreed. [GitHub issue #197](https://github.com/scowalt/machine-setup-scripts/issues/197), labeled `ready-for-agent`, is the authoritative implementation contract; these notes retain the design history. The subsequent owner comment authorizes repository implementation and local commits through `implement-spec` on `integrate/bb-customizations-197`, superseding the design-stage no-commit wording below. Runtime work is tracked in #198 and the [one-time migration procedure](2026-10-06-bb-environment-override-migration.md) in #199. This authorization requires neither a push nor deployment; live migration, service restarts and setup execution remain separately authorized. No live remediation is established by these notes.
 
 ## Evidence
 
@@ -13,7 +13,7 @@ User-authorized read-only Tailscale SSH inspection at 18:45–18:47 UTC confirme
 
 Systemd lists both as loaded overrides. App and ingress services were active/running; local HTTP health returned `ok=true`, and host-daemon status returned `connected=true`. The app process predated both overrides and had no `TMPDIR` variable. Loaded configuration is therefore not proof of what the existing process is using. No configuration was changed, service restarted, or setup run. No credential values were printed.
 
-The existing `bb_unit_dropins_empty` guard in `ubuntu.sh` deliberately rejects every nonempty local drop-in directory. Contained real-helper/caller fixtures reproduce the failure chain with one zero-byte entry and clear it when only that synthetic entry is removed. Existing empty-directory support is already present. This is a customization-policy conflict, not evidence that the guard malfunctioned or BB crashed.
+At diagnosis, the version-309 `bb_unit_dropins_empty` guard in `ubuntu.sh` deliberately rejected every nonempty local drop-in directory. Contained real-helper/caller fixtures reproduce the failure chain with one zero-byte entry and clear it when only that synthetic entry is removed. Existing empty-directory support is already present. This is a customization-policy conflict, not evidence that the guard malfunctioned or BB crashed.
 
 ## Agreed decisions
 
@@ -52,7 +52,7 @@ The consequential maintenance and credential boundary is recorded in [ADR 0011](
 3. Preserve customization bytes and unrelated state. Do not write a new fleet-wide TMPDIR default, change native BB/provider configuration, import environment-file credentials, or retire either override during ordinary setup. Improve controlled diagnostics so a supported TMPDIR override is distinguishable from the unsupported broad environment override or unknown customization.
 4. Cover unknown/extra directives, duplicate/conflicting settings, alternate paths, links, unsafe ownership/modes, changed evidence, unexpected loaded drop-ins and inspection failures. Assert refusal before lifecycle/package changes, unaffected-work continuation, plugin-refresh readiness gating and final failure/log preservation. Preserve existing no-drop-in and verified-empty behavior.
 5. Bump the modified Ubuntu script version. Run Bash syntax and ShellCheck, embedding consistency where applicable, and the mandatory contained extraction/default, BB server, relevant plugin-refresh/preparation, reliability, headless and shared-runtime contracts. Broaden the affected matrix if shared helpers or callers change. Record skips and distinguish offline results from native rollout.
-6. Present the repository changes and the separate one-time migration procedure for review. No commit/push, live migration, permission repair, service restart, provider-auth/model request or setup rerun is implied by confirming development. Obtain explicit authorization for any later live operation.
+6. Present the repository changes and the separate one-time migration procedure for review. At design approval, no commit/push, live migration, permission repair, service restart, provider-auth/model request or setup rerun was implied. The subsequent implementation authorization permits local commits as recorded above; live operations still need separate authorization.
 
 Success for development means the safe TMPDIR-only fixture passes, unknown/broad overrides still fail without mutation, and required contained regressions pass. It does not mean Beelink's next unchanged setup run succeeds: the agreed one-time environment-override migration remains a prerequisite.
 
