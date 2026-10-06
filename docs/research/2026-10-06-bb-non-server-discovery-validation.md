@@ -1,0 +1,84 @@
+# Issue #192: contained non-server discovery validation
+
+Policy: [absence-only default-leaf decision](../adr/0009-limit-bb-group-write-exception-to-negative-discovery.md). Base and integration tip at validation: `966a07af6b9935ea0542048b20e06c313a0a6453`. No live setup, native BB/plugin execution, remote inspection, permission repair or lifecycle operation was used. This is not native recovery or rollout evidence.
+
+## Red → green
+
+Private evidence prefix: `/tmp/issue-192-integration/implementer/`.
+
+| Vertical slice | Red fixture root | Green fixture root |
+| --- | --- | --- |
+| HOME 0750, default `.bb` and enrollment 0775, inert machine daemon, no main evidence: expected `absent`, observed `discovery / writable-local-state` | `setup-fixture-matrix-uzemf1pf` | `setup-fixture-matrix-tj5qwgh0` |
+| Partial native evidence without a database must not be `absent` | `setup-fixture-matrix-1x2mcofj` | `setup-fixture-matrix-o81hjb82` |
+| Ambiguous/relative main-process claims must not become negative discovery | `setup-fixture-matrix-1btd9m6i` | `setup-fixture-matrix-dpcjtimj` |
+
+Initial fixture corrections are retained, not counted as behavioral red evidence: `setup-fixture-matrix-atywwjl9` exposed fixture umask/string assumptions; `setup-fixture-matrix-3pm2t0st` exposed an earlier-error stub placed only in Ubuntu's preparation branch. Corrected fixtures explicitly set synthetic modes and inject an independent failure in both lifecycle branches.
+
+## Initial-source results (before review correction)
+
+These results cover the first implementation, committed as `d144c0a2ce86b22b02dd0fb79de398746a1b3e2a`. They did not cover ordinary live database volatility; the correction and its separate evidence follow below.
+
+- **64 refresh methods pass, zero skips**: `setup-fixture-matrix-7yk3bpsu` under the private prefix. Coverage includes captured-state controls, strict refusals, all seven evidence names/forms, no-follow metadata errors, candidate/ancestor/marker races, handle cleanup, HOME normalization, mixed roles and real wrapper/caller/log outcomes.
+- **42/42 complete pre-push entries pass**: `/tmp/setup-fixture-matrix-0aw6xn_d`. This includes setup-default/environment, extraction/containment, hook dispatch, BB preparation/desktop/server, reliability, headless, shared runtime, CLT/Homebrew, reboot, weekly and orchestration contracts.
+- Every run used the audited sanitized sequential runner, private roots/stdio and successful mandatory kernel filter/self-test. No containment failure or unexpected real effect was observed; this was not a syscall-wide effects audit.
+- Bash syntax, ShellCheck, changed Python AST parsing, all three embedding checks, whitespace, full comment policy and staged redacted Gitleaks pass. Existing pinned comment-parser packages were invoked directly; no dependency resolution/download was used. Trusted Markdownlint was unavailable; changed Markdown was manually checked.
+
+Exact initial-source commands:
+
+```bash
+env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tests/run-fixture-matrix.py \
+  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --pwsh /opt/microsoft/powershell/7/pwsh --tool-path /usr/bin:/bin \
+  --artifact-parent /tmp/issue-192-integration/implementer tests/test_bb_plugin_refresh.py
+
+env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tools/run-pre-push-contracts.py \
+  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --pwsh /opt/microsoft/powershell/7/pwsh \
+  --mise /home/scowalt/.local/bin/mise --chezmoi /home/scowalt/.local/bin/chezmoi \
+  --bun /home/scowalt/.bun/bin/bun
+```
+
+The private handoff retains exact per-suite results/skips, raw red/green logs, static commands/results and source hashes. Optional installed skills/Pi/extension/Go-lock/OpenCode-shim and cross-repository dotfiles integrations remain disabled. Bash 3.2 and native Windows handle/ACL fixtures are explicit skips. Linux PowerShell coverage does not establish Windows or PowerShell 5.1 behavior; native macOS/WSL/ARM/Bazzite and BB/plugin continuity remain unverified. The earlier [fixture incident's uncertainty](2026-09-29-fixture-containment-incident.md) is unchanged.
+
+Download-capable commit hooks are replaced only for implementation commits with command-local `LEFTHOOK=0`, after the available checks recorded here; persistent hook configuration is unchanged. These worker implementation stages performed no push, PR mutation or issue closure; parent integration/publication is recorded separately below.
+
+## Review correction: preserve volatile server evidence
+
+Both review axes found that the absence probe also imposed full database/sidecar and directory timestamp stability on already verified live servers. The correction revalidates known live directories through the existing strict identity/permission checks before skipping negative classification. Other positive candidates retain metadata identity, ownership, mode, link-count and presence checks, but not database content/mtime or directory timestamp immutability. Full leaf snapshot stability still gates every accepted negative result. Header, partial-state, process/peer ownership and all negative race/error safeguards remain exercised.
+
+Evidence prefix: `/tmp/issue-192-integration/review-fix/`.
+
+| Stage | Artifact root | Result |
+| --- | --- | --- |
+| Live database/WAL/SHM/directory activity regression against `d144c0a` | `setup-fixture-matrix-z4kvp1mi` | Four expected red subcases: `discovery / changed-local-state` instead of refresh |
+| Strict known-live revalidation before negative probing | `setup-fixture-matrix-v1yl5_eb` | 65 methods pass |
+| Remaining positive-candidate volatility regression | `setup-fixture-matrix-tj6dxbh1` | Five expected red subcases, including directory change between stat and open |
+| Positive identity-only metadata comparison; full negative snapshot retained | `setup-fixture-matrix-h51w12pk` | 66 methods pass |
+| Final-source targeted suite, including additional strict/refusal guards | `setup-fixture-matrix-59r4rpw9` | **69 methods pass, zero skips** |
+| Complete final-source inventory, first attempt | `/tmp/setup-fixture-matrix-hioy9oug` | **41/42 pass**; Backlog MCP retirement reports `boundary-changed` |
+| Unchanged Backlog contract alone | `setup-fixture-matrix-aet738h6` | Pass, including available PowerShell coverage; native Windows omission retained |
+| Complete final-source inventory, recheck | `/tmp/setup-fixture-matrix-cmrfjgxm` | **41/42 pass**; same Backlog refusal at a different fixture case |
+
+The complete inventory is **not an aggregate pass**. The Backlog fixture and all six embedded Backlog helpers are byte-identical to the base; its boundary comparison includes ancestor size/mtime/ctime. The specific changed boundary and cause were not captured, so neither environmental interference nor a resolved flake is claimed. No unrelated policy or fixture was changed to hide this gap. All other entries, including the required affected matrix, pass on both final-source attempts.
+
+Commands use the exact prefixes above with the targeted runner's artifact parent changed to `/tmp/issue-192-integration/review-fix`; the isolated recheck selects `tests/backlog-mcp-retirement-contract.sh`. Final manifests, exact commands, per-entry results/skips and raw logs are retained under that prefix. Bash syntax, ShellCheck, Python AST parsing, all embeddings, staged whitespace/comment policy and redacted Gitleaks pass; trusted Markdownlint remains unavailable. Existing tools only, sequential containment and successful mandatory preflights were retained. No containment failure or unexpected real effect was observed in those worker runs; native recovery and the original incident uncertainty remain unverified.
+
+## Integration review and blocked validation
+
+The implementation and correction were fast-forwarded into `integration/192-bb-non-server-discovery` at `18291867125b1af1d44fe97983eeff58f5c4977d`. All 262 committed file hashes matched the worker's final manifest. Independent final Standards and Spec reviews resolved the volatility finding and reported zero remaining concrete implementation findings, while explicitly retaining the aggregate-validation gap. Reports: `/tmp/issue-192-integration/review-standards-final.md` and `review-spec-final.md`.
+
+A parent experiment changed only the runner's artifact-parent location to a newly created private directory under the account HOME, retaining the audited runner, native tools, kernel filter/self-test, credential-free environment and sequential execution. It ran the same 42-entry inventory plus the targeted refresh suite. Artifacts: `/home/scowalt/setup-fixture-192-x4u7q3ge/setup-fixture-matrix-m052kvj2`; exact command and source-hash confirmation: `/tmp/issue-192-integration/private-root-command.json` and `private-root-result.json`.
+
+Result: **41/43 entries pass**, including Backlog and all 69 targeted BB methods. This is not a successful replacement aggregate. The Pi-profile trusted-HOME-alias fixture failed with `missing-ancestor`. The shared-runtime activation fixture failed because native mise discovered the real account's ancestor configuration and refused it as untrusted. No configuration content is reproduced here; no trust command or configuration edit was issued. This observation confirms that relocating private fixture roots beneath a real HOME is not an adequate isolation strategy for native ancestor discovery. It does not establish the cause of the earlier Backlog failures. The runner completed before these failures were inspected; no further behavioral execution followed. Network containment remained active, but no syscall-wide filesystem-effects audit was performed.
+
+No production or fixture permission guard was relaxed, unrelated source changed, or live setup/BB/plugin operation used to obtain green results. The complete validation requirement remains blocked. [PR #194](https://github.com/scowalt/machine-setup-scripts/pull/194) stays draft and #192 remains open; neither the pre-correction 42/42 result nor the relocated-root experiment is substituted for a final passing aggregate. Further work needs a separately scoped investigation of fixture isolation and the unchanged Backlog refusal, not another permissive fallback.
+
+## Subsequent user-authorized merge
+
+The user subsequently requested merging to main despite the documented aggregate-validation gaps. This authorizes publication, not a clean aggregate claim, fixture-policy weakening or native rollout. The earlier draft/open status records the preceding blocked stage.
+
+Main advanced concurrently to `9945878359aa894c8fae06345fff79da2d562433` with PR #195's verified OpenCode Homebrew revision support. Integration preserved both changes, resolving only five setup version banners. Exact source comparison confirmed that each Bash script is upstream's source plus the previously reviewed BB block, apart from the incremented banner; OpenCode policy/fixtures and Windows equal upstream, while BB policy/fixtures equal the reviewed correction. No new runtime behavior was invented during conflict resolution.
+
+The merged source passed **5/5 contained integration entries** at `/tmp/setup-fixture-matrix-jeny1pv2`: extraction/containment, setup-default/environment, all 69 BB refresh methods, the OpenCode CLI contract and setup reliability. The standard `/tmp` runner, explicit existing Node/PowerShell, mandatory kernel filter/self-test, private stdio/roots and sequential execution were retained. Bash syntax, ShellCheck, embedding checks and whitespace passed. Exact source hashes and the runner summary are retained in `/tmp/issue-192-integration/merge-source-manifest.json` and `merge-validation.log`.
+
+This limited integration check is not a new complete-inventory pass and does not resolve the previously recorded Backlog or relocated-root failures, optional/native skips, Markdownlint gap or incident uncertainty. No live setup, remote repair, trust grant, application/plugin execution or lifecycle operation was used.

@@ -394,7 +394,7 @@ class Discovery(unittest.TestCase):
             self.proc = previous
 
     @contextlib.contextmanager
-    def darwin_http(self, api, fault=None):
+    def darwin_http(self, api, fault=None, data=None):
         requests = []
         def connection(host, port, **_kwargs):
             self.assertEqual((host, port), ('127.0.0.1', 39001))
@@ -405,7 +405,7 @@ class Discovery(unittest.TestCase):
                 if path == '/health':
                     value = {'ok': fault != 'health', 'launchId': 'fixture-launch'}
                 elif path == '/api/v1/system/config':
-                    value = {'dataDir': str(self.home / ('wrong-data' if fault == 'data' else '.bb'))}
+                    value = {'dataDir': str(self.home / 'wrong-data' if fault == 'data' else data or self.home / '.bb')}
                     api.verified = True
                 else:
                     value = api.request(method, path, payload)
@@ -416,12 +416,12 @@ class Discovery(unittest.TestCase):
         with patch.object(P.http.client, 'HTTPConnection', side_effect=connection):
             yield requests
 
-    def run_policy(self, api=None, policy='ready', native_api=False):
+    def run_policy(self, api=None, policy='ready', native_api=False, environment=None):
         output = io.StringIO()
         apis = iter(api) if isinstance(api, list) else None
         api_class = P.NativeApi
         with patch.object(P.sys, 'argv', ['fixture', str(self.home), policy]), \
-                patch.dict(P.os.environ, {}, clear=True), \
+                patch.dict(P.os.environ, environment or {}, clear=True), \
                 patch.object(P, 'Processes', return_value=self.proc), \
                 patch.object(P, 'NativeApi', side_effect=lambda *args: api_class(*args) if native_api else
                              next(apis) if apis is not None else api), \
@@ -431,6 +431,448 @@ class Discovery(unittest.TestCase):
                 contextlib.redirect_stdout(output):
             status = P.run()
         return status, output.getvalue()
+
+    def captured_non_server(self, daemon=True, enrolled=True, mode=0o775):
+        self.home.chmod(0o750)
+        data = self.home / '.bb'
+        data.mkdir(mode=mode)
+        data.chmod(mode)
+        if enrolled:
+            enrollment = self.home / '.bb-machines'
+            enrollment.mkdir(mode=0o775)
+            enrollment.chmod(0o775)
+            (enrollment / 'fixture-enrollment').write_text('remote-selection-secret-sentinel')
+        if daemon:
+            self.records[32106] = (['node', str(self.home / '.bb-machines/host-daemon/dist/index.js')], {}, b'1')
+        return data
+
+    def test_captured_execution_machine_is_absent_without_requests_or_state_changes(self):
+        self.captured_non_server()
+        paths = [self.home, *sorted(self.home.rglob('*'))]
+        before = [(path.read_bytes() if path.is_file() else None, path.lstat()) for path in paths]
+        with patch.object(P.subprocess, 'run', side_effect=AssertionError('execution forbidden')), \
+                patch.object(P.http.client, 'HTTPConnection', side_effect=AssertionError('request forbidden')) as requests:
+            status, output = self.run_policy(native_api=True)
+        self.assertEqual((status, output), (0, 'BB_PLUGIN_REFRESH absent\n'))
+        self.assertEqual(requests.call_count, 0)
+        self.assertEqual([(path.read_bytes() if path.is_file() else None, path.lstat()) for path in paths], before)
+        result = run_wrapper(output, status)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('No verified local BB main server requires plugin refresh.', result.stdout)
+
+    def test_prepared_unenrolled_private_and_explicit_default_controls(self):
+        for daemon, enrolled, mode in ((False, True, 0o775), (True, False, 0o775),
+                                      (False, False, 0o775), (True, True, 0o700)):
+            with self.subTest(daemon=daemon, enrolled=enrolled, mode=oct(mode)):
+                self.captured_non_server(daemon, enrolled, mode)
+                for environment in ({}, {'BB_DATA_DIR': str(self.home / '.bb')},
+                                    {'BB_CLI': 'secret-sentinel', 'BB_SERVER_URL': 'https://remote.invalid'}):
+                    api = FakeApi()
+                    self.assertEqual(self.run_policy(api, environment=environment), (0, 'BB_PLUGIN_REFRESH absent\n'))
+                    self.assertFalse(api.verified)
+                    self.assertFalse(api.calls)
+                (self.home / '.bb').rmdir()
+                if enrolled:
+                    (self.home / '.bb-machines/fixture-enrollment').unlink()
+                    (self.home / '.bb-machines').rmdir()
+                self.records.clear()
+        self.assertEqual(self.run_policy(), (0, 'BB_PLUGIN_REFRESH absent\n'))
+
+    def test_default_exception_never_authorizes_custom_leaves_or_unsafe_ancestry(self):
+        data = self.captured_non_server()
+        custom = self.home / 'custom'
+        custom.mkdir()
+        custom.chmod(0o775)
+        self.assertEqual(self.run_policy(environment={'BB_DATA_DIR': str(custom)}),
+                         (1, 'BB_PLUGIN_REFRESH failed discovery writable-local-state\n'))
+        custom.rmdir()
+        for path, mode in ((data, 0o777), (self.home, 0o770), (self.root, 0o770)):
+            previous = path.stat().st_mode & 0o777
+            path.chmod(mode)
+            with self.subTest(path=path):
+                self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery writable-local-state\n'))
+            path.chmod(previous)
+        data.rmdir()
+        for target in (custom, self.package):
+            data.symlink_to(target)
+            self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery unverified-local-state\n'))
+            data.unlink()
+        data.write_text('not a directory')
+        self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery unverified-local-state\n'))
+        data.unlink()
+        parent = self.home / 'linked'
+        parent.symlink_to(self.package)
+        self.assertEqual(self.run_policy(environment={'BB_DATA_DIR': str(parent / 'child')}),
+                         (1, 'BB_PLUGIN_REFRESH failed discovery unverified-local-state\n'))
+        parent.unlink()
+        parent.write_text('not a directory')
+        self.assertEqual(self.run_policy(environment={'BB_DATA_DIR': str(parent / 'child')}),
+                         (1, 'BB_PLUGIN_REFRESH failed discovery unverified-local-state\n'))
+
+    def test_metadata_probe_refuses_foreign_ownership_without_descending(self):
+        data = self.captured_non_server()
+        native_stat, native_open = os.stat, os.open
+        for target, uid in ((data, 0), (data, os.getuid() + 1), (self.root, os.getuid() + 1)):
+            expected = native_stat(target)
+            def metadata(path, *args, **kwargs):
+                info = native_stat(path, *args, **kwargs)
+                actual = native_stat(target)
+                if (info.st_dev, info.st_ino) == (actual.st_dev, actual.st_ino):
+                    info = types.SimpleNamespace(st_mode=info.st_mode, st_uid=uid)
+                return info
+            def open_path(path, *args, **kwargs):
+                info = native_stat(path, dir_fd=kwargs.get('dir_fd'), follow_symlinks=False)
+                self.assertNotEqual((info.st_dev, info.st_ino), (expected.st_dev, expected.st_ino),
+                                    'foreign directory must not be opened')
+                return native_open(path, *args, **kwargs)
+            with self.subTest(target=target, uid=uid), patch.object(P.os, 'stat', side_effect=metadata), \
+                    patch.object(P.os, 'open', side_effect=open_path):
+                self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery foreign-local-state\n'))
+
+    def test_marker_probe_is_metadata_only_nofollow_and_never_interprets_missing_io_errors(self):
+        data = self.captured_non_server()
+        native_stat, native_open = os.stat, os.open
+        names = ('bb.db', 'bb.db-wal', 'bb.db-shm', 'bb.db-journal',
+                 'bb-app-runtime.json', 'server-moved.json', 'server-import.json')
+        def open_directory(path, flags, *args, **kwargs):
+            self.assertTrue(flags & os.O_DIRECTORY)
+            self.assertTrue(flags & os.O_NOFOLLOW)
+            return native_open(path, flags, *args, **kwargs)
+        for name in names:
+            for error in (PermissionError('secret-sentinel'), NotADirectoryError('secret-sentinel'),
+                          OSError('secret-sentinel'), NotImplementedError('secret-sentinel')):
+                def metadata(path, *args, **kwargs):
+                    if str(path) in names:
+                        self.assertIsNotNone(kwargs.get('dir_fd'))
+                        self.assertIs(kwargs.get('follow_symlinks'), False)
+                        if str(path) == name:
+                            raise error
+                    return native_stat(path, *args, **kwargs)
+                with self.subTest(name=name, error=type(error).__name__), \
+                        patch.object(P.os, 'stat', side_effect=metadata), \
+                        patch.object(P.os, 'open', side_effect=open_directory):
+                    self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery unverified-local-state\n'))
+        for name in names:
+            marker = data / name
+            marker.symlink_to(self.package / 'package.json')
+            with patch.object(P.os, 'open', side_effect=open_directory):
+                self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery writable-local-state\n'))
+            marker.unlink()
+
+    def test_mixed_execution_machine_and_verified_custom_server_refresh_only_local_main(self):
+        default = self.captured_non_server()
+        custom = self.server(data=self.home / 'manual')
+        before = default.stat(), (custom / 'bb.db').read_bytes()
+        for daemon in (False, True):
+            if not daemon:
+                record = self.records.pop(32106)
+            else:
+                self.records[32106] = record
+            rows = [plugin('disabled', enabled=False), plugin('pin', 'npm:fixture@1.0.0'),
+                    plugin('local', 'path:/inert/development')]
+            api = FakeApi(rows, {'disabled': 'update-available', 'pin': 'pinned', 'local': 'pinned'})
+            preserved = copy.deepcopy(api.plugins)
+            with self.subTest(daemon=daemon), self.darwin_http(api, data=custom) as requests:
+                self.assertEqual(self.run_policy(native_api=True, environment={'BB_DATA_DIR': str(custom)}),
+                                 (0, 'BB_PLUGIN_REFRESH updated\n'))
+            self.assertEqual(requests[:2], [('GET', '/health', None), ('GET', '/api/v1/system/config', None)])
+            self.assertEqual(api.plugins['pin'], preserved['pin'])
+            self.assertEqual(api.plugins['local'], preserved['local'])
+            self.assertEqual(api.plugins['disabled']['status'], 'disabled')
+            self.assertFalse(api.plugins['disabled']['enabled'])
+            self.assertEqual(api.plugins['disabled']['source'], preserved['disabled']['source'])
+            self.assertEqual(len(api.mutations()), 1)
+        self.assertEqual((default.stat(), (custom / 'bb.db').read_bytes()), before)
+        custom.chmod(0o775)
+        self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery writable-local-state\n'))
+
+    @contextlib.contextmanager
+    def database_activity(self, data, kind):
+        database = data / 'bb.db'
+        directory_activity = kind in ('directory', 'opening-directory')
+        target = data / ('active-log' if directory_activity else kind)
+        if kind != 'bb.db' and not directory_activity:
+            target.write_bytes(b'inert sidecar')
+        native_stat = os.stat
+        identity = native_stat(data if kind == 'opening-directory' else database)
+        writes = []
+        def metadata(path, *args, **kwargs):
+            info = native_stat(path, *args, **kwargs)
+            if (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino):
+                with target.open('ab') as stream:
+                    stream.write(b'inert activity')
+                if directory_activity:
+                    target.unlink()
+                writes.append(kind)
+            return info
+        with patch.object(P.os, 'stat', side_effect=metadata):
+            yield writes
+
+    def test_verified_live_database_activity_does_not_require_negative_snapshot_stability(self):
+        data = self.server()
+        database = data / 'bb.db'
+        original = database.stat()
+        for kind in ('bb.db', 'bb.db-wal', 'bb.db-shm', 'directory'):
+            with self.subTest(kind=kind):
+                api = FakeApi([plugin(enabled=False)])
+                with self.database_activity(data, kind) as writes, self.darwin_http(api) as requests:
+                    result = self.run_policy(native_api=True)
+                self.assertTrue(writes, 'synthetic database activity must occur in red and green')
+                self.assertEqual(result, (0, 'BB_PLUGIN_REFRESH updated\n'))
+                self.assertEqual(requests[:2], [('GET', '/health', None), ('GET', '/api/v1/system/config', None)])
+                self.assertEqual(len(api.mutations()), 1)
+                self.assertFalse(api.plugins['tracking']['enabled'])
+                self.assertEqual(api.plugins['tracking']['source'], 'npm:fixture@^1')
+                current = database.stat()
+                self.assertEqual((current.st_dev, current.st_ino, current.st_uid, current.st_gid, current.st_mode),
+                                 (original.st_dev, original.st_ino, original.st_uid, original.st_gid, original.st_mode))
+                self.assertEqual(database.read_bytes()[:16], b'SQLite format 3\0')
+
+    def test_verified_live_server_does_not_require_directory_read_access(self):
+        data = self.server()
+        native_open = os.open
+        def open_path(path, flags, *args, **kwargs):
+            if flags & os.O_DIRECTORY:
+                raise PermissionError('directory-open-secret-sentinel')
+            return native_open(path, flags, *args, **kwargs)
+        api = FakeApi()
+        with patch.object(P.os, 'open', side_effect=open_path), self.darwin_http(api) as requests:
+            result = self.run_policy(native_api=True)
+        self.assertEqual(result, (0, 'BB_PLUGIN_REFRESH updated\n'))
+        self.assertEqual(len(api.mutations()), 1)
+        self.assertEqual(requests[:2], [('GET', '/health', None), ('GET', '/api/v1/system/config', None)])
+        self.assertEqual((data / 'bb.db').read_bytes()[:16], b'SQLite format 3\0')
+
+    def test_positive_probe_retains_database_identity_ownership_permissions_links_and_header_guards(self):
+        data = self.data()
+        database = data / 'bb.db'
+        native_stat = os.stat
+        original = native_stat(database)
+        fields = ('st_dev', 'st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_size',
+                  'st_mtime_ns', 'st_ctime_ns', 'st_nlink')
+        for fault in ('st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_nlink', 'header'):
+            self.data(data)
+            observed = False
+            def metadata(path, *args, **kwargs):
+                nonlocal observed
+                info = native_stat(path, *args, **kwargs)
+                if (info.st_dev, info.st_ino) == (original.st_dev, original.st_ino):
+                    if fault == 'header':
+                        database.write_bytes(b'invalid header')
+                    elif observed:
+                        info = types.SimpleNamespace(**{key: getattr(info, key) for key in fields})
+                        setattr(info, fault, getattr(info, fault) + 1)
+                    observed = True
+                return info
+            with self.subTest(fault=fault), patch.object(P.os, 'stat', side_effect=metadata):
+                api = FakeApi()
+                result = self.run_policy(api)
+            self.assertTrue(observed)
+            self.assertEqual(result, (1, 'BB_PLUGIN_REFRESH failed discovery ' +
+                ('unverified-main-server' if fault == 'header' else 'changed-local-state') + '\n'))
+            self.assertFalse(api.verified)
+            self.assertFalse(api.calls)
+
+    def test_live_deduplication_retains_strict_directory_revalidation(self):
+        data = self.server()
+        native_stat = os.stat
+        original = native_stat(data)
+        fields = ('st_dev', 'st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_size',
+                  'st_mtime_ns', 'st_ctime_ns', 'st_nlink')
+        for fault in ('st_ino', 'st_uid', 'st_gid', 'st_mode'):
+            changed = False
+            def metadata(path, *args, **kwargs):
+                nonlocal changed
+                try:
+                    info = native_stat(path, *args, **kwargs)
+                except FileNotFoundError:
+                    if Path(path) == data / 'server-import.json':
+                        changed = True
+                    raise
+                if changed and (info.st_dev, info.st_ino) == (original.st_dev, original.st_ino):
+                    info = types.SimpleNamespace(**{key: getattr(info, key) for key in fields})
+                    setattr(info, fault, getattr(info, fault) + (0o020 if fault == 'st_mode' else 1))
+                return info
+            with self.subTest(fault=fault), patch.object(P.os, 'stat', side_effect=metadata), \
+                    self.darwin_http(FakeApi()) as requests:
+                status, output = self.run_policy(native_api=True)
+            self.assertTrue(changed)
+            self.assertEqual(status, 1, output)
+            self.assertIn('BB_PLUGIN_REFRESH failed discovery ', output)
+            self.assertFalse(requests)
+
+    def test_positive_database_activity_keeps_strict_stopped_classification_without_absence_claim(self):
+        data = self.data()
+        for kind in ('bb.db', 'bb.db-wal', 'bb.db-shm', 'directory', 'opening-directory'):
+            with self.subTest(kind=kind):
+                api = FakeApi()
+                with self.database_activity(data, kind) as writes:
+                    result = self.run_policy(api)
+                self.assertTrue(writes)
+                self.assertEqual(result, (0, 'BB_PLUGIN_REFRESH stopped\n'))
+                self.assertFalse(api.verified)
+                self.assertFalse(api.calls)
+
+    def test_changed_negative_snapshot_is_refused_and_all_handles_close(self):
+        original_home = self.home
+        native_stat, native_fstat, native_open, native_close, native_chmod = os.stat, os.fstat, os.open, os.close, os.chmod
+        cases = ('leaf-replace', 'ancestor-replace', 'link-substitute', 'leaf-mode', 'ancestor-mode',
+                 'leaf-owner', 'leaf-group', 'ancestor-owner', 'ancestor-group', 'marker-appear',
+                 'marker-remove', 'marker-appear-remove', 'failure-and-close', 'close-only')
+        for case in cases:
+            self.home = original_home / case
+            self.home.mkdir()
+            data = self.captured_non_server(False, False)
+            marker = data / 'bb.db-journal'
+            if case == 'marker-remove':
+                marker.write_bytes(b'inert')
+            target = native_stat(self.home if case.startswith('ancestor') else data)
+            mutated = False
+            descriptors = []
+            def metadata(path, *args, **kwargs):
+                nonlocal mutated
+                try:
+                    return native_stat(path, *args, **kwargs)
+                finally:
+                    if str(path) == 'server-import.json' and not mutated:
+                        mutated = True
+                        if case in ('leaf-replace', 'link-substitute'):
+                            data.rename(self.home / 'old')
+                            if case == 'leaf-replace':
+                                data.mkdir()
+                            else:
+                                data.symlink_to(self.home / 'old')
+                        elif case == 'ancestor-replace':
+                            self.home.rename(self.home.with_name(case + '-old'))
+                            self.home.mkdir()
+                        elif case in ('leaf-mode', 'ancestor-mode'):
+                            native_chmod(self.home if case == 'ancestor-mode' else data, 0o700)
+                        elif case in ('marker-appear', 'marker-appear-remove'):
+                            marker.write_bytes(b'inert')
+                            if case == 'marker-appear-remove':
+                                marker.unlink()
+                        elif case == 'marker-remove':
+                            marker.unlink()
+            def descriptor_info(fd):
+                info = native_fstat(fd)
+                if mutated and (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino) and case in (
+                        'leaf-owner', 'ancestor-owner', 'leaf-group', 'ancestor-group', 'failure-and-close'):
+                    fields = ('st_dev', 'st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_size',
+                              'st_mtime_ns', 'st_ctime_ns', 'st_nlink')
+                    info = types.SimpleNamespace(**{key: getattr(info, key) for key in fields})
+                    if case.endswith('group'):
+                        info.st_gid += 1
+                    else:
+                        info.st_uid += 1
+                return info
+            def open_directory(*args, **kwargs):
+                fd = native_open(*args, **kwargs)
+                descriptors.append(fd)
+                return fd
+            def close(fd):
+                native_close(fd)
+                if case in ('failure-and-close', 'close-only'):
+                    raise OSError('cleanup-secret-sentinel')
+            api = FakeApi()
+            with self.subTest(case=case), patch.object(P.os, 'stat', side_effect=metadata), \
+                    patch.object(P.os, 'fstat', side_effect=descriptor_info), \
+                    patch.object(P.os, 'open', side_effect=open_directory), patch.object(P.os, 'close', side_effect=close):
+                status, output = self.run_policy(api)
+                self.assertEqual((status, output), (1, 'BB_PLUGIN_REFRESH failed discovery ' +
+                    ('unverified-local-state' if case == 'close-only' else 'changed-local-state') + '\n'))
+                self.assertFalse(api.verified)
+                self.assertFalse(api.calls)
+            self.assertTrue(mutated)
+            for fd in descriptors:
+                with self.assertRaises(OSError):
+                    native_fstat(fd)
+        self.home = original_home
+
+    def test_home_alias_normalizes_default_but_negative_result_never_trusts_later_server_state(self):
+        data = self.captured_non_server()
+        canonical = self.home
+        alias = self.root / 'home-alias'
+        alias.symlink_to(canonical)
+        self.home = alias
+        self.assertEqual(self.run_policy(environment={'BB_DATA_DIR': str(alias / '.bb')}),
+                         (0, 'BB_PLUGIN_REFRESH absent\n'))
+        self.assertEqual(self.run_policy(environment={'BB_DATA_DIR': str(canonical / '.bb')}),
+                         (0, 'BB_PLUGIN_REFRESH absent\n'))
+        (data / 'bb.db').write_bytes(b'SQLite format 3\0')
+        self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery writable-local-state\n'))
+        self.home = canonical
+
+    def test_missing_candidate_must_remain_missing_in_the_verified_parent(self):
+        native_stat = os.stat
+        created = False
+        def metadata(path, *args, **kwargs):
+            nonlocal created
+            try:
+                return native_stat(path, *args, **kwargs)
+            except FileNotFoundError:
+                if str(path) == '.bb' and not created:
+                    created = True
+                    (self.home / '.bb').mkdir()
+                raise
+        with patch.object(P.os, 'stat', side_effect=metadata):
+            self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery changed-local-state\n'))
+        self.assertTrue(created)
+
+    def test_unverifiable_process_inventory_prevents_negative_classification(self):
+        self.captured_non_server()
+        with patch.object(self.proc, 'table', side_effect=P.Refusal('process-proof-unavailable')):
+            self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery process-proof-unavailable\n'))
+        with patch.object(self.proc, 'read', side_effect=P.Refusal('changed-process')):
+            self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery changed-process\n'))
+
+    def test_unresolved_main_process_claim_cannot_be_excluded_as_non_server(self):
+        self.captured_non_server()
+        for argv in (['node', str(self.entry)],
+                     ['node', str(self.entry), str(self.entry)],
+                     ['node', 'bb-app/server/dist/index.js']):
+            with self.subTest(argv=argv):
+                self.records[100] = (argv, {'HOME': str(self.home)}, b'1')
+                api = FakeApi()
+                status, output = self.run_policy(api)
+                self.assertEqual(status, 1, output)
+                self.assertNotIn('absent', output)
+                self.assertFalse(api.calls)
+                self.assertFalse(api.verified)
+
+    def test_partial_main_evidence_is_never_absent_even_without_a_database(self):
+        data = self.home / '.bb'
+        data.mkdir()
+        names = ('bb.db', 'bb.db-wal', 'bb.db-shm', 'bb.db-journal',
+                 'bb-app-runtime.json', 'server-moved.json', 'server-import.json')
+        for mode, database in ((0o700, False), (0o775, False), (0o775, True)):
+            data.chmod(mode)
+            if database:
+                (data / 'bb.db').write_bytes(b'SQLite format 3\0')
+            for name in names:
+                if database and name == 'bb.db':
+                    continue
+                for form in ('malformed', 'directory', 'dangling-link'):
+                    marker = data / name
+                    if form == 'malformed':
+                        marker.write_text('secret-path-sentinel')
+                    elif form == 'directory':
+                        marker.mkdir()
+                    else:
+                        marker.symlink_to(self.root / 'missing-secret-sentinel')
+                    with self.subTest(mode=oct(mode), database=database, name=name, form=form):
+                        api = FakeApi()
+                        status, output = self.run_policy(api)
+                        self.assertEqual(status, 1, output)
+                        self.assertNotIn('BB_PLUGIN_REFRESH absent', output)
+                        self.assertNotIn('sentinel', output)
+                        self.assertFalse(api.calls)
+                        self.assertFalse(api.verified)
+                    if form == 'directory':
+                        marker.rmdir()
+                    else:
+                        marker.unlink()
+            if database:
+                (data / 'bb.db').unlink()
 
     def test_writable_state_reports_controlled_refusal_without_permission_repair(self):
         data = self.data()
@@ -1180,6 +1622,29 @@ class NativeEvidence(unittest.TestCase):
 
 
 class Callers(unittest.TestCase):
+    def policy_outcomes(self):
+        fixture = Discovery()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        data = fixture.captured_non_server()
+        absent = fixture.run_policy()
+        (data / 'bb.db').write_bytes(b'SQLite format 3\0')
+        refusal = fixture.run_policy()
+        (data / 'bb.db').unlink()
+        fixture.server(data=fixture.home / 'manual')
+        first = FakeApi()
+        first.results['tracking'] = P.Refusal('operation-timeout')
+        fixture.server(101, fixture.home / 'second', '39002')
+        second = FakeApi()
+        second.safe = True
+        failure_then_deferral = fixture.run_policy([first, second])
+        self.assertEqual(absent, (0, 'BB_PLUGIN_REFRESH absent\n'))
+        self.assertEqual(refusal, (1, 'BB_PLUGIN_REFRESH failed discovery writable-local-state\n'))
+        self.assertEqual(failure_then_deferral[0], 1)
+        self.assertIn('BB_PLUGIN_REFRESH safe-mode', failure_then_deferral[1])
+        self.assertIn('BB_PLUGIN_REFRESH failed update operation-timeout', failure_then_deferral[1])
+        return absent, refusal, failure_then_deferral
+
     def test_ubuntu_selection_readiness_and_preparation_failures_keep_boundaries(self):
         source = EXTRACT.definitions((ROOT / 'ubuntu.sh').read_text())
         caller = re.search(r'^run_setup_tasks\(\) \{\n.*?^\}', source, re.M | re.S).group()
@@ -1222,6 +1687,7 @@ run_fixture
                 self.assertLess(result.stdout.index('normal-startup'), result.stdout.index('refresh:'))
 
     def test_shared_embedding_windows_boundary_and_real_failure_aggregation(self):
+        outcomes = self.policy_outcomes()
         wrapper = (ROOT / 'lib/bb-plugin-refresh.bash').read_text().replace('@@PYTHON@@', (ROOT / 'lib/bb-plugin-refresh.py').read_text().rstrip()).rstrip()
         for script in SCRIPTS:
             source = (ROOT / (script + '.sh')).read_text()
@@ -1239,6 +1705,7 @@ run_fixture
                 code = stubs + '\n' + main + '\n' + outer + '\n' + refresh + '''
 bb_plugin_refresh_payload() { printf '%s\\n' "$FIXTURE_OUTPUT"; echo stderr-secret-path-sentinel >&2; return "$REFRESH_STATUS"; }
 setup_bb_machine() { return "$EARLIER"; }
+install_opencode_cli() { return "$EARLIER"; }
 print_error() { printf '%s\\n' "$1"; }
 print_warning() { printf '%s\\n' "$1"; }
 print_message() { printf '%s\\n' "$1"; }
@@ -1252,7 +1719,7 @@ determine_dotfiles_access() { :; }
 check_dotfiles_access() { return 1; }
 setup_dotfiles_deploy_key() { return 1; }
 is_main_user() { return 0; }
-bb_server_selection() { return 1; }
+bb_server_selection() { return "$SELECTION"; }
 whoami() { echo fixture; }
 brew() { :; }
 unzip() { :; }
@@ -1274,13 +1741,17 @@ DOTFILES_ACCESS_METHOD=none
                          ('secret-path-sentinel', 0, 0, 1),
                          ('BB_PLUGIN_REFRESH checked', 0, 1, 1),
                          ('BB_PLUGIN_REFRESH safe-mode', 0, 1, 1)]
-                for text, status, earlier, expected in cases:
+                cases = [(*case, 1) for case in cases]
+                cases += [(text, status, earlier, int(bool(status or earlier)), selection)
+                          for status, text in outcomes for earlier in (0, 1)
+                          for selection in ((0, 1) if script == 'ubuntu' else (1,))]
+                for text, status, earlier, expected, selection in cases:
                     env = {'HOME': str(home), 'PATH': '/usr/bin:/bin', 'REFRESH_STATUS': str(status),
-                           'EARLIER': str(earlier), 'FIXTURE_OUTPUT': text,
+                           'EARLIER': str(earlier), 'FIXTURE_OUTPUT': text, 'SELECTION': str(selection),
                            'USER': 'fixture', 'LANG': 'C', 'TERM': 'dumb'}
                     result = subprocess.run(['/bin/bash', '-c', code], env=env, cwd=home,
                                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
-                    with self.subTest(script=script, text=text, earlier=earlier, status=status):
+                    with self.subTest(script=script, text=text, earlier=earlier, status=status, selection=selection):
                         self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
                         self.assertIn('logging', result.stdout)
                         self.assertIn('unrelated', result.stdout)
@@ -1296,6 +1767,7 @@ DOTFILES_ACCESS_METHOD=none
         self.assertNotIn('refresh_bb_plugins', (ROOT / 'win.ps1').read_text())
 
     def test_early_failure_survives_success_deferral_reboot_and_completed_log(self):
+        outcomes = self.policy_outcomes()
         selected = EXTRACT.definitions((ROOT / 'mac.sh').read_text())
         real = ('run_setup_tasks', 'main', 'refresh_bb_plugins', 'start_setup_log', 'finish_setup_log')
         names = re.findall(r'^([A-Za-z_][A-Za-z_0-9]*)\(\) \{', selected, re.M)
@@ -1311,7 +1783,7 @@ print_debug() { printf '%s\n' "$*"; }
 install_bb_desktop() { echo desktop-operation; [[ "$FAIL_TASK" != desktop ]]; }
 install_opencode_cli() { echo opencode-operation; [[ "$FAIL_TASK" != opencode ]]; }
 install_gitea_client() { echo independent-success; return 0; }
-bb_plugin_refresh_payload() { printf 'BB_PLUGIN_REFRESH %s\n' "$DEFERRAL"; }
+bb_plugin_refresh_payload() { printf '%s\n' "$FIXTURE_OUTPUT"; return "$REFRESH_STATUS"; }
 refresh_pi_packages() { echo later-pi-success; return 0; }
 check_pending_reboot() { echo reboot-reported; }
 check_dotfiles_access() { return 1; }
@@ -1324,27 +1796,32 @@ upload_log() { cp -- "$SETUP_LOG_FILE" "$HOME/completed-upload.log"; }
                         'launchctl', 'kill', 'pkill', 'tailscale'):
             code += f'\n{command}() {{ echo FORBIDDEN:{command}; return 99; }}'
         code += '\nmain\n'
+        results = [(0, 'BB_PLUGIN_REFRESH safe-mode', 'BB plugin refresh deliberately deferred: native safe mode remains enabled.'),
+                   (0, 'BB_PLUGIN_REFRESH stopped', 'Stopped local BB main-server plugin refresh deferred; no server was started.')]
+        results += [(status, text, diagnostic) for (status, text), diagnostic in zip(outcomes, (
+            'No verified local BB main server requires plugin refresh.',
+            'BB plugin refresh failed: discovery / writable-local-state.',
+            'BB plugin refresh failed: update / operation-timeout.'))]
         for failed in ('desktop', 'opencode', 'none'):
-            for deferral, diagnostic in (
-                    ('safe-mode', 'BB plugin refresh deliberately deferred: native safe mode remains enabled.'),
-                    ('stopped', 'Stopped local BB main-server plugin refresh deferred; no server was started.')):
-                with self.subTest(failed=failed, deferral=deferral), tempfile.TemporaryDirectory(prefix='bb-refresh-final-log-') as home:
+            for status, text, diagnostic in results:
+                expected = int(failed != 'none' or status != 0)
+                with self.subTest(failed=failed, outcome=text), tempfile.TemporaryDirectory(prefix='bb-refresh-final-log-') as home:
                     result = subprocess.run(['/bin/bash', '-c', code], cwd=home,
                                             env={'HOME': home, 'PATH': '/usr/bin:/bin', 'FAIL_TASK': failed,
-                                                 'DEFERRAL': deferral, 'TERM': 'dumb'},
+                                                 'FIXTURE_OUTPUT': text, 'REFRESH_STATUS': str(status), 'TERM': 'dumb'},
                                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
-                    self.assertEqual(result.returncode, int(failed != 'none'), result.stdout + result.stderr)
+                    self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
                     logs = list((Path(home) / '.local/log/machine-setup').glob('*.log'))
                     self.assertEqual(len(logs), 1)
                     log = logs[0].read_text()
                     self.assertEqual((Path(home) / 'completed-upload.log').read_text(), log)
-                    summary = 'Setup completed with errors' if failed != 'none' else '✨ Setup complete!'
+                    summary = 'Setup completed with errors' if expected else '✨ Setup complete!'
                     milestones = ['desktop-operation', 'opencode-operation', 'independent-success', diagnostic,
                                   'later-pi-success', 'reboot-reported', summary, 'Run log saved to:']
                     positions = [log.index(marker) for marker in milestones]
                     self.assertEqual(positions, sorted(positions), log)
                     self.assertEqual(log.count('Run log saved to:'), 1)
-                    self.assertEqual('✨ Setup complete!' in log, failed == 'none')
+                    self.assertEqual('✨ Setup complete!' in log, not expected)
                     self.assertNotIn('FORBIDDEN:', result.stdout + result.stderr + log)
                     self.assertEqual(result.stderr, '')
 

@@ -7625,6 +7625,76 @@ class LocalFiles:
             self.seen[str(current)] = mark
         return info
 
+    def main_evidence(self, path):
+        path = self.normalize(path)
+        need(path.is_absolute() and '..' not in path.parts, 'unverified-local-state')
+        names = ('bb.db', 'bb.db-wal', 'bb.db-shm', 'bb.db-journal',
+                 'bb-app-runtime.json', 'server-moved.json', 'server-import.json')
+        handles = []
+        completed = False
+        missing = None
+        try:
+            for current in list(reversed(path.parents)) + [path]:
+                parent = handles[-1][0] if handles else None
+                name = current.name if parent is not None else '/'
+                try:
+                    info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                except FileNotFoundError:
+                    need(parent is not None, 'unverified-local-state')
+                    missing = (parent, name)
+                    break
+                need(stat.S_ISDIR(info.st_mode), 'unverified-local-state')
+                leaf = current == path
+                need(info.st_uid == self.uid if leaf else info.st_uid in (0, self.uid),
+                     'foreign-local-state')
+                sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
+                mask = 0o002 if leaf and path == self.home / '.bb' else 0o022
+                need(not info.st_mode & mask or sticky_tmp, 'writable-local-state')
+                previous = self.seen.get(str(current))
+                need(previous is None or previous == fingerprint(info)[:5], 'changed-local-state')
+                fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+                handles.append((fd, parent, name, info, leaf))
+                need(fingerprint(os.fstat(fd))[:5] == fingerprint(info)[:5], 'changed-local-state')
+            def probe():
+                evidence = []
+                for name in names:
+                    try:
+                        info = os.stat(name, dir_fd=handles[-1][0], follow_symlinks=False)
+                    except FileNotFoundError:
+                        evidence.append(None)
+                    else:
+                        evidence.append(fingerprint(info)[:5] + (info.st_nlink,))
+                return evidence
+            before = probe() if missing is None else []
+            present = any(item is not None for item in before)
+            if missing is not None:
+                try:
+                    os.stat(missing[1], dir_fd=missing[0], follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise Refusal('changed-local-state')
+            else:
+                need(probe() == before, 'changed-local-state')
+            for fd, parent, name, info, leaf in handles:
+                expected = fingerprint(info) if leaf and not present else fingerprint(info)[:5]
+                for observed in (os.fstat(fd), os.stat(name, dir_fd=parent, follow_symlinks=False)):
+                    mark = fingerprint(observed) if leaf and not present else fingerprint(observed)[:5]
+                    need(mark == expected, 'changed-local-state')
+            completed = True
+            return present
+        except (OSError, NotImplementedError):
+            raise Refusal('unverified-local-state') from None
+        finally:
+            close_failed = False
+            for fd, *_ in reversed(handles):
+                try:
+                    os.close(fd)
+                except Exception:
+                    close_failed = True
+            if completed and close_failed:
+                raise Refusal('unverified-local-state')
+
     def read(self, path, optional=False, header=False):
         path = self.normalize(path)
         info = self.inspect(path, optional=optional, volatile=header)
@@ -7815,8 +7885,7 @@ def main_entry(argv):
     entries = [arg for arg in argv[1:] if arg.endswith('/server/dist/index.js')]
     if not entries:
         return None
-    if len(entries) != 1 or not Path(entries[0]).is_absolute():
-        return None
+    need(len(entries) == 1 and Path(entries[0]).is_absolute(), 'ambiguous-process')
     return Path(entries[0])
 
 
@@ -7881,12 +7950,15 @@ def discover(files, processes, configured_data=None, block_default=False):
     for data in data_dirs:
         if block_default and data == files.home / '.bb':
             continue
-        info = files.inspect(data, directory=True, optional=True)
-        if info is None or any(s['key'] == (info.st_dev, info.st_ino) for s in servers):
+        if any(s['data'] == data for s in servers):
+            files.inspect(data, directory=True)
             continue
-        db = files.read(data / 'bb.db', optional=True, header=True)
-        if db is None:
-            continue   
+        if not files.main_evidence(data):
+            continue
+        info = files.inspect(data, directory=True)
+        if any(s['key'] == (info.st_dev, info.st_ino) for s in servers):
+            continue
+        db = files.read(data / 'bb.db', header=True)
         need(info.st_uid == files.uid and (data / 'bb.db').stat().st_uid == files.uid
              and db[:16] == b'SQLite format 3\0', 'unverified-main-server')
         moved = files.json(data / 'server-moved.json', optional=True)
@@ -10266,7 +10338,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 306 | Last changed: Recognize verified OpenCode Homebrew revisions"
+    echo -e "${GRAY}Version 308 | Last changed: Integrate BB discovery and OpenCode Homebrew revisions"
 
     if ! acquire_setup_lock; then
         return 1
