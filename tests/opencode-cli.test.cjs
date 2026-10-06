@@ -742,13 +742,16 @@ for (const phase of ['staged', 'promoted']) for (const failedProcess of [false, 
         assert.deepEqual(fs.readFileSync(f.dest), previous); assert.deepEqual(fs.readFileSync(receipt), before);
     });
 }
-function homebrewFixture(t, platform = 'linux', prefix = '/home/linuxbrew/.linuxbrew') {
+function homebrewFixture(t, platform = 'linux', prefix = '/home/linuxbrew/.linuxbrew', release = '1.18.33', revision = '') {
     const f = fixture(t), calls = [], observed = [];
-    const command = prefix + '/bin/opencode', cellar = prefix + '/Cellar/opencode/1.18.33';
+    const keg = release + revision;
+    const command = prefix + '/bin/opencode', cellar = prefix + '/Cellar/opencode/' + keg;
     const logical = file => typeof file === 'string' && (file === '/' || file === '/home' || file === '/opt' ||
         file.startsWith('/opt/homebrew') || file.startsWith('/home/linuxbrew') || /^\/(etc|proc|usr)(\/|$)/.test(file));
     const mapped = file => logical(file) ? path.join(f.home, 'system', file.slice(1)) : file;
     const uid = process.getuid(), gid = process.getgid();
+    const privacySystem = file => /^\/(etc|proc|usr)(\/|$)/.test(file) && file !== '/usr' &&
+        file !== '/usr/local' && !file.startsWith('/usr/local/');
     function put(file, text, mode = 0o644) {
         fs.mkdirSync(path.dirname(mapped(file)), {recursive: true});
         fs.writeFileSync(mapped(file), text); fs.chmodSync(mapped(file), mode);
@@ -763,10 +766,10 @@ function homebrewFixture(t, platform = 'linux', prefix = '/home/linuxbrew/.linux
     put('/proc/456/task/456/stat', '456 (stable fixture) S ' + Array(18).fill('0').join(' ') + ' 23456\n');
     put('/usr/bin/python3.12', 'INERT python marker', 0o755);
     fs.symlinkSync('python3.12', mapped('/usr/bin/python3'));
-    put(cellar + '/bin/opencode', f.publish('opencode-linux-x64-baseline', '1.18.33'), 0o555);
+    put(cellar + '/bin/opencode', f.publish('opencode-linux-x64-baseline', release), 0o555);
     put(cellar + '/INSTALL_RECEIPT.json', '{"source":{"tap":"anomalyco/tap"}}', 0o664);
     fs.mkdirSync(mapped(prefix + '/bin'), {recursive: true});
-    fs.symlinkSync('../Cellar/opencode/1.18.33/bin/opencode', mapped(command));
+    fs.symlinkSync('../Cellar/opencode/' + keg + '/bin/opencode', mapped(command));
     function modes(dir) {
         fs.chmodSync(dir, 0o755);
         for (const name of fs.readdirSync(dir)) if (fs.lstatSync(path.join(dir, name)).isDirectory()) modes(path.join(dir, name));
@@ -779,13 +782,13 @@ function homebrewFixture(t, platform = 'linux', prefix = '/home/linuxbrew/.linux
         return (...args) => {
             if (logical(args[0])) {
                 observed.push([key, args[0]]);
-                assert.ok(!/^\/(etc|proc|usr)(\/|$)/.test(args[0]), 'privacy-proof system access forbidden');
+                assert.ok(!privacySystem(args[0]), 'privacy-proof system access forbidden');
                 assert.ok(!['chmodSync', 'chownSync', 'writeFileSync', 'unlinkSync', 'rmSync', 'mkdirSync', 'linkSync', 'symlinkSync'].includes(key), 'Homebrew/system writes forbidden except command quarantine/restore');
                 if (key === 'openSync') assert.equal(args[1] & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_TRUNC), 0);
                 if (key === 'renameSync') assert.ok(args[0] === command || args[0].startsWith(prefix + '/bin/.opencode-setup-recovery-'));
             }
             const value = object[key](...args.map(mapped));
-            if (key === 'lstatSync' && logical(args[0]) && (args[0] === '/' || args[0] === '/home' || args[0] === '/opt' || /^\/(etc|proc|usr)(\/|$)/.test(args[0]))) value.uid = 0;
+            if (key === 'lstatSync' && logical(args[0]) && (args[0] === '/' || args[0] === '/home' || args[0] === '/opt' || args[0] === '/usr' || privacySystem(args[0]))) value.uid = 0;
             if (key === 'lstatSync' && f.statOverrides.has(args[0])) Object.assign(value, f.statOverrides.get(args[0]));
             if (key === 'renameSync' && args[0] === command && f.afterQuarantine) f.afterQuarantine(args[1]);
             return value;
@@ -812,7 +815,7 @@ function homebrewFixture(t, platform = 'linux', prefix = '/home/linuxbrew/.linux
     f.options.probe = undefined;
     t.after(() => {
         assert.ok(calls.every(call => call.operation === 'execFileSync'), 'privacy-proof external operations forbidden');
-        assert.ok(observed.every(([, file]) => !/^\/(etc|proc|usr)(\/|$)/.test(file)), 'privacy-proof system access forbidden');
+        assert.ok(observed.every(([, file]) => !privacySystem(file)), 'privacy-proof system access forbidden');
     });
     return Object.assign(f, {api, command, prefix, cellar, mapped, put, calls, observed});
 }
@@ -954,7 +957,7 @@ for (const state of ['service-primary', 'service-supplementary', 'stale-service-
 }
 for (const cause of ['world-write', 'root-group-write', 'foreign-owner', 'linked-ancestor']) {
     test(`Homebrew rejects ${cause} before mutation or unsafe descendant reads`, async t => {
-        const f = homebrewFixture(t), boundary = f.prefix + '/Cellar';
+        const f = homebrewFixture(t, 'linux', '/home/linuxbrew/.linuxbrew', '1.18.33', '_2'), boundary = f.prefix + '/Cellar';
         if (cause === 'world-write') fs.chmodSync(f.mapped(boundary), 0o777);
         if (cause === 'root-group-write') f.statOverrides.set(boundary, {uid: 0});
         if (cause === 'foreign-owner') f.statOverrides.set(boundary, {uid: process.getuid()+1});
@@ -977,18 +980,83 @@ test('group-write allowances exclude standalone paths and unapproved macOS prefi
     const f = fixture(t); const command = f.legacy(); fs.chmodSync(path.dirname(command), 0o775);
     await assert.rejects(policy.install(f.options), /unsafe-path/); assert.equal(f.probes.length, 0);
 });
-function darwinHomebrewFixture(t) {
-    const f = homebrewFixture(t, 'darwin', '/opt/homebrew');
+function darwinHomebrewFixture(t, release = '1.18.33', revision = '', prefix = '/opt/homebrew') {
+    const f = homebrewFixture(t, 'darwin', prefix, release, revision);
     for (const dir of [f.prefix + '/Cellar', f.prefix + '/Cellar/opencode', f.cellar, f.cellar + '/bin']) {
         fs.chmodSync(f.mapped(dir), 0o755);
     }
     fs.chmodSync(f.mapped(f.cellar + '/INSTALL_RECEIPT.json'), 0o644);
-    fs.chmodSync(f.mapped(f.prefix + '/bin'), 0o775);
-    f.publish('opencode-darwin-arm64', '1.18.33');
+    fs.chmodSync(f.mapped(f.prefix + '/bin'), prefix === '/opt/homebrew' ? 0o775 : 0o755);
+    f.publish('opencode-darwin-arm64', release);
     f.publish('@opencode/cli-darwin-arm64', '2.0.18');
     f.options.target = 'darwin-arm64';
     return f;
 }
+test('owner Homebrew 1.18.30_2 link migrates using upstream bytes and verifies on repeat', async t => {
+    const f = darwinHomebrewFixture(t, '1.18.30', '_2');
+    const preserved = [f.mapped(f.cellar + '/bin/opencode'), f.mapped(f.cellar + '/INSTALL_RECEIPT.json')];
+    for (const file of ['.config/opencode/config.json', '.local/share/opencode/auth.json', '.bashrc', 'project/opencode.json']) {
+        const target = path.join(f.home, file);
+        fs.mkdirSync(path.dirname(target), {recursive: true}); fs.writeFileSync(target, 'INERT preserved data');
+        preserved.push(target);
+    }
+    const snapshot = file => {
+        const info = fs.lstatSync(file);
+        return {bytes: fs.readFileSync(file), ino: info.ino, mode: info.mode, mtime: info.mtimeMs};
+    };
+    const before = preserved.map(snapshot);
+    assert.equal(fs.readlinkSync(f.mapped(f.command)), '../Cellar/opencode/1.18.30_2/bin/opencode');
+    assert.equal(await f.api.install(f.options), 'migrated');
+    assert.deepEqual(fs.readFileSync(f.dest), f.binary);
+    assert.deepEqual(preserved.map(snapshot), before);
+    const backup = fs.readdirSync(f.mapped(f.prefix + '/bin')).find(name => name.startsWith('.opencode-setup-recovery-'));
+    assert.equal(fs.readlinkSync(f.mapped(f.prefix + '/bin/' + backup)), '../Cellar/opencode/1.18.30_2/bin/opencode');
+    f.options.commands = [f.dest];
+    assert.equal(await f.api.install(f.options), 'current');
+    assert.deepEqual(preserved.map(snapshot), before);
+});
+for (const route of ['darwin-arm', 'darwin-conventional', 'linux']) {
+    for (const revision of ['', '_1', '_2', '_123', '_9007199254740991']) for (const absolute of [false, true]) {
+        test(`${route} ${revision || 'unrevisioned'} ${absolute ? 'absolute' : 'relative'} Homebrew link migrates and repeats`, async t => {
+            const f = route === 'linux' ? homebrewFixture(t, 'linux', '/home/linuxbrew/.linuxbrew', '1.18.30', revision)
+                : darwinHomebrewFixture(t, '1.18.30', revision, route === 'darwin-arm' ? '/opt/homebrew' : '/usr/local');
+            if (absolute) {
+                fs.unlinkSync(f.mapped(f.command)); fs.symlinkSync(f.cellar + '/bin/opencode', f.mapped(f.command));
+            }
+            const receipt = f.mapped(f.cellar + '/INSTALL_RECEIPT.json'), before = fs.readFileSync(receipt);
+            assert.equal(await f.api.install(f.options), 'migrated');
+            assert.deepEqual(fs.readFileSync(f.dest), f.binary);
+            assert.deepEqual(fs.readFileSync(receipt), before);
+            f.options.commands = [f.dest];
+            assert.equal(await f.api.install(f.options), 'current');
+        });
+    }
+}
+for (const route of ['darwin', 'linux']) test(`${route} verified newer revision-bearing release is preserved without probes`, async t => {
+    const f = route === 'darwin' ? darwinHomebrewFixture(t, '3.0.0', '_12')
+        : homebrewFixture(t, 'linux', '/home/linuxbrew/.linuxbrew', '3.0.0', '_12');
+    f.publish('@opencode/cli-' + f.options.target, '3.0.0');
+    f.options.path = f.prefix + '/bin'; f.shellSelection = f.command;
+    const before = fs.readlinkSync(f.mapped(f.command));
+    assert.equal(await f.api.install(f.options), 'newer');
+    assert.equal(fs.readlinkSync(f.mapped(f.command)), before);
+    assert.equal(f.probes.length, 0);
+    assert.deepEqual(fs.readdirSync(path.dirname(f.dest)), []);
+});
+for (const [release, revision, reason] of [
+    ...['_', '_0', '_01', '_+1', '_-1', '_abc', '_2_3', '_2-beta', '_2+build', '_9007199254740992']
+        .map(revision => ['1.18.30', revision, 'brew-command']),
+    ['01.18.30', '_2', 'version'], ['1.18', '_2', 'version'], ['1.18.30-beta', '_2', 'brew-command'],
+    ['1.18.30+build', '_2', 'brew-command'],
+]) test(`unsupported Homebrew keg ${release}${revision} fails before probe or promotion`, async t => {
+    const f = darwinHomebrewFixture(t, release, revision), before = fs.readlinkSync(f.mapped(f.command));
+    await assert.rejects(f.api.install(f.options), error => {
+        assert.equal(f.api.failureResult(error), `opencode-cli:policy-failed:${reason === 'version' ? 'installation' : 'homebrew-preflight'}:${reason}`); return true;
+    });
+    assert.equal(fs.readlinkSync(f.mapped(f.command)), before);
+    assert.equal(f.probes.length, 0);
+    assert.deepEqual(fs.readdirSync(path.dirname(f.dest)), []);
+});
 test('Darwin account-owned bin group write permits only verified command migration and repeat verification', async t => {
     const f = darwinHomebrewFixture(t), bin = f.mapped(f.prefix + '/bin');
     const receipt = f.mapped(f.cellar + '/INSTALL_RECEIPT.json'), before = fs.readFileSync(receipt);
@@ -1000,18 +1068,19 @@ test('Darwin account-owned bin group write permits only verified command migrati
     f.options.commands = [f.dest];
     assert.equal(await f.api.install(f.options), 'current');
 });
-for (const relative of ['', '/Cellar', '/Cellar/opencode', '/Cellar/opencode/1.18.33',
-    '/Cellar/opencode/1.18.33/bin', '/Cellar/opencode/1.18.33/bin/opencode',
-    '/Cellar/opencode/1.18.33/INSTALL_RECEIPT.json', '/var', '/var/homebrew', '/var/homebrew/pinned']) {
-    test(`Darwin bin allowance does not extend to group-writable ${relative || 'prefix'}`, t => {
-        const f = darwinHomebrewFixture(t), boundary = f.prefix + relative;
+for (const relative of ['', '/Cellar', '/Cellar/opencode', '/Cellar/opencode/1.18.33_2',
+    '/Cellar/opencode/1.18.33_2/bin', '/Cellar/opencode/1.18.33_2/bin/opencode',
+    '/Cellar/opencode/1.18.33_2/INSTALL_RECEIPT.json', '/var', '/var/homebrew', '/var/homebrew/pinned']) {
+    test(`Darwin bin allowance does not extend to group-writable ${relative || 'prefix'}`, async t => {
+        const f = darwinHomebrewFixture(t, '1.18.33', '_2'), boundary = f.prefix + relative;
         if (relative.startsWith('/var')) f.put(f.prefix + '/var/homebrew/pinned/inert-sentinel', 'INERT');
         fs.chmodSync(f.mapped(boundary), fs.lstatSync(f.mapped(boundary)).mode | 0o020);
-        assert.throws(() => f.api.brewCopy(f.command), error => {
+        await assert.rejects(f.api.install(f.options), error => {
             assert.equal(f.api.failureResult(error), 'opencode-cli:policy-failed:homebrew-preflight:brew-path'); return true;
         });
-        assert.equal(f.observed.some(([, file]) => file.startsWith(boundary + '/')), false,
-            'untrusted ancestor must stop traversal before descendants');
+        assert.equal(f.observed.some(([operation, file]) => file.startsWith(boundary + '/') &&
+            !(operation === 'lstatSync' && (file === f.command || f.command.startsWith(file + '/')))), false,
+            'ownership-only command-route stats must not inspect a refused keg or receipt');
         assert.equal(f.calls.length, 0);
     });
 }
@@ -1027,7 +1096,7 @@ test('Darwin bin allowance does not recognize lexical near matches or nested com
 for (const [change, reason] of [['pin', 'pinned'], ['custom-tap', 'brew-origin'],
     ['custom-link', 'brew-command'], ['custom-bytes', 'unverified-copy']]) {
     test(`Darwin approved bin retains ${change} refusal before any probe or migration`, async t => {
-        const f = darwinHomebrewFixture(t);
+        const f = darwinHomebrewFixture(t, '1.18.33', '_2');
         if (change === 'pin') f.put(f.prefix + '/var/homebrew/pinned/opencode', 'INERT pin');
         if (change === 'custom-tap') f.put(f.cellar + '/INSTALL_RECEIPT.json', '{"source":{"tap":"custom/tap"}}');
         if (change === 'custom-link') {
@@ -1049,7 +1118,7 @@ for (const [change, reason] of [['pin', 'pinned'], ['custom-tap', 'brew-origin']
 }
 for (const phase of ['staged', 'quarantined', 'recovery']) for (const change of ['mode', 'group', 'identity']) {
     test(`Darwin approved bin ${change} change invalidates ${phase} snapshots`, async t => {
-        const f = darwinHomebrewFixture(t), boundary = f.prefix + '/bin';
+        const f = darwinHomebrewFixture(t, '1.18.33', '_2'), boundary = f.prefix + '/bin';
         const native = f.mapped(f.cellar + '/bin/opencode'), before = fs.readFileSync(native);
         const mutate = () => {
             if (change === 'mode') fs.chmodSync(f.mapped(boundary), 0o755);
@@ -1076,8 +1145,34 @@ for (const phase of ['staged', 'quarantined', 'recovery']) for (const change of 
         else assert.ok(f.statOverrides.has(boundary), 'independent metadata change remains intact');
     });
 }
+test('revision-bearing Homebrew command survives failed replacement artifact staging without a probe', async t => {
+    const f = darwinHomebrewFixture(t, '1.18.30', '_2');
+    const url = 'https://registry.npmjs.org/@opencode/cli-darwin-arm64/2.0.18';
+    const metadata = JSON.parse(f.responses.get(url));
+    metadata.dist.integrity = 'sha512-' + Buffer.alloc(64).toString('base64');
+    f.responses.set(url, Buffer.from(JSON.stringify(metadata)));
+    await assert.rejects(f.api.install(f.options), error => {
+        assert.equal(f.api.failureResult(error), 'opencode-cli:policy-failed:installation:integrity'); return true;
+    });
+    assert.equal(fs.readlinkSync(f.mapped(f.command)), '../Cellar/opencode/1.18.30_2/bin/opencode');
+    assert.equal(f.probes.length, 0);
+    assert.deepEqual(fs.readdirSync(path.dirname(f.dest)), []);
+});
+test('revision-bearing Homebrew command is restored exactly after an independently occupied publication destination', async t => {
+    const f = darwinHomebrewFixture(t, '1.18.30', '_2');
+    const receipt = f.mapped(f.cellar + '/INSTALL_RECEIPT.json'), before = fs.readFileSync(receipt);
+    f.afterQuarantine = () => fs.writeFileSync(f.dest, 'INERT independent command', {mode: 0o755});
+    await assert.rejects(f.api.install(f.options), error => {
+        assert.equal(f.api.failureResult(error), 'opencode-cli:policy-failed:installation:native-EEXIST'); return true;
+    });
+    assert.equal(fs.readlinkSync(f.mapped(f.command)), '../Cellar/opencode/1.18.30_2/bin/opencode');
+    assert.deepEqual(fs.readFileSync(receipt), before);
+    assert.equal(fs.readFileSync(f.dest, 'utf8'), 'INERT independent command');
+    assert.deepEqual(fs.readdirSync(f.mapped(f.prefix + '/bin')), ['opencode']);
+    assert.deepEqual(fs.readdirSync(path.dirname(f.dest)), ['opencode']);
+});
 for (const phase of ['staged', 'promoted']) test(`Darwin bin exception preserves rollback after ${phase} probe failure`, async t => {
-    const f = darwinHomebrewFixture(t), before = fs.readlinkSync(f.mapped(f.command));
+    const f = darwinHomebrewFixture(t, '1.18.33', '_2'), before = fs.readlinkSync(f.mapped(f.command));
     f.duringProbe = count => { if (count === (phase === 'staged' ? 1 : 2)) throw new Error('INERT failed probe'); };
     await assert.rejects(f.api.install(f.options), /version-probe/);
     assert.equal(fs.readlinkSync(f.mapped(f.command)), before);
@@ -1085,11 +1180,11 @@ for (const phase of ['staged', 'promoted']) test(`Darwin bin exception preserves
     assert.equal(fs.statSync(f.mapped(f.prefix + '/bin')).mode & 0o777, 0o775);
 });
 for (const [change, reason] of [['identity', 'unverified-copy'], ['pin', 'pinned'], ['receipt-link', 'brew-path'],
-    ['malformed-receipt', 'metadata'], ['custom-tap', 'brew-origin'], ['custom-link', 'brew-command'],
+    ['malformed-receipt', 'metadata'], ['missing-receipt', 'native-ENOENT'], ['custom-tap', 'brew-origin'], ['custom-link', 'brew-command'],
     ['receipt-world-write', 'brew-path'], ['receipt-foreign-owner', 'brew-path'], ['receipt-root-group-write', 'brew-path'],
     ['receipt-hardlink', 'brew-path'], ['outside-prefix-group-write', 'brew-path']]) {
     test(`Homebrew preserves ${change} without executing any command`, async t => {
-        const f = homebrewFixture(t), native = f.cellar + '/bin/opencode', receipt = f.cellar + '/INSTALL_RECEIPT.json';
+        const f = homebrewFixture(t, 'linux', '/home/linuxbrew/.linuxbrew', '1.18.33', '_2'), native = f.cellar + '/bin/opencode', receipt = f.cellar + '/INSTALL_RECEIPT.json';
         if (change === 'identity') { fs.chmodSync(f.mapped(native), 0o755); f.put(native, 'INERT custom command', 0o555); }
         if (change === 'pin') f.put(f.prefix + '/var/homebrew/pinned/opencode', 'inert pin');
         if (change === 'receipt-link') {
@@ -1097,6 +1192,7 @@ for (const [change, reason] of [['identity', 'unverified-copy'], ['pin', 'pinned
             fs.symlinkSync('INSTALL_RECEIPT.json.saved', f.mapped(receipt));
         }
         if (change === 'malformed-receipt') f.put(receipt, '{malformed');
+        if (change === 'missing-receipt') fs.unlinkSync(f.mapped(receipt));
         if (change === 'custom-tap') f.put(receipt, '{"source":{"tap":"custom/tap"}}');
         if (change === 'custom-link') {
             fs.unlinkSync(f.mapped(f.command)); fs.symlinkSync('../custom/opencode', f.mapped(f.command));
@@ -1108,7 +1204,7 @@ for (const [change, reason] of [['identity', 'unverified-copy'], ['pin', 'pinned
         if (change === 'outside-prefix-group-write') fs.chmodSync(f.mapped('/home/linuxbrew'), 0o775);
         const before = fs.readlinkSync(f.mapped(f.command)), contents = fs.readFileSync(f.mapped(native));
         await assert.rejects(f.api.install(f.options), error => {
-            assert.equal(f.api.failureResult(error), `opencode-cli:policy-failed:${reason.startsWith('brew-') ? 'homebrew-preflight' : 'installation'}:${reason}`); return true;
+            assert.equal(f.api.failureResult(error), `opencode-cli:policy-failed:${reason.startsWith('brew-') || reason.startsWith('native-') ? 'homebrew-preflight' : 'installation'}:${reason}`); return true;
         });
         assert.equal(fs.readlinkSync(f.mapped(f.command)), before);
         assert.deepEqual(fs.readFileSync(f.mapped(native)), contents);
@@ -1119,7 +1215,7 @@ for (const [change, reason] of [['identity', 'unverified-copy'], ['pin', 'pinned
 for (const phase of ['before-quarantine', 'before-publication', 'recovery']) {
     for (const change of ['owner', 'group', 'mode', 'path-identity', 'receipt', 'command-bytes', 'command-link', 'pin']) {
         test(`Homebrew preserves independent ${change} changes at ${phase}`, async t => {
-            const f = homebrewFixture(t), boundary = f.prefix + '/Cellar';
+            const f = homebrewFixture(t, 'linux', '/home/linuxbrew/.linuxbrew', '1.18.33', '_2'), boundary = f.prefix + '/Cellar';
             let backup, changed, evidence;
             const snapshot = file => {
                 const info = fs.lstatSync(f.mapped(file));
@@ -1182,10 +1278,10 @@ for (const phase of ['before-quarantine', 'before-publication', 'recovery']) {
     }
 }
 for (const phase of ['staged', 'promoted']) test(`Homebrew ${phase} probe failure safely restores the original verified command`, async t => {
-    const f = homebrewFixture(t), original = fs.readFileSync(f.mapped(f.cellar + '/bin/opencode'));
+    const f = homebrewFixture(t, 'linux', '/home/linuxbrew/.linuxbrew', '1.18.33', '_2'), original = fs.readFileSync(f.mapped(f.cellar + '/bin/opencode'));
     f.duringProbe = count => { if (count === (phase === 'staged' ? 1 : 2)) throw new Error('INERT probe failure'); };
     await assert.rejects(f.api.install(f.options), /version-probe/);
-    assert.equal(fs.readlinkSync(f.mapped(f.command)), '../Cellar/opencode/1.18.33/bin/opencode');
+    assert.equal(fs.readlinkSync(f.mapped(f.command)), '../Cellar/opencode/1.18.33_2/bin/opencode');
     assert.deepEqual(fs.readFileSync(f.mapped(f.cellar + '/bin/opencode')), original);
     assert.deepEqual(fs.readdirSync(path.dirname(f.dest)), []);
     assert.deepEqual(fs.readdirSync(f.mapped(f.prefix + '/bin')), ['opencode']);
