@@ -1,5 +1,7 @@
 # Accept group write only on OpenCode's Darwin Homebrew bin directory
 
+Superseded by [the Homebrew-directory decision](0010-accept-opencode-darwin-homebrew-directories.md) after a fuller capture exposed the next directory rejection. The original decision and evidence limitations below are historical.
+
 The owner-selected alternative to changing Mac permissions is to let OpenCode's Homebrew preflight accept group write on the real `/opt/homebrew/bin` directory owned by the non-root invoking account. The [captured-state regression](../../tests/test_opencode_macos_preflight.py) reproduces the former refusal with UID 501 and mode 0775; the owner's recollection that permissions were unchanged since the failed run supports historical attribution, not an audited snapshot. This adds one Darwin exception beside the [Linux-only decision](0005-accept-opencode-linux-homebrew-group-write.md), not an allowance for other prefixes, descendants, files, links, root execution, foreign ownership or world write.
 
 Other principals with effective group write may tamper with commands; we explicitly accept that risk without claiming group privacy or ACL equivalence. Keep parent-first traversal, filesystem snapshots (including mode/group/identity), official-byte verification and [command-only migration/rollback](0004-keep-opencode-migration-command-only.md); add no permission repair, privacy probe or override. Passing the captured ancestor gate does not validate the uncaptured link target, later checks or native installation recovery.

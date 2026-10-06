@@ -1556,8 +1556,9 @@ function brewPermissions(file, info) {
     if (!info.isSymbolicLink() && (info.mode & 0o020)) {
         const linuxBrew = process.platform === 'linux' &&
             (file === '/home/linuxbrew/.linuxbrew' || file.startsWith('/home/linuxbrew/.linuxbrew/'));
-        const darwinBin = process.platform === 'darwin' && file === '/opt/homebrew/bin' && info.isDirectory();
-        if (info.uid === 0 || info.uid !== process.getuid() || !(linuxBrew || darwinBin)) fail('brew-path');
+        const darwinBrewDirectory = process.platform === 'darwin' && info.isDirectory() &&
+            ['/opt/homebrew', '/usr/local'].some(prefix => file === prefix || file.startsWith(prefix + '/'));
+        if (info.uid === 0 || info.uid !== process.getuid() || !(linuxBrew || darwinBrewDirectory)) fail('brew-path');
     }
 }
 function checkBrewTrust(trust, moved = false) {
@@ -7422,7 +7423,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 178 | Last changed: Recognize verified OpenCode Homebrew revisions"
+    Write-Host "Version 179 | Last changed: Accept account-owned macOS Homebrew directories for OpenCode"
 
     Assert-HeadlessUnsupported
 

@@ -1528,8 +1528,9 @@ function brewPermissions(file, info) {
     if (!info.isSymbolicLink() && (info.mode & 0o020)) {
         const linuxBrew = process.platform === 'linux' &&
             (file === '/home/linuxbrew/.linuxbrew' || file.startsWith('/home/linuxbrew/.linuxbrew/'));
-        const darwinBin = process.platform === 'darwin' && file === '/opt/homebrew/bin' && info.isDirectory();
-        if (info.uid === 0 || info.uid !== process.getuid() || !(linuxBrew || darwinBin)) fail('brew-path');
+        const darwinBrewDirectory = process.platform === 'darwin' && info.isDirectory() &&
+            ['/opt/homebrew', '/usr/local'].some(prefix => file === prefix || file.startsWith(prefix + '/'));
+        if (info.uid === 0 || info.uid !== process.getuid() || !(linuxBrew || darwinBrewDirectory)) fail('brew-path');
     }
 }
 function checkBrewTrust(trust, moved = false) {
@@ -8868,7 +8869,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 157 | Last changed: Integrate BB discovery and OpenCode Homebrew revisions"
+    echo -e "${GRAY}Version 158 | Last changed: Accept account-owned macOS Homebrew directories for OpenCode"
 
     if ! acquire_setup_lock; then
         return 1
