@@ -1135,8 +1135,8 @@ function inspectBrewCopy(file) {
     inspect(file, 'link');
     const link = fs.readlinkSync(file);
     const binary = path.resolve(path.dirname(file), link);
-    const match = binary.match(new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/Cellar/opencode/([0-9.]+)/bin/opencode$`));
-    if (!match) fail('brew-command');
+    const match = binary.match(new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/Cellar/opencode/([0-9.]+)(?:_([1-9][0-9]*))?/bin/opencode$`));
+    if (!match || (match[2] !== undefined && !Number.isSafeInteger(Number(match[2])))) fail('brew-command');
     version(match[1]);
     const receiptPath = path.join(path.dirname(path.dirname(binary)), 'INSTALL_RECEIPT.json');
     inspect(binary, 'file'); inspect(receiptPath, 'file');
@@ -8218,7 +8218,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 236 | Last changed: Preserve volatile BB server evidence during discovery${NC}"
+    echo -e "${GRAY}Version 237 | Last changed: Integrate BB discovery and OpenCode Homebrew revisions${NC}"
 
     if ! acquire_setup_lock; then
         return 1

@@ -1603,8 +1603,8 @@ function inspectBrewCopy(file) {
     inspect(file, 'link');
     const link = fs.readlinkSync(file);
     const binary = path.resolve(path.dirname(file), link);
-    const match = binary.match(new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/Cellar/opencode/([0-9.]+)/bin/opencode$`));
-    if (!match) fail('brew-command');
+    const match = binary.match(new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/Cellar/opencode/([0-9.]+)(?:_([1-9][0-9]*))?/bin/opencode$`));
+    if (!match || (match[2] !== undefined && !Number.isSafeInteger(Number(match[2])))) fail('brew-command');
     version(match[1]);
     const receiptPath = path.join(path.dirname(path.dirname(binary)), 'INSTALL_RECEIPT.json');
     inspect(binary, 'file'); inspect(receiptPath, 'file');
@@ -7422,7 +7422,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 177 | Last changed: Accept account-owned Darwin Homebrew bin group write only"
+    Write-Host "Version 178 | Last changed: Recognize verified OpenCode Homebrew revisions"
 
     Assert-HeadlessUnsupported
 
