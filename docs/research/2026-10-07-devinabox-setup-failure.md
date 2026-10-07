@@ -97,18 +97,72 @@ Systemd distinctions matter:
 2. **Seek configuration-review approval, not an outage repair:** name devinabox, scowalt and the exact `env.conf`. Have the owner identify required BB/provider settings and establish supported, non-secret native configuration/source/precedence evidence independent of the broad override. Current health does not meet that prerequisite. If any requirement is missing or uncertain, stop without reading/copying credentials, importing `~/.env.local`, deleting the override or disturbing the running services. [ADR 0011][adr]; [migration section 1][migration].
 3. **Any transition needs its own exact approval:** the documented retirement of Beelink's `20-env-local.conf` is a bounded procedure, not permission to retire devinabox's `env.conf`. Adapt/review the actual filename, content/identity, unsafe directory/file modes, private verified backup outside active systemd search locations, interruption and recovery plan. Preserve native credentials, account environment file and unrelated state. Removal, reload/start/restart, setup rerun and reboot require separately agreed scope; none is authorized by this note. Ordinary setup can update unrelated packages/tools and interrupt work, so it is not the minimal review step. [Migration sections 1–4][migration]; [ADR 0011][adr]; [rollback scope][rollback].
 
-No implementation change, commit, issue action, live setup, application/plugin load or native remediation was performed by this research worker. Parent-reported tests are offline mechanism evidence, not rollout or continuity evidence; the earlier fixture incident's uncertainty is unchanged. Public indexes/URLs are mutable, and the investigation did not verify downloaded artifact hashes, identify the later upgrader, reconstruct historical process environments, or establish provider/browser/restart/boot readiness. [Parent evidence][initial]; [native scope][native]; [fixture audit][audit]; [incident record][incident].
+The original diagnosis research worker performed no implementation change, commit, issue action, live setup, application/plugin load or native remediation. Parent-reported tests are offline mechanism evidence, not rollout or continuity evidence; the earlier fixture incident's uncertainty is unchanged. Public indexes/URLs are mutable, and the investigation did not verify downloaded artifact hashes, identify the later upgrader, reconstruct historical process environments, or establish provider/browser/restart/boot readiness. [Parent evidence][initial]; [native scope][native]; [fixture audit][audit]; [incident record][incident].
+
+## 5. Native configuration audit and the consumed query exception
+
+This section is **existing-evidence synthesis for [#205](https://github.com/scowalt/machine-setup-scripts/issues/205)**, not an additional investigation or updated host snapshot. The [private bounded-audit report][native-audit] and [filtered one-query result][native-inventory] are supplementary, ephemeral records. The facts and limitations needed for the blocker are retained here and in the [devinabox evidence/operator packet][devinabox-packet]; understanding the stop condition does not require those private files.
+
+### Static findings — supported mechanisms, not configured inventory
+
+The reviewed installed application was **`bb-app` 0.44.0**. Official [configuration documentation][bb-config-doc] was pinned to upstream `68a1e8b7aa84fbd836eb8825e4d042ae0c52e74a`, not proven byte-identical to that installed release. Prior research read static help/schema/registration and selected installed code only; it did not execute/import installed BB or establish account-specific provider/tool selections.
+
+| Existing static evidence | What it establishes / what remains unknown |
+| --- | --- |
+| Launcher (`dist/bb-app.js`, runtime/configuration dispatch) | Managed configuration commands reject secret-shaped keys for their display, but runtime resolution loads managed configuration **and managed env files before dispatch**. A non-secret display is not a no-secret-read path. Generic merge order is base/option environment → managed configuration → managed env, with a final bind-host override; `BB_SERVER_URL` uses explicit option → persisted `serverUrl` → environment → default. Neither order identifies this account's selected sources for all required keys. |
+| Server configuration and provider status (`server/dist/start-server.js`, `serverAccessStatus`, `getProviderState`) | `/system/config` can call access-provider `availability()`; provider state can issue `provider.health` host maintenance requests and use contributed-environment health. These are not inert stored-metadata views. No live status/configuration request was approved by this static review. |
+| Provider models/usage and plugin settings | Catalogs can refresh in the background; inspected usage paths can collect stale/absent observations even with `refresh=false`. Synchronous settings storage skips secret descriptors, asynchronous storage reads secret files, and the complete public settings route was not proven safe. A masked response or “no refresh” label does not establish the full path's effects. |
+| Provider declarations | Codex/Claude Code bundles were examples, not an exhaustive provider audit or configured identities. Claude Code's declared `CLAUDE_CODE_OAUTH_TOKEN` passthrough demonstrates possible inherited provider input, **not** its use on devinabox. Defaults, registrations and installation cannot enumerate required workflows. |
+| Contribution resolution (`resolveHostEnvironment`, `mergeHostAndProviderEnvironment`) | Static order is built-in Git → global machine environment → project environment, then plugin-provided provider contributions at thread launch, with later names winning. Git resolution can execute credential/authenticated subprocesses. Full host bridge, each provider's spawn/import behavior and final child-tool inheritance were not traced. This is not a complete effective-source/independence report. |
+
+Keep three categories separate: **server/launcher settings**, **provider authentication/settings/contributions**, and **child-tool inputs**. Native configuration can be a scoped source without proving it wins every required input, or that every launched tool receives it. A setting name, credential-file existence, provider readiness label or current host health cannot fill source/precedence gaps. Missing native configuration would need separate scoped review/provisioning, not an account dotenv importer or new credential store. [ADR 0011][adr]; [devinabox packet][devinabox-packet].
+
+### Bounded follow-up trace — why one names view needed extra permission
+
+The existing follow-up stopped after six targeted code reads plus symbol/locator searches in the already identified installed `server/dist/start-server.js`. It traced:
+
+1. `publicApiRoutes.system.machineEnvironment` (**L44801–44806**) and handler (**L177753–177756**): GET `/settings/machine-environment`, no request switch to suppress Git health.
+2. `machineEnvironmentView` (**L66829–66849**) → `readMachineEnvironment` (**L66748–66750**): default global scope (`projectId = null`), reading/parsing encrypted stored rows, then mapping names/notes with `value: null`. This is not a metadata-column-only database read, but the traced row mapping calls neither decryption nor encryption-key acquisition.
+3. `getAppSettings` (**L27953–27979**) and `machineGitHealth` / `resolveGitCredentials` (**L66438–66494**): unless a **global** `GH_TOKEN` row exists or automatic Git credentials are disabled, `execFile` runs `gh auth token --hostname github.com`, then on successful token parsing `gh api --hostname github.com user`. A project-local `GH_TOKEN` does not suppress this global path; the project view calls it first.
+
+Within that traced GET chain, no explicit DB write, plugin/provider callback, catalog refresh or environment-key creation was found. Nearby mutation routes are distinct. **General request middleware and Git internals were not exhaustively audited**, so no universal no-effects claim follows. Normal request authentication is distinct from the handler's additional token acquisition/authenticated GitHub request. The original strict metadata-only permission did not cover that additional behavior. [Private detailed trace][native-audit].
+
+### Later approved observation — limited result and exhausted permission
+
+Scott subsequently approved **one** local devinabox global inventory request, including its built-in use of existing GitHub credentials, with only variable names and controlled status fields exposed. At **2026-10-07 15:16:39 UTC**, the approved `bb machine env list --json` request returned:
+
+| Approved retained field | Result |
+| --- | --- |
+| Addressed scope | Local devinabox server, global native machine-environment records |
+| Variable names | Empty list: **zero global records** |
+| Built-in Git status | **`logged in`** |
+| Values, notes, raw response/arbitrary diagnostics disclosed | **No**; schema-filtered output only |
+
+No live query was performed by the static research worker; this separately approved follow-up is later evidence. It did not authorize credential/configuration changes, provider inference, project/provider queries, service actions or setup. **That one-query exception is consumed**, not renewable by this packet, issue label or repository implementation request.
+
+Crucially, `runGh` inherits the current service environment; the successful Git result does not identify whether its credential depends on the broad override. Zero global records do not mean zero requirements, no project/provider records, no authenticated child tools, or independent provider configuration. The observation did not establish usable/decryptable native secrets or complete launch precedence. Do not manufacture configured identities from the inspected declarations.
+
+### Durable stop condition and next input
+
+The unresolved requirements are the enabled/configured provider and tool inventory, owner exclusions, selected supported per-workflow sources/precedence independent of `env.conf`, fresh baselines and exact bounded acceptance requests/costs. No pre-existing integration failure inventory was established; unknown is not passed. Failures must stay separate and block transition when they prevent the required proof.
+
+The smallest next input is Scott's non-secret workflow identifiers, purposes/scopes and exclusions, with existing source-evidence references. If a specific row still needs a native view/probe, its complete effects and scope require a **new separate review/authorization**; unavailable safe evidence is a blocker, not permission for raw credential/process-environment reads or an expanding upstream audit/inspector. [#207](https://github.com/scowalt/machine-setup-scripts/issues/207) remains blocked before backup, retirement, directory handling or service changes. The exact `env.conf` and unsafe containing directory, approval stages, saved endpoint, independent controller and fresh restoration decision are covered by the [devinabox packet][devinabox-packet]. The [Beelink procedure][migration] is not devinabox authority. No live inspection, migration, policy change or new behavioral execution occurred for this documentation synthesis.
 
 ## Sources
 
 - Operational evidence: [redacted collector log][log], [initial parent findings][initial] and [final native follow-up][native]. The [canonical collector object][collector] requires authenticated access and was not refetched here.
+- Existing configuration evidence: [durably summarized static report][native-audit], [filtered approved query result][native-inventory] and [devinabox operator packet][devinabox-packet]. Private `/tmp` records are supplementary, not a complete inventory or prerequisites to understanding the blocker.
 - Repository policy/mechanism: [Ubuntu source][ubuntu], [refresh wrapper][refresh], [service-preflight fixtures][preflight-tests], [ADR 0011][adr], [customization decision][design] and [separate migration procedure][migration].
-- External primary sources: Ubuntu's [`apt-get`][apt-get] and [`apt-secure`][apt-secure] manuals, [package-management documentation][ubuntu-packages], [Noble systemd unit][systemd-unit]/[execution][systemd-exec]/[control][systemctl] manuals, [upstream systemd API][systemd-api], and the [Hetzner][hetzner-index]/[official Ubuntu][ubuntu-index] package indexes and linked archive URLs.
+- External primary sources already consulted: [pinned BB configuration documentation][bb-config-doc], Ubuntu's [`apt-get`][apt-get] and [`apt-secure`][apt-secure] manuals, [package-management documentation][ubuntu-packages], [Noble systemd unit][systemd-unit]/[execution][systemd-exec]/[control][systemctl] manuals, [upstream systemd API][systemd-api], and the [Hetzner][hetzner-index]/[official Ubuntu][ubuntu-index] package indexes and linked archive URLs. None was refetched for #205.
 
 [collector]: https://logs.scowalt.com/logs/devinabox/2026-10-07-03-22-09-069.log
 [log]: /tmp/setup-diagnosis-devinabox-6XGdq3Pz/collector.redacted.log
 [initial]: /tmp/setup-diagnosis-devinabox-6XGdq3Pz/findings.md
 [native]: /tmp/setup-diagnosis-devinabox-6XGdq3Pz/live-followup.md
+[native-audit]: /tmp/setup-diagnosis-devinabox-6XGdq3Pz/native-config-evidence-research.md
+[native-inventory]: /tmp/setup-diagnosis-devinabox-6XGdq3Pz/approved-native-inventory.json
+[devinabox-packet]: ../plans/2026-10-07-devinabox-bb-environment-migration.md
+[bb-config-doc]: https://github.com/get-bb/bb/blob/68a1e8b7aa84fbd836eb8825e4d042ae0c52e74a/docs/configuration.md
 [ubuntu]: ../../ubuntu.sh
 [refresh]: ../../lib/bb-plugin-refresh.bash
 [preflight-tests]: ../../tests/test_bb_service_preflight.py
