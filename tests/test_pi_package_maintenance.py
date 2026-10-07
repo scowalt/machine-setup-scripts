@@ -189,6 +189,171 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                     elif failure not in ('prose', 'prepare', 'permissions', 'askclaude-policy'):
                         self.assertIn('PACKAGE-STEP:refresh', result.stdout)
 
+    def run_real_trust_caller(self, script, prior_failure=False):
+        windows = script.endswith('.ps1')
+        text = (ROOT / script).read_text()
+        if windows:
+            names = re.findall(r'^function ([\w-]+)(?:\s|\()', text, re.M)
+            real = ('Prepare-PiProfilePermissions', 'Disable-PiAskClaude', 'Remove-PiProse',
+                    'Set-PiOpenCodeGoProvider', 'Prepare-PiMcpAdapter', 'Setup-PiMcpAdapter', 'Update-PiPackages')
+            code = r'''$ErrorActionPreference='Stop'
+$tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile($env:FIXTURE_SOURCE,[ref]$tokens,[ref]$errors)
+if ($errors.Count) { throw 'Invalid fixture source' }
+foreach ($definition in $ast.EndBlock.Statements) {
+    if ($definition -is [System.Management.Automation.Language.FunctionDefinitionAst]) {
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+}
+'''
+            code += '\n'.join('function ' + n + ' { return $true }' for n in names if n not in real)
+            code += '''
+function Write-Debug { }
+function Write-Message { }
+function Write-Section { }
+function Write-Success { }
+function Write-Warning($Text) { Write-Host $Text }
+function Test-EnvLocalFlag { return $false }
+function Remove-CompoundEngineeringResources { Write-Host 'UNRELATED-CONTINUED'; return $true }
+function Test-PendingReboot { Write-Host 'REBOOT-CHECKED'; return $false }
+function Get-SetupLogDirectory { return (Join-Path $env:HOME 'logs') }
+function Start-Transcript { }
+function Complete-SetupLog { Write-Host 'LOG-FINALIZED' }
+'''
+            caller = extract(script, 'Invoke-WindowsSetupTasks')
+            tail = caller[caller.index('    if (-not (Prepare-PiProfilePermissions))'):]
+            code += '\nfunction Invoke-WindowsSetupTasks {\n$script:PiProfileMutationsBlocked=$false\n$piSetupFailed=$' + str(prior_failure).lower() + '\n$piOpenCodeGoReady=$false\n' + tail
+            code += '\n' + extract(script, 'Initialize-WindowsEnvironment')
+            code += '\ntry { Initialize-WindowsEnvironment } catch { Write-Host "EXPECTED-SETUP-ERROR"; exit 1 }\n'
+            fixture = self.root / 'real-caller.ps1'
+            fixture.write_text(code)
+            command = [PWSH, '-NoProfile', '-NonInteractive', '-File', str(fixture)]
+        else:
+            names = re.findall(r'^(\w+)\(\) \{', text, re.M)
+            from extract_setup_fixture import definitions
+            real = ('prepare_pi_profile_permissions', 'disable_pi_askclaude', 'remove_pi_prose',
+                    'configure_pi_opencode_go', 'prepare_pi_mcp_adapter', 'setup_pi_mcp_adapter', 'refresh_pi_packages')
+            code = definitions(text) + '\n'
+            code += '\n'.join(n + '() { return 0; }' for n in names if n not in real)
+            code += '''
+print_warning() { printf '%s\\n' "$*"; }
+remove_compound_engineering_resources() { printf 'UNRELATED-CONTINUED\\n'; }
+check_pending_reboot() { printf 'REBOOT-CHECKED\\n'; }
+start_setup_log() { :; }
+finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
+'''
+            caller = extract(script, 'run_setup_tasks')
+            tail = caller[re.search(r'^    if ! [^\n]*prepare_pi_profile_permissions', caller, re.M).start():]
+            code += '\nrun_setup_tasks() {\nlocal _setup_had_errors=' + str(int(prior_failure)) + ' _pi_go_ready=0 PI_PROFILE_MUTATIONS_BLOCKED=0\n' + tail
+            code += '\n' + extract(script, 'main') + '\nmain\n'
+            command = ['bash', '--noprofile', '--norc']
+        self.statefile.write_text(json.dumps(self.state))
+        return subprocess.run(command, input=code, env={**self.env, 'FIXTURE_SOURCE': str(ROOT / script)}, cwd=self.root,
+                              capture_output=True, text=True, timeout=30)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX metadata with portable PowerShell adapters')
+    def test_real_caller_converges_private_pi_through_group_writable_ancestors(self):
+        from test_pi_opencode_go_setup import GoSetupTests, KEY
+        go = GoSetupTests()
+        go.setUp()
+        self.addCleanup(go.doCleanups)
+        for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+            for selected in (False, True):
+                with self.subTest(script=script, selected=selected):
+                    case = PackageMaintenance()
+                    case.setUp()
+                    self.addCleanup(case.doCleanups)
+                    default = case.agent
+                    if selected:
+                        case.agent = case.home / 'profiles/team/active'
+                        case.agent.mkdir(parents=True)
+                        case.env['PI_CODING_AGENT_DIR'] = str(case.agent)
+                    case.env.pop('PI_OFFLINE')
+                    shutil.copytree(go.home / '.local', case.home / '.local')
+                    shutil.copy2(go.envfile, case.home / '.env.local')
+                    settings, _ = case.seed_affected_store()
+                    settings['packages'].append('npm:pi-prose')
+                    (case.agent / 'settings.json').write_text(json.dumps(settings))
+                    retired = case.agent / 'npm/node_modules/pi-prose'
+                    retired.mkdir(parents=True)
+                    (retired / 'package.json').write_text('{"name":"pi-prose","scripts":{"uninstall":"exit 99"}}')
+                    (retired / 'index.js').write_text('throw Error("must not execute")')
+                    (case.agent / 'prose').mkdir()
+                    sentinel = case.agent / 'prose/config.json'
+                    sentinel.write_text('{custom malformed prose is preserved')
+                    auth = case.agent / 'auth.json'
+                    auth.write_text('{"keep":{"type":"api_key","key":"fixture-unrelated"}}')
+                    ordinary = [case.home, case.agent / 'npm', case.agent / 'npm/node_modules']
+                    if selected:
+                        ordinary += [case.agent.parent, case.agent.parent.parent]
+                        (default / 'auth.json').write_text('inactive fixture credential')
+                        (default / 'settings.json').write_text('{"packages":["npm:pi-prose"]}')
+                    for directory in ordinary:
+                        directory.chmod(0o2775)
+                    metadata = lambda p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode, p.stat().st_dev, p.stat().st_ino)
+                    before = {p: metadata(p) for p in ordinary}
+                    for repeat in range(2):
+                        result = case.run_real_trust_caller(script)
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertIn('LOG-FINALIZED', result.stdout)
+                        self.assertIn('UNRELATED-CONTINUED', result.stdout)
+                        self.assertNotIn(KEY, result.stdout + result.stderr)
+                        self.assertEqual(json.loads(auth.read_text()), {
+                            'keep': {'type': 'api_key', 'key': 'fixture-unrelated'},
+                            'opencode-go': {'type': 'api_key', 'key': KEY}})
+                        self.assertFalse(retired.exists())
+                        self.assertEqual(sentinel.read_text(), '{custom malformed prose is preserved')
+                        self.assertEqual(json.loads((case.agent / 'npm/package.json').read_text())['dependencies']['pi-mcp-adapter'], '2.32.1')
+                        self.assertEqual(json.loads((case.agent / 'settings.json').read_text())['packages'], [
+                            {'source': PIN, 'extensions': ['index.ts'], 'skills': []}, 'npm:unrelated'])
+                        self.assertEqual({p: metadata(p) for p in ordinary}, before)
+                        self.assertEqual(case.agent.stat().st_mode & 0o7777, 0o700)
+                        self.assertEqual(auth.stat().st_mode & 0o7777, 0o600)
+                        if selected:
+                            self.assertEqual((default / 'auth.json').read_text(), 'inactive fixture credential')
+                            self.assertEqual(json.loads((default / 'settings.json').read_text()), {'packages': []})
+                        calls = [json.loads(line) for line in case.statefile.with_suffix('.calls').read_text().splitlines()]
+                        self.assertIn(['update', '--extensions', '--no-approve'], calls)
+                        self.assertFalse(any('pi-prose' in str(call) for call in calls))
+                    if script not in ('ubuntu.sh', 'win.ps1'):
+                        continue
+                    for failure in ('earlier', 'permissions', 'credential', 'prose', 'adapter', 'install', 'resource', 'refresh'):
+                        with self.subTest(failure=failure):
+                            callsfile = case.statefile.with_suffix('.calls')
+                            callsfile.unlink(missing_ok=True)
+                            target = case.agent / ('npm/package.json' if failure == 'adapter' else 'settings.json')
+                            original = target.read_bytes()
+                            credential = auth.read_bytes()
+                            if failure == 'permissions':
+                                case.home.chmod(0o2777)
+                            elif failure == 'credential':
+                                auth.chmod(0o644)
+                            elif failure in ('prose', 'adapter'):
+                                target.write_text('{malformed-fixture-do-not-log')
+                            elif failure in ('install', 'refresh'):
+                                case.state['fail'] = 'install' if failure == 'install' else 'update'
+                            elif failure == 'resource':
+                                case.state['bad_resource'] = 'empty'
+                            try:
+                                result = case.run_real_trust_caller(script, prior_failure=failure == 'earlier')
+                                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                                self.assertIn('UNRELATED-CONTINUED', result.stdout)
+                                self.assertIn('REBOOT-CHECKED', result.stdout)
+                                self.assertIn('LOG-FINALIZED', result.stdout)
+                                self.assertNotIn(KEY, result.stdout + result.stderr)
+                                self.assertNotIn('malformed-fixture-do-not-log', result.stdout + result.stderr)
+                                self.assertEqual(auth.read_bytes(), credential)
+                                calls = [json.loads(line) for line in callsfile.read_text().splitlines()] if callsfile.exists() else []
+                                if failure in ('permissions', 'credential', 'prose', 'adapter'):
+                                    self.assertEqual(calls, [])
+                                self.assertEqual(['update', '--extensions', '--no-approve'] in calls, failure in ('earlier', 'refresh'))
+                            finally:
+                                case.home.chmod(0o2775)
+                                auth.chmod(0o600)
+                                target.write_bytes(original)
+                                case.state.pop('fail', None)
+                                case.state.pop('bad_resource', None)
+
     def seed_affected_store(self):
         store = self.agent / 'npm'; store.mkdir(exist_ok=True)
         settings = {'packages': [{'source': 'npm:pi-mcp-adapter@2.33.0', 'extensions': ['index.ts'], 'skills': []},
@@ -209,12 +374,17 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                 settings, manifest = self.seed_affected_store()
                 settings['packages'][0]['source'] = PIN
                 manifest['dependencies']['pi-mcp-adapter'] = '2.32.1'
+                ordinary = (self.home, self.agent / 'npm')
+                for directory in ordinary:
+                    directory.chmod(0o2775)
+                before = [(p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in ordinary]
                 for _ in range(2):
                     result = self.run_helper(script, 'adapter')
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertEqual(json.loads((self.agent / 'settings.json').read_text()), settings)
                     self.assertEqual(json.loads((self.agent / 'npm/package.json').read_text()), manifest)
                     self.assertNotIn('DO-NOT-LOG-FIXTURE', result.stdout + result.stderr)
+                    self.assertEqual([(p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in ordinary], before)
                 self.assertEqual(default.read_text(), '{"untouched":"default profile"}')
                 self.assertIn('allow-remote=none', (self.home / '.npmrc').read_text())
                 self.assertEqual((self.agent / 'npm/package-lock.json').read_text(), '{"lockfileVersion":3,"fixture":"npm owns this"}')
@@ -226,11 +396,16 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                 settings, manifest = self.seed_affected_store()
                 settings['packages'].pop(0)
                 del manifest['dependencies']['pi-mcp-adapter']
+                ordinary = (self.home, self.agent / 'npm')
+                for directory in ordinary:
+                    directory.chmod(0o2775)
+                before = [(p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in ordinary]
                 result = self.run_helper(script, 'adapter')
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(json.loads((self.agent / 'settings.json').read_text()), settings)
                 self.assertEqual(json.loads((self.agent / 'npm/package.json').read_text()), manifest)
                 self.assertFalse(self.statefile.with_suffix('.calls').exists(), 'Opt-out must not install adapter')
+                self.assertEqual([(p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in ordinary], before)
 
     def test_disabled_or_unverified_extension_filters_do_not_report_success(self):
         for entry in ({'extensions': []}, {'extensions': ['-index.ts']},

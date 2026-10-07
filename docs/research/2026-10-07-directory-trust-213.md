@@ -123,7 +123,7 @@ remote-receipt/telemetry uncertainty.
 
 Merged integration tip `e23441a` (Impeccable, preparation, server and refresh
 slices) after implementation commit `8c57b6a`. Only the three version banners
-conflicted; both components' helper changes were retained. Final merged banners
+conflicted; both components' helper changes were retained. That merge's banners
 are macOS 287, Ubuntu 319, Bazzite 166. Desktop payloads were regenerated from
 `mac.sh` into Ubuntu/Bazzite without replacing unrelated source. Relative to the
 integration tip, only this slice's eight owned paths differ.
@@ -133,6 +133,16 @@ source at `/tmp/setup-fixture-matrix-ywo5o9_r`, including all 112 component and 
 real-caller methods, Windows wrapper, CLT/Homebrew/reliability, headless and
 containment/default coverage. No skips. Full cross-component aggregate remains
 #217's obligation; these results do not substitute for it.
+
+Integration advanced again during validation. A second merge includes `84de27a`
+(OpenCode #214 and Pi #215), again resolving only the three banners, now macOS
+289, Ubuntu 321, Bazzite 168, and regenerating identical desktop embeddings.
+`/tmp/setup-fixture-matrix-7tem40nl` passes the refreshed default/environment,
+extraction/containment and desktop contracts (3/3) on that source. The earlier
+six-suite result is explicitly prior to this second integration refresh;
+headless/reboot/reliability were not repeated a third time. ShellCheck, syntax,
+embedding equality, unchanged kernel filter, whitespace and staged Gitleaks pass
+again (`/tmp/setup-208-coordination/213-final-static.log`).
 
 ## Required guidance updates for #217
 

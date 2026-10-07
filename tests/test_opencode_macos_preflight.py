@@ -166,7 +166,7 @@ class MacPreflightCapture(unittest.TestCase):
 
     def test_other_owners_modes_types_paths_and_platforms_still_refuse(self):
         for variant in ('root-owner', 'foreign-owner', 'root-account', 'world-write',
-                        'file', 'symlink', 'linux', 'freebsd'):
+                        'file', 'symlink', 'freebsd'):
             with self.subTest(variant=variant):
                 observed = replay(variant)
                 self.assertEqual(observed['result'],
@@ -174,8 +174,8 @@ class MacPreflightCapture(unittest.TestCase):
                 expected = ['/', '/opt', '/opt/homebrew', '/opt/homebrew/bin']
                 self.assertEqual(observed['trace'], [['lstat', file] for file in expected])
 
-    def test_account_owned_group_writable_prefix_and_intel_bin_are_accepted(self):
-        for variant in ('prefix-write', 'usr-local'):
+    def test_account_owned_group_writable_recognized_directories_are_accepted(self):
+        for variant in ('prefix-write', 'usr-local', 'linux'):
             with self.subTest(variant=variant):
                 observed = replay(variant)
                 self.assertEqual(observed['result'], 'uncaptured-link-target')
