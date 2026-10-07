@@ -3770,7 +3770,8 @@ function systemHomeAlias(file, stat) {
         return entry && entry.isDirectory() && !entry.isSymbolicLink() && entry.uid === 0 && !(entry.mode & 0o022);
     });
 }
-function directoryChain(directory, missing = false, installed = false) {
+const directorySnapshots = new Map();
+function directoryChain(directory, missing = false, installed = false, credentialBoundary = false) {
     const chain = [];
     for (let current = directory; ; current = path.dirname(current)) {
         chain.unshift(current);
@@ -3784,7 +3785,16 @@ function directoryChain(directory, missing = false, installed = false) {
         if (!stat.isDirectory() || stat.isSymbolicLink()) fail('linked-directory');
         // A root-owned sticky temporary ancestor cannot replace this user's child.
         const stickyRoot = stat.uid === 0 && (stat.mode & 0o1000);
-        if (!windows && (![0, uid].includes(stat.uid) || ((stat.mode & (installed ? 0o002 : 0o022)) && !stickyRoot))) fail('untrusted-directory');
+        // Ordinary account ancestors retain their modes. The direct credential
+        // writer stays non-writable; installed-code and system rules are unchanged.
+        const ordinary = stat.uid === uid && uid !== 0 && !(credentialBoundary && current === directory);
+        const mask = installed || ordinary ? 0o002 : 0o022;
+        if (!windows) {
+            if (![0, uid].includes(stat.uid) || ((stat.mode & mask) && !stickyRoot)) fail('untrusted-directory');
+            const before = directorySnapshots.get(current);
+            if (before && ['dev', 'ino', 'mode', 'uid', 'gid'].some(field => before[field] !== stat[field])) fail('concurrent-metadata-change');
+            directorySnapshots.set(current, stat);
+        }
     }
 }
 function regular(file, privateFile = false, installed = false) {
@@ -3983,7 +3993,7 @@ async function main() {
     selected = absolute(selected);
     const profile = within(selected, logicalHome) ? path.join(home, path.relative(logicalHome, selected)) : selected;
     if (profile === path.parse(profile).root || profile === home) fail('unsafe-profile');
-    directoryChain(profile, true);
+    directoryChain(profile, true, false, true);
     if (info(profile)) {
         operation = 'models-json';
         const modelsText = readText(path.join(profile, 'models.json'));
@@ -4024,7 +4034,7 @@ async function main() {
     }
     operation = 'profile-create';
     fs.mkdirSync(profile, {recursive: true, mode: 0o700});
-    directoryChain(profile);
+    directoryChain(profile, false, false, true);
     await acl(profile, 'directory');
     let compromised = false;
     let release;
@@ -4039,7 +4049,7 @@ async function main() {
         operation = 'auth-read';
         const held = inspectLock();
         if (!held) fail('lock-unverified');
-        directoryChain(profile);
+        directoryChain(profile, false, false, true);
         const before = readText(auth, true);
         if (before !== null) await acl(auth, 'private');
         const document = before === null ? {} : authDocument(before);
@@ -4054,7 +4064,7 @@ async function main() {
         try {
             await acl(temporary, 'secure');
             await acl(temporary, 'private');
-            directoryChain(profile);
+            directoryChain(profile, false, false, true);
             const currentLock = inspectLock();
             if (compromised || !currentLock || held.ino !== currentLock.ino || held.dev !== currentLock.dev) fail('lock-compromised');
             if (readText(auth, true) !== before) fail('concurrent-metadata-change');
@@ -5055,7 +5065,10 @@ function unixPrepare(logicalHome, selected) {
         if (!stat.isDirectory() || stat.isSymbolicLink()) fail('linked-or-nondirectory');
         if (managed ? stat.uid !== uid : ![0, uid].includes(stat.uid)) fail('foreign-owner');
         const stickyRoot = stat.uid === 0 && (stat.mode & 0o1000);
-        if (!managed && (stat.mode & 0o022) && !stickyRoot) fail('unsafe-ancestor');
+        // Ordinary account directories may retain group access; private profile
+        // leaves are prepared separately below. System boundaries stay strict.
+        const mask = stat.uid === uid && uid !== 0 ? 0o002 : 0o022;
+        if (!managed && (stat.mode & mask) && !stickyRoot) fail('unsafe-ancestor');
         return stat;
     }
     chain(logicalHome).forEach(file => inspect(file));
@@ -5071,10 +5084,12 @@ function unixPrepare(logicalHome, selected) {
             if (!plan.has(file)) plan.set(file, inspect(file, managed.has(file)));
         }
     }
+    const sameDirectory = (a, b) => a && b && a.dev === b.dev && a.ino === b.ino &&
+        a.mode === b.mode && a.uid === b.uid && a.gid === b.gid;
     function unchanged() {
         for (const [file, before] of plan) {
             const after = inspect(file, managed.has(file));
-            if (Boolean(before) !== Boolean(after) || before && (before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode)) fail('directory-changed');
+            if (Boolean(before) !== Boolean(after) || before && !sameDirectory(before, after)) fail('directory-changed');
         }
     }
     if ([...managed].some(file => !plan.get(file))) {
@@ -5090,7 +5105,7 @@ function unixPrepare(logicalHome, selected) {
             const fd = fs.openSync(parent, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
             try {
                 const pinned = fs.fstatSync(fd);
-                if (!expected || expected.dev !== pinned.dev || expected.ino !== pinned.ino || expected.mode !== pinned.mode) fail('directory-changed');
+                if (!sameDirectory(expected, pinned)) fail('directory-changed');
                 unchanged();
                 const result = mkdirAt(['create', path.basename(file), String(pinned.dev), String(pinned.ino)], fd);
                 const identity = /^created:([0-9]+):([0-9]+)\n$/.exec(result.stdout || '');
@@ -5105,7 +5120,7 @@ function unixPrepare(logicalHome, selected) {
         const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
         try {
             const opened = fs.fstatSync(fd);
-            if (!opened.isDirectory() || opened.uid !== uid || before.ino !== opened.ino || before.dev !== opened.dev) fail('directory-changed');
+            if (!opened.isDirectory() || opened.uid !== uid || !sameDirectory(before, opened)) fail('directory-changed');
             fs.fchmodSync(fd, 0o700); // Only the verified directory inode, never its contents.
             const after = fs.fstatSync(fd);
             if ((after.mode & 0o7777) !== 0o700) fail('permission-unverified');
@@ -9011,7 +9026,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 242 | Last changed: Match native Impeccable tabs and globstars${NC}"
+    echo -e "${GRAY}Version 243 | Last changed: Preserve private Pi through shared ancestors${NC}"
 
     if ! acquire_setup_lock; then
         return 1

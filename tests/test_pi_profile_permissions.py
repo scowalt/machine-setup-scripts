@@ -96,6 +96,29 @@ class ProfilePermissionsTests(unittest.TestCase):
                     self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
             self.assertEqual(custom_parent.stat().st_mode, parent_before)
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX ordinary ancestors with private profile leaves')
+    def test_group_writable_ordinary_ancestors_are_preserved_during_private_preparation(self):
+        self.create_profile()
+        parent = self.home / 'profiles/team'
+        parent.mkdir(parents=True)
+        active = parent / 'active'
+        active.mkdir()
+        ordinary = (self.home, parent.parent, parent)
+        for mode in (0o750, 0o755, 0o775, 0o2775):
+            for directory in ordinary:
+                directory.chmod(mode)
+            before = {p: metadata(p.stat()) for p in ordinary}
+            for script in SCRIPTS:
+                with self.subTest(script=script, mode=oct(mode)):
+                    prelude = "const child = require('node:child_process');\n"
+                    prelude += "for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync']) child[name] = () => { throw Error('forbidden privacy proof'); };\n"
+                    prelude += "process.getgroups = () => { throw Error('unavailable group enumeration'); };\n"
+                    result = self.helper(active, script, prelude)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    for profile in (self.profile.parent, self.profile, active):
+                        self.assertEqual(profile.stat().st_mode & 0o7777, 0o700)
+                    self.assertEqual({p: metadata(p.stat()) for p in ordinary}, before)
+
     def test_all_profiles_preflight_before_default_creation_or_repair(self):
         outside = self.root / 'outside'
         outside.mkdir()
@@ -122,8 +145,8 @@ class ProfilePermissionsTests(unittest.TestCase):
     def test_foreign_profile_and_unsafe_ancestor_are_not_repaired(self):
         self.create_profile()
         active_parent = self.home / 'profiles'
-        active_parent.mkdir(mode=0o775)
-        active_parent.chmod(0o775)
+        active_parent.mkdir(mode=0o777)
+        active_parent.chmod(0o777)
         active = active_parent / 'active'
         active.mkdir(mode=0o775)
         result = self.helper(active)
@@ -135,10 +158,73 @@ class ProfilePermissionsTests(unittest.TestCase):
         result = self.helper(active, prelude=prelude)
         self.assertIn('failed:foreign-owner', result.stdout)
         self.assertEqual(self.profile.stat().st_mode & 0o777, 0o775)
-        self.home.chmod(0o775)
+        self.home.chmod(0o777)
         result = self.helper()
         self.assertIn('failed:unsafe-ancestor', result.stdout)
-        self.assertEqual(self.home.stat().st_mode & 0o777, 0o775)
+        self.assertEqual(self.home.stat().st_mode & 0o777, 0o777)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX account selection and system boundaries')
+    def test_ordinary_group_write_requires_the_target_account_not_root_or_foreign(self):
+        import json
+        parent = self.home / 'profiles'
+        parent.mkdir()
+        parent.chmod(0o775)
+        active = parent / 'active'
+        self.create_profile()
+        before = metadata(self.profile.stat())
+        for owner in ('0', 'process.getuid() + 1'):
+            prelude = "const f = require('node:fs'), original = f.lstatSync;\n"
+            prelude += 'const target = ' + json.dumps(str(parent)) + ';\n'
+            prelude += 'f.lstatSync = (file, ...args) => { const s = original(file, ...args); if (file === target) s.uid = ' + owner + '; return s; };\n'
+            result = self.helper(active, prelude=prelude)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(metadata(self.profile.stat()), before)
+            self.assertFalse(active.exists())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX metadata races at native creation preflight')
+    def test_accepted_ancestor_metadata_changes_fail_before_private_mutations(self):
+        import json
+        self.create_profile()
+        parent = self.home / 'profiles'
+        parent.mkdir()
+        active = parent / 'new'
+        for change in ('mode', 'gid', 'uid', 'inode', 'type'):
+            with self.subTest(change=change):
+                if active.exists():
+                    active.rmdir()
+                self.profile.chmod(0o775)
+                self.profile.parent.chmod(0o775)
+                parent.chmod(0o775)
+                prelude = 'const target = ' + json.dumps(str(parent)) + ';\n'
+                prelude += 'const change = ' + json.dumps(change) + ';\n'
+                prelude += r'''
+const f = require('node:fs'), child = require('node:child_process');
+const lstat = f.lstatSync, spawn = child.spawnSync;
+let raced = false;
+child.spawnSync = (exe, args, ...rest) => {
+    const result = spawn(exe, args, ...rest);
+    if (args.includes('probe')) raced = true;
+    return result;
+};
+f.lstatSync = (file, ...args) => {
+    const s = lstat(file, ...args);
+    if (file === target && raced) {
+        if (change === 'mode') s.mode |= 0o2000;
+        if (change === 'gid') s.gid += 1;
+        if (change === 'uid') s.uid += 1;
+        if (change === 'inode') s.ino += 1;
+        if (change === 'type') s.isDirectory = () => false;
+    }
+    return s;
+};
+process.on('exit', () => { if (!raced) process.stdout.write('race-not-exercised'); });
+'''
+                result = self.helper(active, prelude=prelude)
+                self.assertNotIn('race-not-exercised', result.stdout)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertFalse(active.exists())
+                self.assertEqual(self.profile.stat().st_mode & 0o777, 0o775)
+                self.assertEqual(self.profile.parent.stat().st_mode & 0o777, 0o775)
 
     def test_linked_default_rejects_before_active_repair(self):
         outside = self.root / 'outside'
@@ -638,6 +724,8 @@ if ((Get-ChildItem -LiteralPath $outside).Count) { throw 'Outside changed throug
         real_home.mkdir(parents=True)
         for directory in (system, system / 'var', system / 'var/home', real_home):
             directory.chmod(0o755)
+        real_home.chmod(0o2775)
+        original_home = (real_home.stat().st_uid, real_home.stat().st_gid, real_home.stat().st_mode)
         (system / 'home').symlink_to('var/home', target_is_directory=True)
         prelude = "const fixtureFs = require('node:fs'), fixturePath = require('node:path');\n"
         prelude += 'const fixtureSystem = ' + json.dumps(str(system)) + ';\n'
@@ -657,6 +745,7 @@ process.argv[3] = '/home/fixture-user/active';
         result = self.helper(prelude=prelude)
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual((real_home / 'active').stat().st_mode & 0o777, 0o700)
+        self.assertEqual((real_home.stat().st_uid, real_home.stat().st_gid, real_home.stat().st_mode), original_home)
         (system / 'var').chmod(0o777)
         result = self.helper(prelude=prelude)
         self.assertNotEqual(result.returncode, 0)
