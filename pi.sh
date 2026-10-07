@@ -65,7 +65,7 @@ setup_load_environment() {
         setup_trim "${line%%=*}"; key="${SETUP_TRIMMED}"
         [[ "${key}" =~ ^[A-Za-z_][A-Za-z_0-9]*$ ]] || { setup_environment_failure 'unsupported environment-file key'; return 1; }
         case "${key}" in
-            HEADLESS|HEADLESS_PASSWORDLESS_SUDO|BB_SERVER|BB_DATA_DIR|BB_APP_NPM_PREFIX|WORK_MACHINE|MACHINE_TYPE|BAN_PI_MCP_ADAPTER|BAN_PI_GOAL_AUTORESEARCH|BAN_MATT_POCOCK_SKILLS|BAN_MATT_POCKOCK_SKILLS|GH_TOKEN|GH_TOKEN_SCOWALT|OP_SERVICE_ACCOUNT_TOKEN|ZAI_API_KEY|OPENCODE_GO_API_KEY|CLAUDE_CONFIG_DIR|CODEX_HOME|PI_CODING_AGENT_DIR) ;;
+            HEADLESS|HEADLESS_PASSWORDLESS_SUDO|BB_SERVER|BB_DATA_DIR|BB_APP_NPM_PREFIX|WORK_MACHINE|MACHINE_TYPE|BAN_PI_MCP_ADAPTER|BAN_PI_GOAL_AUTORESEARCH|BAN_MATT_POCOCK_SKILLS|BAN_MATT_POCKOCK_SKILLS|BAN_IMPECCABLE|GH_TOKEN|GH_TOKEN_SCOWALT|OP_SERVICE_ACCOUNT_TOKEN|ZAI_API_KEY|OPENCODE_GO_API_KEY|CLAUDE_CONFIG_DIR|CODEX_HOME|PI_CODING_AGENT_DIR) ;;
             *) continue ;;
         esac
         setup_trim "${line#*=}"; value="${SETUP_TRIMMED}"
@@ -176,6 +176,7 @@ create_env_local() {
 # BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
+# BAN_IMPECCABLE=1
 # ZAI_API_KEY=<your z.ai API key>
 # OpenCode Go console key (Go subscription; keep Use balance disabled in the console)
 # OPENCODE_GO_API_KEY=<your OpenCode Go API key>
@@ -8732,7 +8733,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 255 | Last changed: Accept account-owned macOS Homebrew directories for OpenCode"
+    echo -e "${GRAY}Version 256 | Last changed: Restore Impeccable exclusion inputs"
 
     if ! acquire_setup_lock; then
         return 1
