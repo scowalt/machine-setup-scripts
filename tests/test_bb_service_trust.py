@@ -100,13 +100,14 @@ class ServiceGroupProof(unittest.TestCase):
         self.assertEqual(result.returncode, 0 if expected == 'trusted\n' else 1)
         return result
 
-    def test_exclusive_group_preserves_file_and_directory_modes(self):
-        directory = self.root / 'deploy'
-        directory.mkdir(); directory.chmod(0o775)
-        self.request['paths'].append(self.entry(directory))
+    def test_exclusive_group_proof_remains_file_only_and_preserves_modes(self):
         before = snapshot(self.root)
         self.run_proof(); self.run_proof()
         self.assertEqual(snapshot(self.root), before)
+        directory = self.root / 'deploy'
+        directory.mkdir(); directory.chmod(0o775)
+        self.request['paths'].append(self.entry(directory))
+        self.run_proof('unverified\n')
 
     def test_enumerable_initgroups_and_whitespace_are_supported(self):
         (self.root / 'system/etc/nsswitch.conf').write_text(' passwd : files\n group : files systemd\n initgroups : files systemd # fixture\n')
@@ -174,12 +175,89 @@ class ServiceGroupProof(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == 'linux', 'Linux read-only group/ACL proof')
 class PreparationReferenceIntegration(unittest.TestCase):
+    def test_ordinary_service_directories_need_no_privacy_proof_on_either_unix_platform(self):
+        for platform in ['linux', 'darwin']:
+            for mode in [0o750, 0o755, 0o770, 0o775, 0o2775]:
+                with self.subTest(platform=platform, mode=oct(mode)):
+                    case = preparation.Preparation(); case.setUp(); self.addCleanup(case.doCleanups)
+                    account_fixture(case.root)
+                    (case.root / 'system/etc/group').write_text(f'account:x:{os.getgid()}:other\n')
+                    (case.root / 'system/etc/nsswitch.conf').write_text('passwd: unavailable\ngroup: unavailable\n')
+                    (case.root / 'system/proc/123/status').unlink()
+                    (case.root / 'acl-unavailable').touch()
+                    units = case.home / '.config/systemd/user'
+                    agents = case.home / 'Library/LaunchAgents'
+                    target = case.home / 'Code/project/deploy/systemd/unrelated.service'
+                    cellar = case.home / 'brew/Cellar/example/1.0'
+                    opt = case.home / 'brew/opt/example'
+                    for directory in [units, agents, target.parent, cellar, opt.parent]:
+                        directory.mkdir(parents=True, exist_ok=True)
+                    target.write_text('[Service]\nExecStart=/usr/bin/true\n'); target.chmod(0o644)
+                    (units / 'unrelated.service').symlink_to(target)
+                    (units / 'masked.service').symlink_to('/dev/null')
+                    (units / 'empty.service').write_text('')
+                    (cellar / 'example.plist').write_text('<plist/>')
+                    opt.symlink_to('../Cellar/example/1.0')
+                    (agents / 'example.plist').symlink_to(opt / 'example.plist')
+                    for directory in [case.home, *[p for p in case.home.rglob('*') if p.is_dir() and not p.is_symlink()]]:
+                        directory.chmod(mode)
+                    preload = case.root / 'no-directory-proof.cjs'
+                    preload.write_text(r'''
+const fs=require('node:fs'),cp=require('node:child_process'),path=require('node:path');
+Object.defineProperty(process,'platform',{value:process.env.TEST_PLATFORM});
+// Like the elevated entry point, helpers use the configured account's UID,
+// not the caller's effective root identity.
+process.geteuid=()=>0;
+const outer=new Set();
+for(let p=process.env.FIXTURE_ROOT;p!=='/';p=path.dirname(p)) outer.add(p);
+const forbidden=()=>{ fs.appendFileSync(process.env.EVENTS,'FORBIDDEN directory privacy proof\n'); throw Error('forbidden'); };
+for(const key of ['lstatSync','statSync']) {
+  const original=fs[key];
+  fs[key]=function(file,...args) {
+    if(String(file)==='/usr/bin/python3') throw Object.assign(Error(),{code:'ENOENT'});
+    if(String(file).startsWith('/etc/') || String(file).startsWith('/proc/')) return forbidden();
+    const s=original.call(fs,file,...args);
+    if(outer.has(String(file)) && s.uid===process.getuid()) s.mode=(s.mode & ~0o777)|0o755;
+    return s;
+  };
+}
+cp.spawnSync=forbidden; // no Python, NSS, ACL or process-membership proof
+const exec=cp.execFileSync;
+cp.execFileSync=function(command,args,...rest) {
+  if(command!=='ps' || JSON.stringify(args)!==JSON.stringify(['-U',String(process.getuid()),'-o','command='])) return forbidden();
+  return exec.call(cp,command,args,...rest); // independent BB operational identity remains required
+};
+''')
+                    (case.tools / 'node').unlink()
+                    case.write_exe('node', f'#!/bin/bash\nexec {NODE!r} --require {str(preload)!r} "$@"\n')
+                    before = snapshot(case.home)
+                    metadata = {p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode)
+                                for p in [case.home, *[p for p in case.home.rglob('*') if p.is_dir() and not p.is_symlink()]]}
+                    for _ in range(2):
+                        out = case.run_helper(TEST_PLATFORM=platform, PROCESSES='unrelated-workload-changing')
+                        self.assertIn('not enrolled', out)
+                        after = {row[0]: row for row in snapshot(case.home)}
+                        for row in before:
+                            self.assertEqual(after[row[0]], row)
+                        self.assertEqual(metadata, {p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in metadata})
+                    self.assertNotIn('FORBIDDEN', case.log())
+                    if platform == 'darwin':
+                        target.chmod(0o664)
+                        case.events.write_text('')
+                        before = snapshot(case.home)
+                        out = case.run_helper(expected=1, TEST_PLATFORM=platform)
+                        self.assertIn('operation=service', out)
+                        self.assertIn('mode=0664 reason=writable-boundary', out)
+                        self.assertNotIn('npm ', case.log())
+                        self.assertEqual(before, snapshot(case.home))
+
     def test_changed_service_link_listing_and_fifo_fail_before_package_work(self):
-        for change in ['link', 'listing', 'fifo']:
+        for change in ['link', 'listing', 'fifo', 'mode', 'gid', 'uid', 'type', 'identity']:
             with self.subTest(change=change):
                 case = preparation.Preparation(); case.setUp(); self.addCleanup(case.doCleanups)
                 units = case.home / '.config/systemd/user'
                 units.mkdir(parents=True)
+                units.chmod(0o775)
                 target = case.home / 'ordinary.unit'
                 target.write_text('unrelated fixture-secret\n')
                 unit = units / 'ordinary.service'
@@ -190,7 +268,18 @@ class PreparationReferenceIntegration(unittest.TestCase):
                 preload.write_text("""
 const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process');
 const read=fs.readSync,home=process.env.HOME,target=path.join(home,'ordinary.unit');
+const units=path.join(home,'.config/systemd/user'),lstat=fs.lstatSync;
 let changed=false;
+fs.lstatSync=function(file,...args) {
+  const s=lstat.call(fs,file,...args);
+  if(changed && String(file)===units) {
+    if(process.env.SERVICE_RACE==='gid') s.gid+=1;
+    if(process.env.SERVICE_RACE==='uid') s.uid+=1;
+    if(process.env.SERVICE_RACE==='identity') s.ino+=1;
+    if(process.env.SERVICE_RACE==='type') s.mode=(s.mode & 0o7777)|0o100000;
+  }
+  return s;
+};
 fs.readSync=function(fd,...args) {
   const count=read.call(fs,fd,...args);
   if(!changed && fs.readlinkSync(`/proc/self/fd/${fd}`)===target) {
@@ -198,7 +287,8 @@ fs.readSync=function(fd,...args) {
     const unit=path.join(home,'.config/systemd/user/ordinary.service');
     if(process.env.SERVICE_RACE==='link') { fs.unlinkSync(unit);fs.symlinkSync(path.join(home,'other.unit'),unit); }
     else if(process.env.SERVICE_RACE==='listing') fs.writeFileSync(path.join(path.dirname(unit),'late.service'),'fixture-secret');
-    else { fs.unlinkSync(target);cp.execFileSync('/usr/bin/mkfifo',[target]); }
+    else if(process.env.SERVICE_RACE==='fifo') { fs.unlinkSync(target);cp.execFileSync('/usr/bin/mkfifo',[target]); }
+    else if(process.env.SERVICE_RACE==='mode') fs.chmodSync(units,0o2775); // both modes individually acceptable
   }
   return count;
 };
@@ -210,6 +300,52 @@ fs.readSync=function(fd,...args) {
                 self.assertNotIn('fixture-secret', out)
                 self.assertNotIn('npm ', case.log())
                 self.assertFalse(case.prefix.exists())
+                if change == 'mode':
+                    self.assertEqual(units.stat().st_mode & 0o7777, 0o2775)
+
+    def test_directory_refusals_still_precede_descendant_inspection_and_package_work(self):
+        for kind in ['foreign', 'root', 'world', 'link', 'dangling', 'type', 'inspection', 'system-group']:
+            with self.subTest(kind=kind):
+                case = preparation.Preparation(); case.setUp(); self.addCleanup(case.doCleanups)
+                directory = case.home / '.config'
+                (directory / 'systemd/user').mkdir(parents=True)
+                directory.chmod(0o775)
+                if kind == 'world': directory.chmod(0o777)
+                elif kind in ['link', 'dangling', 'type']:
+                    directory.rename(case.home / 'preserved')
+                    if kind == 'type': directory.write_text('private-sentinel')
+                    else: directory.symlink_to(case.home / ('preserved' if kind == 'link' else 'missing'))
+                preload = case.root / 'unsafe-directory.cjs'
+                preload.write_text(r'''
+const fs=require('node:fs'),path=require('node:path');
+const unsafe=process.env.REFUSAL==='system-group'?process.env.FIXTURE_ROOT:path.join(process.env.HOME,'.config');
+for(const key of ['lstatSync','statSync','readdirSync','readlinkSync','openSync','readFileSync']) {
+  const original=fs[key];
+  fs[key]=function(file,...args) {
+    // The helper may read its stdin, runtime files and trusted siblings, but
+    // may not probe any child of the rejected directory.
+    if(String(file).startsWith(unsafe+'/') && process.env.REFUSAL!=='system-group') {
+      fs.appendFileSync(process.env.EVENTS,'FORBIDDEN unsafe descendant\n'); throw Error('private-sentinel');
+    }
+    if(key==='lstatSync' && String(file)===unsafe) {
+      if(process.env.REFUSAL==='inspection') throw Error('private-sentinel');
+      const s=original.call(fs,file,...args);
+      if(process.env.REFUSAL==='foreign') s.uid=process.getuid()+1;
+      if(process.env.REFUSAL==='root') s.uid=0;
+      if(process.env.REFUSAL==='system-group') { s.uid=0; s.mode=(s.mode & ~0o7777)|0o775; }
+      return s;
+    }
+    return original.call(fs,file,...args);
+  };
+}
+''')
+                (case.tools / 'node').unlink()
+                case.write_exe('node', f'#!/bin/bash\nexec {NODE!r} --require {str(preload)!r} "$@"\n')
+                before = snapshot(case.home)
+                out = case.run_helper(expected=1, REFUSAL=kind)
+                self.assertNotIn('private-sentinel', out)
+                self.assertNotIn('npm ', case.log())
+                self.assertEqual(before, snapshot(case.home))
 
     def test_shared_home_exclusive_group_preserves_all_arcane_shapes_twice(self):
         case = preparation.Preparation(); case.setUp(); self.addCleanup(case.doCleanups)
@@ -246,21 +382,11 @@ for(const name of ['lstatSync','statSync']) {
     return metadata;
   };
 }
-if(process.env.GROUP_DENY_DESCENT==='1') {
-  const unsafe=path.join(process.env.HOME,'Code/project/deploy');
-  for(const name of ['lstatSync','statSync','readFileSync','readlinkSync','readdirSync','openSync']) {
-    const original=fs[name];
-    fs[name]=function(file,...args) {
-      if(String(file).startsWith(unsafe+'/')) {
-        fs.appendFileSync(path.join(root,'unsafe-descent'),'probe\\n');
-        throw Error('unsafe descendant');
-      }
-      return original.call(fs,file,...args);
-    };
-  }
-}
 cp.spawnSync=function(command,args,options) {
   if(command==='/usr/bin/python3') {
+    if(JSON.parse(options.input).paths.some(p=>!fs.lstatSync(p.path).isFile())) {
+      fs.appendFileSync(process.env.EVENTS,'FORBIDDEN directory proof\\n'); throw Error('file proof only');
+    }
     if(JSON.stringify(args.slice(0,3))!==JSON.stringify(['-I','-S','-c']) || args.length!==4 ||
       options.shell!==false || options.cwd!=='/' || JSON.stringify(options.env)!==JSON.stringify({PATH:'/usr/bin:/bin',LANG:'C.UTF-8'})) throw Error('unsafe group proof');
     const override=path.join(root,'group-response.json');
@@ -278,8 +404,9 @@ cp.spawnSync=function(command,args,options) {
             self.assertEqual(before, (snapshot(case.home / 'Code'), snapshot(case.home / '.config')))
         (case.root / 'system/etc/group').write_text(f'account:x:{os.getgid()}:other\n')
         case.events.unlink()
-        output = case.run_helper(expected=1, GROUP_DENY_DESCENT='1')
-        self.assertFalse((case.root / 'unsafe-descent').exists(), 'shared-group ancestry was probed before its permission proof')
+        output = case.run_helper(expected=1)
+        self.assertIn('operation=service', output)
+        self.assertNotIn('operation=directory', output)
         self.assertIn('reason=writable-boundary', output)
         self.assertNotIn('npm ', case.log())
         self.assertEqual(before, (snapshot(case.home / 'Code'), snapshot(case.home / '.config')))

@@ -9,10 +9,10 @@ ln -s "${python_bin}" "${tmp}/interpreters/python3"
 export PATH="${tmp}/interpreters:${PATH}"
 python3 - "${tmp}" <<'PY'
 import pathlib, sys
+sys.path.insert(0, str(pathlib.Path('tests').resolve()))
+from extract_setup_fixture import definitions
 source = pathlib.Path('ubuntu.sh').read_text()
-start = source.index('bb_server_platform_ready() {')
-end = source.index('\nrun_setup_tasks() {', start)
-pathlib.Path(sys.argv[1], 'helpers.sh').write_text(source[start:end])
+pathlib.Path(sys.argv[1], 'helpers.sh').write_text(definitions(source))
 PY
 
 python3 tests/test_bb_server_diagnostics.py

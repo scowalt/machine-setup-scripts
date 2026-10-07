@@ -7793,7 +7793,8 @@ class LocalFiles:
                  'unverified-local-state')
             need(info.st_uid in (0, self.uid), 'foreign-local-state')
             sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-            need(not info.st_mode & 0o022 or sticky_tmp, 'writable-local-state')
+            mask = 0o002 if is_dir and info.st_uid == self.uid and info.st_uid != 0 else 0o022
+            need(not info.st_mode & mask or sticky_tmp, 'writable-local-state')
             if not is_dir:
                 need(info.st_nlink == 1, 'unverified-local-state')
             previous = self.seen.get(str(current))
@@ -7825,7 +7826,7 @@ class LocalFiles:
                 need(info.st_uid == self.uid if leaf else info.st_uid in (0, self.uid),
                      'foreign-local-state')
                 sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-                mask = 0o002 if leaf and path == self.home / '.bb' else 0o022
+                mask = 0o002 if info.st_uid == self.uid and info.st_uid != 0 else 0o022
                 need(not info.st_mode & mask or sticky_tmp, 'writable-local-state')
                 previous = self.seen.get(str(current))
                 need(previous is None or previous == fingerprint(info)[:5], 'changed-local-state')
@@ -8452,13 +8453,12 @@ function rememberService(file, s) {
 function servicePermissions(file, s, privateParent) {
   check(!(s.mode & 0o002), 'writable-boundary');
   if (!(s.mode & 0o020)) return;
-  // Read-only references are not owned artifacts. On Linux a private ancestor
-  // excludes other accounts even when a descendant retains group write bits.
+  // Only regular read-only service files retain the Linux privacy exception.
+  // Ordinary directories never require this proof or its native dependencies.
   check(process.platform === 'linux', 'writable-boundary');
   check(!s.isFile() || s.nlink === 1, 'unsafe-file');
   if (!privateParent && !serviceGroupCandidates.has(file)) {
-    // Preserve parent-before-descendant inspection even for group-write paths.
-    // Cache only successful proofs; recheck the full set before package work.
+    // Cache only successful file proofs; recheck before package work.
     verifyServiceGroups([[file, s]]);
     serviceGroupCandidates.set(file, s);
   }
@@ -8477,10 +8477,9 @@ function chain(dir, serviceInspection = false) {
   check(s.isDirectory(), 'non-directory');
   check(s.uid === (inside(dir, home) ? uid : 0) || (!inside(dir, home) && s.uid === uid), 'unsafe-ownership');
   const stickyRoot = !inside(dir, home) && s.uid === 0 && (s.mode & 0o1000);
-  if (!stickyRoot) {
-    if (serviceInspection) servicePermissions(dir, s, privateParent);
-    else check(!(s.mode & 0o022), 'writable-boundary');
-  }
+  // Existing group access is accepted for ordinary account-owned directories,
+  // not privileged/system boundaries. Never normalize their mode or group.
+  if (!stickyRoot) check(!(s.mode & (s.uid === uid && uid !== 0 ? 0o002 : 0o022)), 'writable-boundary');
   return privateParent || ((s.uid === uid || s.uid === 0) && !(s.mode & 0o077));
 }
 function regular(f) {
@@ -8583,7 +8582,7 @@ def main():
         fd = os.open(entry['path'], flags)
         try:
             s = os.fstat(fd)
-            need(stat.S_ISDIR(s.st_mode) or stat.S_ISREG(s.st_mode) and s.st_nlink == 1)
+            need(stat.S_ISREG(s.st_mode) and s.st_nlink == 1)
             need(all(getattr(s, 'st_' + key) == entry[key] for key in ['dev', 'ino', 'uid', 'gid', 'mode']))
             if not trusted[entry['gid']]: raise Untrusted()
             try:
@@ -8904,7 +8903,7 @@ setup_bb_machine() {
         fi
     done
     ensure_shared_node_runtime || { print_error 'BB preparation requires the shared Node/npm runtime.'; return 1; }
-    bb_machine_package_state preflight || { print_error 'BB preparation preflight failed; no package changes made. Reconcile explicit Chezmoi permission overrides or unmanaged blockers manually; see README recovery guidance.'; return 1; }
+    bb_machine_package_state preflight || { print_error 'BB preparation preflight failed; no package changes made. Review the controlled blockers above; ordinary account-owned directory group write is supported.'; return 1; }
     _version=$(npm --version 2>/dev/null) || return 1
     [[ "${_version}" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]] || return 1
     if (( BASH_REMATCH[1] < 11 || (BASH_REMATCH[1] == 11 && BASH_REMATCH[2] < 19) )); then
@@ -9012,7 +9011,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 243 | Last changed: Accept account directory group write during Backlog retirement${NC}"
+    echo -e "${GRAY}Version 245 | Last changed: Merge Backlog and BB directory trust${NC}"
 
     if ! acquire_setup_lock; then
         return 1
