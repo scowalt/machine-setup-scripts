@@ -1,5 +1,7 @@
 # Accept account-owned Linux Homebrew group write for OpenCode
 
+Current scope: [ADR 0012](0012-accept-account-owned-ordinary-directories.md) supersedes the component/prefix-only directory limit below. This decision's Linux Homebrew regular-file allowance remains unchanged; the rationale and evidence below are historical.
+
 OpenCode's group-privacy proof refused ordinary 0775 directories and 0664 receipts when unrelated processes changed, even after bounded retries ([#168](https://github.com/scowalt/machine-setup-scripts/issues/168)). For Scott's single-human-user machines, accept account-owned group-writable paths inside the existing Linux Homebrew prefix without proving exclusive membership through NSS, initgroups, procfs or ACL queries; no detector, override or permission repair replaces that prerequisite. Keep ownership, root-owned group-write and world-write rejection, recognized paths/links, filesystem revalidation and [verified command-only migration](0004-keep-opencode-migration-command-only.md).
 
 A service account remains a security boundary: a compromised service with existing write access could tamper with accepted paths, and point-in-time official-byte checks cannot eliminate every concurrent-write race. This deliberately accepts that residual risk rather than requiring a quiet process table; it grants no new access and does not relax macOS, Windows, standalone/package-command, BB or credential policies. The reported native churn source remains unknown, and offline fixtures are not rollout evidence.
