@@ -8305,7 +8305,8 @@ class LocalFiles:
                  'unverified-local-state')
             need(info.st_uid in (0, self.uid), 'foreign-local-state')
             sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-            need(not info.st_mode & 0o022 or sticky_tmp, 'writable-local-state')
+            mask = 0o002 if is_dir and info.st_uid == self.uid and info.st_uid != 0 else 0o022
+            need(not info.st_mode & mask or sticky_tmp, 'writable-local-state')
             if not is_dir:
                 need(info.st_nlink == 1, 'unverified-local-state')
             previous = self.seen.get(str(current))
@@ -8337,7 +8338,7 @@ class LocalFiles:
                 need(info.st_uid == self.uid if leaf else info.st_uid in (0, self.uid),
                      'foreign-local-state')
                 sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-                mask = 0o002 if leaf and path == self.home / '.bb' else 0o022
+                mask = 0o002 if info.st_uid == self.uid and info.st_uid != 0 else 0o022
                 need(not info.st_mode & mask or sticky_tmp, 'writable-local-state')
                 previous = self.seen.get(str(current))
                 need(previous is None or previous == fingerprint(info)[:5], 'changed-local-state')
@@ -9524,7 +9525,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 259 | Last changed: Match native Impeccable tabs and globstars"
+    echo -e "${GRAY}Version 260 | Last changed: Accept account directory group access for BB refresh"
 
     if ! acquire_setup_lock; then
         return 1
