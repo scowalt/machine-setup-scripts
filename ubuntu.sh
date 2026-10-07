@@ -8431,7 +8431,8 @@ class LocalFiles:
                  'unverified-local-state')
             need(info.st_uid in (0, self.uid), 'foreign-local-state')
             sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-            need(not info.st_mode & 0o022 or sticky_tmp, 'writable-local-state')
+            mask = 0o002 if is_dir and info.st_uid == self.uid and info.st_uid != 0 else 0o022
+            need(not info.st_mode & mask or sticky_tmp, 'writable-local-state')
             if not is_dir:
                 need(info.st_nlink == 1, 'unverified-local-state')
             previous = self.seen.get(str(current))
@@ -8463,7 +8464,7 @@ class LocalFiles:
                 need(info.st_uid == self.uid if leaf else info.st_uid in (0, self.uid),
                      'foreign-local-state')
                 sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-                mask = 0o002 if leaf and path == self.home / '.bb' else 0o022
+                mask = 0o002 if info.st_uid == self.uid and info.st_uid != 0 else 0o022
                 need(not info.st_mode & mask or sticky_tmp, 'writable-local-state')
                 previous = self.seen.get(str(current))
                 need(previous is None or previous == fingerprint(info)[:5], 'changed-local-state')
@@ -9090,13 +9091,12 @@ function rememberService(file, s) {
 function servicePermissions(file, s, privateParent) {
   check(!(s.mode & 0o002), 'writable-boundary');
   if (!(s.mode & 0o020)) return;
-  // Read-only references are not owned artifacts. On Linux a private ancestor
-  // excludes other accounts even when a descendant retains group write bits.
+  // Only regular read-only service files retain the Linux privacy exception.
+  // Ordinary directories never require this proof or its native dependencies.
   check(process.platform === 'linux', 'writable-boundary');
   check(!s.isFile() || s.nlink === 1, 'unsafe-file');
   if (!privateParent && !serviceGroupCandidates.has(file)) {
-    // Preserve parent-before-descendant inspection even for group-write paths.
-    // Cache only successful proofs; recheck the full set before package work.
+    // Cache only successful file proofs; recheck before package work.
     verifyServiceGroups([[file, s]]);
     serviceGroupCandidates.set(file, s);
   }
@@ -9115,10 +9115,9 @@ function chain(dir, serviceInspection = false) {
   check(s.isDirectory(), 'non-directory');
   check(s.uid === (inside(dir, home) ? uid : 0) || (!inside(dir, home) && s.uid === uid), 'unsafe-ownership');
   const stickyRoot = !inside(dir, home) && s.uid === 0 && (s.mode & 0o1000);
-  if (!stickyRoot) {
-    if (serviceInspection) servicePermissions(dir, s, privateParent);
-    else check(!(s.mode & 0o022), 'writable-boundary');
-  }
+  // Existing group access is accepted for ordinary account-owned directories,
+  // not privileged/system boundaries. Never normalize their mode or group.
+  if (!stickyRoot) check(!(s.mode & (s.uid === uid && uid !== 0 ? 0o002 : 0o022)), 'writable-boundary');
   return privateParent || ((s.uid === uid || s.uid === 0) && !(s.mode & 0o077));
 }
 function regular(f) {
@@ -9221,7 +9220,7 @@ def main():
         fd = os.open(entry['path'], flags)
         try:
             s = os.fstat(fd)
-            need(stat.S_ISDIR(s.st_mode) or stat.S_ISREG(s.st_mode) and s.st_nlink == 1)
+            need(stat.S_ISREG(s.st_mode) and s.st_nlink == 1)
             need(all(getattr(s, 'st_' + key) == entry[key] for key in ['dev', 'ino', 'uid', 'gid', 'mode']))
             if not trusted[entry['gid']]: raise Untrusted()
             try:
@@ -9542,7 +9541,7 @@ setup_bb_machine() {
         fi
     done
     ensure_shared_node_runtime || { print_error 'BB preparation requires the shared Node/npm runtime.'; return 1; }
-    bb_machine_package_state preflight || { print_error 'BB preparation preflight failed; no package changes made. Reconcile explicit Chezmoi permission overrides or unmanaged blockers manually; see README recovery guidance.'; return 1; }
+    bb_machine_package_state preflight || { print_error 'BB preparation preflight failed; no package changes made. Review the controlled blockers above; ordinary account-owned directory group write is supported.'; return 1; }
     _version=$(npm --version 2>/dev/null) || return 1
     [[ "${_version}" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]] || return 1
     if (( BASH_REMATCH[1] < 11 || (BASH_REMATCH[1] == 11 && BASH_REMATCH[2] < 19) )); then
@@ -9634,7 +9633,7 @@ bb_server_failure() {
         npm.pending-write) _reason='pending package ownership record could not be written' ;;
         npm.install) _reason='stable npm installation failed' ;;
         npm.artifacts|restore.artifacts) _reason='package identity, native dependencies or bundled artifacts could not be verified' ;;
-        update.directories|update.state-mode|update.endpoint-write|update.guard-write|update.app-unit-render|update.ingress-unit-render|update.app-unit-write|update.ingress-unit-write|update.owner-promotion) _reason='managed state or service file operation failed' ;;
+        update.directories|update.endpoint-write|update.guard-write|update.app-unit-render|update.ingress-unit-render|update.app-unit-write|update.ingress-unit-write|update.owner-promotion) _reason='managed state or service file operation failed' ;;
         update.stop-ingress|update.stop-app|restore.stop-ingress|restore.stop-app|restore.start-app|restore.start-ingress|restore.ingress-state|update.daemon-reload|update.enable-app|restore.daemon-reload|restore.disable-app) _reason='service operation failed' ;;
         update.ingress-stopped|update.app-stopped) _reason='service was still reported active during the stopped update window' ;;
         update.prefix-changed) _reason='npm destination changed after installation' ;;
@@ -9655,7 +9654,7 @@ bb_owned_safe_directory() {
     _metadata=$(stat -c '%u %a' -- "${_directory}" 2>/dev/null) || return 1
     read -r _owner _mode <<< "${_metadata}"
     _uid=$(id -u 2>/dev/null) || return 1
-    [[ "${_owner}" == "${_uid}" && "${_mode}" =~ ^[0-7]{3,4}$ ]] && (( (8#${_mode} & 8#022) == 0 ))
+    [[ "${_owner}" == "${_uid}" && "${_mode}" =~ ^[0-7]{3,4}$ ]] && (( (8#${_mode} & 8#002) == 0 ))
 }
 
 bb_setup_directory_preflight() {
@@ -9691,14 +9690,8 @@ bb_setup_directory_preflight() {
         print_error "BB directory preflight: ${_label} is not owned by the setup account; leaving it unchanged."
         return 1
     fi
-    if (( (8#${_mode} & 8#022) != 0 )); then
-        print_error "BB directory preflight: ${_label} is group- or world-writable (mode ${_mode}); setup will not change its permissions."
-        if (( (8#${_mode} & 8#002) == 0 )); then
-            print_message "After confirming group-write access is not needed, run this non-recursive correction and rerun setup: chmod g-w \"${_label}\""
-        else
-            print_message "Review access requirements and remove group/world write from ${_label} only before rerunning setup; do not change descendants."
-        fi
-        print_message 'For Chezmoi-managed directories, review its explicit umask setting if an apply restores write access; setup preserves that setting.'
+    if (( (8#${_mode} & 8#002) != 0 )); then
+        print_error "BB directory preflight: ${_label} is world-writable (mode ${_mode}); setup will not change its permissions."
         return 1
     fi
 }
@@ -9737,7 +9730,7 @@ function optionalStat(file) { try { return fs.lstatSync(file); } catch (error) {
 function safeDir(file) {
   const stat = optionalStat(file);
   if (!stat) return;
-  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid || (stat.mode & 0o022) !== 0) throw new Error("unsafe directory");
+  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid || (stat.mode & 0o002) !== 0) throw new Error("unsafe directory");
 }
 function safeFile(file, symlinkTarget) {
   const stat = optionalStat(file);
@@ -9751,10 +9744,10 @@ function safeFile(file, symlinkTarget) {
 function scanNativeTree(directory) {
   const stat = optionalStat(directory);
   if (!stat) return;
-  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid || (stat.mode & 0o022) !== 0) throw new Error("unsafe native package");
+  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid || (stat.mode & 0o002) !== 0) throw new Error("unsafe native package");
   for (const name of fs.readdirSync(directory)) {
     const file = path.join(directory, name), child = fs.lstatSync(file);
-    if (child.isSymbolicLink() || child.uid !== uid || (child.mode & 0o022) !== 0) throw new Error("unsafe native artifact");
+    if (child.isSymbolicLink() || child.uid !== uid || (child.mode & (child.isDirectory() ? 0o002 : 0o022)) !== 0) throw new Error("unsafe native artifact");
     if (child.isDirectory()) scanNativeTree(file);
     else if (!child.isFile() || child.nlink !== 1) throw new Error("unsafe native artifact");
   }
@@ -9838,7 +9831,7 @@ bb_package_artifacts_ready() {
     local _prefix="$1" _package="$2"
     [[ -f "${_package}/package.json" && ! -L "${_package}" && ! -L "${_package}/package.json" ]] || return 1
     [[ -f "${_prefix}/bin/bb-app" || -L "${_prefix}/bin/bb-app" ]] || return 1
-    node -e 'const p=process.argv[1],bin=process.argv[2],fs=require("node:fs"),path=require("node:path"),{createRequire}=require("node:module");const j=JSON.parse(fs.readFileSync(path.join(p,"package.json"),"utf8"));if(j.name!=="bb-app"||!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(j.version))process.exit(1);const safeFile=f=>{const s=fs.lstatSync(f);if(!s.isFile()||s.isSymbolicLink()||s.size===0||s.nlink!==1||s.uid!==process.getuid()||(s.mode&0o022)!==0)process.exit(1);return s},safeDir=d=>{const s=fs.lstatSync(d);if(!s.isDirectory()||s.isSymbolicLink()||s.uid!==process.getuid()||(s.mode&0o022)!==0)process.exit(1);return s};const prefix=path.dirname(path.dirname(path.dirname(p)));safeDir(prefix);safeDir(path.join(prefix,"bin"));safeDir(path.dirname(path.dirname(p)));safeDir(path.dirname(p));safeDir(p);safeDir(path.join(p,"node_modules"));safeDir(path.join(p,"dist"));safeDir(path.join(p,"app/dist"));safeDir(path.join(p,"server/dist"));safeDir(path.join(p,"host-daemon/dist"));safeFile(path.join(p,"package.json"));const r=createRequire(path.join(p,"package.json"));safeFile(r.resolve("fs-native-extensions"));const locks=r("fs-native-extensions");if(typeof locks.tryLock!=="function"||typeof locks.unlock!=="function")process.exit(1);for(const name of ["better-sqlite3","node-pty","@parcel/watcher"]){const f=r.resolve(name);safeFile(f);const loaded=r(name);if(name==="better-sqlite3"){const db=new loaded(":memory:");db.close()}}const files=["dist/bb-app.js","dist/bb-server.js","dist/bb-host-daemon.js","server/dist/index.js","app/dist/index.html","host-daemon/dist/daemon-bundle.mjs","host-daemon/dist/bb","host-daemon/dist/bb-provider-bridge-worker.mjs","host-daemon/dist/bb-parcel-watcher-child.mjs","host-daemon/dist/bb-plugin-host-worker.mjs"];for(const file of files){const f=path.join(p,file);safeFile(f)}const dir=path.join(p,"host-daemon/dist/bb-chunks");safeDir(dir);if(!fs.readdirSync(dir).some(n=>{const f=path.join(dir,n);try{safeFile(f);return n.endsWith(".js")}catch{return false}}))process.exit(1);const link=fs.lstatSync(bin);if(!link.isSymbolicLink()||link.uid!==process.getuid()||fs.realpathSync(bin)!==fs.realpathSync(path.join(p,"dist/bb-app.js")))process.exit(1)' "${_package}" "${_prefix}/bin/bb-app" >/dev/null 2>&1 || return 1
+    node -e 'const p=process.argv[1],bin=process.argv[2],fs=require("node:fs"),path=require("node:path"),{createRequire}=require("node:module");const j=JSON.parse(fs.readFileSync(path.join(p,"package.json"),"utf8"));if(j.name!=="bb-app"||!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(j.version))process.exit(1);const safeFile=f=>{const s=fs.lstatSync(f);if(!s.isFile()||s.isSymbolicLink()||s.size===0||s.nlink!==1||s.uid!==process.getuid()||(s.mode&0o022)!==0)process.exit(1);return s},safeDir=d=>{const s=fs.lstatSync(d);if(!s.isDirectory()||s.isSymbolicLink()||s.uid!==process.getuid()||(s.mode&0o002)!==0)process.exit(1);return s};const prefix=path.dirname(path.dirname(path.dirname(p)));safeDir(prefix);safeDir(path.join(prefix,"bin"));safeDir(path.dirname(path.dirname(p)));safeDir(path.dirname(p));safeDir(p);safeDir(path.join(p,"node_modules"));safeDir(path.join(p,"dist"));safeDir(path.join(p,"app/dist"));safeDir(path.join(p,"server/dist"));safeDir(path.join(p,"host-daemon/dist"));safeFile(path.join(p,"package.json"));const r=createRequire(path.join(p,"package.json"));safeFile(r.resolve("fs-native-extensions"));const locks=r("fs-native-extensions");if(typeof locks.tryLock!=="function"||typeof locks.unlock!=="function")process.exit(1);for(const name of ["better-sqlite3","node-pty","@parcel/watcher"]){const f=r.resolve(name);safeFile(f);const loaded=r(name);if(name==="better-sqlite3"){const db=new loaded(":memory:");db.close()}}const files=["dist/bb-app.js","dist/bb-server.js","dist/bb-host-daemon.js","server/dist/index.js","app/dist/index.html","host-daemon/dist/daemon-bundle.mjs","host-daemon/dist/bb","host-daemon/dist/bb-provider-bridge-worker.mjs","host-daemon/dist/bb-parcel-watcher-child.mjs","host-daemon/dist/bb-plugin-host-worker.mjs"];for(const file of files){const f=path.join(p,file);safeFile(f)}const dir=path.join(p,"host-daemon/dist/bb-chunks");safeDir(dir);if(!fs.readdirSync(dir).some(n=>{const f=path.join(dir,n);try{safeFile(f);return n.endsWith(".js")}catch{return false}}))process.exit(1);const link=fs.lstatSync(bin);if(!link.isSymbolicLink()||link.uid!==process.getuid()||fs.realpathSync(bin)!==fs.realpathSync(path.join(p,"dist/bb-app.js")))process.exit(1)' "${_package}" "${_prefix}/bin/bb-app" >/dev/null 2>&1 || return 1
 }
 
 bb_install_package() {
@@ -9933,7 +9926,7 @@ def verified(parent, name, directory=True, private=False):
     if before.st_uid != os.getuid():
         raise ValueError()
     if directory:
-        if not stat.S_ISDIR(before.st_mode) or before.st_mode & 0o022 or before.st_mode & 0o500 != 0o500:
+        if not stat.S_ISDIR(before.st_mode) or before.st_mode & 0o002 or before.st_mode & 0o500 != 0o500:
             raise ValueError()
         if private and stat.S_IMODE(before.st_mode) != 0o700:
             raise ValueError()
@@ -9956,7 +9949,7 @@ try:
     current = root
     for name in ('.config', 'systemd', 'user'):
         current = verified(current, name)
-    dropins = verified(current, 'setup-bb-app.service.d', private=True)
+    dropins = verified(current, 'setup-bb-app.service.d')
     entries = os.listdir(dropins)
     if '20-env-local.conf' in entries:
         print('unsupported-environment-file')
@@ -10488,7 +10481,6 @@ if not isinstance(obj,dict): raise ValueError("invalid metadata")' "${_root}" >/
         [[ "${_linger}" == yes ]] || { bb_server_failure preflight.linger-state; return 1; }
     fi
     ( umask 077; mkdir -p -- "${_dir}" "${_units}" "${HOME}/.bb" ) 2>/dev/null || { bb_server_failure update.directories; return 1; }
-    chmod 700 "${_dir}" 2>/dev/null || { bb_server_failure update.state-mode; return 1; }
     if [[ ! -e "${_state}" ]]; then
         ( umask 077; set -C; printf '%s %s %s\n' "${_dns}" "${_port}" "${_origin}" > "${_state}" ) 2>/dev/null || { bb_server_failure update.endpoint-write; return 1; }
         _new_state=1
@@ -11285,7 +11277,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 315 | Last changed: Accept OpenCode account directory group write"
+    echo -e "${GRAY}Version 318 | Last changed: Merge OpenCode and BB directory trust"
 
     if ! acquire_setup_lock; then
         return 1

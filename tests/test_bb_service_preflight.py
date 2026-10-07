@@ -43,7 +43,7 @@ def metadata(value, path):
     selected = home + '/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf'
     if inspection == 'tmpdir-foreign-target':
         selected = home + '/.cache/bb/tmp'
-    elif inspection == 'tmpdir-foreign-ancestor':
+    elif inspection == 'tmpdir-foreign-ancestor' or inspection.startswith('tmpdir-directory-'):
         selected = home + '/.cache'
     if path != selected:
         return value
@@ -55,6 +55,17 @@ def metadata(value, path):
     if inspection == 'tmpdir-identity-race':
         fields['st_ino'] += stats.get(path, 0)
         stats[path] = stats.get(path, 0) + 1
+    if inspection.startswith('tmpdir-directory-'):
+        call = stats.get(path, 0)
+        stats[path] = call + 1
+        if call:
+            field = inspection.removeprefix('tmpdir-directory-').removesuffix('-race')
+            if field == 'mode':
+                fields['st_mode'] ^= 0o020
+            elif field == 'type':
+                fields['st_mode'] = 0o100775
+            else:
+                fields['st_' + field] += 1
     return SimpleNamespace(**fields)
 
 def open_fixture(name, flags, *, dir_fd=None):
@@ -373,7 +384,7 @@ class BbServicePreflightTests(unittest.TestCase):
         broad = dropins / 'env.conf'
         cases = (
             ('captured-775-env-664', 0o775, 0o664, 1),
-            ('same-775-directory-empty', 0o775, None, 1),
+            ('same-775-directory-empty', 0o775, None, 73),
             ('private-700-env-600', 0o700, 0o600, 1),
             ('safe-755-directory-empty', 0o755, None, 73),
             ('absent-directory', None, None, 73),
@@ -509,13 +520,14 @@ class BbServicePreflightTests(unittest.TestCase):
                     override.unlink()
                 self.assertEqual(saved.read_bytes(), content)
         saved.rename(override)
-        for path in (override.parent, self.home / '.cache', target.parent, target):
+        for path in (override.parent, self.home / '.cache', target.parent):
             with self.subTest(path=path.name):
                 path.chmod(0o770)
-                self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed'))
+                self.run_preflight(mode='caller', systemd='reviewed', status=73)
                 path.chmod(0o700)
-        target.chmod(0o755)
-        self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed'))
+        for mode in (0o770, 0o775, 0o755, 0o2700):
+            target.chmod(mode)
+            self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed'))
         target.chmod(0o700)
         target.rmdir()
         self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed'))
@@ -541,9 +553,13 @@ class BbServicePreflightTests(unittest.TestCase):
 
     def test_tmpdir_inspection_uncertainty_and_changes_refuse_without_effects(self):
         self.reviewed()
+        (self.home / '.cache').chmod(0o775)
         for inspection in ('tmpdir-foreign', 'tmpdir-foreign-target', 'tmpdir-foreign-ancestor',
                            'tmpdir-inspection-failed', 'tmpdir-enumeration-failed',
-                           'tmpdir-identity-race', 'tmpdir-content-race'):
+                           'tmpdir-identity-race', 'tmpdir-content-race',
+                           'tmpdir-directory-uid-race', 'tmpdir-directory-gid-race',
+                           'tmpdir-directory-mode-race', 'tmpdir-directory-type-race',
+                           'tmpdir-directory-ino-race'):
             with self.subTest(inspection=inspection):
                 self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed', inspection=inspection))
 
@@ -643,7 +659,7 @@ class BbServicePreflightTests(unittest.TestCase):
 
     def test_empty_dropins_with_unsafe_or_unreadable_modes_stay_blocked(self):
         for unit in UNITS:
-            for permissions in (0o770, 0o707, 0o100, 0o400, 0o000):
+            for permissions in (0o707, 0o100, 0o400, 0o000):
                 with self.subTest(unit=unit, permissions=oct(permissions)):
                     path = self.add_dropin(unit, 'empty')
                     path.chmod(permissions)
@@ -676,6 +692,7 @@ class BbServicePreflightTests(unittest.TestCase):
             for metadata in ('loaded', 'foreign', 'missing', 'malformed', 'failed'):
                 with self.subTest(unit=unit, metadata=metadata):
                     path = self.add_dropin(unit, 'empty')
+                    path.chmod(0o775)
                     try:
                         result = self.run_preflight(unit, mode='caller', systemd=metadata)
                         self.assertIn('SYSTEMD_SHOW: ' + unit, result.stderr)
