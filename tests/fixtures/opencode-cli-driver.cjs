@@ -54,6 +54,7 @@ const writes = new Set(['mkdirSync', 'mkdtempSync', 'writeFileSync', 'renameSync
 const proxy = new Proxy(fs, {get(object, key) {
     if (typeof object[key] !== 'function') return object[key];
     return (...args) => {
+        if (typeof args[0] === 'string') assert.ok(!/^\/(etc|proc)(\/|$)/.test(args[0]), 'privacy inventory forbidden');
         if (key === 'lstatSync' && typeof args[0] === 'string' && !args[0].startsWith(path.dirname(home) + path.sep) &&
             /^opencode(?:\.exe|\.cmd|\.ps1)?$/.test(path.basename(args[0]))) throw Object.assign(new Error('inert absent command'), {code: 'ENOENT'});
         if (writes.has(key)) {
@@ -83,10 +84,12 @@ const cp = {execFileSync(file, args) {
     assert.ok(file.startsWith(home + path.sep), 'foreign application execution forbidden');
     assert.deepEqual(Array.from(args), ['--version']);
     assert.deepEqual(fs.readFileSync(file), bytes, 'official bytes must precede inert version probes');
+    if (file === destination && process.env.FIXTURE_OUTCOME === 'directory-probe') throw new Error('INERT probe failure SECRET');
     return Buffer.from('opencode v2.0.18\n');
 }};
 const fakeProcess = {platform: windows ? 'win32' : 'linux', env: {...process.env}, getuid: process.getuid,
-    report: process.report, stdin: process.stdin, argv: ['node', session ? 'fixture' : '-']};
+    report: process.report, stdin: process.stdin, argv: ['node', session ? 'fixture' : '-'],
+    getgid: () => assert.fail('group inventory forbidden'), getgroups: () => assert.fail('group inventory forbidden')};
 if (windows) {
     fakeProcess.env.SETUP_OPENCODE_FRESH_PATH = '/fixture/persisted-windows-path';
     fakeProcess.env.PATH = fakeProcess.env.PATH.split(':').join(';');
@@ -103,7 +106,8 @@ function applyDiscoveryPath() {
 }
 const modules = {'node:fs': proxy, 'node:https': https, 'node:child_process': cp,
     'node:path': windows ? {...path, delimiter: ';', isAbsolute: path.win32.isAbsolute} : path,
-    'node:os': {...os, homedir: () => home, machine: () => 'x86_64'}};
+    'node:os': {...os, homedir: () => home, tmpdir: () => path.join(home, 'tmp'), machine: () => 'x86_64',
+        userInfo: () => assert.fail('account inventory forbidden')}};
 const source = session ? process.argv[3] : fs.readFileSync(0, 'utf8');
 if (!session) {
     assert.equal(source.trimEnd(), fs.readFileSync(path.join(__dirname, '../../lib/opencode-cli.cjs'), 'utf8').trimEnd());

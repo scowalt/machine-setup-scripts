@@ -287,6 +287,73 @@ hash -p "${HOME}/foreign/opencode" opencode
                     if successful:
                         self.assertNotIn('boundary=command-discovery', run.stdout)
 
+    def test_group_writable_directories_reach_real_installer_caller_and_finalization(self):
+        native_node = shutil.which('node')
+        self.assertTrue(native_node, 'existing native Node required')
+        for name in BASH:
+            source = (ROOT / name).read_text()
+            wrapper = source.split(": 'BEGIN_GENERATED_OPENCODE_CLI'\n")[1].split(": 'BEGIN_OPENCODE_HOMEBREW_GUARD'")[0]
+            caller = function(source, 'run_setup_tasks')
+            call = re.search(r'^    install_opencode_cli \|\| _setup_had_errors=1$', caller, re.M)[0]
+            tail = caller[caller.index('    check_pending_reboot'):]
+            if name == 'mac.sh':
+                tail = tail.replace('    macos_clt_summary', '    :')
+            fixture = ('print_success() { echo "success:$*"; }; print_warning() { echo "warning:$*"; }; print_error() { echo "error:$*"; }\n'
+                       'print_message() { :; }; print_debug() { :; }; print_section() { :; }\n'
+                       'check_pending_reboot() { echo independent-reboot; }; later_success() { echo later-success; }\n'
+                       'start_setup_log() { echo log-started; }; finish_setup_log() { echo "log-finalized:$1"; return "$1"; }\n'
+                       + wrapper + '\nrun_setup_tasks() { local _setup_had_errors=${FIXTURE_PRIOR_FAILURE};\n'
+                       + call + '\nlater_success\n' + tail + '\n' + function(source, 'main') + '\nmain\n')
+            for scenario in ('fresh', 'migration', 'update', 'probe-failure', 'prior-failure'):
+                with self.subTest(script=name, scenario=scenario), tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp); home = root / 'account'; foreign = root / 'foreign'; tools = root / 'tools'
+                    for directory in (home, foreign, tools):
+                        directory.mkdir(mode=0o700)
+                    saved = seed_discovery_state(home)
+                    destination = home / '.local/bin/opencode'
+                    receipt = destination.parent / '.setup-opencode-cli.json'
+                    if scenario != 'update':
+                        destination.unlink(); receipt.unlink()
+                    old = home / '.opencode/bin/opencode'
+                    old.parent.mkdir(parents=True)
+                    if scenario in ('migration', 'probe-failure'):
+                        old.write_bytes(b'INERT --user-agent=opencode/1.2.3\0'); old.chmod(0o700)
+                    (home / 'tmp').mkdir(mode=0o700)
+                    directories = [home, home / '.local', destination.parent, old.parent.parent, old.parent]
+                    for index, directory in enumerate(directories):
+                        directory.chmod(0o775 if index % 2 else 0o2775)
+                    def snapshot():
+                        return [(s.st_uid, s.st_gid, s.st_mode, s.st_dev, s.st_ino)
+                                for directory in directories for s in [directory.stat()]]
+                    before = snapshot()
+                    node = tools / 'node'
+                    node.write_text('#!/bin/sh\nexec "$FIXTURE_NODE" "$FIXTURE_DRIVER" "$@"\n'); node.chmod(0o700)
+                    env = {'PATH': ':'.join([str(tools), str(destination.parent), str(old.parent), '/usr/bin', '/bin']),
+                           'HOME': str(home), 'FIXTURE_NODE': native_node,
+                           'FIXTURE_DRIVER': str(ROOT / 'tests/fixtures/opencode-cli-driver.cjs'), 'FIXTURE_FOREIGN': str(foreign),
+                           'FIXTURE_OUTCOME': 'directory-probe' if scenario == 'probe-failure' else 'lower',
+                           'FIXTURE_PRIOR_FAILURE': '1' if scenario == 'prior-failure' else '0',
+                           'BOLD': '', 'GREEN': '', 'GRAY': '', 'NC': ''}
+                    failed = scenario in ('probe-failure', 'prior-failure')
+                    for attempt in range(1 if failed else 2):
+                        run = subprocess.run(['bash', '-c', fixture], cwd=home, env=env, capture_output=True, text=True, timeout=30)
+                        self.assertEqual(run.returncode, int(failed), run.stdout + run.stderr)
+                        self.assertIn('later-success', run.stdout); self.assertIn('independent-reboot', run.stdout)
+                        self.assertIn('log-finalized:' + str(int(failed)), run.stdout)
+                        self.assertNotIn('SECRET', run.stdout + run.stderr)
+                        self.assertEqual(snapshot(), before, 'no chmod, chown or replacement of input directories')
+                        if scenario == 'probe-failure':
+                            self.assertIn('operation=installation, reason=version-probe', run.stdout)
+                            self.assertEqual(old.read_bytes(), b'INERT --user-agent=opencode/1.2.3\0')
+                            self.assertFalse(destination.exists()); self.assertFalse(receipt.exists())
+                        else:
+                            self.assertEqual(destination.read_bytes(), b'INERT official native 2.0.18')
+                            self.assertEqual(json.loads(receipt.read_text())['version'], '2.0.18')
+                            self.assertFalse(old.exists())
+                        for file, value in saved.items():
+                            if file.parent != destination.parent:
+                                self.assertEqual(file.read_bytes(), value)
+
     def test_brew_upgrade_protects_legacy_records_and_preserves_pins(self):
         text = (ROOT / 'mac.sh').read_text()
         helper = re.search(r'^opencode_guarded_brew_upgrade\(\) \(\n.*?^\)', text, re.M | re.S)[0]

@@ -95,6 +95,91 @@ test('fresh, repeated, update and isolated verification', async t => {
     assert.equal(await policy.install(f.options), 'migrated');
     assert.equal(f.probes.length, 5);
 });
+test('account-owned ordinary directories retain their modes through installation, repeat and update', async t => {
+    for (const platform of ['linux', 'darwin']) for (const mode of [0o700, 0o755, 0o775, 0o2775]) {
+        const f = fixture(t), directories = [f.home, path.join(f.home, '.local'), path.dirname(f.dest)];
+        for (const directory of directories) fs.chmodSync(directory, mode);
+        const snapshot = () => directories.map(directory => {
+            const s = fs.lstatSync(directory); return [s.uid, s.gid, s.mode, s.dev, s.ino];
+        });
+        const before = snapshot();
+        const forbidden = () => assert.fail('directory privacy inventory forbidden');
+        const {api} = virtualPolicy(f, {platform, getgid: forbidden, getgroups: forbidden}, {
+            'node:os': {...os, userInfo: forbidden},
+            'node:child_process': {execFileSync: forbidden, execSync: forbidden, spawnSync: forbidden, spawn: forbidden, exec: forbidden, execFile: forbidden},
+            'node:fs': new Proxy(fs, {get(object, key) {
+                if (key === 'chownSync') return forbidden;
+                if (key === 'chmodSync') return (file, value) => {
+                    assert.ok(path.dirname(file) === path.dirname(f.dest) && path.basename(file).startsWith('.setup-opencode-'));
+                    assert.equal(value, 0o700); return fs.chmodSync(file, value);
+                };
+                if (typeof object[key] !== 'function') return object[key];
+                return (...args) => {
+                    if (typeof args[0] === 'string') assert.ok(!/^\/(etc|proc|usr)(\/|$)/.test(args[0]), 'privacy-proof paths forbidden');
+                    return object[key](...args);
+                };
+            }}),
+        });
+        assert.equal(await api.install(f.options), 'installed');
+        f.options.commands = [f.dest];
+        assert.equal(await api.install(f.options), 'current');
+        assert.deepEqual(snapshot(), before);
+        f.publish('@opencode/cli-linux-x64-baseline', '2.1.0'); f.setLatest({version: '2.1.0'});
+        assert.equal(await api.install(f.options), 'migrated');
+        assert.deepEqual(snapshot(), before);
+        assert.equal(fs.statSync(path.join(path.dirname(f.dest), fs.readdirSync(path.dirname(f.dest))
+            .find(name => name.startsWith('.setup-opencode-') && fs.lstatSync(path.join(path.dirname(f.dest), name)).isDirectory()))).mode & 0o777, 0o700);
+        assert.equal(f.probes.length, 5);
+    }
+});
+for (const phase of ['staged', 'promoted', 'current', 'recovery']) for (const change of ['mode', 'group', 'identity', 'owner', 'type']) {
+    test(`account directory ${change} change invalidates ${phase} evidence`, async t => {
+        const f = fixture(t), boundary = path.dirname(f.dest), original = f.legacy();
+        fs.chmodSync(boundary, 0o775);
+        const overrides = {};
+        const mutate = () => {
+            if (change === 'mode') fs.chmodSync(boundary, 0o2775);
+            else if (change === 'type') overrides.mode = 0o100775;
+            else {
+                const key = {group: 'gid', identity: 'ino', owner: 'uid'}[change];
+                overrides[key] = fs.lstatSync(boundary)[key] + 1;
+            }
+        };
+        const {api} = virtualPolicy(f, {}, {'node:fs': new Proxy(fs, {get(object, key) {
+            if (key === 'lstatSync') return file => {
+                const info = fs.lstatSync(file);
+                if (file === boundary) Object.assign(info, overrides);
+                return info;
+            };
+            return object[key];
+        }})});
+        if (phase === 'current') {
+            f.receipt('2.0.18', f.binary);
+            f.shellBoundary = () => { mutate(); return Buffer.from(f.dest + '\n'); };
+        } else {
+            const probe = f.options.probe;
+            f.options.probe = (...args) => {
+                probe(...args);
+                if (f.probes.length === (phase === 'staged' ? 1 : 2)) {
+                    mutate();
+                    if (phase === 'recovery') throw new Error('INERT probe failed');
+                }
+            };
+        }
+        await assert.rejects(api.install(f.options));
+        assert.equal(fs.statSync(boundary).mode & 0o7777, change === 'mode' ? 0o2775 : 0o775);
+        if (phase === 'staged' || phase === 'current') {
+            assert.equal(fs.readFileSync(original, 'utf8'), 'INERT official 1.2.3');
+            assert.equal(fs.existsSync(f.dest), phase === 'current');
+        } else {
+            assert.equal(fs.existsSync(original), false, 'uncertain rollback must retain the private backup');
+            assert.equal(fs.existsSync(path.join(boundary, '.setup-opencode-cli.lock')), true);
+            const stage = fs.readdirSync(boundary).find(name => name.startsWith('.setup-opencode-') && name !== '.setup-opencode-cli.lock' && fs.lstatSync(path.join(boundary, name)).isDirectory());
+            assert.equal(fs.statSync(path.join(boundary, stage)).mode & 0o777, 0o700);
+            assert.equal(fs.readFileSync(path.join(boundary, stage, 'previous-0'), 'utf8'), 'INERT official 1.2.3');
+        }
+    });
+}
 test('official newer installed minor and major are preserved without execution', async t => {
     for (const release of ['2.1.0', '3.0.0']) {
         const f = fixture(t), bytes = f.publish('@opencode/cli-linux-x64-baseline', release);
@@ -273,19 +358,36 @@ test('standalone migration preserves application data, credentials and shell fil
     const recovery = fs.readdirSync(path.dirname(f.dest)).find(n => n.startsWith('.setup-opencode-') && fs.lstatSync(path.join(path.dirname(f.dest), n)).isDirectory());
     assert.match(fs.readFileSync(path.join(path.dirname(f.dest), recovery, 'previous-0'), 'utf8'), /1.2.3/);
 });
-for (const manager of ['npm', 'bun']) test(`${manager} native-copy/wrapper identity migrates only the command, without lifecycle scripts`, async t => {
+for (const manager of ['npm', 'bun', 'mise']) test(`${manager} group-writable native-copy/wrapper route migrates only the command, without lifecycle scripts`, async t => {
     const f = fixture(t);
-    const root = path.join(f.home, manager === 'npm' ? '.local/lib/node_modules/opencode-ai' : '.bun/install/global/node_modules/opencode-ai');
+    const packagePaths = {npm: '.local/lib/node_modules/opencode-ai', bun: '.bun/install/global/node_modules/opencode-ai',
+        mise: '.local/share/mise/installs/node/24.20.0/lib/node_modules/opencode-ai'};
+    const commandPaths = {npm: '.local/bin/opencode', bun: '.bun/bin/opencode', mise: '.local/share/mise/installs/node/24.20.0/bin/opencode'};
+    const root = path.join(f.home, packagePaths[manager]);
     fs.mkdirSync(path.join(root, 'bin'), {recursive: true});
     fs.writeFileSync(path.join(root, 'package.json'), '{"name":"opencode-ai","version":"1.2.3"}');
     fs.writeFileSync(path.join(root, 'bin/opencode'), 'INERT wrapper');
     fs.writeFileSync(path.join(root, 'bin/.opencode'), 'INERT official 1.2.3');
     f.publish('opencode-ai', '1.2.3', 'INERT wrapper');
     f.publish('opencode-linux-x64-baseline', '1.2.3');
-    const command = path.join(f.home, manager === 'npm' ? '.local/bin/opencode' : '.bun/bin/opencode');
+    const command = path.join(f.home, commandPaths[manager]);
     fs.mkdirSync(path.dirname(command), {recursive: true}); fs.symlinkSync(path.join(root, 'bin/opencode'), command);
+    const directories = new Set();
+    for (const leaf of [path.join(root, 'bin'), path.dirname(command), path.dirname(f.dest)]) {
+        for (let current = leaf; current.startsWith(f.home); current = path.dirname(current)) directories.add(current);
+    }
+    for (const directory of directories) fs.chmodSync(directory, 0o2775);
+    const snapshot = () => [...directories].map(directory => {
+        const s = fs.lstatSync(directory); return [directory, s.uid, s.gid, s.mode, s.dev, s.ino];
+    });
+    const before = snapshot();
+    const manifest = path.join(root, 'package.json'), beforeManifest = fs.readFileSync(manifest);
     f.options.commands.push(command);
     assert.equal(await policy.install(f.options), 'migrated');
+    f.options.commands = [f.dest];
+    assert.equal(await policy.install(f.options), 'current');
+    assert.deepEqual(snapshot(), before);
+    assert.deepEqual(fs.readFileSync(manifest), beforeManifest);
     assert.equal(fs.readFileSync(path.join(root, 'bin/.opencode'), 'utf8'), 'INERT official 1.2.3');
 });
 for (const modification of ['channel', 'major', 'active', 'minimum', 'package', 'malformed']) test(`rejects ${modification} release metadata before mutations`, async t => {
@@ -432,6 +534,39 @@ test('linked ancestors, linked metadata, group-writable copies and pins fail clo
         if (unsafe === 'pin') f.receipt('2.0.18', f.binary, {pinned: true});
         await assert.rejects(policy.install(f.options)); assert.equal(f.probes.length, 0);
     }
+});
+for (const cause of ['world-directory', 'foreign-directory', 'root-directory', 'root-account', 'file-ancestor', 'link-ancestor',
+    'linked-command', 'group-command', 'group-receipt', 'inspection']) test(`ordinary directory policy retains ${cause} refusal`, async t => {
+    const f = fixture(t), directory = path.dirname(f.dest);
+    f.receipt('2.0.18', f.binary);
+    fs.chmodSync(f.home, 0o775); fs.chmodSync(path.join(f.home, '.local'), 0o2775); fs.chmodSync(directory, 0o775);
+    const receipt = path.join(directory, '.setup-opencode-cli.json'), overrides = {};
+    if (cause === 'world-directory') fs.chmodSync(directory, 0o777);
+    if (cause === 'foreign-directory') overrides.uid = process.getuid() + 1;
+    if (cause === 'root-directory' || cause === 'root-account') overrides.uid = 0;
+    if (cause === 'file-ancestor') overrides.mode = 0o100775;
+    if (cause === 'link-ancestor') overrides.mode = 0o120775;
+    if (cause === 'linked-command') { fs.renameSync(f.dest, f.dest + '-saved'); fs.symlinkSync('opencode-saved', f.dest); }
+    if (cause === 'group-command') fs.chmodSync(f.dest, 0o775);
+    if (cause === 'group-receipt') fs.chmodSync(receipt, 0o664);
+    const {api} = virtualPolicy(f, cause === 'root-account' ? {getuid: () => 0} : {}, {'node:fs': new Proxy(fs, {get(object, key) {
+        if (key === 'lstatSync') return file => {
+            if (file === directory && cause === 'inspection') throw Object.assign(new Error('SECRET failed stat'), {code: 'EACCES'});
+            const info = fs.lstatSync(file);
+            if (file === directory) Object.assign(info, overrides);
+            if (cause === 'root-account') info.uid = 0;
+            return info;
+        };
+        return object[key];
+    }})});
+    const contents = fs.readFileSync(receipt);
+    await assert.rejects(api.install(f.options), error => {
+        assert.equal(api.failureResult(error), 'opencode-cli:policy-failed:installation:' + (cause === 'inspection' ? 'native-EACCES' : 'unsafe-path'));
+        return true;
+    });
+    assert.equal(f.probes.length, 0);
+    assert.deepEqual(fs.readFileSync(receipt), contents);
+    assert.deepEqual(fs.readFileSync(f.dest), f.binary);
 });
 test('official embedded version hint avoids an unbounded standalone version search', async t => {
     const f = fixture(t);
@@ -819,6 +954,30 @@ function homebrewFixture(t, platform = 'linux', prefix = '/home/linuxbrew/.linux
     });
     return Object.assign(f, {api, command, prefix, cellar, mapped, put, calls, observed});
 }
+test('recognized Homebrew migration accepts account-owned ancestors outside its prefix without privacy proofs', async t => {
+    const f = homebrewFixture(t), boundary = '/home/linuxbrew';
+    fs.chmodSync(f.mapped(boundary), 0o2775);
+    for (const directory of [f.home, path.join(f.home, '.local'), path.dirname(f.dest)]) fs.chmodSync(directory, 0o775);
+    const before = fs.lstatSync(f.mapped(boundary));
+    for (const dir of ['/etc', '/proc', '/usr']) fs.rmSync(f.mapped(dir), {recursive: true});
+    assert.equal(await f.api.install(f.options), 'migrated');
+    f.options.commands = [f.dest];
+    assert.equal(await f.api.install(f.options), 'current');
+    const after = fs.lstatSync(f.mapped(boundary));
+    for (const key of ['uid', 'gid', 'mode', 'dev', 'ino']) assert.equal(after[key], before[key]);
+    assert.deepEqual(fs.readFileSync(f.dest), f.binary);
+});
+test('accepted Homebrew ancestor mode changes still invalidate migration evidence', async t => {
+    const f = homebrewFixture(t), boundary = f.mapped('/home/linuxbrew');
+    fs.chmodSync(boundary, 0o775);
+    f.duringProbe = count => { if (count === 1) fs.chmodSync(boundary, 0o2775); };
+    await assert.rejects(f.api.install(f.options), error => {
+        assert.equal(f.api.failureResult(error), 'opencode-cli:policy-failed:homebrew-preflight:brew-snapshot-changed'); return true;
+    });
+    assert.equal(fs.statSync(boundary).mode & 0o7777, 0o2775);
+    assert.equal(fs.readlinkSync(f.mapped(f.command)), '../Cellar/opencode/1.18.33/bin/opencode');
+    assert.equal(fs.existsSync(f.dest), false);
+});
 test('verified newer account-owned Homebrew command is preserved with native bytes and route trust intact', async t => {
     const f = homebrewFixture(t), newer = f.prefix + '/Cellar/opencode/3.0.0';
     const bytes = f.publish('@opencode/cli-linux-x64-baseline', '3.0.0');
@@ -974,11 +1133,9 @@ for (const cause of ['world-write', 'root-group-write', 'foreign-owner', 'linked
         assert.equal(f.observed.some(([, file]) => file.startsWith(boundary + '/')), false, 'do not inspect descendants of an untrusted boundary');
     });
 }
-test('group-write allowances exclude standalone paths and unapproved macOS prefixes', async t => {
+test('ordinary directory acceptance leaves macOS Homebrew regular files strict', t => {
     const mac = homebrewFixture(t, 'darwin');
     assert.throws(() => mac.api.brewCopy(mac.command), /brew-path/); assert.equal(mac.calls.length, 0);
-    const f = fixture(t); const command = f.legacy(); fs.chmodSync(path.dirname(command), 0o775);
-    await assert.rejects(policy.install(f.options), /unsafe-path/); assert.equal(f.probes.length, 0);
 });
 function darwinBrewDirectories(f) {
     return [f.prefix, f.prefix + '/bin', f.prefix + '/Cellar', f.prefix + '/Cellar/opencode',
@@ -1224,7 +1381,7 @@ for (const phase of ['staged', 'promoted']) test(`Darwin directory exception pre
 for (const [change, reason] of [['identity', 'unverified-copy'], ['pin', 'pinned'], ['receipt-link', 'brew-path'],
     ['malformed-receipt', 'metadata'], ['missing-receipt', 'native-ENOENT'], ['custom-tap', 'brew-origin'], ['custom-link', 'brew-command'],
     ['receipt-world-write', 'brew-path'], ['receipt-foreign-owner', 'brew-path'], ['receipt-root-group-write', 'brew-path'],
-    ['receipt-hardlink', 'brew-path'], ['outside-prefix-group-write', 'brew-path']]) {
+    ['receipt-hardlink', 'brew-path'], ['outside-prefix-root-group-write', 'brew-path']]) {
     test(`Homebrew preserves ${change} without executing any command`, async t => {
         const f = homebrewFixture(t, 'linux', '/home/linuxbrew/.linuxbrew', '1.18.33', '_2'), native = f.cellar + '/bin/opencode', receipt = f.cellar + '/INSTALL_RECEIPT.json';
         if (change === 'identity') { fs.chmodSync(f.mapped(native), 0o755); f.put(native, 'INERT custom command', 0o555); }
@@ -1243,7 +1400,9 @@ for (const [change, reason] of [['identity', 'unverified-copy'], ['pin', 'pinned
         if (change === 'receipt-foreign-owner') f.statOverrides.set(receipt, {uid: process.getuid()+1});
         if (change === 'receipt-root-group-write') f.statOverrides.set(receipt, {uid: 0});
         if (change === 'receipt-hardlink') fs.linkSync(f.mapped(receipt), f.mapped(receipt + '.linked'));
-        if (change === 'outside-prefix-group-write') fs.chmodSync(f.mapped('/home/linuxbrew'), 0o775);
+        if (change === 'outside-prefix-root-group-write') {
+            fs.chmodSync(f.mapped('/home/linuxbrew'), 0o775); f.statOverrides.set('/home/linuxbrew', {uid: 0});
+        }
         const before = fs.readlinkSync(f.mapped(f.command)), contents = fs.readFileSync(f.mapped(native));
         await assert.rejects(f.api.install(f.options), error => {
             assert.equal(f.api.failureResult(error), `opencode-cli:policy-failed:${reason.startsWith('brew-') || reason.startsWith('native-') ? 'homebrew-preflight' : 'installation'}:${reason}`); return true;
