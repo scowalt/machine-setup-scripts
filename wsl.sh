@@ -4567,7 +4567,8 @@ function safeBoundary(file, mutate = false) {
         } else if (!stat.isDirectory()) fail('unsafe-path');
         else if (process.platform !== 'win32') {
             const stickyRoot = stat.uid === 0 && (stat.mode & 0o1000);
-            if (![0, process.getuid()].includes(stat.uid) || mutate && (stat.mode & 0o022) && !stickyRoot) fail('unsafe-boundary');
+            const directoryMask = stat.uid === 0 ? 0o022 : 0o002;
+            if (![0, process.getuid()].includes(stat.uid) || mutate && (stat.mode & directoryMask) && !stickyRoot) fail('unsafe-boundary');
         }
         entries.push({file: current, stat});
         if (current === path.dirname(current)) break;
@@ -9011,7 +9012,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 242 | Last changed: Match native Impeccable tabs and globstars${NC}"
+    echo -e "${GRAY}Version 243 | Last changed: Accept account directory group write during Backlog retirement${NC}"
 
     if ! acquire_setup_lock; then
         return 1

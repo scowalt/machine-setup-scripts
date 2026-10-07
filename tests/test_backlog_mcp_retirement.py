@@ -23,14 +23,11 @@ for script in SCRIPTS[1:]:
 assert program(ROOT / "win.ps1") == reference, "PowerShell helper drifted"
 
 def run(home: Path, *, pi="", claude="", codex="", gemini="", ok=True, prepare=True, code=None, cwd=None, extra_env=None):
-    if not home.is_symlink():
+    if prepare and not home.is_symlink():
         home.chmod(0o700)
-        if prepare:
-            for candidate in home.rglob("*"):
-                if candidate.is_dir() and not candidate.is_symlink():
-                    candidate.chmod(candidate.stat().st_mode & ~0o022)
-                elif candidate.is_file() and not candidate.is_symlink():
-                    candidate.chmod(candidate.stat().st_mode & ~0o022)
+        for candidate in home.rglob("*"):
+            if not candidate.is_symlink() and (candidate.is_dir() or candidate.is_file()):
+                candidate.chmod(candidate.stat().st_mode & ~0o022)
     environment = os.environ.copy()
     environment.pop("NODE_OPTIONS", None)
     environment.pop("NODE_PATH", None)
@@ -144,7 +141,7 @@ with tempfile.TemporaryDirectory() as raw:
     codex = home / '.codex/config.toml'; codex.parent.mkdir()
     original = '[mcp_servers.keep]\ncommand="keep"\n'; codex.write_text(original)
     runtime = home / '.pyenv/versions/3.12.77/bin/python3'; runtime.parent.mkdir(parents=True)
-    runtime.symlink_to('/usr/bin/python3')
+    shutil.copy2('/usr/bin/python3', runtime)
     prelude = r'''const fixtureFs=require('node:fs'), fixtureProcess=require('node:child_process');
 const fixtureStat=fixtureFs.lstatSync.bind(fixtureFs), fixtureSpawn=fixtureProcess.spawnSync.bind(fixtureProcess);
 fixtureFs.lstatSync=(file,...args)=>{if(['/opt/homebrew/bin/python3','/usr/local/bin/python3'].includes(file)){const e=new Error(); e.code='ENOENT'; throw e;} return fixtureStat(file,...args);};
@@ -152,7 +149,7 @@ let fixtureProbe=0;
 fixtureProcess.spawnSync=(command,args,options)=>{if(args.includes('import tomllib; print("ready")') && ++fixtureProbe===1) return {status:1,stdout:'',stderr:'fixture: no tomllib'}; return fixtureSpawn(command,args,options);};
 '''
     assert run(home, code=prelude + reference).stdout.strip() == 'absent'
-    assert codex.read_text() == original and runtime.is_symlink()
+    assert codex.read_text() == original and runtime.is_file() and not runtime.is_symlink()
 
 with tempfile.TemporaryDirectory() as raw:
     home = Path(raw); directory = home / ".config/mcp"; directory.mkdir(parents=True); os.chmod(home / ".config", 0o775); os.chmod(directory, 0o775)

@@ -5,6 +5,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "${repo_root}"
 
 python3 tests/test_backlog_mcp_retirement.py
+python3 tests/test_backlog_directory_trust.py
 python3 tests/test_backlog_windows_planner.py
 
 wrapper_root=$(mktemp -d)

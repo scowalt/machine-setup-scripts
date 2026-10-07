@@ -119,8 +119,14 @@ run_cleanup_fixture() {
         export PI_CODING_AGENT_DIR="${custom_pi}"
         source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
 
+        ordinary_dirs=("${home}" "${default_claude}" "${custom_claude}" "${default_codex}" "${custom_codex}"
+            "${home}/.gemini" "${home}/.pi" "${default_claude}/output-styles" "${custom_claude}/output-styles")
+        chmod 2775 "${ordinary_dirs[@]}"
+        before_modes=$(stat -c "%u:%g:%a:%i" "${ordinary_dirs[@]}")
         remove_attention_span_resources
         remove_attention_span_resources
+        after_modes=$(stat -c "%u:%g:%a:%i" "${ordinary_dirs[@]}")
+        [[ "${after_modes}" == "${before_modes}" ]]
 
         for style in \
             "${default_claude}/output-styles/attention-kind.md" \

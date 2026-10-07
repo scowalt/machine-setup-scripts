@@ -229,6 +229,11 @@ for file in "${bash_setup_scripts[@]}"; do
     printf '%s\n' '{"skills":["lfg"]}' > "${cleanup_home}/.pi/agent/compound-engineering/install-manifest.json"
     ln -s "${compound_repo}/skills/lfg" "${cleanup_home}/.agents/skills/lfg"
     ln -s "${symlink_target}" "${cleanup_home}/.agents/skills/external-link"
+    ordinary_dirs=("${cleanup_home}" "${cleanup_home}/.agents" "${cleanup_home}/.agents/skills"
+        "${cleanup_home}/.pi" "${cleanup_home}/.pi/agent/skills" "${cleanup_home}/.pi/agent/agents"
+        "${cleanup_home}/.local" "${cleanup_home}/.local/share")
+    chmod 2775 "${ordinary_dirs[@]}" "${compound_repo}"
+    before_modes=$(stat -c '%u:%g:%a:%i' "${ordinary_dirs[@]}")
 
     SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" \
         HOME="${cleanup_home}" PI_CODING_AGENT_DIR="" bash -c '
@@ -236,6 +241,8 @@ for file in "${bash_setup_scripts[@]}"; do
         remove_compound_engineering_resources
         remove_compound_engineering_resources
     '
+    after_modes=$(stat -c '%u:%g:%a:%i' "${ordinary_dirs[@]}")
+    [[ "${after_modes}" == "${before_modes}" ]] || fail "${file}: ordinary directory metadata changed"
 
     for path in \
         "${cleanup_home}/.agents/skills/lfg" \

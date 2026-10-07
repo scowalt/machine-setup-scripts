@@ -5303,7 +5303,8 @@ function safeBoundary(file, mutate = false) {
         } else if (!stat.isDirectory()) fail('unsafe-path');
         else if (process.platform !== 'win32') {
             const stickyRoot = stat.uid === 0 && (stat.mode & 0o1000);
-            if (![0, process.getuid()].includes(stat.uid) || mutate && (stat.mode & 0o022) && !stickyRoot) fail('unsafe-boundary');
+            const directoryMask = stat.uid === 0 ? 0o022 : 0o002;
+            if (![0, process.getuid()].includes(stat.uid) || mutate && (stat.mode & directoryMask) && !stickyRoot) fail('unsafe-boundary');
         }
         entries.push({file: current, stat});
         if (current === path.dirname(current)) break;
@@ -8260,7 +8261,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 183 | Last changed: Match native Impeccable tabs and globstars"
+    Write-Host "Version 184 | Last changed: Accept account directory group write during Backlog retirement"
 
     Assert-HeadlessUnsupported
 
