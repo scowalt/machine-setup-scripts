@@ -140,7 +140,7 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_order "${file}" '^[[:space:]]+elif install_pi_cli; then$' '^[[:space:]]+(if ! )?remove_simple_english_skill' 'managed skill installation after agent provisioning'
     assert_order "${file}" '^[[:space:]]+(if ! )?remove_simple_english_skill' '^[[:space:]]+(if ! )?remove_show_me_skill' 'Simple English before show-me'
     assert_order "${file}" '^[[:space:]]+(if ! )?remove_show_me_skill' '^[[:space:]]+(if ! )?configure_pi_skill_ownership' 'show-me removal before Pi ownership'
-    assert_order "${file}" '^[[:space:]]+(if ! )?remove_show_me_skill' '^[[:space:]]+remove_impeccable_resources$' 'show-me removal before cleanup'
+    assert_order "${file}" '^[[:space:]]+(if ! )?remove_show_me_skill' '^[[:space:]]+converge_impeccable_skill \|\| _setup_had_errors=1$' 'independent show-me retirement before Impeccable convergence'
     assert_function_contains "${file}" configure_pi_skill_ownership 'matt_pocock_skill_policy ownership' 'shared ownership policy'
     assert_function_contains "${file}" remove_pr_lens_skill 'matt_pocock_skill_policy remove-pr-lens' 'PR Lens retirement'
     for shared_function in install_managed_agent_skill remove_simple_english_skill remove_show_me_skill remove_pr_lens_skill configure_pi_skill_ownership; do

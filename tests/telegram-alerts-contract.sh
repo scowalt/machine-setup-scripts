@@ -53,13 +53,18 @@ for file in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh; do
         unset BB_THREAD_ID BB_ENVIRONMENT_ID BB_TERMINAL_ID
         create_env_local
         assert_placeholders "${HOME}/.env.local"
+        count=$(grep -c '^# BAN_IMPECCABLE=1$' "${HOME}/.env.local" || true)
+        [[ ${count} == 1 ]] || fail "${file}: missing or duplicate commented Impeccable exclusion"
+        if grep -Eq '^[[:space:]]*BAN_IMPECCABLE=' "${HOME}/.env.local"; then
+            fail "${file}: active Impeccable exclusion in template"
+        fi
         permissions=$(stat -c '%a' "${HOME}/.env.local" 2>/dev/null || stat -f '%Lp' "${HOME}/.env.local")
         [[ ${permissions} == 600 ]] || fail "${file}: environment file permissions"
         cp "${HOME}/.env.local" "${home}/first-run"
         create_env_local
         cmp -s "${HOME}/.env.local" "${home}/first-run" || fail "${file}: rerun changed generated file"
 
-        printf '%s\n' 'EXISTING=preserve-me' 'TELEGRAM_ALERTS_BOT_TOKEN=local-test-value' 'TELEGRAM_ALERTS_CHAT_ID=123' > "${HOME}/.env.local"
+        printf '%s\n' 'EXISTING=preserve-me' 'BAN_IMPECCABLE=1' 'TELEGRAM_ALERTS_BOT_TOKEN=local-test-value' 'TELEGRAM_ALERTS_CHAT_ID=123' > "${HOME}/.env.local"
         cp "${HOME}/.env.local" "${home}/before"
         create_env_local
         cmp -s "${HOME}/.env.local" "${home}/before" || fail "${file}: changed existing credentials"
@@ -68,6 +73,11 @@ for file in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh; do
         cp "${HOME}/.env.local" "${home}/before"
         create_env_local
         cmp -s "${HOME}/.env.local" "${home}/before" || fail "${file}: modified old file without alert keys"
+
+        printf '%s\n' 'EXISTING=preserve-me' 'BAN_IMPECCABLE=0' > "${HOME}/.env.local"
+        cp "${HOME}/.env.local" "${home}/before"
+        create_env_local
+        cmp -s "${HOME}/.env.local" "${home}/before" || fail "${file}: modified existing Impeccable preference"
     )
     printf 'PASS: %s environment creation and preservation\n' "${file}"
 done

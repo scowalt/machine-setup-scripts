@@ -25,12 +25,17 @@ try {
             throw "Missing or duplicate placeholder: $key"
         }
     }
+    if ([regex]::Matches($initial, '(?m)^# BAN_IMPECCABLE=1\r?$').Count -ne 1) {
+        throw 'Missing or duplicate commented Impeccable exclusion'
+    }
+    if ($initial -match '(?m)^\s*BAN_IMPECCABLE=') { throw 'Active Impeccable exclusion in template' }
     New-TokenPlaceholders
     if ((Get-Content -Raw $path) -cne $initial) { throw 'Rerun changed the generated file.' }
 
     foreach ($content in @(
         'EXISTING=preserve-me',
-        "EXISTING=preserve-me`nTELEGRAM_ALERTS_BOT_TOKEN=local-test-value`nTELEGRAM_ALERTS_CHAT_ID=123"
+        "EXISTING=preserve-me`nBAN_IMPECCABLE=0",
+        "EXISTING=preserve-me`nBAN_IMPECCABLE=1`nTELEGRAM_ALERTS_BOT_TOKEN=local-test-value`nTELEGRAM_ALERTS_CHAT_ID=123"
     )) {
         Set-Content -Path $path -Value $content
         $before = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($path))

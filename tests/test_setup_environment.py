@@ -49,6 +49,40 @@ class Environment(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn('credential', result.stdout + result.stderr)
 
+    def test_bash_impeccable_input_is_literal_and_independent_of_other_exclusions(self):
+        policy = CONTENTS + 'BAN_MATT_POCOCK_SKILLS=1\nBAN_MATT_POCKOCK_SKILLS=0\nBAN_PI_MCP_ADAPTER=0\nBAN_PI_GOAL_AUTORESEARCH=1\n'
+        code = '''setup_load_environment || exit 1
+[[ "$BAN_MATT_POCOCK_SKILLS" == 1 && "$BAN_MATT_POCKOCK_SKILLS" == 0 && "$BAN_PI_MCP_ADAPTER" == 0 && "$BAN_PI_GOAL_AUTORESEARCH" == 1 ]] || exit 2
+if [[ "$EXPECT_PRESENT" == 1 ]]; then
+    [[ "${BAN_IMPECCABLE+x}" == x && "$BAN_IMPECCABLE" == "$EXPECTED" ]]
+else
+    [[ -z "${BAN_IMPECCABLE+x}" ]]
+fi
+'''
+        cases = (('', None), ('# BAN_IMPECCABLE=1\n', None),
+                 ('BAN_IMPECCABLE=1 # intentional exclusion\n', '1'),
+                 ('export BAN_IMPECCABLE="0"\n', '0'), ('BAN_IMPECCABLE=\n', ''),
+                 ('BAN_IMPECCABLE=true\n', 'true'), ('BAN_IMPECCABLE=false\n', 'false'),
+                 ('BAN_IMPECCABLE=01\n', '01'), ("BAN_IMPECCABLE=' 1 '\n", ' 1 '),
+                 ('BAN_IMPECCABLE=1#literal\n', '1#literal'),
+                 ("BAN_IMPECCABLE='$(touch escaped)'\n", '$(touch escaped)'))
+        for saved, expected in cases:
+            with self.subTest(saved=saved):
+                result = self.bash(code, policy + saved,
+                                   {'EXPECTED': expected or '', 'EXPECT_PRESENT': str(int(expected is not None))})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn('credential', result.stdout + result.stderr)
+        for saved, inherited, expected in (('', '1', '1'), ('# BAN_IMPECCABLE=1\n', '0', '0'),
+                                            ('BAN_IMPECCABLE=1\n', '0', '1'), ('BAN_IMPECCABLE=0\n', '1', '0')):
+            with self.subTest(saved=saved, inherited=inherited):
+                result = self.bash(code, policy + saved,
+                                   {'BAN_IMPECCABLE': inherited, 'EXPECTED': expected, 'EXPECT_PRESENT': '1'})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = self.bash('setup_load_environment', 'BAN_IMPECCABLE=two words\n')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('Failed:', result.stdout)
+        self.assertNotIn('two words', result.stdout + result.stderr)
+
     def test_malformed_data_is_controlled_and_command_text_is_never_executed(self):
         for invalid in ('GH_TOKEN="unterminated', 'GH_TOKEN="one"two', 'GH_TOKEN="one"#two',
                         'GH_TOKEN=two words', '"GH_TOKEN"=value', 'touch escaped'):
@@ -68,6 +102,58 @@ class Environment(unittest.TestCase):
                                'BB_SERVER=1\nSETUP_MAINTENANCE_AUTHORIZED=1\n',
                                {'BB_SERVER': override, 'EXPECTED': override, 'SETUP_ENTRY_PLATFORM': 'ubuntu'})
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    @unittest.skipUnless(PWSH, 'Set PWSH_BIN; native Windows is not claimed')
+    def test_powershell_impeccable_input_is_literal_and_independent_of_other_exclusions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / 'fixture.ps1'
+            script.write_text("$ErrorActionPreference='Stop'\n" + (ROOT / 'lib/setup-policy.ps1').read_text() + """
+$file = Join-Path $env:USERPROFILE '.env.local'
+$policy = "BAN_MATT_POCOCK_SKILLS=1`nBAN_MATT_POCKOCK_SKILLS=0`nBAN_PI_MCP_ADAPTER=0`nBAN_PI_GOAL_AUTORESEARCH=1`n"
+$cases = @(
+    @{ Data = ''; Expected = '' },
+    @{ Data = '# BAN_IMPECCABLE=1'; Expected = '' },
+    @{ Data = 'BAN_IMPECCABLE=1 # intentional exclusion'; Expected = '1' },
+    @{ Data = 'export BAN_IMPECCABLE="0"'; Expected = '0' },
+    @{ Data = 'BAN_IMPECCABLE='; Expected = '' },
+    @{ Data = 'BAN_IMPECCABLE=true'; Expected = 'true' },
+    @{ Data = 'BAN_IMPECCABLE=false'; Expected = 'false' },
+    @{ Data = 'BAN_IMPECCABLE=01'; Expected = '01' },
+    @{ Data = "BAN_IMPECCABLE=' 1 '"; Expected = ' 1 ' },
+    @{ Data = 'BAN_IMPECCABLE=1#literal'; Expected = '1#literal' },
+    @{ Data = 'BAN_IMPECCABLE=''$(New-Item escaped)'''; Expected = '$(New-Item escaped)' },
+    @{ Data = ''; Before = '1'; Expected = '1' },
+    @{ Data = '# BAN_IMPECCABLE=1'; Before = '0'; Expected = '0' },
+    @{ Data = 'BAN_IMPECCABLE=1'; Before = '0'; Expected = '1' },
+    @{ Data = 'BAN_IMPECCABLE=0'; Before = '1'; Expected = '0' }
+)
+foreach ($case in $cases) {
+    [Environment]::SetEnvironmentVariable('BAN_IMPECCABLE', $case.Before, 'Process')
+    [IO.File]::WriteAllText($file, $policy + $case.Data + "`n")
+    $before = [Convert]::ToBase64String([IO.File]::ReadAllBytes($file))
+    Read-SetupEnvironment
+    if ([string]$env:BAN_IMPECCABLE -cne $case.Expected) { throw 'Impeccable input changed' }
+    if ($env:BAN_MATT_POCOCK_SKILLS -cne '1' -or $env:BAN_MATT_POCKOCK_SKILLS -cne '0' -or
+        $env:BAN_PI_MCP_ADAPTER -cne '0' -or $env:BAN_PI_GOAL_AUTORESEARCH -cne '1') { throw 'Independent exclusion changed' }
+    if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($file)) -cne $before) { throw 'Environment file changed' }
+}
+[IO.File]::WriteAllText($file, "BAN_IMPECCABLE=two words`n")
+$rejected = $false
+try { Read-SetupEnvironment } catch {
+    if ($_.Exception.Message -ne 'Unsupported environment-file value') { throw }
+    $rejected = $true
+}
+if (-not $rejected) { throw 'Malformed Impeccable input accepted' }
+Write-Output 'PASS: data-only Impeccable input'
+""")
+            result = subprocess.run([PWSH, '-NoLogo', '-NoProfile', '-NonInteractive', '-File', str(script)],
+                                    cwd=tmp, env=dict(os.environ, HOME=tmp, USERPROFILE=tmp),
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('PASS:', result.stdout)
+            self.assertFalse((root / 'escaped').exists())
+            self.assertEqual((root / '.env.local').read_text(), 'BAN_IMPECCABLE=two words\n')
 
     @unittest.skipUnless(PWSH, 'Set PWSH_BIN; native Windows is not claimed')
     def test_powershell_literals_rejection_and_exact_headless_precedence(self):
