@@ -206,6 +206,34 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(len([c for c in self.calls if c[0] == 'fetch']), 1)
         self.assertFalse((self.target.parent / '.setup-bb-desktop.lock').exists())
 
+    def test_linux_group_writable_application_ancestors_install_update_and_current(self):
+        paths = [self.home, self.home / '.local', self.home / '.local/opt',
+                 self.target.parent, self.home / '.local/share', self.menu.parent]
+        for path in paths:
+            path.mkdir(parents=True, exist_ok=True)
+            path.chmod(0o2775)
+        before = {path: (path.stat().st_uid, path.stat().st_gid, path.stat().st_mode) for path in paths}
+        chmod = os.chmod
+        def no_directory_repair(path, *args, **kwargs):
+            self.assertFalse(Path(path).is_dir(), 'ordinary directory permission repair')
+            return chmod(path, *args, **kwargs)
+        with patch.object(os, 'chmod', no_directory_repair), \
+                patch.object(os, 'chown', side_effect=AssertionError('ownership repair forbidden')), \
+                patch.object(os, 'getgrouplist', side_effect=AssertionError('group privacy proof forbidden')), \
+                patch.object(self.ns['pwd'], 'getpwall', side_effect=AssertionError('NSS enumeration forbidden')), \
+                patch.object(os, 'getxattr', side_effect=AssertionError('ACL privacy proof forbidden')), \
+                patch.object(subprocess, 'run', side_effect=AssertionError('native execution forbidden')):
+            self.assertEqual(self.install(), 'installed')
+            self.assertEqual(self.target.read_bytes(), self.data)
+            self.assertEqual(self.install(), 'current')
+            self.old_install()
+            self.assertEqual(self.install(), 'installed')
+            self.assertEqual(self.target.read_bytes(), self.data)
+            self.assertEqual(self.install(), 'current')
+        self.assertEqual(before, {path: (path.stat().st_uid, path.stat().st_gid, path.stat().st_mode) for path in paths})
+        self.assertEqual(self.menu.read_text(), self.ns['menu_text'](self.target))
+        self.assertFalse((self.target.parent / '.setup-bb-desktop.lock').exists())
+
     def test_update(self):
         self.old_install()
         self.assertEqual(self.install(), 'installed')
@@ -328,6 +356,110 @@ class DesktopTests(unittest.TestCase):
             with self.assertRaisesRegex(self.ns['Refusal'], 'wrong-account-home'):
                 self.install()
 
+    def test_group_writable_selected_xdg_directory_remains_supported(self):
+        data_home = self.home / 'selected/data'
+        paths = (self.home / 'selected', data_home, data_home / 'applications')
+        for path in paths:
+            path.mkdir(parents=True, exist_ok=True)
+            path.chmod(0o775)
+        before = {p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in paths}
+        with patch.dict(os.environ, XDG_DATA_HOME=str(data_home)):
+            self.assertEqual(self.install(), 'installed')
+            self.assertEqual(self.install(), 'current')
+        self.assertEqual((data_home / 'applications/dev.bb.desktop.desktop').read_text(), self.ns['menu_text'](self.target))
+        self.assertFalse(self.menu.exists())
+        self.assertEqual(before, {p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in paths})
+
+    def test_desktop_operation_rejects_root_account_before_any_external_effect(self):
+        self.ns['UID'] = 0
+        with self.assertRaisesRegex(self.ns['Refusal'], 'root-account'):
+            self.install()
+        self.assertEqual(self.calls, [])
+        self.assertFalse(self.target.exists())
+
+    def test_ordinary_directory_acceptance_does_not_authorize_foreign_or_root_group_write(self):
+        original = self.old_install()
+        ancestor = self.home / '.local'
+        real_stat = Path.stat
+        for owner, mode in ((0, 0o775), (os.getuid() + 10000, 0o755),
+                            (os.getuid() + 10000, 0o775), (os.getuid(), 0o777)):
+            def metadata(path, **kwargs):
+                s = real_stat(path, **kwargs)
+                if path == ancestor:
+                    fields = {key: getattr(s, key) for key in dir(s) if key.startswith('st_')}
+                    fields.update(st_uid=owner, st_mode=stat.S_IFDIR | mode)
+                    return types.SimpleNamespace(**fields)
+                return s
+            with self.subTest(owner=owner, mode=oct(mode)), patch.object(Path, 'stat', metadata):
+                with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-directory'):
+                    self.install()
+            self.assertEqual(self.target.read_bytes(), original)
+            self.assertEqual(self.calls, [])
+
+    def test_group_writable_regular_artifacts_remain_refused(self):
+        original = self.old_install()
+        self.target.parent.chmod(0o775)
+        self.target.chmod(0o770)
+        with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-file'):
+            self.install()
+        self.assertEqual(self.target.read_bytes(), original)
+        self.target.chmod(0o700)
+        self.menu.parent.mkdir(parents=True, exist_ok=True)
+        self.menu.parent.chmod(0o775)
+        self.menu.write_text(self.ns['menu_text'](self.target))
+        self.menu.chmod(0o660)
+        with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-file'):
+            self.install()
+        self.mac()
+        self.assertEqual(self.install('macos'), 'installed')
+        file = self.target / 'Contents/MacOS/bb'
+        file.chmod(0o770)
+        with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-bundle-file'):
+            self.install('macos')
+        self.assertEqual(file.read_text(), 'INERT, NOT EXECUTABLE')
+
+    def test_group_writable_lock_and_stage_are_not_ordinary_directories(self):
+        original = self.old_install()
+        self.target.parent.chmod(0o775)
+        lock = self.target.parent / '.setup-bb-desktop.lock'
+        mkdir, mkdtemp = Path.mkdir, tempfile.mkdtemp
+        for part in ('lock', 'stage'):
+            def make_lock(path, *args, **kwargs):
+                result = mkdir(path, *args, **kwargs)
+                if path == lock and part == 'lock':
+                    path.chmod(0o775)
+                return result
+            def make_stage(*args, **kwargs):
+                path = Path(mkdtemp(*args, **kwargs))
+                if part == 'stage':
+                    path.chmod(0o775)
+                return str(path)
+            with self.subTest(part=part), patch.object(Path, 'mkdir', make_lock), \
+                    patch.object(tempfile, 'mkdtemp', make_stage):
+                with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-transaction-directory'):
+                    self.install()
+            self.assertEqual(self.target.read_bytes(), original)
+            self.assertTrue(lock.exists())
+            self.assertEqual(self.calls, [])
+            shutil.rmtree(lock)
+
+    def test_private_lock_and_stage_accepted_mode_changes_retain_evidence(self):
+        original = self.old_install()
+        for part in ('lock', 'stage'):
+            def fetch(url, target=None, maximum=None):
+                result = self.fetch(url, target, maximum)
+                if target:
+                    path = target.parent if part == 'stage' else target.parent.parent
+                    path.chmod(0o2700)
+                return result
+            self.ns['fetch'] = fetch
+            with self.subTest(part=part), self.assertRaisesRegex(self.ns['Refusal'], 'transaction-changed'):
+                self.install()
+            self.assertEqual(self.target.read_bytes(), original)
+            lock = self.target.parent / '.setup-bb-desktop.lock'
+            self.assertTrue(lock.exists())
+            shutil.rmtree(lock)
+
     def test_stale_lock_fails_closed(self):
         self.target.parent.mkdir(parents=True)
         lock = self.target.parent / '.setup-bb-desktop.lock'
@@ -400,6 +532,9 @@ class DesktopTests(unittest.TestCase):
         self.menu.parent.mkdir(parents=True, exist_ok=True)
         self.menu.write_text(self.ns['menu_text'](self.target))
         menu_before = self.menu.read_bytes()
+        for path in (self.target.parent, self.menu.parent):
+            path.chmod(0o775)
+        before = {p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in (self.target.parent, self.menu.parent)}
         rename = os.rename
         def fail_menu(source, dest):
             if str(source).endswith('/menu.desktop'):
@@ -410,6 +545,7 @@ class DesktopTests(unittest.TestCase):
                 self.install()
         self.assertEqual(self.target.read_bytes(), original)
         self.assertEqual(self.menu.read_bytes(), menu_before)
+        self.assertEqual(before, {p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in before})
 
     def test_post_install_verification_failure_rolls_back(self):
         original = self.old_install()
@@ -436,6 +572,49 @@ class DesktopTests(unittest.TestCase):
         self.latest = release(self.number, self.data, 'macos')
         self.assertEqual(self.install('macos'), 'newer-preserved')
         self.assertEqual((self.target / 'Contents/Info.plist').read_bytes(), before)
+
+    def test_mac_group_writable_bundle_directories_current_and_update(self):
+        self.mac()
+        self.assertEqual(self.install('macos'), 'installed')
+        paths = [self.home, self.target.parent, self.target, self.target / 'Contents',
+                 self.target / 'Contents/MacOS']
+        for path in paths:
+            path.chmod(0o2775)
+        before = {path: (path.stat().st_uid, path.stat().st_gid, path.stat().st_mode) for path in paths}
+        original = (self.target / 'Contents/Info.plist').read_bytes()
+        with patch.object(os, 'chmod', side_effect=AssertionError('permission repair forbidden')), \
+                patch.object(os, 'getgrouplist', side_effect=AssertionError('group privacy proof forbidden')), \
+                patch.object(self.ns['pwd'], 'getpwall', side_effect=AssertionError('NSS enumeration forbidden')), \
+                patch.object(os, 'getxattr', side_effect=AssertionError('ACL privacy proof forbidden')), \
+                patch.object(subprocess, 'run', side_effect=AssertionError('native execution forbidden')):
+            self.assertEqual(self.install('macos'), 'current')
+            self.assertEqual(before, {path: (path.stat().st_uid, path.stat().st_gid, path.stat().st_mode) for path in paths})
+            self.number = '2.0.0'
+            self.mac()
+            self.process_state = True
+            self.assertEqual(self.install('macos'), 'deferred-running')
+            self.assertEqual((self.target / 'Contents/Info.plist').read_bytes(), original)
+            self.process_state = False
+            self.assertEqual(self.install('macos'), 'installed')
+            self.assertEqual(plistlib.loads((self.target / 'Contents/Info.plist').read_bytes())[
+                'CFBundleShortVersionString'], '2.0.0')
+            self.assertEqual(self.install('macos'), 'current')
+        for path in paths[:2]:
+            self.assertEqual((path.stat().st_uid, path.stat().st_gid, path.stat().st_mode), before[path])
+
+    def test_mac_user_bundle_accepted_mode_change_cannot_defer(self):
+        self.mac()
+        self.assertEqual(self.install('macos'), 'installed')
+        self.target.chmod(0o775)
+        original = (self.target / 'Contents/Info.plist').read_bytes()
+        def running(*_):
+            self.target.chmod(0o2775)
+            return True
+        self.ns['running'] = running
+        with self.assertRaisesRegex(self.ns['Refusal'], 'installation-changed'):
+            self.install('macos')
+        self.assertEqual((self.target / 'Contents/Info.plist').read_bytes(), original)
+        self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), 0o2775)
 
     def test_mac_identity_signature_notarization_failure(self):
         self.mac()
@@ -495,6 +674,41 @@ class DesktopTests(unittest.TestCase):
         with self.assertRaisesRegex(self.ns['Refusal'], 'nonexecutable-appimage'):
             self.install()
         self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), 0o600)
+
+    def test_accepted_directory_metadata_changes_refuse_and_retain_recovery(self):
+        original = self.old_install()
+        self.menu.parent.mkdir(parents=True, exist_ok=True)
+        for directory in (self.home, self.target.parent, self.menu.parent):
+            directory.chmod(0o775)
+            baseline = directory.stat()
+            for field, value in (('st_mode', stat.S_IFDIR | 0o2775), ('st_gid', baseline.st_gid + 1),
+                                 ('st_ino', baseline.st_ino + 1), ('st_uid', baseline.st_uid + 1),
+                                 ('st_dev', baseline.st_dev + 1), ('st_mode', stat.S_IFREG | 0o775)):
+                changed = False
+                path_stat = Path.stat
+                def metadata(path, **kwargs):
+                    s = path_stat(path, **kwargs)
+                    if path == directory and changed:
+                        fields = {key: getattr(s, key) for key in dir(s) if key.startswith('st_')}
+                        fields[field] = value
+                        return types.SimpleNamespace(**fields)
+                    return s
+                def fetch(url, target=None, maximum=None):
+                    nonlocal changed
+                    result = self.fetch(url, target, maximum)
+                    if target:
+                        changed = True
+                    return result
+                self.ns['fetch'] = fetch
+                with self.subTest(directory=directory.relative_to(self.home), field=field, value=value), \
+                        patch.object(Path, 'stat', metadata):
+                    with self.assertRaisesRegex(self.ns['Refusal'], 'transaction-changed'):
+                        self.install()
+                self.assertEqual(self.target.read_bytes(), original)
+                self.assertFalse(self.menu.exists())
+                lock = self.target.parent / '.setup-bb-desktop.lock'
+                self.assertTrue(lock.exists(), 'uncertain transaction evidence discarded')
+                shutil.rmtree(lock)
 
     def test_changed_installation_before_promotion_is_preserved(self):
         self.old_install()
@@ -609,6 +823,9 @@ class DesktopTests(unittest.TestCase):
         return pid
 
     def test_real_inventory_allows_install_and_update_with_unrelated_private_environment(self):
+        self.home.chmod(0o775)
+        self.target.parent.mkdir(parents=True)
+        self.target.parent.chmod(0o775)
         pid = self.proc_row('/usr/bin/node', name='node')
         self.ns['running'] = self.real_running
         read_bytes = Path.read_bytes
@@ -621,6 +838,8 @@ class DesktopTests(unittest.TestCase):
             self.old_install('1.0.0')
             self.assertEqual(self.install(), 'installed')
             self.assertEqual(self.target.read_bytes(), self.data)
+        self.assertEqual(stat.S_IMODE(self.home.stat().st_mode), 0o775)
+        self.assertEqual(stat.S_IMODE(self.target.parent.stat().st_mode), 0o775)
 
     def test_native_title_on_unrelated_executable_never_reads_environment(self):
         self.proc_row('/usr/bin/node', name='bb')
@@ -1046,6 +1265,23 @@ class MacApplicationsTests(unittest.TestCase):
                 self.assertEqual(self.installed_bytes(), original)
                 self.assertFalse((self.target.parent / '.setup-bb-desktop.lock').exists())
 
+    def test_system_parent_keeps_native_exception_with_group_writable_account_bundle(self):
+        self.native_layout(self.number)
+        directories = (self.target, self.target / 'Contents', self.target / 'Contents/MacOS')
+        for path in directories:
+            self.metadata[path] = dict(st_uid=501, st_gid=80, st_mode=stat.S_IFDIR | 0o2775)
+        before = self.installed_snapshot()
+        parent = self.target.parent.stat()
+        with patch.object(os, 'chmod', side_effect=AssertionError('permission repair forbidden')), \
+                patch.object(os, 'getgrouplist', side_effect=AssertionError('group privacy proof forbidden')):
+            self.assertEqual(self.install('macos'), 'current')
+            self.assertEqual(self.installed_snapshot(), before)
+            self.data = mac_zip('2.0.0')
+            self.latest = release('2.0.0', self.data, 'macos')
+            self.assertEqual(self.install('macos'), 'installed')
+        self.assertEqual(plistlib.loads(self.installed_bytes())['CFBundleShortVersionString'], '2.0.0')
+        self.assertEqual(self.ns['directory_identity'](self.target.parent.stat()), self.ns['directory_identity'](parent))
+
     def test_root_admin_parent_without_group_write_also_updates(self):
         self.native_layout()
         self.metadata[self.target.parent]['st_mode'] = stat.S_IFDIR | 0o755
@@ -1140,21 +1376,21 @@ class MacApplicationsTests(unittest.TestCase):
             with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-directory'):
                 self.install('macos')
         nested = self.target / 'Contents'
-        self.metadata[nested] = dict(st_uid=501, st_gid=80, st_mode=stat.S_IFDIR | 0o775)
+        self.metadata[nested] = dict(st_uid=501, st_gid=80, st_mode=stat.S_IFDIR | 0o777)
         with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-bundle-file'):
             self.install('macos')
         del self.metadata[nested]
-        self.metadata[self.home / 'Applications']['st_mode'] = stat.S_IFDIR | 0o775
+        self.metadata[self.home / 'Applications']['st_mode'] = stat.S_IFDIR | 0o777
         with self.assertRaisesRegex(self.ns['Refusal'], 'unsafe-directory'):
             self.ns['directory'](self.home / 'Applications', macos=True)
 
-    def test_root_foreign_and_writable_bundles_still_refused(self):
+    def test_root_foreign_and_world_writable_bundles_still_refused(self):
         self.native_layout()
         original = self.installed_bytes()
         accepted = self.metadata[self.target].copy()
         for change, reason in (({'st_uid': 0}, 'foreign-bundle'),
                                ({'st_uid': 999}, 'unsafe-directory'),
-                               ({'st_mode': stat.S_IFDIR | 0o775}, 'unsafe-directory')):
+                               ({'st_mode': stat.S_IFDIR | 0o777}, 'unsafe-directory')):
             with self.subTest(change=change):
                 self.metadata[self.target] = {**accepted, **change}
                 with self.assertRaisesRegex(self.ns['Refusal'], reason):

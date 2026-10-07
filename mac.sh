@@ -9520,7 +9520,7 @@ def checked_directory(path, macos=False):
                 stat.S_IMODE(s.st_mode) in (0o755, 0o775), 'unsafe-directory')
     else:
         require(stat.S_ISDIR(s.st_mode) and s.st_uid in (0, UID) and
-                (not s.st_mode & 0o022 or
+                (not s.st_mode & (0o002 if s.st_uid == UID and UID != 0 else 0o022) or
                  (s.st_uid == 0 and s.st_mode & stat.S_ISVTX)), 'unsafe-directory')
     return s
 
@@ -9615,7 +9615,8 @@ def bundle(path):
                 require(item.resolve().is_relative_to(path.resolve()) and item.exists(), 'unsafe-bundle-link')
             else:
                 require((stat.S_ISDIR(s.st_mode) or stat.S_ISREG(s.st_mode)) and
-                        not s.st_mode & 0o022, 'unsafe-bundle-file')
+                        not s.st_mode & (0o002 if stat.S_ISDIR(s.st_mode) else 0o022),
+                        'unsafe-bundle-file')
     info = path / 'Contents/Info.plist'
     regular(info, macos=True)
     data = plistlib.loads(info.read_bytes())
@@ -9857,25 +9858,29 @@ def install(platform):
     # Only an already-present system app selects this path. Fresh installs still
     # use ~/Applications; never elevate, repair permissions or relocate a copy.
     boundaries = []
-    if system_app:
-        for item in [*reversed(target.parent.parents), target.parent]:
-            boundaries.append((item, directory_identity(checked_directory(item, macos=True))))
+    def capture_directories(path):
+        for item in [*reversed(path.parents), path]:
+            if not any(item == prior for prior, _ in boundaries):
+                boundaries.append((item, directory_identity(checked_directory(item, macos=platform == 'macos'))))
+    capture_directories(target.parent)
     def boundary():
         # Parent-before-descendant revalidation also guards rollback and cleanup.
         for item, identity in boundaries:
             require(directory_identity(item.lstat()) == identity, 'transaction-changed')
     def private_boundary(path):
-        if system_app:
-            boundary()
-            s = checked_directory(path, macos=True)
-            require(s.st_uid == UID and stat.S_IMODE(s.st_mode) == 0o700, 'unsafe-transaction-directory')
-            boundaries.append((path, directory_identity(s)))
-            boundary()
+        boundary()
+        s = checked_directory(path, macos=platform == 'macos')
+        modes = (0o700,) if system_app else (0o700, 0o2700)
+        require(s.st_uid == UID and stat.S_IMODE(s.st_mode) in modes, 'unsafe-transaction-directory')
+        boundaries.append((path, directory_identity(s)))
+        boundary()
     boundary()
     text = menu_text(target) if menu else None
     old_menu = None
     if menu:
         directory(menu.parent, create=True)
+        capture_directories(menu.parent)
+        boundary()
         if exists(menu):
             regular(menu)
             old_menu = menu.read_bytes()
@@ -9885,7 +9890,7 @@ def install(platform):
     lock_identity = (lock.stat().st_dev, lock.stat().st_ino)
     private_boundary(lock)
     completed = False
-    transaction_ready = not system_app
+    transaction_ready = False
     try:
         boundary()
         stage = Path(tempfile.mkdtemp(prefix='stage-', dir=lock))
@@ -9894,7 +9899,7 @@ def install(platform):
         latest = release_asset(fetch(API + '/tags/desktop-latest'), platform, 'desktop-latest')
         boundary()
         previous = None
-        previous_root = bundle_root_identity(target) if system_app else None
+        previous_root = bundle_root_identity(target) if platform == 'macos' and exists(target) else None
         if exists(target):
             previous = installed_linux(target, latest) if platform == 'linux' else bundle(target)
             boundary()
@@ -9915,11 +9920,13 @@ def install(platform):
                     staged_menu = stage / 'menu.desktop'
                     staged_menu.write_text(text)
                     directory(menu.parent)
+                    boundary()
                     # Exclusive publication: preserve a menu created concurrently.
                     os.link(staged_menu, menu, follow_symlinks=False)
                     staged_menu.unlink()
                     regular(menu)
                     require(menu.read_text() == text, 'menu-verification')
+                boundary()
                 completed = True
                 return 'current' if previous[0] == latest['version'] else 'newer-preserved'
         archive = stage / 'download'
@@ -9938,12 +9945,11 @@ def install(platform):
             if previous:
                 require(previous[1] == identity[1], 'different-signing-team')
                 is_running = running(target, platform)
-                if system_app:
-                    boundary()
-                    require(bundle(target) == previous and
-                            bundle_root_identity(target) == previous_root,
-                            'installation-changed')
-                    boundary()
+                boundary()
+                require(bundle(target) == previous and
+                        bundle_root_identity(target) == previous_root,
+                        'installation-changed')
+                boundary()
                 if is_running:
                     completed = True
                     return 'deferred-running'
@@ -9961,14 +9967,15 @@ def install(platform):
             directory(target.parent, macos=platform == 'macos')
             actual = (installed_linux(target, latest) if platform == 'linux' else bundle(target)) if exists(target) else None
             require(actual == previous, 'installation-changed')
-            if system_app:
-                require(bundle_root_identity(target) == previous_root, 'installation-changed')
+            if platform == 'macos':
+                require((bundle_root_identity(target) if exists(target) else None) == previous_root,
+                        'installation-changed')
             boundary()
             if menu:
                 regular(menu) if exists(menu) else directory(menu.parent)
                 require((menu.read_bytes() if exists(menu) else None) == old_menu, 'menu-changed')
         result = promote(candidate, target, menu, text, stage, verify, unchanged, platform,
-                         boundary if system_app else None)
+                         boundary)
         completed = True
         return result
     finally:
@@ -9977,7 +9984,7 @@ def install(platform):
         boundary()
         directory(lock, macos=platform == 'macos')
         require((lock.stat().st_dev, lock.stat().st_ino) == lock_identity, 'transaction-changed')
-        # A system stage that never passed private-boundary validation is not
+        # A stage that never passed private-boundary validation is not
         # ours to traverse/delete. Preserve it along with the lock on uncertainty.
         if transaction_ready:
             backups = list(lock.glob('stage-*/previous-*'))
@@ -10010,7 +10017,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 283 | Last changed: Match native Impeccable tabs and globstars${NC}"
+    echo -e "${GRAY}Version 284 | Last changed: Accept account-owned bb desktop directories${NC}"
 
     if ! acquire_setup_lock; then
         return 1
