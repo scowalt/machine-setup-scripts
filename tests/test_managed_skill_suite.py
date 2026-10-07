@@ -271,9 +271,80 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
                 for base in self.all_dirs():
                     self.assertFalse((base / name).exists())
 
+    def test_group_writable_containers_already_converge_exclude_and_retire_without_mode_repair(self):
+        self.env['XDG_STATE_HOME'] = str(self.home / 'state')
+        state = self.put(self.home / 'state/skills/.skill-lock.json', json.dumps({
+            'version': 3, 'skills': {'keep': {'source': 'other/repo'}}, 'dismissed': {'keep': True}}))
+        sentinels = [self.put(self.home / name, 'PRIVATE-SENTINEL') for name in (
+            '.env.local', 'project/.agents/skills/tdd/SKILL.md', 'hosted/diagram.html', '.claude/hooks/keep')]
+        for base in self.all_dirs():
+            self.put(base / 'keep-me/SKILL.md', 'unrelated skill')
+        private = {self.default_pi, self.custom_pi}
+        containers = [self.home] + [p for p in self.home.rglob('*') if p.is_dir()]
+        for directory in containers:
+            directory.chmod(0o700 if directory in private else 0o2775)
+        metadata = {p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode, p.stat().st_ino) for p in containers}
+        for script in ('mac.sh', 'win.ps1'):
+            if script == 'win.ps1' and not PWSH:
+                continue
+            with self.subTest(script=script):
+                for _ in range(2):
+                    self.wrapper(script)
+                for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
+                    for name in KNOWN + ['new-upstream-skill']:
+                        self.assertGreater((base / name / 'SKILL.md').stat().st_size, 0)
+                inventory = json.loads((self.home / '.agents/.setup-matt-pocock-skills.json').read_text())
+                self.assertEqual(set(inventory['skills']), set(KNOWN + HISTORICAL + ['new-upstream-skill']))
+                shutil.copytree(self.shared / 'tdd', self.default_pi / 'skills/tdd')
+                self.put(self.custom_pi / 'skills/tdd/SKILL.md', 'custom duplicate')
+                self.wrapper(script, 'ownership')
+                self.wrapper(script, 'ownership')
+                self.assertFalse((self.default_pi / 'skills/tdd').exists())
+                self.assertEqual((self.custom_pi / 'skills/tdd/SKILL.md').read_text(), 'custom duplicate')
+                for profile in (self.default_pi, self.custom_pi):
+                    selected = json.loads((profile / 'settings.json').read_text())['skills']
+                    self.assertIn('!' + str(profile / 'skills/tdd') + '/**', selected)
+                    self.assertNotIn('!' + str(self.shared / 'tdd') + '/**', selected)
+                calls = Path(self.env['SKILL_TEST_CALLS']).read_bytes()
+                for name, operation in (('pr-lens', 'retire'), ('simple-english', 'retire-simple'), ('show-me', 'retire-show')):
+                    for base in self.all_dirs():
+                        self.put(base / name / 'SKILL.md', 'user-modified retired copy')
+                        (base / name).chmod(0o2775)
+                    self.wrapper(script, operation)
+                    self.wrapper(script, operation)
+                    self.assertTrue(all(not (base / name).exists() for base in self.all_dirs()))
+                self.env.update(BAN_MATT_POCOCK_SKILLS='1', SKILL_TEST_MODE='bad-runtime')
+                self.wrapper(script)
+                self.wrapper(script)
+                self.env.pop('BAN_MATT_POCOCK_SKILLS')
+                self.env.pop('SKILL_TEST_MODE')
+                for base in self.all_dirs():
+                    self.assertEqual([p.name for p in base.iterdir()], ['keep-me'])
+                self.assertEqual(Path(self.env['SKILL_TEST_CALLS']).read_bytes(), calls)
+                self.assertEqual(json.loads(state.read_text()), {
+                    'version': 3, 'skills': {'keep': {'source': 'other/repo'}}, 'dismissed': {'keep': True}})
+                self.assertEqual({p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode, p.stat().st_ino) for p in containers}, metadata)
+                for sentinel in sentinels:
+                    self.assertEqual(sentinel.read_text(), 'PRIVATE-SENTINEL')
+
+    def test_group_writable_staging_remains_private_not_an_ordinary_container(self):
+        stage = Path(self.policy('stage').stdout.strip())
+        stage.chmod(0o770)
+        for mode in ('promote', 'dispose'):
+            result = self.policy(mode, argument=stage, success=False)
+            self.assertIn('unsafe-stage', result.stderr)
+            self.assertEqual(stage.stat().st_mode & 0o777, 0o770)
+        stage.chmod(0o700)
+        self.policy('dispose', argument=stage)
+
     def test_default_claude_and_xdg_state_paths(self):
         self.env.pop('CLAUDE_CONFIG_DIR')
         self.env['XDG_STATE_HOME'] = str(self.home / 'state')
+        containers = [self.home / name for name in ('', '.claude', '.claude/skills', '.agents', '.agents/skills', 'state', 'state/skills')]
+        for directory in containers:
+            directory.mkdir(parents=True, exist_ok=True)
+            directory.chmod(0o775)
+        before = {p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode, p.stat().st_ino) for p in containers}
         self.wrapper('mac.sh')
         self.assertTrue((self.home / '.claude/skills/retro/SKILL.md').is_file())
         self.assertTrue((self.home / 'state/skills/.skill-lock.json').is_file())
@@ -281,6 +352,7 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
         self.wrapper('mac.sh')
         self.assertFalse((self.shared / 'new-upstream-skill').exists())
         self.assertEqual(json.loads((self.home / 'state/skills/.skill-lock.json').read_text())['skills'], {})
+        self.assertEqual({p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode, p.stat().st_ino) for p in containers}, before)
 
     def test_both_optouts_remove_all_global_copies_and_future_inventory_offline(self):
         for script in ('mac.sh', 'win.ps1'):

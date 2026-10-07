@@ -192,8 +192,15 @@ PI_FILE
         export XDG_DATA_HOME="${xdg_data}"
         source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
 
+        ordinary_dirs=("${home}" "${home}/.local" "${home}/.local/bin" "${home}/.local/share"
+            "${home}/.claude" "${home}/.claude/hooks" "${home}/.codex" "${home}/.gemini"
+            "${home}/.config" "${home}/.pi" "${custom_claude}" "${custom_codex}" "${xdg_config}" "${xdg_data}")
+        chmod 2775 "${ordinary_dirs[@]}"
+        before_modes=$(stat -c "%u:%g:%a:%i" "${ordinary_dirs[@]}")
         remove_rtk_resources
         remove_rtk_resources
+        after_modes=$(stat -c "%u:%g:%a:%i" "${ordinary_dirs[@]}")
+        [[ "${after_modes}" == "${before_modes}" ]]
 
         for removed_path in \
             "${home}/.local/bin/rtk" \

@@ -5340,7 +5340,8 @@ function safeBoundary(file, mutate = false) {
         } else if (!stat.isDirectory()) fail('unsafe-path');
         else if (process.platform !== 'win32') {
             const stickyRoot = stat.uid === 0 && (stat.mode & 0o1000);
-            if (![0, process.getuid()].includes(stat.uid) || mutate && (stat.mode & 0o022) && !stickyRoot) fail('unsafe-boundary');
+            const directoryMask = stat.uid === 0 ? 0o022 : 0o002;
+            if (![0, process.getuid()].includes(stat.uid) || mutate && (stat.mode & directoryMask) && !stickyRoot) fail('unsafe-boundary');
         }
         entries.push({file: current, stat});
         if (current === path.dirname(current)) break;
@@ -8302,7 +8303,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 186 | Last changed: Merge Pi and OpenCode directory trust"
+    Write-Host "Version 187 | Last changed: Merge Backlog with integrated directory trust"
 
     Assert-HeadlessUnsupported
 
