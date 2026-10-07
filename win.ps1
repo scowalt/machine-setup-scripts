@@ -106,7 +106,7 @@ function Read-SetupEnvironment {
         throw 'Unsafe environment-file boundary'
     }
     $keys = @('HEADLESS','HEADLESS_PASSWORDLESS_SUDO','BB_SERVER','BB_DATA_DIR','BB_APP_NPM_PREFIX','WORK_MACHINE','MACHINE_TYPE',
-        'BAN_PI_MCP_ADAPTER','BAN_PI_GOAL_AUTORESEARCH','BAN_MATT_POCOCK_SKILLS','BAN_MATT_POCKOCK_SKILLS',
+        'BAN_PI_MCP_ADAPTER','BAN_PI_GOAL_AUTORESEARCH','BAN_MATT_POCOCK_SKILLS','BAN_MATT_POCKOCK_SKILLS','BAN_IMPECCABLE',
         'GH_TOKEN','GH_TOKEN_SCOWALT','OP_SERVICE_ACCOUNT_TOKEN','ZAI_API_KEY','OPENCODE_GO_API_KEY',
         'CLAUDE_CONFIG_DIR','CODEX_HOME','PI_CODING_AGENT_DIR')
     foreach ($line in [IO.File]::ReadAllLines($file)) {
@@ -172,6 +172,7 @@ function New-TokenPlaceholders {
 # BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
 # BAN_MATT_POCOCK_SKILLS=1
+# BAN_IMPECCABLE=1
 # ZAI_API_KEY=<your z.ai API key>
 # OpenCode Go console key (Go subscription; keep Use balance disabled in the console)
 # OPENCODE_GO_API_KEY=<your OpenCode Go API key>
@@ -7423,7 +7424,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 179 | Last changed: Accept account-owned macOS Homebrew directories for OpenCode"
+    Write-Host "Version 180 | Last changed: Restore Impeccable exclusion inputs"
 
     Assert-HeadlessUnsupported
 
