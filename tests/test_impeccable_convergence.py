@@ -26,6 +26,12 @@ SCRIPTS = ['impeccable', 'impeccable.cmd', 'VERSION', 'command-metadata.json', '
            'live-browser-session.js', 'live-browser-ignores.js', 'live-browser-dom.js', 'modern-screenshot.umd.js',
            'data/font-index.json', 'data/font-index-failures.json']
 AGENTS = ['manual-edit-applier', 'asset-producer', 'documenter', 'finish-reviewer']
+CAPTURED_DIRECTORIES = ['.agents', '.claude/skills', '.agents/skills', '.cursor', '.cursor/skills',
+                        '.gemini', '.gemini/skills', '.pi/agent/skills', '.cursor/agents']
+
+
+def directory_metadata(paths):
+    return {str(file): (file.stat().st_uid, file.stat().st_gid, file.stat().st_mode) for file in paths}
 
 
 @lru_cache(maxsize=6)
@@ -89,6 +95,36 @@ if (process.env.IMPECCABLE_TEST_PLATFORM === 'win32') {
     Object.defineProperty(process, 'platform', {value: 'win32'});
     require('node:child_process').spawnSync = () => ({status: 1, stdout: '', stderr: 'PRIVATE-SENTINEL native permission uncertainty'});
 }
+for (const name of ['spawnSync', 'spawn', 'execSync', 'exec', 'execFileSync', 'execFile', 'fork']) {
+    if (process.platform !== 'win32') require('node:child_process')[name] = () => { throw new Error('FORBIDDEN_PRIVACY_PROCESS'); };
+}
+process.getgroups = () => { throw new Error('FORBIDDEN_GROUP_ENUMERATION'); };
+require('node:os').userInfo = () => { throw new Error('FORBIDDEN_ACCOUNT_ENUMERATION'); };
+for (const name of ['readFileSync', 'openSync', 'readdirSync']) {
+    const original = fs[name];
+    fs[name] = (file, ...args) => {
+        if (typeof file === 'string' && (/^\/etc\/(?:passwd|group|nsswitch\.conf)$/.test(file) || /^\/proc(?:\/|$)/.test(file))) throw new Error('FORBIDDEN_PRIVACY_INSPECTION');
+        return original(file, ...args);
+    };
+}
+for (const name of ['chmodSync', 'chownSync', 'lchownSync', 'fchmodSync', 'fchownSync']) {
+    fs[name] = () => { throw new Error('FORBIDDEN_PERMISSION_REPAIR'); };
+}
+let changedMetadata = false;
+const originalStat = fs.lstatSync;
+fs.lstatSync = (file, ...args) => {
+    const st = originalStat(file, ...args);
+    if (file === process.env.IMPECCABLE_TEST_STAT_PATH) {
+        Object.assign(st, JSON.parse(process.env.IMPECCABLE_TEST_STAT || '{}'));
+    }
+    if (changedMetadata && file === process.env.IMPECCABLE_TEST_RACE_PATH) {
+        const field = process.env.IMPECCABLE_TEST_RACE_FIELD || 'gid';
+        if (field === 'mode') st.mode ^= 0o005;
+        else st[field] += 1;
+    }
+    if (process.env.IMPECCABLE_TEST_MODE === 'unsafe-stage' && process.argv[5] === 'promote' && file === process.argv[6]) st.mode |= 0o070;
+    return st;
+};
 const originalRename = fs.renameSync;
 let refusedRename = false;
 fs.renameSync = (from, to) => {
@@ -97,6 +133,11 @@ fs.renameSync = (from, to) => {
     const failures = {'fail-skill-promotion': home + '/.gemini/skills/impeccable',
         'fail-settings-promotion': home + '/.pi/agent/settings.json',
         'fail-inventory-promotion': home + '/.agents/.setup-impeccable.json'};
+    if (!refusedRename && mode === 'change-parent-during-promotion' && to === home + '/.gemini/skills/impeccable') {
+        refusedRename = true;
+        changedMetadata = true;
+        const error = new Error('PRIVATE-SENTINEL promotion failure'); error.code = 'EIO'; throw error;
+    }
     if (!refusedRename && failures[mode] === to) {
         refusedRename = true;
         const error = new Error('PRIVATE-SENTINEL native failure'); error.code = 'EIO'; throw error;
@@ -118,6 +159,7 @@ require('node:https').get = (url, options, callback) => {
     request.destroy = error => { request.emit('error', error || new Error('fixture')); request.emit('close'); };
     process.nextTick(() => {
         const mode = process.env.IMPECCABLE_TEST_MODE;
+        if (mode === 'change-directory-group') changedMetadata = true;
         if (mode === 'change-live-settings') {
             fs.writeFileSync(process.env.IMPECCABLE_TEST_HOME + '/.pi/agent/settings.json', '{"skills":["concurrent-user-selection"],"theme":"concurrent"}');
         }
@@ -146,12 +188,24 @@ require('node:https').get = (url, options, callback) => {
         file.write_text(data)
         return file
 
+    def captured_directories(self, writable=CAPTURED_DIRECTORIES):
+        self.home.chmod(0o750)
+        paths = [self.home, self.home / '.pi', self.home / '.pi/agent']
+        for name in CAPTURED_DIRECTORIES:
+            directory = self.home / name
+            directory.mkdir(parents=True, exist_ok=True)
+            directory.chmod(0o775 if name in writable else 0o755)
+            paths.append(directory)
+        for directory in paths[1:3]:
+            directory.chmod(0o700)
+        return paths
+
     def snapshot(self, directory=None):
         directory = directory or self.home
         state = {}
         def visit(file):
             info = file.lstat()
-            state[str(file.relative_to(directory))] = (info.st_mode,
+            state[str(file.relative_to(directory))] = (info.st_uid, info.st_gid, info.st_mode,
                 os.readlink(file) if file.is_symlink() else
                 hashlib.sha256(file.read_bytes()).hexdigest() if file.is_file() else None)
             if file.is_dir() and not file.is_symlink():
@@ -337,6 +391,72 @@ if (-not $result) { exit 1 }
             self.assertEqual(sentinel.read_text(), 'PRIVATE-SENTINEL')
         self.assertEqual((self.home / 'user.npmrc').read_text(), 'ignore-scripts=true\n')
         self.assertEqual((self.home / 'global.npmrc').read_text(), 'allow-remote=false\n')
+
+    def test_each_captured_directory_and_combined_layout_install_update_repeat_exclude_and_reinstall(self):
+        for writable in [[name] for name in CAPTURED_DIRECTORIES] + [CAPTURED_DIRECTORIES]:
+            with self.subTest(writable=writable):
+                paths = self.captured_directories(writable)
+                before = directory_metadata(paths)
+                unrelated = self.put(self.home / '.agents/skills/tdd/SKILL.md', 'independent Matt suite')
+                for revision in ('initial', 'updated', 'updated'):
+                    self.env['IMPECCABLE_TEST_REVISION'] = revision
+                    result = self.adapter()
+                    self.assertIn('verified', result.stdout)
+                    for provider in PROVIDERS:
+                        self.assertEqual((self.home / provider / 'impeccable/SKILL.md').read_text(), descriptor(provider) + revision)
+                    self.assertEqual(directory_metadata(paths), before)
+                calls = (self.root / 'calls').read_bytes()
+                self.env.update(BAN_IMPECCABLE='1', IMPECCABLE_TEST_MODE='bad-runtime')
+                for _ in range(2):
+                    self.adapter()
+                    self.assertEqual(directory_metadata(paths), before)
+                    self.assertEqual((self.root / 'calls').read_bytes(), calls)
+                    for provider in PROVIDERS:
+                        self.assertFalse((self.home / provider / 'impeccable').exists())
+                self.env.pop('BAN_IMPECCABLE')
+                self.env.pop('IMPECCABLE_TEST_MODE')
+                self.adapter()
+                self.assertEqual(directory_metadata(paths), before)
+                self.assertEqual(unrelated.read_text(), 'independent Matt suite')
+                self.env['BAN_IMPECCABLE'] = '1'
+                self.adapter()
+                self.env.pop('BAN_IMPECCABLE')
+
+    def test_readable_private_group_writable_and_setgid_containers_keep_metadata_at_selected_destinations(self):
+        paths = self.captured_directories()
+        selected = self.home / 'profiles/shared/pi'
+        claude = self.root / 'selected claude'
+        codex = self.home / 'profiles/codex'
+        self.env.update(PI_CODING_AGENT_DIR=str(selected), CLAUDE_CONFIG_DIR=str(claude), CODEX_HOME=str(codex))
+        containers = [self.home, self.home / 'profiles', selected.parent, selected / 'skills',
+                      claude, claude / 'skills', claude / 'agents', codex, codex / 'skills',
+                      self.home / '.codex', self.home / '.codex/skills']
+        for directory in containers:
+            directory.mkdir(parents=True, exist_ok=True)
+        selected.chmod(0o700)
+        settings = self.put(selected / 'settings.json', '{"skills":["custom"],"theme":"keep"}')
+        for permissions in (0o700, 0o755, 0o775, 0o2775):
+            with self.subTest(mode=oct(permissions)):
+                for directory in containers:
+                    directory.chmod(permissions)
+                before = directory_metadata(paths + containers + [selected])
+                for shell in ('bash', 'powershell'):
+                    self.adapter(shell)
+                    self.assertEqual((selected / 'skills/impeccable/SKILL.md').read_text(), descriptor('.pi/agent/skills'))
+                    self.assertEqual((claude / 'skills/impeccable/SKILL.md').read_text(), descriptor('.claude/skills'))
+                    self.assertEqual(json.loads(settings.read_text())['skills'], ['custom', '!' + str(self.home / '.agents/skills/impeccable') + '/**'])
+                    self.assertEqual(directory_metadata(paths + containers + [selected]), before)
+                    for tree in (selected / 'skills/impeccable', claude / 'skills/impeccable',
+                                 codex / 'skills/impeccable', self.home / '.codex/skills/impeccable'):
+                        tree.mkdir(exist_ok=True)
+                        tree.chmod(permissions)
+                    self.env['BAN_IMPECCABLE'] = '1'
+                    calls = (self.root / 'calls').read_bytes()
+                    self.adapter(shell)
+                    self.assertEqual((self.root / 'calls').read_bytes(), calls)
+                    self.assertEqual(directory_metadata(paths + containers + [selected]), before)
+                    self.assertEqual(json.loads(settings.read_text()), {'skills': ['custom'], 'theme': 'keep'})
+                    self.env.pop('BAN_IMPECCABLE')
 
     def test_powershell_public_adapter_restores_user_environment_and_location_on_repeated_install(self):
         for _ in range(2):
@@ -705,6 +825,45 @@ if (-not $result) { exit 1 }
         self.assertEqual(root_descriptor.read_text(), 'Unrelated root descriptor; never execute.\n')
         self.assertEqual(ignore.read_text(), '/SKILL.md\n!impeccable/SKILL.md\n')
 
+    def test_accepted_metadata_changes_in_destinations_and_ancestors_invalidate_snapshots_before_promotion(self):
+        self.captured_directories()
+        self.adapter()
+        nested = self.home / '.pi/agent/skills/impeccable/reference'
+        nested.chmod(0o775)
+        for target, reason in ((nested, 'changed-copy'), (self.home / '.agents', 'changed-directory')):
+            for field in ('gid', 'mode', 'ino', 'uid'):
+                with self.subTest(target=target.name, field=field):
+                    self.env.update(IMPECCABLE_TEST_MODE='change-directory-group', IMPECCABLE_TEST_RACE_PATH=str(target),
+                                    IMPECCABLE_TEST_RACE_FIELD=field)
+                    before = self.snapshot()
+                    result = self.adapter(success=False)
+                    self.assertIn('Impeccable: ' + ('unsafe-owner-or-mode' if field == 'uid' else reason) + '.', result.stderr)
+                    self.assertEqual(self.snapshot(), before)
+                    self.assertFalse((self.home / '.agents/.setup-impeccable.lock').exists())
+
+    def test_accepted_parent_changes_during_failed_promotion_retain_private_recovery_evidence(self):
+        self.captured_directories()
+        self.adapter()
+        prior = (self.home / '.claude/skills/impeccable/SKILL.md').read_bytes()
+        self.env.update(IMPECCABLE_TEST_MODE='change-parent-during-promotion',
+                        IMPECCABLE_TEST_REVISION='new payload', IMPECCABLE_TEST_RACE_PATH=str(self.home / '.agents'),
+                        IMPECCABLE_TEST_RACE_FIELD='mode')
+        result = self.adapter(success=False)
+        self.assertIn('Impeccable: recovery-required.', result.stderr)
+        lock = self.home / '.agents/.setup-impeccable.lock'
+        self.assertEqual(lock.stat().st_mode & 0o777, 0o600)
+        backups = list((self.home / '.claude/skills').glob('.setup-impeccable-*.old'))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual((backups[0] / 'SKILL.md').read_bytes(), prior)
+        self.assertEqual(backups[0].stat().st_mode & 0o777, 0o700)
+        self.assertFalse(list(self.home.rglob('.setup-impeccable-*.new')))
+        self.env.pop('IMPECCABLE_TEST_MODE')
+        before = self.snapshot()
+        calls = (self.root / 'calls').read_bytes()
+        self.adapter(success=False)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual((self.root / 'calls').read_bytes(), calls)
+
     def test_changed_source_or_user_selection_after_verification_is_not_promoted_or_overwritten(self):
         self.adapter()
         for mode in ('change-stage-after-verification', 'change-live-settings'):
@@ -730,6 +889,112 @@ if (-not $result) { exit 1 }
         for shell in ('bash', 'powershell'):
             self.adapter(shell)
 
+    def test_private_pi_boundaries_still_refuse_group_write_with_ordinary_ancestors_accepted(self):
+        self.captured_directories()
+        selected = self.home / 'shared profiles/selected pi'
+        selected.mkdir(parents=True)
+        selected.parent.chmod(0o775)
+        self.env['PI_CODING_AGENT_DIR'] = str(selected)
+        self.adapter()
+        for boundary in (self.home / '.pi', self.home / '.pi/agent', selected):
+            boundary.chmod(0o775)
+            for flag in ('0', '1'):
+                with self.subTest(boundary=boundary.name, excluded=flag):
+                    self.env['BAN_IMPECCABLE'] = flag
+                    before = self.snapshot()
+                    calls = (self.root / 'calls').read_bytes()
+                    result = self.adapter(success=False)
+                    self.assertIn('Impeccable: unsafe-owner-or-mode.', result.stderr)
+                    self.assertEqual(self.snapshot(), before)
+                    self.assertEqual((self.root / 'calls').read_bytes(), calls)
+            boundary.chmod(0o700)
+        self.env.pop('BAN_IMPECCABLE')
+
+    def test_ordinary_group_access_does_not_weaken_files_world_write_ownership_or_stage_privacy(self):
+        self.captured_directories()
+        self.adapter()
+        for relative, permissions in (('.agents', 0o777), ('.pi/agent/skills/impeccable/reference', 0o777),
+                                      ('.pi/agent/settings.json', 0o660), ('.agents/.setup-impeccable.json', 0o660),
+                                      ('.pi/agent/skills/impeccable/SKILL.md', 0o660)):
+            file = self.home / relative
+            original = file.stat().st_mode & 0o7777
+            file.chmod(permissions)
+            for flag in ('0', '1'):
+                with self.subTest(path=relative, excluded=flag):
+                    self.env['BAN_IMPECCABLE'] = flag
+                    before = self.snapshot()
+                    calls = (self.root / 'calls').read_bytes()
+                    result = self.adapter(success=False)
+                    self.assertIn('Impeccable: unsafe-owner-or-mode.', result.stderr)
+                    self.assertEqual(self.snapshot(), before)
+                    self.assertEqual((self.root / 'calls').read_bytes(), calls)
+            file.chmod(original)
+        self.env.pop('BAN_IMPECCABLE')
+        for owner in (0, os.getuid() + 12345):
+            self.env.update(IMPECCABLE_TEST_STAT_PATH=str(self.home / '.agents'), IMPECCABLE_TEST_STAT=json.dumps({'uid': owner}))
+            before = self.snapshot()
+            calls = (self.root / 'calls').read_bytes()
+            self.adapter(success=False)
+            self.assertEqual(self.snapshot(), before)
+            self.assertEqual((self.root / 'calls').read_bytes(), calls)
+        self.env.pop('IMPECCABLE_TEST_STAT_PATH')
+        self.env.pop('IMPECCABLE_TEST_STAT')
+        self.env['IMPECCABLE_TEST_MODE'] = 'unsafe-stage'
+        before = self.snapshot()
+        result = self.adapter(success=False)
+        self.assertIn('Impeccable: unsafe-stage.', result.stderr)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_root_system_boundary_stays_strict_but_account_ancestors_need_no_private_ancestor(self):
+        self.captured_directories()
+        selected = self.root / 'system-parent/selected claude'
+        selected.mkdir(parents=True)
+        self.env.update(CLAUDE_CONFIG_DIR=str(selected), IMPECCABLE_TEST_STAT_PATH=str(selected.parent),
+                        IMPECCABLE_TEST_STAT=json.dumps({'uid': 0, 'mode': 0o40755}))
+        self.adapter()
+        self.env['IMPECCABLE_TEST_STAT'] = json.dumps({'uid': 0, 'mode': 0o40775})
+        before = self.snapshot()
+        calls = (self.root / 'calls').read_bytes()
+        result = self.adapter(success=False)
+        self.assertIn('Impeccable: unsafe-owner-or-mode.', result.stderr)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual((self.root / 'calls').read_bytes(), calls)
+        self.home.chmod(0o775)
+        self.env.update(IMPECCABLE_TEST_STAT_PATH=str(self.root),
+                        IMPECCABLE_TEST_STAT=json.dumps({'mode': 0o40775, 'gid': os.getgid() + 1}))
+        self.adapter()
+        self.assertEqual(self.home.stat().st_mode & 0o777, 0o775)
+
+    def test_wrong_type_dangling_ancestor_and_hardlinked_metadata_refuse_without_installer_or_cleanup(self):
+        self.captured_directories()
+        self.adapter()
+        directory = self.home / '.cursor/skills'
+        saved = self.root / 'saved-skills'
+        directory.rename(saved)
+        calls = (self.root / 'calls').read_bytes()
+        for linked in (False, True):
+            if linked:
+                directory.symlink_to(self.root / 'missing', target_is_directory=True)
+            else:
+                directory.write_text('not a directory')
+            for flag in ('0', '1'):
+                self.env['BAN_IMPECCABLE'] = flag
+                before = self.snapshot()
+                self.adapter(success=False)
+                self.assertEqual(self.snapshot(), before)
+                self.assertEqual((self.root / 'calls').read_bytes(), calls)
+            directory.unlink()
+        saved.rename(directory)
+        settings = self.home / '.pi/agent/settings.json'
+        os.link(settings, self.root / 'hardlinked-settings')
+        for flag in ('0', '1'):
+            self.env['BAN_IMPECCABLE'] = flag
+            before = self.snapshot()
+            result = self.adapter(success=False)
+            self.assertIn('Impeccable: unsafe-metadata.', result.stderr)
+            self.assertEqual(self.snapshot(), before)
+            self.assertEqual((self.root / 'calls').read_bytes(), calls)
+
     def test_native_windows_permission_uncertainty_refuses_before_installer_and_preserves_profiles(self):
         self.put(self.home / '.pi/agent/settings.json', '{"skills":["custom"]}')
         self.env['IMPECCABLE_TEST_PLATFORM'] = 'win32'
@@ -754,7 +1019,7 @@ if (-not $result) { exit 1 }
                 self.assertEqual((foreign / 'settings.json').read_text(), '{}')
                 self.env.pop('PI_CODING_AGENT_DIR')
                 ancestor = self.home / '.agents'
-                ancestor.chmod(0o775)
+                ancestor.chmod(0o777)
                 before = self.snapshot()
                 self.adapter(shell, success=False)
                 self.assertEqual(self.snapshot(), before)

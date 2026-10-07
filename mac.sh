@@ -3441,15 +3441,17 @@ function directory(file) {
         if (!st.isDirectory()) fail('not-directory');
         if (process.platform !== 'win32') {
             const uid = process.getuid();
-            if (![0, uid].includes(st.uid) || (st.mode & 0o022) && !(st.uid === 0 && (st.mode & 0o1000))) fail('unsafe-owner-or-mode');
+            const writeMask = st.uid === uid && uid !== 0 ? 0o002 : 0o022;
+            if (![0, uid].includes(st.uid) || (st.mode & writeMask) && !(st.uid === 0 && (st.mode & 0o1000))) fail('unsafe-owner-or-mode');
             if (homeInput && path.isAbsolute(homeInput) && (file === path.resolve(homeInput) || file.startsWith(path.resolve(homeInput) + path.sep)) && st.uid !== uid) fail('unsafe-owner-or-mode');
         }
     }
 }
-function owned(file) {
+function owned(file, privateDirectory = false) {
     const st = stat(file);
     if (st) windowsRecord(file, true, st.isSymbolicLink() && ['remove', 'dispose'].includes(mode));
-    if (st && process.platform !== 'win32' && (st.uid !== process.getuid() || !st.isSymbolicLink() && (st.mode & 0o022))) fail('unsafe-owner-or-mode');
+    const writeMask = st?.isDirectory() && st.uid !== 0 && !privateDirectory ? 0o002 : 0o022;
+    if (st && process.platform !== 'win32' && (st.uid !== process.getuid() || !st.isSymbolicLink() && (st.mode & writeMask))) fail('unsafe-owner-or-mode');
 }
 function jsonFile(file) {
     directory(path.dirname(file));
@@ -3483,7 +3485,7 @@ function fingerprint(file) {
     const st = stat(file);
     if (!st) return null;
     owned(file);
-    const identity = [st.dev, st.ino, st.mode, st.nlink, st.mtimeMs];
+    const identity = [st.dev, st.ino, st.mode, st.uid, st.gid, st.nlink, st.mtimeMs];
     if (st.isSymbolicLink()) identity.push(fs.readlinkSync(file));
     else if (st.isDirectory()) identity.push(fs.readdirSync(file).sort().map(name => [name, fingerprint(path.join(file, name))]));
     else if (st.isFile()) identity.push(crypto.createHash('sha256').update(readRegular(file)).digest('hex'));
@@ -3913,6 +3915,9 @@ function context(excluded = false) {
     const piRelative = path.relative(home, activePi);
     if (!piRelative || piRelative === '..' || piRelative.startsWith('..' + path.sep) || path.isAbsolute(piRelative)) fail('outside-home');
     const pi = unique([path.join(home, '.pi/agent'), profile(activePi, '.pi/agent')]);
+    for (const dir of unique([path.join(home, '.pi'), ...pi])) {
+        directory(dir); owned(dir, true);
+    }
     const claude = profile(process.env.CLAUDE_CONFIG_DIR, '.claude');
     const bindings = [
         {provider: 'claude', source: '.claude/skills/impeccable', destination: path.join(claude, 'skills/impeccable')},
@@ -10009,7 +10014,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 285 | Last changed: Merge BB preparation and refresh directory trust${NC}"
+    echo -e "${GRAY}Version 286 | Last changed: Merge Impeccable and BB directory trust${NC}"
 
     if ! acquire_setup_lock; then
         return 1
