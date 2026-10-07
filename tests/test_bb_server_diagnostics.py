@@ -111,6 +111,10 @@ loginctl() {
     if [[ ${RACE_OVERRIDE:-0} == 1 ]]; then
         printf '[Service]\nEnvironment=TMPDIR=/unsupported-fixture\n' > "$HOME/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf"
     fi
+    if [[ -n ${RACE_DIRECTORY:-} ]]; then
+        [[ "$RACE_DIRECTORY" == "$HOME/"* ]] || return 97
+        chmod 2770 "$RACE_DIRECTORY"
+    fi
     [[ ${FAIL_LINGER:-} != query ]] || { noisy_failure; return 1; }
     printf '%s\n' "${LINGER:-yes}"
 }
@@ -232,6 +236,50 @@ start_setup_log() { printf 'LOG_STARTED\n'; }
 finish_setup_log() { printf 'FINAL_STATUS=%s\n' "$1"; return "$1"; }
 '''
 
+    def test_ordinary_directory_modes_survive_complete_maintenance_and_caller(self):
+        self.active()
+        sentinel = self.seed('.bb/auth.json', '{"private":"' + SECRET + '"}')
+        directories = [self.home / p for p in ('', '.config', '.config/systemd',
+                       '.config/systemd/user', '.config/setup-bb-server', '.bb')]
+        extra = self.ordinary_caller() + r'''
+chmod() {
+    [[ ! -d "${*: -1}" ]] || { event forbidden-directory-chmod; return 97; }
+    builtin command chmod "$@"
+}
+chown() { event forbidden-chown; return 97; }
+for name in getent groups getfacl setfacl ps pgrep; do
+    eval "$name() { event forbidden-privacy-proof; return 97; }"
+done
+id() {
+    [[ "$*" == -u || "$*" == -un ]] || { event forbidden-membership-proof; return 97; }
+    builtin command id "$@"
+}
+check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
+'''
+        for mode in (0o700, 0o755, 0o770, 0o775, 0o2775):
+            for directory in directories:
+                directory.chmod(mode)
+            before = {p: (p.stat().st_dev, p.stat().st_ino, p.stat().st_uid,
+                          p.stat().st_gid, p.stat().st_mode) for p in directories}
+            for attempt in range(2):
+                with self.subTest(mode=oct(mode), attempt=attempt):
+                    self.events.write_text('')
+                    result = self.run_code('main', extra=extra)
+                    self.assertEqual(result.returncode, 0, result)
+                    self.assertEqual(result.stderr, '')
+                    for expected in ('PLUGIN_REFRESH:ready', 'INDEPENDENT_WORK',
+                                     'REBOOT_CHECK', 'FINAL_STATUS=0'):
+                        self.assertIn(expected, result.stdout)
+                    events = self.events.read_text().splitlines()
+                    self.assertNotIn('forbidden', '\n'.join(events))
+                    order = [events.index(e) for e in ('stop-ingress', 'stop-app', 'install', 'config', 'start-app')]
+                    self.assertEqual(order, sorted(order))
+                    self.assertEqual({p: (p.stat().st_dev, p.stat().st_ino, p.stat().st_uid,
+                                         p.stat().st_gid, p.stat().st_mode) for p in directories}, before)
+                    self.assertEqual(sentinel.read_text(), '{"private":"' + SECRET + '"}')
+                    self.assertEqual(sentinel.stat().st_mode & 0o7777, 0o600)
+                    self.assertIn('bb-guard app-start', (self.home / '.config/systemd/user/setup-bb-app.service').read_text())
+
     def test_changed_customization_before_mutation_keeps_caller_incomplete(self):
         override = self.customize()
         before = self.snapshot()
@@ -244,6 +292,25 @@ finish_setup_log() { printf 'FINAL_STATUS=%s\n' "$1"; return "$1"; }
         self.assertIn('PLUGIN_REFRESH:block-default', result.stdout)
         self.assertIn('INDEPENDENT_WORK', result.stdout)
         self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
+
+    def test_accepted_directory_mode_change_invalidates_pre_mutation_snapshot(self):
+        override = self.customize()
+        ingress = self.home / '.config/systemd/user/setup-bb-ingress.service.d'
+        ingress.mkdir(mode=0o775)
+        for directory in (override.parent, self.home / '.cache', ingress):
+            with self.subTest(directory=directory.name):
+                directory.chmod(0o775)
+                before = self.snapshot()
+                before[str(directory.relative_to(self.home))] = (0o42770, None)
+                self.events.write_text('')
+                result = self.run_code('main', extra=self.ordinary_caller(),
+                                       env={'RACE_DIRECTORY': str(directory)})
+                self.assertEqual(result.returncode, 1, result)
+                self.assertRegex(result.stderr, r'\[preflight\.(app|ingress)-unit\]')
+                self.assertEqual(self.snapshot(), before)
+                self.assertNotRegex(self.events.read_text(), r'(?m)^(install|config|stop-|start-|sudo)')
+                self.assertIn('PLUGIN_REFRESH:block-default', result.stdout)
+                self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
 
     def test_replaced_parent_refuses_before_dropin_enumeration(self):
         override = self.customize()
@@ -269,6 +336,14 @@ find() {
 
     def test_reviewed_customization_completes_caller_with_native_config_preserved(self):
         override = self.customize()
+        (self.home / '.config/systemd/user/setup-bb-ingress.service.d').mkdir()
+        ordinary = [self.home / p for p in ('', '.config', '.config/systemd', '.config/systemd/user',
+                    '.config/setup-bb-server', '.bb', '.cache', '.cache/bb',
+                    '.config/systemd/user/setup-bb-app.service.d',
+                    '.config/systemd/user/setup-bb-ingress.service.d')]
+        for directory in ordinary:
+            directory.chmod(0o2775)
+        modes = {p: (p.stat().st_ino, p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in ordinary}
         self.package.mkdir()
         self.seed(str(self.package.relative_to(self.home)) + '/package.json', '{"name":"bb-app"}')
         native = self.package / 'node_modules/fs-native-extensions'
@@ -293,6 +368,8 @@ find() {
             self.assertIn('INDEPENDENT_WORK', result.stdout)
             self.assertTrue(result.stdout.endswith('FINAL_STATUS=0\n'))
             self.assertEqual({p: (p.stat().st_mode, p.read_bytes()) for p in protected}, before)
+            self.assertEqual({p: (p.stat().st_ino, p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in ordinary}, modes)
+            self.assertEqual((self.home / '.cache/bb/tmp').stat().st_mode & 0o7777, 0o700)
             events = self.events.read_text().splitlines()
             order = [events.index(e) for e in ('stop-ingress', 'stop-app', 'install', 'start-app')]
             self.assertEqual(order, sorted(order))
@@ -305,8 +382,142 @@ find() {
         self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
         self.assertEqual({p: (p.stat().st_mode, p.read_bytes()) for p in protected}, before)
 
+    def test_group_writable_package_tree_completes_real_install_config_and_caller(self):
+        self.active()
+        files = {
+            'package.json': '{"name":"bb-app","version":"0.44.0"}',
+            'node_modules/fs-native-extensions/index.js': 'exports.tryLock=()=>true;exports.unlock=()=>{};',
+            'node_modules/better-sqlite3/index.js': 'module.exports=class {close(){}};',
+            'node_modules/node-pty/index.js': 'module.exports={};',
+            'node_modules/@parcel/watcher/index.js': 'module.exports={};',
+            'node_modules/fs-native-extensions/prebuilds/linux-x64/nested/fixture.node': 'inert-not-loaded',
+        }
+        for artifact in ('dist/bb-app.js', 'dist/bb-server.js', 'dist/bb-host-daemon.js',
+                         'server/dist/index.js', 'app/dist/index.html',
+                         'host-daemon/dist/daemon-bundle.mjs', 'host-daemon/dist/bb',
+                         'host-daemon/dist/bb-provider-bridge-worker.mjs',
+                         'host-daemon/dist/bb-parcel-watcher-child.mjs',
+                         'host-daemon/dist/bb-plugin-host-worker.mjs', 'host-daemon/dist/bb-chunks/a.js'):
+            files[artifact] = 'throw new Error("fixture application must never execute");'
+        for relative, content in files.items():
+            path = self.package / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+            path.chmod(0o600)
+        (self.prefix / 'bin/bb-app').symlink_to('../lib/node_modules/bb-app/dist/bb-app.js')
+        config = self.seed('.bb/config.json', '{"config":{"BB_APP_URL":"https://old.invalid"},"providers":{"keep":"native"}}')
+        env = self.seed('.bb/env.json', '{"env":{"BB_APP_URL":"https://old.invalid","KEY":"' + SECRET + '"}}')
+        auth = self.seed('.bb/auth.json', '{"private":"' + SECRET + '"}')
+        for unit in ('app', 'ingress'):
+            (self.home / ('.config/systemd/user/setup-bb-' + unit + '.service.d')).mkdir()
+        directories = [self.home] + [p for p in self.home.rglob('*') if p.is_dir()]
+        for path in directories:
+            path.chmod(0o2775)
+        before = {p: (p.stat().st_dev, p.stat().st_ino, p.stat().st_uid,
+                      p.stat().st_gid, p.stat().st_mode) for p in directories}
+        protected = {p: p.read_bytes() for p in (auth, self.home / '.config/setup-bb-server/endpoint')}
+        extra = self.ordinary_caller() + '\n' + '\n'.join(simple_function(self.source, name) for name in
+                 ('bb_install_package', 'bb_package_artifacts_ready')) + r'''
+chmod() {
+    [[ ! -d "${*: -1}" ]] || { event forbidden-directory-chmod; return 97; }
+    builtin command chmod "$@"
+}
+for name in chown getent groups getfacl setfacl ps pgrep; do
+    eval "$name() { event forbidden-privacy-or-repair; return 97; }"
+done
+id() {
+    [[ "$*" == -u || "$*" == -un ]] || { event forbidden-membership-proof; return 97; }
+    builtin command id "$@"
+}
+check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
+'''
+        for attempt in range(2):
+            with self.subTest(attempt=attempt):
+                self.events.write_text('')
+                result = self.run_code('main', extra=extra, native_config=True)
+                self.assertEqual(result.returncode, 0, result)
+                self.assertEqual(result.stderr, '')
+                events = self.events.read_text().splitlines()
+                self.assertNotIn('forbidden', '\n'.join(events))
+                order = [events.index(e) for e in ('stop-ingress', 'stop-app', 'npm-install', 'start-app')]
+                self.assertEqual(order, sorted(order))
+                for expected in ('PLUGIN_REFRESH:ready', 'REBOOT_CHECK', 'FINAL_STATUS=0'):
+                    self.assertIn(expected, result.stdout)
+                self.assertEqual(json.loads(config.read_text()), {'config': {'BB_APP_URL': 'https://fixture.example.ts.net'},
+                                                                 'providers': {'keep': 'native'}})
+                self.assertEqual(json.loads(env.read_text()), {'env': {'KEY': SECRET}})
+                self.assertEqual({p: (p.stat().st_dev, p.stat().st_ino, p.stat().st_uid,
+                                     p.stat().st_gid, p.stat().st_mode) for p in directories}, before)
+                self.assertEqual({p: p.read_bytes() for p in protected}, protected)
+                for name in ('config.json', 'env.json', '.config.json.lock', '.env.json.lock'):
+                    self.assertEqual((self.home / '.bb' / name).stat().st_mode & 0o7777, 0o600)
+
+        for relative, mode, label in (
+            ('.bb/auth.json', 0o640, 'preflight.host-identity'),
+            ('.bb/config.json', 0o620, 'preflight.config-file'),
+            ('.bb/.config.json.lock', 0o620, 'config.locks'),
+            ('.config/setup-bb-server/endpoint', 0o640, 'preflight.endpoint-file'),
+            ('.config/systemd/user/setup-bb-app.service', 0o664, 'preflight.app-unit-file'),
+            (str(self.package.relative_to(self.home)) + '/package.json', 0o660, 'npm.previous-target'),
+            (str(self.package.relative_to(self.home)) + '/node_modules/fs-native-extensions/prebuilds/linux-x64/nested/fixture.node',
+             0o660, 'npm.previous-target'),
+        ):
+            with self.subTest(unsafe_file=relative):
+                target = self.home / relative
+                old_mode, content = target.stat().st_mode & 0o7777, target.read_bytes()
+                target.chmod(mode)
+                result = self.run_code('main', extra=extra, native_config=True)
+                self.assertEqual(result.returncode, 1, result)
+                self.assertIn('[' + label + ']', result.stderr)
+                self.assertIn('PLUGIN_REFRESH:block-default', result.stdout)
+                self.assertIn('REBOOT_CHECK', result.stdout)
+                self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
+                self.assertEqual(target.read_bytes(), content)
+                self.assertEqual(target.stat().st_mode & 0o7777, mode)
+                target.chmod(old_mode)
+        for target, label in ((self.home / '.local', 'npm.prefix-directory'),
+                              (self.package, 'npm.previous-target'),
+                              (self.package / 'node_modules/fs-native-extensions/prebuilds/linux-x64/nested', 'npm.previous-target')):
+            with self.subTest(unsafe_directory=str(target.relative_to(self.home))):
+                target.chmod(0o2777)
+                result = self.run_code('main', extra=extra, native_config=True)
+                self.assertEqual(result.returncode, 1, result)
+                self.assertIn('[' + label + ']', result.stderr)
+                self.assertEqual(target.stat().st_mode & 0o7777, 0o2777)
+                target.chmod(0o2775)
+                saved = self.root / 'saved-directory'
+                target.rename(saved)
+                target.symlink_to(saved, target_is_directory=True)
+                result = self.run_code('main', extra=extra, native_config=True)
+                self.assertEqual(result.returncode, 1, result)
+                self.assertIn('[' + label + ']', result.stderr)
+                self.assertTrue(target.is_symlink())
+                target.unlink()
+                saved.rename(target)
+        for label, failure in (('npm.install', {'FAIL_INSTALL': '1'}),
+                               ('readiness.https', {'FAIL_READY': 'https'})):
+            with self.subTest(downstream=label):
+                self.events.write_text('')
+                result = self.run_code('main', extra=extra, native_config=True, env=failure)
+                self.assertEqual(result.returncode, 1, result)
+                self.assertIn('[' + label + ']', result.stderr)
+                self.assertIn('PLUGIN_REFRESH:block-default', result.stdout)
+                self.assertIn('start-ingress', self.events.read_text())
+                self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
+        result = self.run_code('main', extra=extra + '\nupdate_dependencies() { return 1; }', native_config=True)
+        self.assertEqual(result.returncode, 1, result)
+        self.assertIn('PLUGIN_REFRESH:ready', result.stdout)
+        self.assertNotIn('BB server setup incomplete', result.stdout)
+        self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
+        self.assertEqual({p: (p.stat().st_dev, p.stat().st_ino, p.stat().st_uid,
+                             p.stat().st_gid, p.stat().st_mode) for p in directories}, before)
+        self.assertEqual({p: p.read_bytes() for p in protected}, protected)
+
     def test_captured_two_override_refusal_survives_real_log_finalization(self):
         override = self.customize()
+        for directory in (self.home, self.home / '.config', self.home / '.config/systemd',
+                          override.parent.parent, override.parent):
+            directory.chmod(0o775)
         broad = self.seed('.config/systemd/user/setup-bb-app.service.d/20-env-local.conf',
                           '[Service]\nEnvironmentFile=%h/.env.local\n')
         broad.chmod(0o664)
@@ -497,7 +708,6 @@ find() {
 
     def test_write_errors_suppress_native_paths(self):
         self.failure('update.directories', extra='mkdir() { noisy_failure; }')
-        self.failure('update.state-mode', extra='chmod() { noisy_failure; }')
         self.failure('update.guard-write', extra='mktemp() { noisy_failure; }')
         for kind in ('app', 'ingress'):
             extra = 'bb_write_bb_guard() { return 0; }\n' + '''
