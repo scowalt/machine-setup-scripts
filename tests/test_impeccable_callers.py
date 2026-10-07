@@ -15,6 +15,7 @@ class ImpeccableCallers(unittest.TestCase):
     put = convergence.ImpeccableConvergence.put
     snapshot = convergence.ImpeccableConvergence.snapshot
     adapter = convergence.ImpeccableConvergence.adapter
+    captured_directories = convergence.ImpeccableConvergence.captured_directories
 
     def run_entry(self, entry, success=True):
         self.put(self.root / 'events', '')
@@ -47,7 +48,21 @@ class ImpeccableCallers(unittest.TestCase):
         for file, contents in state.items():
             self.assertEqual(file.read_bytes(), contents, str(file))
 
+    def test_ubuntu_captured_group_writable_layout_converges_and_finalizes_without_permission_repair(self):
+        state = self.seed_preserved_state()
+        paths = self.captured_directories()
+        before = convergence.directory_metadata(paths)
+        result, events = self.run_entry('ubuntu.sh')
+        self.assertIn('verified', result.stdout)
+        for provider in convergence.PROVIDERS:
+            self.assertEqual((self.home / provider / 'impeccable/SKILL.md').read_text(), convergence.descriptor(provider))
+        self.assertEqual(convergence.directory_metadata(paths), before)
+        self.assert_preserved_state(state)
+        for operation in ('matt', 'independent', 'reboot', 'final:0'):
+            self.assertIn(operation, events)
+
     def test_bash_required_installer_failure_survives_independent_work_reboot_and_finalization(self):
+        self.captured_directories()
         self.env['IMPECCABLE_TEST_MODE'] = 'failed-command'
         for entry in BASH:
             with self.subTest(entry=entry):
@@ -64,6 +79,7 @@ class ImpeccableCallers(unittest.TestCase):
                 self.assertFalse(any(event.startswith('FORBIDDEN:') for event in events), events)
 
     def test_windows_boolean_failure_survives_independent_work_reboot_and_real_log_wrapper(self):
+        self.captured_directories()
         self.env['IMPECCABLE_TEST_MODE'] = 'failed-command'
         before = self.snapshot()
         result = self.adapter('powershell', entry='win.ps1', success=False)
@@ -77,6 +93,8 @@ class ImpeccableCallers(unittest.TestCase):
 
     def test_six_real_callers_install_and_update_complete_default_pi_payload_preserving_independent_state(self):
         state = self.seed_preserved_state()
+        paths = self.captured_directories()
+        metadata = convergence.directory_metadata(paths)
         settings = self.put(self.home / '.pi/agent/settings.json', '{"skills":["custom"],"theme":"keep","packages":["npm:keep"]}')
         for entry in ENTRIES:
             with self.subTest(entry=entry):
@@ -101,12 +119,20 @@ class ImpeccableCallers(unittest.TestCase):
                     self.assertIn('independent', events)
                     self.assertIn('reboot', events)
                     self.assert_preserved_state(state)
+                    self.assertEqual(convergence.directory_metadata(paths), metadata)
 
     def test_selected_profiles_exact_data_only_exclusion_is_offline_idempotent_and_reversible_for_six_callers(self):
         state = self.seed_preserved_state()
         selected = self.home / 'selected pi'
         claude = self.home / 'selected claude'
         self.env.update(PI_CODING_AGENT_DIR=str(selected), CLAUDE_CONFIG_DIR=str(claude))
+        paths = self.captured_directories()
+        for directory in (selected / 'skills', claude, claude / 'skills', claude / 'agents'):
+            directory.mkdir(parents=True, exist_ok=True)
+            directory.chmod(0o775)
+            paths.append(directory)
+        selected.chmod(0o700)
+        metadata = convergence.directory_metadata(paths + [selected])
         settings = self.put(selected / 'settings.json', '{"skills":["custom"],"theme":"keep"}')
         environment = self.home / '.env.local'
         outside = self.put(self.home / 'foreign/SKILL.md', 'keep leaf-link target')
@@ -148,8 +174,10 @@ class ImpeccableCallers(unittest.TestCase):
                 self.run_entry(entry)
                 self.assertTrue((selected / 'skills/impeccable/scripts/live-browser.js').is_file())
                 self.assert_preserved_state(state)
+                self.assertEqual(convergence.directory_metadata(paths + [selected]), metadata)
 
     def test_incomplete_payload_failed_promotion_and_runtime_failure_remain_incomplete_without_losing_old_payload(self):
+        self.captured_directories()
         for entry in ENTRIES:
             with self.subTest(entry=entry):
                 self.run_entry(entry)
@@ -164,6 +192,7 @@ class ImpeccableCallers(unittest.TestCase):
                 self.env.pop('IMPECCABLE_TEST_MODE')
 
     def test_earlier_independent_failure_is_not_erased_by_successful_impeccable_convergence(self):
+        self.captured_directories()
         self.env['IMPECCABLE_TEST_EARLIER_FAILURE'] = '1'
         for entry in ENTRIES:
             with self.subTest(entry=entry):

@@ -68,6 +68,12 @@ All seven entries pass. Installed-code/dotfiles probes stay disabled: weekly man
 
 Static verification: native `shellcheck mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh`, Bash syntax, `python3 tools/embed-opencode-cli.py --check`, actual PowerShell AST parsing in containment, and `git diff --check` pass. Source-only comment removal after the first expanded matrix did not change behavior. Final integration-tip merge/recheck evidence is recorded below.
 
+## Integration recheck
+
+Implementation commit: `cd80186`. Merged integration `73a8a9c` (BB preparation/server/refresh) with banner-only conflict resolution; the six-entry expanded command above passes again at `/tmp/setup-fixture-matrix-zl0u2axg` (merge commit `e109814`). Then merged the current integration tip `e23441a` (also Impeccable), again resolving only banners and regenerating OpenCode embeddings. The same runner prefix plus `--timeout 600 tests/setup-default-contract.sh tests/test_fixture_containment.py tests/opencode-cli-contract.sh` passes all three entries at `/tmp/setup-fixture-matrix-xcwwjan0`, with the same OpenCode counts/skips.
+
+Final versions are macOS 287, Ubuntu 319, WSL 246, Pi 263, Bazzite 166 and Windows 185. Native ShellCheck, syntax/AST, whitespace, OpenCode embedding checks and integration BB-refresh/Impeccable embedding checks pass. The kernel/FD filter and runner remain byte-identical to the initial source. Native Gitleaks staged scanning also passes. Network-capable `bunx`/`uv` hooks were not invoked: native checks were run explicitly and commits used an empty hooks path. Markdownlint and the Python 3.14 comment-policy hook were not run here; no new source comments were added. Comparison against the merged integration tip shows only this ticket's core, fixtures, standalone blocks/banners and evidence file.
+
 ## Guidance for #217 and limits
 
 - Supersede only the directory-scope limitations in ADRs 0005/0010 (and historical 0008); preserve ADR 0004's command-only migration and all regular-file/system/private/Windows distinctions. Preserve historical capture uncertainty.
