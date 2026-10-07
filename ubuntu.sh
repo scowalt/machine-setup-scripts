@@ -9582,7 +9582,7 @@ bb_server_failure() {
         preflight.metadata-link) _reason='linked BB metadata is not supported' ;;
         preflight.migration-state) _reason='existing server move or import marker blocks setup' ;;
         preflight.app-unit-file|preflight.ingress-unit-file|preflight.guard-file|preflight.endpoint-file|preflight.config-file|preflight.env-file|npm.owner-file|npm.pending-file) _reason='ownership, type, permissions or managed identity is unsafe or unverified' ;;
-        preflight.unit-dropins) _reason='service drop-in path is not a verified empty directory' ;;
+        preflight.unit-dropins) _reason='service drop-in selection is unsupported or unverified' ;;
         preflight.endpoint-read) _reason='saved endpoint could not be read' ;;
         preflight.endpoint-port|preflight.endpoint-origin) _reason='saved endpoint value is invalid or inconsistent' ;;
         preflight.app-unit|preflight.ingress-unit) _reason='service fragment or drop-in ownership is unverified' ;;
@@ -9880,27 +9880,149 @@ bb_unit_dropins_empty() {
     [[ -n "${_before}" ]] || return 1
     bb_owned_safe_directory "${_directory}" || return 1
     _entries=$(find "${_directory}" -mindepth 1 -maxdepth 1 -printf x -quit 2>/dev/null) || return 1
-    [[ -z "${_entries}" && -d "${_directory}" && ! -L "${_directory}" ]] || return 1
+    [[ -d "${_directory}" && ! -L "${_directory}" ]] || return 1
     _after=$(stat -c '%d:%i:%u:%g:%f:%y:%z' -- "${_directory}" 2>/dev/null) || return 1
-    [[ "${_before}" == "${_after}" ]]
+    [[ "${_before}" == "${_after}" ]] || return 1
+    case "${_entries}" in
+        '') return 0 ;;
+        x) return 2 ;;
+        *) return 1 ;;
+    esac
+}
+
+bb_tmpdir_snapshot() {
+    /usr/bin/python3 -I -S - "${HOME}" 2>/dev/null <<'BB_TMPDIR'
+import hashlib
+import os
+import re
+import stat
+import sys
+
+home = sys.argv[1]
+handles = []
+records = []
+
+def identity(value):
+    return tuple(getattr(value, 'st_' + key) for key in
+                 ('dev', 'ino', 'uid', 'gid', 'mode', 'nlink', 'size', 'mtime_ns', 'ctime_ns'))
+
+def verified(parent, name, directory=True, private=False):
+    before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if before.st_uid != os.getuid():
+        raise ValueError()
+    if directory:
+        if not stat.S_ISDIR(before.st_mode) or before.st_mode & 0o022 or before.st_mode & 0o500 != 0o500:
+            raise ValueError()
+        if private and stat.S_IMODE(before.st_mode) != 0o700:
+            raise ValueError()
+    elif not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) != 0o600:
+        raise ValueError()
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    if directory:
+        flags |= os.O_DIRECTORY
+    fd = os.open(name, flags, dir_fd=parent)
+    handles.append(fd)
+    if identity(before) != identity(os.fstat(fd)):
+        raise ValueError()
+    records.append((parent, name, fd, identity(before)))
+    return fd
+
+try:
+    if not re.fullmatch(r'/[a-zA-Z0-9_./-]+', home) or os.path.normpath(home) != home:
+        raise ValueError()
+    root = verified(None, home)
+    current = root
+    for name in ('.config', 'systemd', 'user'):
+        current = verified(current, name)
+    dropins = verified(current, 'setup-bb-app.service.d', private=True)
+    entries = os.listdir(dropins)
+    if '20-env-local.conf' in entries:
+        print('unsupported-environment-file')
+        sys.exit(1)
+    if entries != ['10-tmpdir.conf']:
+        raise ValueError()
+    file = verified(dropins, '10-tmpdir.conf', directory=False)
+    content = os.read(file, 4097)
+    if len(content) != os.fstat(file).st_size:
+        raise ValueError()
+    assignment = ('TMPDIR=' + home + '/.cache/bb/tmp').encode('ascii')
+    accepted = [b'[Service]\nEnvironment=' + value + ending
+                for value in (assignment, b'"' + assignment + b'"')
+                for ending in (b'', b'\n')]
+    if content not in accepted:
+        raise ValueError()
+    current = root
+    for name in ('.cache', 'bb', 'tmp'):
+        current = verified(current, name, private=name == 'tmp')
+    if os.listdir(dropins) != ['10-tmpdir.conf']:
+        raise ValueError()
+    os.lseek(file, 0, os.SEEK_SET)
+    if os.read(file, 4097) != content:
+        raise ValueError()
+    for parent, name, fd, before in records:
+        if before != identity(os.fstat(fd)) or before != identity(os.stat(name, dir_fd=parent, follow_symlinks=False)):
+            raise ValueError()
+    digest = hashlib.sha256(repr([record[3] for record in records]).encode('ascii') + content).hexdigest()
+    print('tmpdir:' + digest)
+except (OSError, ValueError):
+    sys.exit(1)
+finally:
+    for fd in reversed(handles):
+        os.close(fd)
+BB_TMPDIR
+}
+
+bb_unit_dropins_snapshot() {
+    local _name="$1" _directory="${HOME}/.config/systemd/user/$1.d" _snapshot _parent _inspection_status
+    for _parent in "${HOME}" "${HOME}/.config" "${HOME}/.config/systemd" "${HOME}/.config/systemd/user"; do
+        bb_setup_directory_preflight "${_parent}" >/dev/null || return 1
+    done
+    if [[ ! -e "${_directory}" && ! -L "${_directory}" ]]; then
+        printf 'absent\n'
+    elif bb_unit_dropins_empty "${_directory}"; then
+        _snapshot=$(stat -c '%d:%i:%u:%g:%f:%y:%z' -- "${_directory}" 2>/dev/null) || return 1
+        [[ -n "${_snapshot}" ]] || return 1
+        printf 'empty:%s\n' "${_snapshot}"
+    else
+        _inspection_status=$?
+        [[ "${_inspection_status}" -eq 2 && "${_name}" == setup-bb-app.service ]] || return 1
+        _snapshot=$(bb_tmpdir_snapshot) || {
+            [[ "${_snapshot}" != unsupported-environment-file ]] || printf '%s\n' "${_snapshot}"
+            return 1
+        }
+        [[ "${_snapshot}" =~ ^tmpdir:[a-f0-9]{64}$ ]] || return 1
+        printf '%s\n' "${_snapshot}"
+    fi
 }
 
 bb_unit_preflight() {
-    local _name="$1" _file="$2" _details _line _fragment='' _dropins='' _seen_fragment=0 _seen_dropins=0
+    local _name="$1" _file="$2" _expected="${3:-}" _snapshot _selected='' _details _line _fragment='' _dropins='' _seen_fragment=0 _seen_dropins=0
     _details=$(systemctl --user show "${_name}" --property=FragmentPath --property=DropInPaths 2>/dev/null) || return 1
     while IFS= read -r _line; do
         case "${_line}" in
-            FragmentPath=*) _fragment="${_line#FragmentPath=}"; _seen_fragment=1 ;;
-            DropInPaths=*) _dropins="${_line#DropInPaths=}"; _seen_dropins=1 ;;
+            FragmentPath=*)
+                [[ "${_seen_fragment}" -eq 0 ]] || return 1
+                _fragment="${_line#FragmentPath=}"; _seen_fragment=1 ;;
+            DropInPaths=*)
+                [[ "${_seen_dropins}" -eq 0 ]] || return 1
+                _dropins="${_line#DropInPaths=}"; _seen_dropins=1 ;;
             *) return 1 ;;
         esac
     done <<< "${_details}"
     [[ "${_seen_fragment}" -eq 1 && "${_seen_dropins}" -eq 1 ]] || return 1
-    if [[ -n "${_dropins}" ]]; then
-        print_error "BB service preflight: ${_name} has loaded systemd drop-ins. Review its overrides before rerunning setup; BB setup is blocked and overrides are left unchanged."
+    if [[ "${_expected}" == tmpdir:* ]]; then
+        _selected="${HOME}/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf"
+        [[ "${_name}" == setup-bb-app.service && "${_fragment}" == "${_file}" ]] || return 1
+    fi
+    if [[ "${_dropins}" != "${_selected}" ]]; then
+        print_error "BB service preflight: ${_name} has unverified loaded systemd drop-ins. Review its overrides before rerunning setup; BB setup is blocked and overrides are left unchanged."
         return 1
     fi
-    [[ -z "${_fragment}" || "${_fragment}" == "${_file}" ]]
+    [[ -z "${_fragment}" || "${_fragment}" == "${_file}" ]] || return 1
+    if [[ -n "${_expected}" ]]; then
+        _snapshot=$(bb_unit_dropins_snapshot "${_name}") || return 1
+        [[ "${_snapshot}" == "${_expected}" ]] || return 1
+    fi
 }
 
 bb_write_owned_content() {
@@ -10252,13 +10374,18 @@ setup_bb_server() {
     [[ ! -e "${HOME}/.bb/server-moved.json" && ! -e "${HOME}/.bb/server-import.json" ]] || { bb_server_failure preflight.migration-state; return 1; }
     bb_owned_file "${_units}/setup-bb-app.service" '# setup-managed bb app v1' || { bb_server_failure preflight.app-unit-file; return 1; }
     bb_owned_file "${_units}/setup-bb-ingress.service" '# setup-managed bb ingress v1' || { bb_server_failure preflight.ingress-unit-file; return 1; }
-    local _unit
+    local _unit _snapshot _app_customization='' _ingress_customization=''
     for _unit in setup-bb-app.service setup-bb-ingress.service; do
-        if [[ -e "${_units}/${_unit}.d" || -L "${_units}/${_unit}.d" ]] && ! bb_unit_dropins_empty "${_units}/${_unit}.d"; then
+        if ! _snapshot=$(bb_unit_dropins_snapshot "${_unit}"); then
             bb_server_failure preflight.unit-dropins
-            print_error "BB service preflight: ${_unit} has a nonempty or unverified drop-in path at \$HOME/.config/systemd/user/${_unit}.d. Review its overrides before rerunning setup; BB setup is blocked and overrides are left unchanged."
+            if [[ "${_snapshot}" == unsupported-environment-file ]]; then
+                print_error "BB service preflight: ${_unit} has an unsupported whole-file environment override. Review the separately authorized migration before rerunning setup; BB setup is blocked and overrides are left unchanged."
+            else
+                print_error "BB service preflight: ${_unit} has an unsupported or unverified drop-in path at \$HOME/.config/systemd/user/${_unit}.d. Review its overrides before rerunning setup; BB setup is blocked and overrides are left unchanged."
+            fi
             return 1
         fi
+        if [[ "${_unit}" == setup-bb-app.service ]]; then _app_customization="${_snapshot}"; else _ingress_customization="${_snapshot}"; fi
     done
     _app="${_units}/setup-bb-app.service" _serve="${_units}/setup-bb-ingress.service" _guard="${_dir}/bb-guard"
     if [[ -f "${_app}" ]]; then { _old_app=$(<"${_app}"); } 2>/dev/null; fi
@@ -10274,8 +10401,11 @@ setup_bb_server() {
         if [[ "${_port}" == 443 ]]; then _mode="https://${_dns}"; else _mode="https://${_dns}:${_port}"; fi
         [[ "${_origin}" == "${_mode}" ]] || { bb_server_failure preflight.endpoint-origin; return 1; }
     fi
-    bb_unit_preflight setup-bb-app.service "${_app}" || { bb_server_failure preflight.app-unit; return 1; }
-    bb_unit_preflight setup-bb-ingress.service "${_serve}" || { bb_server_failure preflight.ingress-unit; return 1; }
+    bb_unit_preflight setup-bb-app.service "${_app}" "${_app_customization}" || { bb_server_failure preflight.app-unit; return 1; }
+    bb_unit_preflight setup-bb-ingress.service "${_serve}" "${_ingress_customization}" || { bb_server_failure preflight.ingress-unit; return 1; }
+    if [[ "${_app_customization}" == tmpdir:* ]]; then
+        print_message 'BB service preflight: setup-bb-app.service private TMPDIR override verified; remaining maintenance and readiness checks still apply.'
+    fi
     if systemctl --user is-active --quiet setup-bb-app.service >/dev/null 2>&1; then _app_active=1; fi
     if systemctl --user is-active --quiet setup-bb-ingress.service >/dev/null 2>&1; then _ingress_active=1; fi
     _mode=$(systemctl --user is-enabled setup-bb-app.service 2>/dev/null) || _mode=''
@@ -10328,6 +10458,8 @@ if not isinstance(obj,dict): raise ValueError("invalid metadata")' "${_root}" >/
     node -e 'const fs=require("node:fs"),path=require("node:path"),home=process.argv[1],expected={BB_DATA_DIR:path.join(home,".bb"),BB_SERVER_PORT:"38886",BB_HOST_DAEMON_PORT:"38887",BB_SERVER_BIND_HOST:"127.0.0.1"};for(const file of [path.join(home,".bb/config.json"),path.join(home,".bb/env.json")]){if(!fs.existsSync(file))continue;const v=JSON.parse(fs.readFileSync(file,"utf8"));for(const layer of [v?.config,v?.env,v]){if(!layer||typeof layer!=="object")continue;for(const [key,value] of Object.entries(expected))if(Object.hasOwn(layer,key)&&String(layer[key])!==value)process.exit(1)}}for(const [key,value] of Object.entries(expected))if(process.env[key]!==undefined&&process.env[key]!==value)process.exit(1)' "${HOME}" >/dev/null 2>&1 || { bb_server_failure preflight.runtime-overrides; return 1; }
     _user=$(id -un 2>/dev/null) || { bb_server_failure preflight.account-name; return 1; }
     _linger=$(loginctl show-user "${_user}" --property=Linger --value 2>/dev/null) || { bb_server_failure preflight.linger-query; return 1; }
+    bb_unit_preflight setup-bb-app.service "${_app}" "${_app_customization}" || { bb_server_failure preflight.app-unit; return 1; }
+    bb_unit_preflight setup-bb-ingress.service "${_serve}" "${_ingress_customization}" || { bb_server_failure preflight.ingress-unit; return 1; }
     if [[ "${_linger}" != yes ]]; then
         { can_sudo && sudo loginctl enable-linger "${_user}" >/dev/null 2>&1; } || { bb_server_failure preflight.linger-enable; return 1; }
         _linger=$(loginctl show-user "${_user}" --property=Linger --value 2>/dev/null) || { bb_server_failure preflight.linger-recheck; return 1; }
@@ -11131,7 +11263,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 313 | Last changed: Match native Impeccable tabs and globstars"
+    echo -e "${GRAY}Version 314 | Last changed: Merge Impeccable and BB TMPDIR policies"
 
     if ! acquire_setup_lock; then
         return 1

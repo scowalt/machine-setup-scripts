@@ -1,0 +1,5 @@
+# Scope BB server customizations without broad credential inheritance
+
+The [Beelink failure and agreed design](../plans/2026-10-06-bb-server-customizations.md) show that a healthy setup-managed bb server can still have an incomplete setup run because local overrides fail preflight. Keep setup responsible for maintenance and preserve the reviewed optional private TMPDIR customization, but continue rejecting unknown or conflicting overrides rather than treating all local customization as trusted or making the server unmanaged.
+
+Use BB-native configuration for scoped provider/settings inputs, not automatic imports from the account-wide `~/.env.local`. Retiring the existing whole-file environment override requires the [separately authorized, privately backed-up migration](../plans/2026-10-06-bb-environment-override-migration.md), gated on non-secret evidence of required native configuration; ordinary setup must preserve it and remain incomplete until that transition is approved and performed. This accepts delayed maintenance rather than silently changing credential exposure or applying configuration that the currently running process may never have used.
