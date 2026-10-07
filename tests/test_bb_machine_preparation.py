@@ -182,6 +182,101 @@ setup_bb_machine "$1"
     def log(self):
         return self.events.read_text() if self.events.exists() else ""
 
+    def run_caller(self, platform, expected=0, **env):
+        source = SOURCES[platform]
+        names = set(re.findall(r'^(\w+)\(\)\s*\{', source, re.M))
+        script = '\n'.join(f'{name}() {{ :; }}' for name in names)
+        for name in ['run_setup_tasks', 'main']:
+            script += '\n' + re.search(rf'^{name}\(\) \{{\n.*?^\}}', source, re.M | re.S).group()
+        script += '\n' + BLOCK + '''
+ensure_shared_node_runtime() { echo runtime >> "$EVENTS"; return "${RUNTIME_FAIL:-0}"; }
+check_dotfiles_access() { return 1; }
+setup_dotfiles_deploy_key() { return 1; }
+prepare_pi_profile_permissions() { return "${PI_FAIL:-0}"; }
+install_bb_desktop() { return "${EARLIER_FAIL:-0}"; }
+env_local_flag_is_one() { [[ "${!1:-0}" == 1 ]]; }
+remove_compound_engineering_resources() { echo independent >> "$EVENTS"; }
+check_pending_reboot() { echo reboot >> "$EVENTS"; }
+start_setup_log() { echo started >> "$EVENTS"; }
+finish_setup_log() { echo "final:$1" >> "$EVENTS"; return "$1"; }
+print_message() { printf 'message: %s\\n' "$*"; }
+print_success() { printf 'success: %s\\n' "$*"; }
+print_error() { printf 'error: %s\\n' "$*"; }
+print_warning() { printf 'warning: %s\\n' "$*"; }
+brew() { :; }
+'''
+        if platform == 'ubuntu':
+            for name in ['bb_server_selection', 'bb_server_restore_process_override']:
+                script += re.search(rf'^{name}\(\) \{{\n.*?^\}}', source, re.M | re.S).group() + '\n'
+        if platform == 'wsl':
+            script += re.search(r'^fail_unsupported_headless\(\) \{\n.*?^\}', source, re.M | re.S).group() + '\n'
+        result = subprocess.run(['/bin/bash', '-c', script + '\nmain\n'], env=self.env | env,
+                                cwd=self.home, text=True, capture_output=True, timeout=40)
+        self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+        self.assertNotIn('FORBIDDEN', self.log())
+        self.assertEqual(self.log().splitlines()[-1], f'final:{expected}')
+        self.assertIn('independent\n', self.log())
+        self.assertIn('reboot\n', self.log())
+        return result.stdout
+
+    def test_real_callers_converge_group_writable_preparation_without_normalizing_directories(self):
+        for directory in [self.home, self.home / '.local', self.home / '.local/share']:
+            directory.mkdir(exist_ok=True)
+            directory.chmod(0o2775)
+        sentinel = self.home / 'unrelated-project'
+        sentinel.mkdir(mode=0o775)
+        (sentinel / 'keep').write_text('unchanged')
+        for platform in SCRIPTS:
+            for version in ['0.44.0', '0.44.0', '0.45.0']:
+                with self.subTest(platform=platform, version=version):
+                    directories = [self.home, *[p for p in self.home.rglob('*') if p.is_dir()]]
+                    for p in directories:
+                        p.chmod(0o2775)
+                    metadata = {p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in directories}
+                    self.package(version)
+                    self.events.write_text('')
+                    out = self.run_caller(platform, WORK_MACHINE='1', HEADLESS='0')
+                    self.assertIn('not enrolled and no BB service created', out)
+                    self.assertEqual(json.loads((self.pkg / 'package.json').read_text())['version'], version)
+                    self.assertEqual(metadata, {p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in directories})
+                    self.assertEqual((sentinel / 'keep').read_text(), 'unchanged')
+                    for relative in ['.bb', '.bb-machines', '.local/bin', '.config/systemd']:
+                        self.assertFalse((self.home / relative).exists())
+
+    def test_real_callers_retain_preparation_and_independent_errors_through_finalization(self):
+        for directory in [self.home / '.local', self.home / '.local/share']:
+            directory.mkdir(exist_ok=True); directory.chmod(0o775)
+        for platform in SCRIPTS:
+            for flags in [{'EARLIER_FAIL': '1'}, {'PI_FAIL': '1'}, {'FAIL_INSTALL': '1'}, {'FAIL_REBUILD': '1'}]:
+                with self.subTest(platform=platform, flags=flags):
+                    self.events.write_text('')
+                    out = self.run_caller(platform, expected=1, **flags)
+                    if 'FAIL_INSTALL' in flags or 'FAIL_REBUILD' in flags:
+                        self.assertNotIn('software prepared', out)
+                    else:
+                        self.assertIn('software prepared', out)
+                    self.assertIn('npm ["install"', self.log())
+                    self.assertFalse((self.home / '.bb').exists())
+                    self.assertEqual((self.home / '.local/share').stat().st_mode & 0o777, 0o775)
+
+    def test_preparation_directory_acceptance_keeps_private_marker_and_regular_files_strict(self):
+        self.run_helper()
+        for directory in [self.prefix.parent, self.prefix, self.pkg, self.pkg / 'node_modules']:
+            directory.chmod(0o2775)
+        for relative, mode in [('owner.json', 0o640), ('npm/lib/node_modules/bb-app/package.json', 0o664),
+                               ('npm/lib/node_modules/bb-app/node_modules/node-pty/index.js', 0o664)]:
+            with self.subTest(relative=relative):
+                file = self.prefix.parent / relative
+                original = file.stat().st_mode & 0o777
+                file.chmod(mode)
+                self.events.write_text('')
+                before = snapshot(self.home)
+                self.run_helper(expected=1)
+                self.assertEqual(snapshot(self.home), before)
+                self.assertNotIn('npm ', self.log())
+                file.chmod(original)
+        self.run_helper()
+
     def test_observed_permissions_report_blockers_without_mutation(self):
         directory = self.home / '.config'
         (directory / 'systemd/user').mkdir(parents=True)
@@ -397,6 +492,8 @@ process.exit(fakeProcess.exitCode);
         unit = self.home / ".config/systemd/user/bb-host-daemon-fixture.service"
         unit.parent.mkdir(parents=True)
         unit.write_text(f"ExecStart={self.prefix}/bin/bb-app host-daemon --auto-update\n")
+        for directory in [self.home, *[p for p in self.home.rglob('*') if p.is_dir()]]:
+            directory.chmod(0o2775)
         before = snapshot(self.home)
         self.events.unlink()
         self.package("0.45.0")
@@ -591,7 +688,7 @@ process.exit(fakeProcess.exitCode);
         for name in directories:
             (self.home / name).mkdir(exist_ok=True)
         for name in directories:
-            for mode in ([0o777] if sys.platform == 'linux' else [0o775, 0o777]):
+            for mode in [0o777]:
                 with self.subTest(name=name, mode=oct(mode)):
                     p = self.home / name
                     p.chmod(mode)
@@ -701,12 +798,30 @@ process.exit(fakeProcess.exitCode);
                 p.write_bytes(backup)
                 p.chmod(0o600)
         self.prefix.chmod(0o770)
+        self.run_helper()
+        self.assertEqual(self.prefix.stat().st_mode & 0o777, 0o770)
+        self.prefix.chmod(0o777)
         self.run_helper(expected=1)
         self.prefix.chmod(0o700)
         extra = self.prefix / "lib/node_modules/unrelated"
         extra.mkdir()
         self.run_helper(expected=1)
         self.assertTrue(extra.is_dir())
+
+    def test_preparation_directory_links_are_not_readonly_service_reference_links(self):
+        self.run_helper()
+        for directory in [self.home / '.local', self.prefix.parent, self.prefix, self.pkg]:
+            with self.subTest(directory=directory):
+                backup = self.root / 'preserved-copy'
+                directory.rename(backup)
+                directory.symlink_to(backup)
+                before = snapshot(self.home), snapshot(backup)
+                self.events.write_text('')
+                self.run_helper(expected=1)
+                self.assertEqual((snapshot(self.home), snapshot(backup)), before)
+                self.assertNotIn('npm ', self.log())
+                directory.unlink()
+                backup.rename(directory)
 
     def test_work_headless_platform_and_wsl2(self):
         for platform, kernel, headless in [("mac", "Darwin", "0"), ("mac", "Darwin", "1"), ("ubuntu", "Linux", "0"), ("pi", "Linux", "1"), ("bazzite", "Linux", "0"), ("wsl", "Linux", "0")]:
@@ -727,7 +842,7 @@ process.exit(fakeProcess.exitCode);
         new = self.home / ".local/share/mise/installs/node/new"
         for d in [old, new]:
             (d / "bin").mkdir(parents=True)
-            (d / "bin/node").symlink_to(NODE)
+            shutil.copy2(NODE, d / 'bin/node')
             (d / "unrelated").write_text("preserve")
         before = snapshot(old)
         self.run_helper(NATIVE="1", FIXTURE_ABI="second", PATH=f"{new}/bin:{self.env['PATH']}")

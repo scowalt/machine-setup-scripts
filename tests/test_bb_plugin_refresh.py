@@ -446,6 +446,66 @@ class Discovery(unittest.TestCase):
             self.records[32106] = (['node', str(self.home / '.bb-machines/host-daemon/dist/index.js')], {}, b'1')
         return data
 
+    def test_account_owned_data_package_and_ancestors_refresh_without_permission_repairs(self):
+        for selection in ('default', 'explicit-default', 'custom', 'custom-outside-home'):
+            selected = self.root / 'manual/data' if selection == 'custom-outside-home' else (
+                self.home / 'custom/data' if selection == 'custom' else None)
+            data = self.server(data=selected)
+            paths = [self.root, self.home, self.home / '.bb', data, *self.entry.parents[:6]]
+            if selection.startswith('custom'):
+                paths.append(data.parent)
+            environment = {} if selection == 'default' else {'BB_DATA_DIR': str(data)}
+            if selection.startswith('custom'):
+                (self.home / '.bb/bb.db').unlink(missing_ok=True)
+            for mode in (0o700, 0o755, 0o775, 0o2775):
+                for path in paths:
+                    path.chmod(mode)
+                before = {path: path.stat() for path in paths}
+                database = (data / 'bb.db').read_bytes()
+                api = FakeApi([plugin(enabled=False)])
+                with self.subTest(selection=selection, mode=oct(mode)), \
+                        patch.object(P.subprocess, 'run', side_effect=AssertionError('external proof forbidden')), \
+                        patch.object(P.os, 'getgroups', side_effect=AssertionError('group proof forbidden')), \
+                        patch.object(P.os, 'getgrouplist', side_effect=AssertionError('initgroups proof forbidden')), \
+                        patch.object(P.os, 'listxattr', side_effect=AssertionError('ACL proof forbidden')), \
+                        self.darwin_http(api, data=data) as requests:
+                    self.assertEqual(self.run_policy(native_api=True, environment=environment),
+                                     (0, 'BB_PLUGIN_REFRESH updated\n'))
+                    self.assertEqual(self.run_policy(native_api=True, environment=environment),
+                                     (0, 'BB_PLUGIN_REFRESH checked\n'))
+                    self.assertEqual(api.mutations(), [('POST', '/api/v1/plugins/tracking/update', {})])
+                    self.assertTrue(set((method, path) for method, path, _ in requests) <= {
+                        ('GET', '/health'), ('GET', '/api/v1/system/config'),
+                        ('GET', '/api/v1/plugins/safe-mode'), ('GET', '/api/v1/plugins'),
+                        ('GET', '/api/v1/plugins/tracking/source'),
+                        ('POST', '/api/v1/plugins/updates/check'), ('POST', '/api/v1/plugins/tracking/update')})
+                    self.assertFalse(api.plugins['tracking']['enabled'])
+                    self.assertEqual(api.plugins['tracking']['source'], 'npm:fixture@^1')
+                    self.assertEqual({path: path.stat() for path in paths}, before)
+                    self.assertEqual((data / 'bb.db').read_bytes(), database)
+
+    def test_group_writable_custom_and_default_absence_is_metadata_only_and_preserves_state(self):
+        data = self.captured_non_server()
+        custom = self.home / 'custom/data'
+        custom.mkdir(parents=True)
+        for path in (self.root, self.home, data, custom.parent, custom):
+            path.chmod(0o2775)
+        self.proc.table = lambda: [32106, 999]
+        for selected in (None, str(data), str(custom)):
+            before = {path: path.lstat() for path in (self.root, self.home, data, custom.parent, custom)}
+            env = {'BB_CLI': '/must/not/execute', 'BB_SERVER_URL': 'https://remote.invalid'}
+            if selected:
+                env['BB_DATA_DIR'] = selected
+            with self.subTest(selected=selected), \
+                    patch.object(P.subprocess, 'run', side_effect=AssertionError('external proof forbidden')), \
+                    patch.object(P.os, 'getgroups', side_effect=AssertionError('group proof forbidden')), \
+                    patch.object(P.os, 'getgrouplist', side_effect=AssertionError('initgroups proof forbidden')), \
+                    patch.object(P.os, 'listxattr', side_effect=AssertionError('ACL proof forbidden')), \
+                    patch.object(P.http.client, 'HTTPConnection', side_effect=AssertionError('request forbidden')) as requests:
+                self.assertEqual(self.run_policy(native_api=True, environment=env), (0, 'BB_PLUGIN_REFRESH absent\n'))
+            self.assertFalse(requests.called)
+            self.assertEqual({path: path.lstat() for path in before}, before)
+
     def test_captured_execution_machine_is_absent_without_requests_or_state_changes(self):
         self.captured_non_server()
         paths = [self.home, *sorted(self.home.rglob('*'))]
@@ -478,15 +538,10 @@ class Discovery(unittest.TestCase):
                 self.records.clear()
         self.assertEqual(self.run_policy(), (0, 'BB_PLUGIN_REFRESH absent\n'))
 
-    def test_default_exception_never_authorizes_custom_leaves_or_unsafe_ancestry(self):
+    def test_unsafe_directories_links_and_types_still_refuse_negative_classification(self):
         data = self.captured_non_server()
         custom = self.home / 'custom'
-        custom.mkdir()
-        custom.chmod(0o775)
-        self.assertEqual(self.run_policy(environment={'BB_DATA_DIR': str(custom)}),
-                         (1, 'BB_PLUGIN_REFRESH failed discovery writable-local-state\n'))
-        custom.rmdir()
-        for path, mode in ((data, 0o777), (self.home, 0o770), (self.root, 0o770)):
+        for path, mode in ((data, 0o777), (self.home, 0o772), (self.root, 0o772)):
             previous = path.stat().st_mode & 0o777
             path.chmod(mode)
             with self.subTest(path=path):
@@ -556,7 +611,7 @@ class Discovery(unittest.TestCase):
             marker = data / name
             marker.symlink_to(self.package / 'package.json')
             with patch.object(P.os, 'open', side_effect=open_directory):
-                self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery writable-local-state\n'))
+                self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery unverified-local-state\n'))
             marker.unlink()
 
     def test_mixed_execution_machine_and_verified_custom_server_refresh_only_local_main(self):
@@ -584,7 +639,8 @@ class Discovery(unittest.TestCase):
             self.assertEqual(len(api.mutations()), 1)
         self.assertEqual((default.stat(), (custom / 'bb.db').read_bytes()), before)
         custom.chmod(0o775)
-        self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery writable-local-state\n'))
+        with self.darwin_http(FakeApi(), data=custom):
+            self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH updated\n'))
 
     @contextlib.contextmanager
     def database_activity(self, data, kind):
@@ -672,6 +728,85 @@ class Discovery(unittest.TestCase):
                 ('unverified-main-server' if fault == 'header' else 'changed-local-state') + '\n'))
             self.assertFalse(api.verified)
             self.assertFalse(api.calls)
+
+    def test_root_owned_group_writable_ancestor_cannot_authorize_absence(self):
+        self.captured_non_server()
+        self.root.chmod(0o775)
+        original, native_stat = self.root.stat(), os.stat
+        def metadata(path, *args, **kwargs):
+            info = native_stat(path, *args, **kwargs)
+            if (info.st_dev, info.st_ino) == (original.st_dev, original.st_ino):
+                return types.SimpleNamespace(st_mode=info.st_mode, st_uid=0)
+            return info
+        with patch.object(P.os, 'stat', side_effect=metadata):
+            self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery writable-local-state\n'))
+
+    def test_read_only_root_owned_package_directory_remains_supported(self):
+        self.server()
+        self.package.chmod(0o755)
+        original, native_stat = self.package.stat(), os.stat
+        def metadata(path, *args, **kwargs):
+            info = native_stat(path, *args, **kwargs)
+            if (info.st_dev, info.st_ino) == (original.st_dev, original.st_ino):
+                fields = ('st_dev', 'st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_size',
+                          'st_mtime_ns', 'st_ctime_ns', 'st_nlink')
+                info = types.SimpleNamespace(**{name: getattr(info, name) for name in fields})
+                info.st_uid = 0
+            return info
+        with patch.object(P.os, 'stat', side_effect=metadata), self.darwin_http(FakeApi()):
+            self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH updated\n'))
+
+    def test_refresh_revalidates_accepted_directory_metadata_before_each_request(self):
+        data = self.server()
+        for path in (self.home, data, self.package):
+            path.chmod(0o775)
+        native_stat = os.stat
+        fields = ('st_dev', 'st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_size',
+                  'st_mtime_ns', 'st_ctime_ns', 'st_nlink')
+        for target in (self.home, data, self.package):
+            original = native_stat(target)
+            for field in ('st_dev', 'st_ino', 'st_uid', 'st_gid', 'st_mode'):
+                requests = []
+                def metadata(path, *args, **kwargs):
+                    info = native_stat(path, *args, **kwargs)
+                    if requests and (info.st_dev, info.st_ino) == (original.st_dev, original.st_ino):
+                        info = types.SimpleNamespace(**{name: getattr(info, name) for name in fields})
+                        setattr(info, field, (info.st_mode & ~0o005) if field == 'st_mode' else getattr(info, field) + 1)
+                    return info
+                with self.subTest(target=target, field=field), \
+                        self.darwin_http(FakeApi()) as requests, patch.object(P.os, 'stat', side_effect=metadata):
+                    status, output = self.run_policy(native_api=True)
+                self.assertEqual(status, 1, output)
+                self.assertIn('failed identity ', output)
+                self.assertEqual(requests, [('GET', '/health', None)])
+
+    def test_positive_directory_acceptance_keeps_system_file_and_type_refusals(self):
+        data = self.server()
+        for path in (self.home, data, self.package):
+            path.chmod(0o775)
+        native_stat = os.stat
+        fields = ('st_dev', 'st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_size',
+                  'st_mtime_ns', 'st_ctime_ns', 'st_nlink')
+        cases = [(self.package, field, value) for field, value in (
+            ('st_uid', 0), ('st_uid', os.getuid() + 1), ('st_mode', P.stat.S_IFDIR | 0o777),
+            ('st_mode', P.stat.S_IFLNK | 0o775), ('st_mode', P.stat.S_IFREG | 0o644))]
+        cases += [(target, field, value) for target in (data / 'bb.db', self.package / 'package.json', self.entry)
+                  for field, value in (('st_mode', P.stat.S_IFREG | 0o660), ('st_nlink', 2),
+                                       ('st_mode', P.stat.S_IFLNK | 0o600))]
+        for target, field, value in cases:
+            original = native_stat(target)
+            def metadata(path, *args, **kwargs):
+                info = native_stat(path, *args, **kwargs)
+                if (info.st_dev, info.st_ino) == (original.st_dev, original.st_ino):
+                    info = types.SimpleNamespace(**{name: getattr(info, name) for name in fields})
+                    setattr(info, field, value)
+                return info
+            with self.subTest(target=target, field=field, value=value), \
+                    patch.object(P.os, 'stat', side_effect=metadata), self.darwin_http(FakeApi()) as requests:
+                status, output = self.run_policy(native_api=True)
+            self.assertEqual(status, 1, output)
+            self.assertNotIn('absent', output)
+            self.assertFalse(requests)
 
     def test_live_deduplication_retains_strict_directory_revalidation(self):
         data = self.server()
@@ -799,6 +934,8 @@ class Discovery(unittest.TestCase):
         self.assertEqual(self.run_policy(environment={'BB_DATA_DIR': str(canonical / '.bb')}),
                          (0, 'BB_PLUGIN_REFRESH absent\n'))
         (data / 'bb.db').write_bytes(b'SQLite format 3\0')
+        self.assertEqual(self.run_policy(), (0, 'BB_PLUGIN_REFRESH stopped\n'))
+        (data / 'bb.db').chmod(0o660)
         self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery writable-local-state\n'))
         self.home = canonical
 
@@ -844,7 +981,7 @@ class Discovery(unittest.TestCase):
         data.mkdir()
         names = ('bb.db', 'bb.db-wal', 'bb.db-shm', 'bb.db-journal',
                  'bb-app-runtime.json', 'server-moved.json', 'server-import.json')
-        for mode, database in ((0o700, False), (0o775, False), (0o775, True)):
+        for mode, database in ((0o700, False), (0o775, False), (0o700, True), (0o775, True)):
             data.chmod(mode)
             if database:
                 (data / 'bb.db').write_bytes(b'SQLite format 3\0')
@@ -862,7 +999,10 @@ class Discovery(unittest.TestCase):
                     with self.subTest(mode=oct(mode), database=database, name=name, form=form):
                         api = FakeApi()
                         status, output = self.run_policy(api)
-                        self.assertEqual(status, 1, output)
+                        stopped = database and name in ('bb.db-wal', 'bb.db-shm', 'bb.db-journal')
+                        self.assertEqual(status, 0 if stopped else 1, output)
+                        if stopped:
+                            self.assertEqual(output, 'BB_PLUGIN_REFRESH stopped\n')
                         self.assertNotIn('BB_PLUGIN_REFRESH absent', output)
                         self.assertNotIn('sentinel', output)
                         self.assertFalse(api.calls)
@@ -874,9 +1014,10 @@ class Discovery(unittest.TestCase):
             if database:
                 (data / 'bb.db').unlink()
 
-    def test_writable_state_reports_controlled_refusal_without_permission_repair(self):
+    def test_writable_file_reports_controlled_refusal_without_permission_repair(self):
         data = self.data()
         data.chmod(0o775)
+        (data / 'bb.db').chmod(0o660)
         before = data.stat(), (data / 'bb.db').read_bytes()
         status, output = self.run_policy()
         self.assertEqual(status, 1)
@@ -1111,6 +1252,8 @@ class Discovery(unittest.TestCase):
 
     def test_darwin_mixed_inventory_updates_only_verified_account_server_and_preserves_intent(self):
         data = self.server()
+        for path in (self.home, data, self.package):
+            path.chmod(0o775)
         self.records[53750] = self.records[100]
         self.records[53752] = self.records[100]
         before = (data / 'bb.db').read_bytes(), (self.package / 'package.json').read_bytes()
@@ -1164,7 +1307,9 @@ class Discovery(unittest.TestCase):
                 self.assertTrue(set(native.private_reads) <= {100})
 
     def test_darwin_native_contract_socket_and_health_proof_still_gate_plugin_requests(self):
-        self.server()
+        data = self.server()
+        for path in (self.home, data, self.package):
+            path.chmod(0o775)
         table = b'-2 53750\n' + f'{os.getuid()} 100\n'.encode()
         manifest = self.package / 'package.json'
         original = manifest.read_bytes()
@@ -1629,6 +1774,7 @@ class Callers(unittest.TestCase):
         data = fixture.captured_non_server()
         absent = fixture.run_policy()
         (data / 'bb.db').write_bytes(b'SQLite format 3\0')
+        (data / 'bb.db').chmod(0o660)
         refusal = fixture.run_policy()
         (data / 'bb.db').unlink()
         fixture.server(data=fixture.home / 'manual')
@@ -1644,6 +1790,124 @@ class Callers(unittest.TestCase):
         self.assertIn('BB_PLUGIN_REFRESH safe-mode', failure_then_deferral[1])
         self.assertIn('BB_PLUGIN_REFRESH failed update operation-timeout', failure_then_deferral[1])
         return absent, refusal, failure_then_deferral
+
+    def test_real_refresh_runs_inside_ordinary_callers_with_group_writable_directories(self):
+        driver = r'''
+import importlib.util, json, os, sys, types
+from pathlib import Path
+from unittest.mock import patch
+spec = importlib.util.spec_from_file_location('refresh_fixture_tests', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+f = module.Discovery()
+config = json.loads(Path(os.environ['FIXTURE_CONFIG']).read_text())
+for name in ('root', 'home', 'package', 'entry'):
+    setattr(f, name, Path(config[name]))
+f.records = {int(pid): (argv, env, stamp.encode()) for pid, (argv, env, stamp) in config['records'].items()}
+f.proc = types.SimpleNamespace(table=lambda: list(f.records), read=lambda pid: f.records.get(pid),
+    peer_owned=lambda *_: True, database_open=lambda _: False)
+api = module.FakeApi([module.plugin(enabled=False)])
+api.safe = config['case'] == 'safe-mode'
+if config['case'] == 'update-failed':
+    api.results['tracking'] = module.P.Refusal('operation-timeout')
+with f.darwin_http(api, data=Path(config['data'])) as requests, \
+        patch.object(module.P.subprocess, 'run', side_effect=AssertionError('external execution forbidden')), \
+        patch.object(module.P.os, 'getgroups', side_effect=AssertionError('group proof forbidden')), \
+        patch.object(module.P.os, 'getgrouplist', side_effect=AssertionError('initgroups proof forbidden')), \
+        patch.object(module.P.os, 'listxattr', side_effect=AssertionError('ACL proof forbidden')):
+    status, output = f.run_policy(native_api=True, environment=config['environment'])
+Path(os.environ['FIXTURE_RESULT']).write_text(json.dumps({'requests': requests, 'plugins': api.plugins}))
+print(output, end='')
+sys.exit(status)
+'''
+        for script in SCRIPTS:
+            selected = EXTRACT.definitions((ROOT / (script + '.sh')).read_text())
+            real = ('main', 'run_setup_tasks', 'refresh_bb_plugins')
+            names = re.findall(r'^([A-Za-z_][A-Za-z_0-9]*)\(\) \{', selected, re.M)
+            code = '\n'.join(f'{name}() {{ :; }}' for name in names if name not in real)
+            for name in real:
+                code += '\n' + re.search(rf'^{name}\(\) \{{\n.*?^\}}', selected, re.M | re.S).group()
+            code += r'''
+bb_plugin_refresh_payload() { /usr/bin/python3 -I -B "$FIXTURE_DRIVER" "$FIXTURE_TESTS"; }
+setup_bb_machine() { return "$EARLIER"; }
+print_error() { printf '%s\n' "$1"; }
+print_warning() { printf '%s\n' "$1"; }
+print_message() { printf '%s\n' "$1"; }
+print_debug() { printf '%s\n' "$1"; }
+prepare_pi_profile_permissions() { echo unrelated; }
+refresh_pi_packages() { echo later-pi-success; }
+check_pending_reboot() { echo reboot-reported; }
+start_setup_log() { echo logging; }
+finish_setup_log() { echo "finalized:$1"; return "$1"; }
+check_dotfiles_access() { return 1; }
+setup_dotfiles_deploy_key() { return 1; }
+is_main_user() { return 0; }
+bb_server_selection() { return 1; }
+whoami() { echo fixture; }
+brew() { :; }
+unzip() { :; }
+MACOS_DEVELOPER_TOOLS_STATE=ready
+MACOS_CLT_OPERATION_FAILED=0
+DOTFILES_ACCESS_METHOD=none
+'''
+            for command in ('systemctl', 'launchctl', 'loginctl', 'pgrep', 'ps', 'curl', 'npm',
+                            'bun', 'pi', 'bb', 'chezmoi', 'sudo', 'kill', 'pkill', 'tailscale'):
+                code += f'\n{command}() {{ echo FORBIDDEN:{command}; return 99; }}'
+            code += '\nmain\n'
+            for case in ('updated', 'absent', 'stopped', 'safe-mode', 'update-failed', 'file-failed'):
+                for custom in (False, True):
+                    fixture = Discovery()
+                    fixture.setUp()
+                    try:
+                        data = fixture.home / ('custom/data' if custom else '.bb')
+                        if case == 'absent':
+                            data.mkdir(parents=True)
+                        elif case == 'stopped':
+                            fixture.data(data)
+                        else:
+                            fixture.server(data=data)
+                        if case == 'file-failed':
+                            (data / 'bb.db').chmod(0o660)
+                        paths = [fixture.home, data, *fixture.entry.parents[:6]]
+                        if custom:
+                            paths.append(data.parent)
+                        for path in paths:
+                            path.chmod(0o2775)
+                        before = {path: path.stat() for path in paths}
+                        (fixture.root / 'driver.py').write_text(driver)
+                        config = {name: str(getattr(fixture, name)) for name in ('root', 'home', 'package', 'entry')}
+                        config.update(case=case, data=str(data), environment={'BB_DATA_DIR': str(data)},
+                            records={pid: [argv, env, stamp.decode()] for pid, (argv, env, stamp) in fixture.records.items()})
+                        (fixture.root / 'config.json').write_text(json.dumps(config))
+                        for earlier in (0, 1):
+                            expected = int(bool(earlier or case in ('update-failed', 'file-failed')))
+                            env = {'HOME': str(fixture.home), 'PATH': '/usr/bin:/bin', 'EARLIER': str(earlier),
+                                   'USER': 'fixture', 'LANG': 'C', 'TERM': 'dumb',
+                                   'FIXTURE_CONFIG': str(fixture.root / 'config.json'),
+                                   'FIXTURE_DRIVER': str(fixture.root / 'driver.py'),
+                                   'FIXTURE_TESTS': str(Path(__file__).resolve()),
+                                   'FIXTURE_RESULT': str(fixture.root / 'result.json')}
+                            result = subprocess.run(['/bin/bash', '-c', code], cwd=fixture.home, env=env,
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+                            with self.subTest(script=script, case=case, custom=custom, earlier=earlier):
+                                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                                for marker in ('logging', 'unrelated', 'later-pi-success', 'reboot-reported', f'finalized:{expected}'):
+                                    self.assertIn(marker, result.stdout)
+                                self.assertNotIn('FORBIDDEN:', result.stdout + result.stderr)
+                                self.assertNotIn('sentinel', result.stdout + result.stderr)
+                                report = json.loads((fixture.root / 'result.json').read_text())
+                                updates = [r for r in report['requests'] if r[1].endswith('/update')]
+                                if case in ('updated', 'update-failed'):
+                                    self.assertEqual(updates, [['POST', '/api/v1/plugins/tracking/update', {}]])
+                                else:
+                                    self.assertFalse(updates)
+                                if case in ('absent', 'stopped', 'file-failed'):
+                                    self.assertFalse(report['requests'])
+                                self.assertFalse(report['plugins']['tracking']['enabled'])
+                                self.assertEqual(report['plugins']['tracking']['version'], '1.1.0' if case == 'updated' else '1.0.0')
+                                self.assertEqual({path: path.stat() for path in paths}, before)
+                    finally:
+                        fixture.doCleanups()
 
     def test_ubuntu_selection_readiness_and_preparation_failures_keep_boundaries(self):
         source = EXTRACT.definitions((ROOT / 'ubuntu.sh').read_text())
