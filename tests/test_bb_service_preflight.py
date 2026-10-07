@@ -360,6 +360,67 @@ class BbServicePreflightTests(unittest.TestCase):
                     self.assertIn(expected, result.stdout)
                 self.assertNotIn('SYSTEMD_SHOW', result.stderr)
 
+    def test_captured_devinabox_override_differential_through_ordinary_caller(self):
+        for relative, content in (
+            ('.bb/config.json', '{"config":{"BB_APP_URL":"https://fixture.example.ts.net:38443"},"providers":{"keep":"fixture-secret"}}\n'),
+            ('.bb/env.json', '{"env":{"KEEP_API_KEY":"fixture-secret"}}\n'),
+            ('.config/setup-bb-server/endpoint', 'fixture.example.ts.net 38443 https://fixture.example.ts.net:38443\n'),
+        ):
+            protected = self.home / relative
+            protected.write_text(content)
+            protected.chmod(0o600)
+        dropins = self.add_dropin(UNITS[0], 'empty')
+        broad = dropins / 'env.conf'
+        cases = (
+            ('captured-775-env-664', 0o775, 0o664, 1),
+            ('same-775-directory-empty', 0o775, None, 1),
+            ('private-700-env-600', 0o700, 0o600, 1),
+            ('safe-755-directory-empty', 0o755, None, 73),
+            ('absent-directory', None, None, 73),
+        )
+        for state, directory_mode, file_mode, status in cases:
+            with self.subTest(state=state):
+                if file_mode is None:
+                    broad.unlink(missing_ok=True)
+                else:
+                    broad.write_bytes(b'[Service]\nEnvironmentFile=%h/.env.local\n')
+                    broad.chmod(file_mode)
+                    metadata = broad.lstat()
+                    self.assertTrue(stat.S_ISREG(metadata.st_mode))
+                    self.assertEqual((metadata.st_uid, metadata.st_nlink, metadata.st_size,
+                                      stat.S_IMODE(metadata.st_mode)),
+                                     (os.getuid(), 1, 40, file_mode))
+                if directory_mode is None:
+                    dropins.rmdir()
+                else:
+                    dropins.chmod(directory_mode)
+                    metadata = dropins.lstat()
+                    self.assertTrue(stat.S_ISDIR(metadata.st_mode))
+                    self.assertEqual((metadata.st_uid, stat.S_IMODE(metadata.st_mode)),
+                                     (os.getuid(), directory_mode))
+                first = self.run_preflight(mode='caller', status=status)
+                second = self.run_preflight(mode='caller', status=status)
+                self.assertEqual((first.stdout, first.stderr), (second.stdout, second.stderr))
+                for result in (first, second):
+                    self.assertIn('LOG_STARTED', result.stdout)
+                    self.assertNotIn('Setup complete!', result.stdout)
+                    if status == 1:
+                        self.assert_caller_refusal(result)
+                        self.assert_diagnostic(result, UNITS[0])
+                        self.assertIn('[preflight.unit-dropins]', result.stderr)
+                        self.assertNotIn('[diagnostic.unknown]', result.stderr)
+                        self.assertNotIn('SYSTEMD_SHOW', result.stderr)
+                        self.assertNotIn('PLUGIN_REFRESH: ready', result.stdout)
+                        self.assertIn('REBOOT_CHECK', result.stdout)
+                        self.assertIn('Setup completed with errors', result.stdout)
+                    else:
+                        self.assertIn('NEXT_INERT_GATE', result.stderr)
+                        for unit in UNITS:
+                            self.assertIn('SYSTEMD_SHOW: ' + unit, result.stderr)
+                        self.assertNotIn('BB server setup incomplete', result.stdout)
+                        self.assertNotIn('PLUGIN_REFRESH:', result.stdout)
+                        self.assertNotIn('FINAL_STATUS=', result.stdout)
+
     def reviewed(self):
         dropins = self.add_dropin(UNITS[0], 'empty')
         target = self.home / '.cache/bb/tmp'
