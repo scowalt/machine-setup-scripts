@@ -44,7 +44,7 @@ flock /tmp/setup-208-coordination/fixtures.lock env -i PATH=/usr/bin:/bin \
 - Initial new-fixture import typo: `/tmp/setup-fixture-matrix-4q12fy39`; failed before tests, corrected to the audited `definitions` extractor. This is not policy red evidence or a containment failure.
 - **Genuine red:** prefix + `tests/test_backlog_directory_trust.py`, `/tmp/setup-fixture-matrix-rf3xx14a`. Unchanged production: 5 methods, 9 failing subcases. `0770`, `0775`, `2775` public retirement reports `unsafe-boundary`; all five ordinary callers remain incomplete. Private/readable controls and independent refusal/race controls pass.
 - **First green:** same command, `/tmp/setup-fixture-matrix-87qxi60z`; 5 methods pass with the same directory modes after the minimal predicate change.
-- **Expanded green:** `/tmp/setup-fixture-matrix-n5dujiib`; prefix + `tests/setup-default-contract.sh tests/test_fixture_containment.py tests/backlog-mcp-retirement-contract.sh tests/test_managed_skill_suite.py tests/pi-skill-ownership-contract.sh tests/simple-english-skill-contract.sh tests/rtk-removal-contract.sh tests/attention-span-removal-contract.sh tests/ai-coding-agent-contract.sh`. All **9/9 entries pass**. Backlog directory suite then had 6 methods; managed suite 34 methods (3 optional skips). Further coverage/static-only fixture edits follow this first expanded run; final validation is recorded below.
+- **Expanded green:** `/tmp/setup-fixture-matrix-n5dujiib`; prefix + `tests/setup-default-contract.sh tests/test_fixture_containment.py tests/backlog-mcp-retirement-contract.sh tests/test_managed_skill_suite.py tests/pi-skill-ownership-contract.sh tests/simple-english-skill-contract.sh tests/rtk-removal-contract.sh tests/attention-span-removal-contract.sh tests/ai-coding-agent-contract.sh`. All **9/9 entries pass**. Backlog directory suite then had 6 methods; managed suite 34 methods (3 optional skips). The final runs below also cover the later link/type/inspection test and default-Claude mode-preservation assertions.
 
 New fixtures load definitions only and replace unrelated effects before invoking the retained real ordinary caller. Existing kernel/FD filter and sanitized runner are unchanged. Native Python fixture runtimes are copied. Native CLI/Git skill fixtures remain inert, optional installed-code integrations stay off, and temporary-root mode setup is not a live machine workaround. No live setup, app/skill/extension/BB execution or machine permission repair was performed. No new unexpected effect was observed; this is not a syscall-wide audit and does not resolve historical incident uncertainty.
 
@@ -52,6 +52,28 @@ New fixtures load definitions only and replace unrelated effects before invoking
 
 Do not describe every skill helper as newly relaxed: Matt suite/retirements, RTK, Attention-kind and Compound were already compatible. Add the cross-component policy pointer to the managed-skills/retirement guidance: ordinary account-owned directories retain group access; existing explicit private staging/Pi leaves, file rules and system aliases stay separate. Mention Backlog's account-directory acceptance for both retirement metadata and recognized parser prefixes. Keep ADR 0001's permanent bounded retirement decision; no reversal is needed. No README expansion or shared guidance edit is part of this slice.
 
+## Final validation and integration
+
+Implementation commit: `4479012`. Integration `73a8a9c` was merged as `d3e8ebf`; later integration `e23441a` was merged as `cdfd957`. Conflicts were only version banners, resolved with versions greater than both parents. No component helper was replaced during conflict resolution. BB-refresh and Impeccable embeddings were regenerated/check-verified; Backlog and managed-policy equality pass their contracts.
+
+- **18/18 entries pass** on `d3e8ebf`: `/tmp/setup-fixture-matrix-d2gzqh7s`, using the prefix above followed by:
+
+```text
+tests/setup-default-contract.sh tests/test_fixture_containment.py
+tests/backlog-mcp-retirement-contract.sh tests/test_managed_skill_suite.py
+tests/pi-skill-ownership-contract.sh tests/simple-english-skill-contract.sh
+tests/rtk-removal-contract.sh tests/attention-span-removal-contract.sh
+tests/ai-coding-agent-contract.sh tests/pi-profile-permissions-contract.sh
+tests/pi-package-maintenance-contract.sh tests/shared-node-runtime-contract.sh
+tests/pi-opencode-go-contract.sh tests/opencode-go-wiring-contract.sh
+tests/setup-reliability-contract.sh tests/weekly-log-audit-regressions.sh
+tests/headless-contract.sh tests/pending-reboot-contract.sh
+```
+
+- **5/5 post-merge entries pass** on `cdfd957`: `/tmp/setup-fixture-matrix-pur45yi1`, same prefix followed by `tests/setup-default-contract.sh tests/test_fixture_containment.py tests/backlog-mcp-retirement-contract.sh tests/test_managed_skill_suite.py tests/ai-coding-agent-contract.sh`. Backlog has 7 directory/caller methods and 6 Windows planner methods; managed suite has 34 methods with 3 explicit optional skips. The other 13 entries above were not rerun after the Impeccable-only integration; final aggregate remains #217's responsibility.
+- ShellCheck and Bash syntax pass for five modified Bash entry points and four modified shell contracts; `git diff --check` passes. PowerShell AST/native-helper compilation passed through the Backlog contract. Native Gitleaks 8.30.1 reports no leaks for the implementation/integration range. Download-capable Lefthook commands were not invoked (`LEFTHOOK=0` for local commits); Markdownlint and the parser-dependent comment-policy hook were not run, and no tools were installed. New code contains no prose comments/docstrings.
+- Kernel filter source remains byte-identical to the initial source (`1963233f54482e9fc8e0cdaf2ee7696e4ff4fdc09f42e96f72f4e713d1d0629f`); runner is unchanged. Every artifact root contains successful mandatory preflight and controlled suite results.
+
 ## Validation limits and remaining integration work
 
-Optional managed CLI discovery/snapshot and dotfiles render integrations are disabled (3 managed-suite skips). Native Windows ACL/handle behavior is skipped; Linux PowerShell/Bun is not Windows evidence. macOS, ARM, native WSL/Bazzite, live skills usability and rollout are unverified. The parent/#217 owns the complete cross-component dispatcher and final guidance reconciliation; no green aggregate is inferred from focused contracts. Nearby regressions and post-merge validation are recorded in the final update to this file.
+Optional managed CLI discovery/snapshot and dotfiles rendering remain disabled (3 managed-suite skips, repeated by weekly). Pi profile tests skip 2 native Windows cases; package maintenance skips 2 installed registry/dotfiles integrations; shared-runtime convergence skips 1 external-dotfiles integration; Go skips 2 installed catalog/lock integrations. Backlog native Windows handle/ACL operations are explicitly skipped. Linux PowerShell/Bun compilation and wrappers are not native Windows evidence. macOS, ARM, native WSL/Bazzite, live skills usability and rollout are unverified. Parent/#217 owns the complete cross-component dispatcher and final guidance reconciliation; no green aggregate or live rollout is inferred from these contracts. No implementation blocker remains in #216.
