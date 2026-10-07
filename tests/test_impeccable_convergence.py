@@ -600,6 +600,35 @@ if (-not $result) { exit 1 }
                     self.assertEqual((self.root / 'calls').read_bytes(), calls)
                     self.assertEqual(ignore.read_text(), 'impeccable/\n!impeccable/SKILL.md\n')
 
+    def test_native_ignore_trailing_tabs_remain_literal_while_trailing_spaces_are_ignored(self):
+        cases = [
+            ('impeccable/\n!impeccable/\t\n', False),
+            ('impeccable/\n!impeccable/ \t\n', False),
+            ('impeccable/\n!impeccable/\t \n', False),
+            ('impeccable/\n!impeccable/   \n', True),
+            ('impeccable/\t\n', True),
+            ('impeccable/SKILL.md\t\n', True),
+            ('impeccable/   \n', False),
+        ]
+        for profile in (self.home / '.pi/agent', self.home / 'selected pi'):
+            self.env['PI_CODING_AGENT_DIR'] = str(profile)
+            self.adapter()
+            for text, success in cases:
+                ignore = self.put(profile / 'skills/.ignore', text)
+                for shell in ('bash', 'powershell'):
+                    with self.subTest(profile=profile.name, text=text, shell=shell):
+                        before = self.snapshot()
+                        calls = (self.root / 'calls').read_bytes()
+                        result = self.adapter(shell, success=success)
+                        self.assertEqual(ignore.read_bytes(), text.encode())
+                        if success:
+                            self.assertIn('verified', result.stdout)
+                            self.assertEqual((profile / 'skills/impeccable/SKILL.md').read_text(), descriptor('.pi/agent/skills'))
+                        else:
+                            self.assertNotIn('verified', result.stdout)
+                            self.assertEqual(self.snapshot(), before)
+                            self.assertEqual((self.root / 'calls').read_bytes(), calls)
+
     def test_pi_ignore_rules_respect_native_scoping_directory_types_globs_and_ordered_parent_negation(self):
         cases = [
             ({'.ignore': 'impeccable/\n!impeccable/\n'}, True),
@@ -821,6 +850,37 @@ if (-not $result) { exit 1 }
                         self.assertNotIn('verified', result.stdout)
                         self.assertEqual(self.snapshot(), before)
                         self.assertEqual((self.root / 'calls').read_bytes(), calls)
+
+    def test_native_pi_terminal_globstar_requires_a_suffix_but_middle_globstar_can_match_zero_directories(self):
+        cases = [
+            ('!impeccable/**', True),
+            ('!impeccable/**/**', True),
+            ('!impeccable/**/SKILL.md', True),
+            ('!skills/**/impeccable', False),
+            ('!**/impeccable', False),
+            ('!skills/impeccable/**', False),
+            ('!skills/**/impeccable/**', False),
+        ]
+        self.adapter()
+        for profile in (self.home / '.pi/agent', self.home / 'selected pi'):
+            self.env['PI_CODING_AGENT_DIR'] = str(profile)
+            settings = profile / 'settings.json'
+            for entry, success in cases:
+                self.put(settings, json.dumps({'skills': [entry, 'custom'], 'theme': 'keep'}))
+                for shell in ('bash', 'powershell'):
+                    with self.subTest(profile=profile.name, entry=entry, shell=shell):
+                        before = self.snapshot()
+                        calls = (self.root / 'calls').read_bytes()
+                        result = self.adapter(shell, success=success)
+                        if success:
+                            self.assertIn('verified', result.stdout)
+                            self.assertEqual(json.loads(settings.read_text()), {'skills': [entry, 'custom',
+                                '!' + str(self.home / '.agents/skills/impeccable') + '/**'], 'theme': 'keep'})
+                            self.assertEqual((profile / 'skills/impeccable/SKILL.md').read_text(), descriptor('.pi/agent/skills'))
+                        else:
+                            self.assertNotIn('verified', result.stdout)
+                            self.assertEqual(self.snapshot(), before)
+                            self.assertEqual((self.root / 'calls').read_bytes(), calls)
 
     def test_native_pi_resource_paths_and_override_precedence_use_each_discovery_source(self):
         self.adapter()
