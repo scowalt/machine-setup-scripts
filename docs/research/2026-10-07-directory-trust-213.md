@@ -119,6 +119,21 @@ service action, inventory, credentials or network request was used. This was not
 a syscall-wide effects audit and does not alter the earlier containment incident's
 remote-receipt/telemetry uncertainty.
 
+## Integration refresh
+
+Merged integration tip `e23441a` (Impeccable, preparation, server and refresh
+slices) after implementation commit `8c57b6a`. Only the three version banners
+conflicted; both components' helper changes were retained. Final merged banners
+are macOS 287, Ubuntu 319, Bazzite 166. Desktop payloads were regenerated from
+`mac.sh` into Ubuntu/Bazzite without replacing unrelated source. Relative to the
+integration tip, only this slice's eight owned paths differ.
+
+The same six-suite affected command above passes **6/6** again on the merged
+source at `/tmp/setup-fixture-matrix-ywo5o9_r`, including all 112 component and 3
+real-caller methods, Windows wrapper, CLT/Homebrew/reliability, headless and
+containment/default coverage. No skips. Full cross-component aggregate remains
+#217's obligation; these results do not substitute for it.
+
 ## Required guidance updates for #217
 
 - Add the cross-component #208 decision pointer to the `CLAUDE.md` desktop bullet:

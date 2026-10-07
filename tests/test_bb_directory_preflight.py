@@ -4,6 +4,8 @@ import subprocess
 import tempfile
 import unittest
 
+from extract_setup_fixture import definitions
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DIRECTORIES = ("", ".config", ".config/systemd", ".config/systemd/user",
@@ -40,6 +42,10 @@ setup_bb_server
 
 
 class BbDirectoryPreflightTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.definitions = definitions((ROOT / 'ubuntu.sh').read_text())
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="bb-directory-preflight-")
         self.addCleanup(self.temporary.cleanup)
@@ -49,11 +55,8 @@ class BbDirectoryPreflightTests(unittest.TestCase):
             directory = self.home / relative
             directory.mkdir(parents=True, exist_ok=True)
             directory.chmod(0o755 if relative else 0o750)
-        source = (ROOT / "ubuntu.sh").read_text()
-        start = source.index("bb_server_platform_ready() {")
-        end = source.index("\nrun_setup_tasks() {", start)
         self.helpers = self.root / "helpers.sh"
-        self.helpers.write_text(source[start:end])
+        self.helpers.write_text(self.definitions)
 
     def snapshot(self):
         paths = [self.root]
@@ -89,7 +92,7 @@ class BbDirectoryPreflightTests(unittest.TestCase):
     def test_safe_directories_reach_next_gate(self):
         self.assertEqual(self.run_preflight(), "DIRECTORY_PREFLIGHT_PASSED\n")
 
-    def test_observed_group_writable_directories_explain_nonrecursive_correction(self):
+    def test_observed_group_writable_directories_keep_modes_without_correction(self):
         for relative in DIRECTORIES:
             with self.subTest(directory=relative):
                 directory = self.home / relative
@@ -97,24 +100,20 @@ class BbDirectoryPreflightTests(unittest.TestCase):
                 directory.chmod(0o775)
                 try:
                     output = self.run_preflight()
-                    self.assert_blocked(output, relative, "group- or world-writable (mode 775)")
-                    label = "$HOME" + ("/" + relative if relative else "")
-                    self.assertIn(f'chmod g-w "{label}"', output)
-                    self.assertIn("non-recursive", output)
+                    self.assertEqual(output, "DIRECTORY_PREFLIGHT_PASSED\n")
                 finally:
                     directory.chmod(previous)
 
-    def test_observed_775_config_hierarchy_reports_first_blocker(self):
+    def test_observed_775_config_hierarchy_passes_without_correction(self):
         for relative in (".config", ".config/systemd", ".config/systemd/user"):
             (self.home / relative).chmod(0o775)
         output = self.run_preflight()
-        self.assert_blocked(output, ".config", "group- or world-writable (mode 775)")
-        self.assertIn('chmod g-w "$HOME/.config"', output)
+        self.assertEqual(output, "DIRECTORY_PREFLIGHT_PASSED\n")
 
     def test_world_writable_directory_does_not_suggest_group_only_correction(self):
         (self.home / ".config").chmod(0o757)
         output = self.run_preflight()
-        self.assert_blocked(output, ".config", "group- or world-writable (mode 757)")
+        self.assert_blocked(output, ".config", "world-writable (mode 757)")
         self.assertNotIn("chmod g-w", output)
 
     def test_linked_directories_and_external_contents_are_preserved(self):

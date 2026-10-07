@@ -316,7 +316,7 @@ umask "$2"
                 self.assertEqual(result.returncode, 0, result)
                 self.assertEqual([((self.home / p).stat().st_mode & 0o777) for p in DIRECTORIES],
                                  [0o775, 0o775, 0o775])
-                self.assertIn("group- or world-writable (mode 775)", self.preflight())
+                self.assertEqual(self.preflight(), "DIRECTORY_PREFLIGHT_PASSED\n")
 
     def test_native_explicit_config_umask_wins_without_being_rewritten(self):
         config = self.config.read_text()
@@ -327,13 +327,7 @@ umask "$2"
                 self.assertEqual(result.returncode, 0, result)
                 self.assertEqual([((self.home / p).stat().st_mode & 0o777) for p in DIRECTORIES],
                                  [expected, expected, expected])
-                output = self.preflight()
-                if mask == "002":
-                    self.assertIn("group- or world-writable (mode 775)", output)
-                    self.assertIn("review its explicit umask setting", output)
-                    self.assertNotIn("DIRECTORY_PREFLIGHT_PASSED", output)
-                else:
-                    self.assertEqual(output, "DIRECTORY_PREFLIGHT_PASSED\n")
+                self.assertEqual(self.preflight(), "DIRECTORY_PREFLIGHT_PASSED\n")
 
 
 class BbPreparationDotfilesTests(unittest.TestCase):
