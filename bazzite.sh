@@ -1392,7 +1392,7 @@ async function artifact(name, release, get = fetchBytes) {
     if (manifest?.name !== name || manifest.version !== release) fail('artifact-identity');
     return files;
 }
-function safePath(file, home, leafLink = false) {
+function safePath(file, home, leafLink = false, directories) {
     const relative = path.relative(home, file);
     if (relative.startsWith('..') || path.isAbsolute(relative)) fail('outside-home');
     const chain = [home];
@@ -1402,7 +1402,17 @@ function safePath(file, home, leafLink = false) {
         try { st = fs.lstatSync(item); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
         if ((st.isSymbolicLink() && !(leafLink && item === file)) ||
             (!st.isSymbolicLink() && !st.isDirectory() && !st.isFile()) ||
-            (process.platform !== 'win32' && (st.uid !== process.getuid() || (!st.isSymbolicLink() && (st.mode & 0o022))))) fail('unsafe-path');
+            (process.platform !== 'win32' && (st.uid !== process.getuid() ||
+                (!st.isSymbolicLink() && (st.mode & (st.isDirectory() && st.uid !== 0 ? 0o002 : 0o022)))))) fail('unsafe-path');
+        if (directories && st.isDirectory()) {
+            if (directories.has(item) && !sameBrew(directories.get(item), st)) fail('changed-copy');
+            directories.set(item, st);
+        }
+    }
+}
+function checkAccountDirectories(directories) {
+    for (const [file, before] of directories || []) {
+        if (!sameBrew(before, fs.lstatSync(file))) fail('changed-copy');
     }
 }
 function boundedRead(file) {
@@ -1529,9 +1539,8 @@ function brewPermissions(file, info) {
     if (!info.isSymbolicLink() && (info.mode & 0o020)) {
         const linuxBrew = process.platform === 'linux' &&
             (file === '/home/linuxbrew/.linuxbrew' || file.startsWith('/home/linuxbrew/.linuxbrew/'));
-        const darwinBrewDirectory = process.platform === 'darwin' && info.isDirectory() &&
-            ['/opt/homebrew', '/usr/local'].some(prefix => file === prefix || file.startsWith(prefix + '/'));
-        if (info.uid === 0 || info.uid !== process.getuid() || !(linuxBrew || darwinBrewDirectory)) fail('brew-path');
+        const accountDirectory = ['linux', 'darwin'].includes(process.platform) && info.isDirectory();
+        if (info.uid === 0 || info.uid !== process.getuid() || !(linuxBrew || accountDirectory)) fail('brew-path');
     }
 }
 function checkBrewTrust(trust, moved = false) {
@@ -1620,9 +1629,10 @@ function packageCommandDirectory(root, home) {
     }
     fail('custom-prefix');
 }
-async function identify(file, home, nativeTarget, get) {
+async function identify(file, home, nativeTarget, get, directories) {
+    const checkPath = (file, leafLink = false) => safePath(file, home, leafLink, directories);
     const brew = brewCopy(file);
-    if (!brew) safePath(file, home, true);
+    if (!brew) checkPath(file, true);
     let binary = brew?.binary || file, release = brew?.release, route = brew?.route || 'standalone';
     const st = fs.lstatSync(file);
     let windowsShim = false;
@@ -1636,15 +1646,15 @@ async function identify(file, home, nativeTarget, get) {
         if (!windowsShim) binary = fs.realpathSync(file);
         const match = binary.match(/^(.*[\\/]node_modules[\\/]opencode-ai)[\\/]bin[\\/]opencode(?:\.exe)?$/);
         if (!match) fail('custom-link');
-        const root = match[1]; safePath(root, home); safePath(binary, home);
+        const root = match[1]; checkPath(root); checkPath(binary);
         if (!samePath(path.dirname(file), packageCommandDirectory(root, home))) fail('custom-prefix');
-        const packageMetadata = path.join(root, 'package.json'); safePath(packageMetadata, home);
+        const packageMetadata = path.join(root, 'package.json'); checkPath(packageMetadata);
         const pkg = json(boundedRead(packageMetadata));
         if (pkg.name !== 'opencode-ai' || version(pkg.version)[0] !== 1) fail('package-conflict');
         release = pkg.version; route = 'package';
         const manifest = path.join(path.dirname(path.dirname(root)), 'package.json');
         if (fs.existsSync(manifest)) {
-            safePath(manifest, home);
+            checkPath(manifest);
             const policy = json(boundedRead(manifest));
             const selected = policy.dependencies?.['opencode-ai'];
             if (selected && !['latest', '*'].includes(selected) && !/^[~^]1\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(selected)) fail('pinned');
@@ -1655,7 +1665,7 @@ async function identify(file, home, nativeTarget, get) {
             if (!published.get(`package/bin/${path.basename(binary)}`)?.equals(boundedRead(binary))) fail('custom-wrapper');
             binary = path.join(root, 'bin/.opencode');
         }
-        safePath(binary, home);
+        checkPath(binary);
     } else if (!brew && !['.local/bin', '.opencode/bin', '.bun/bin'].some(dir => samePath(path.dirname(file), path.join(home, dir)))) {
         fail('custom-prefix');
     }
@@ -1693,18 +1703,20 @@ async function installChecked(options) {
     const nativeTarget = options.target === undefined ? target() : options.target;
     if (!nativeTarget) return 'unsupported';
     const homeInput = options.home || os.homedir(), home = fs.realpathSync(homeInput);
-    safePath(home, home);
+    const directories = process.platform === 'win32' ? null : new Map();
+    const checkPath = (file, leafLink = false) => safePath(file, home, leafLink, directories);
+    checkPath(home);
     if (process.platform === 'win32' && process.env.SETUP_OPENCODE_ACL_VERIFIED !== '1') fail('windows-acl');
     const latest = json(await get('https://opencode.ai/update/api/latest/cli/npm'));
     if (latest.channel !== 'latest' || latest.name !== 'cli' || latest.distribution !== 'npm' ||
         latest.active !== true || latest.minimum !== false || latest.metadata?.package !== '@opencode/cli' || version(latest.version)[0] !== 2) fail('release-metadata');
     const release = latest.version, destination = path.join(home, '.local/bin', process.platform === 'win32' ? 'opencode.exe' : 'opencode');
     const receipt = path.join(home, '.local/bin/.setup-opencode-cli.json');
-    safePath(destination, home, true); safePath(receipt, home);
+    checkPath(destination, true); checkPath(receipt);
     const found = (options.commands || commands(home)).filter(file => !foreignCommand(file, home));
     if (found.some(file => samePath(path.dirname(file), path.join(home, '.bun/bin')))) {
         const manifest = path.join(home, '.bun/install/global/package.json');
-        safePath(manifest, home);
+        checkPath(manifest);
         if (fs.existsSync(manifest)) {
             const policy = json(boundedRead(manifest)), selected = policy.dependencies?.['opencode-ai'];
             if (selected && !['latest', '*'].includes(selected) && !/^[~^]1\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(selected)) fail('pinned');
@@ -1722,7 +1734,7 @@ async function installChecked(options) {
     };
     let installed = null, installedBytes = null;
     if (fs.existsSync(receipt)) {
-        safePath(destination, home);
+        checkPath(destination);
         const record = json(boundedRead(receipt)); version(record.version);
         if (Object.keys(record).some(key => !['package', 'version', 'sha512', 'pinned'].includes(key)) ||
             (Object.hasOwn(record, 'pinned') && typeof record.pinned !== 'boolean')) fail('receipt');
@@ -1736,14 +1748,15 @@ async function installChecked(options) {
     const old = [];
     for (const file of found) {
         if (installed && samePath(file, destination)) continue;
-        old.push(await identify(file, home, nativeTarget, get));
+        old.push(await identify(file, home, nativeTarget, get, directories));
     }
     if (old.some(item => compare(item.release, release) > 0)) {
         if (old.length !== 1 || installed) fail('shadowed-newer');
         const item = old[0];
         const revalidate = () => {
+            checkAccountDirectories(directories);
             if (item.route === 'homebrew') checkBrewTrust(item.brewTrust);
-            else safePath(item.file, home);
+            else checkPath(item.file);
             if (digest(boundedRead(item.binary)) !== item.nativeHash) fail('changed-copy');
         };
         revalidate();
@@ -1753,13 +1766,15 @@ async function installChecked(options) {
     }
     if (installed && compare(installed, release) >= 0) {
         if (old.length) fail('shadowed');
+        checkAccountDirectories(directories);
         await verifySelection(destination);
-        safePath(destination, home);
+        checkAccountDirectories(directories);
+        checkPath(destination);
         if (!boundedRead(destination).equals(installedBytes)) fail('changed-copy');
         if (compare(installed, release) > 0) return 'newer';
         const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'setup-opencode-'));
         let probeError;
-        try { runProbe(destination, installed, temp); }
+        try { runProbe(destination, installed, temp); checkAccountDirectories(directories); }
         catch (error) { probeError = nativeFailure('installation', error); throw probeError; }
         finally {
             try { fs.rmSync(temp, {recursive: true, force: true}); }
@@ -1770,8 +1785,9 @@ async function installChecked(options) {
     const files = await artifact(`@opencode/cli-${nativeTarget}`, release, get);
     const bytes = files.get(`package/bin/${path.basename(destination)}`);
     if (!bytes || !bytes.length) fail('missing-binary');
-    const bin = path.dirname(destination); safePath(bin, home);
-    fs.mkdirSync(bin, {recursive: true, mode: 0o755}); safePath(bin, home);
+    checkAccountDirectories(directories);
+    const bin = path.dirname(destination); checkPath(bin);
+    fs.mkdirSync(bin, {recursive: true, mode: 0o755}); checkPath(bin);
     const stage = fs.mkdtempSync(path.join(bin, '.setup-opencode-'));
     const staged = path.join(stage, path.basename(destination));
     const backups = []; let promoted = false, completed = false, locked = false, originalError;
@@ -1781,18 +1797,20 @@ async function installChecked(options) {
         fs.mkdirSync(lock, {mode: 0o700}); locked = true;
         fs.writeFileSync(staged, bytes, {mode: 0o755, flag: 'wx'});
         runProbe(staged, release, stage);
+        checkAccountDirectories(directories);
         for (const item of old) {
             if (item.route === 'homebrew') checkBrewTrust(item.brewTrust);
-            else safePath(item.file, home, !!item.link);
+            else checkPath(item.file, !!item.link);
             if (item.link ? fs.readlinkSync(item.file) !== item.link : !boundedRead(item.file).equals(item.bytes)) fail('changed-copy');
             if (digest(boundedRead(item.binary)) !== item.nativeHash) fail('changed-copy');
         }
         if (installed) {
-            safePath(destination, home);
+            checkPath(destination);
             if (!boundedRead(destination).equals(installedBytes)) fail('changed-copy');
             old.push({file: destination});
         }
         for (const item of old) {
+            checkAccountDirectories(directories);
             if (item.route === 'homebrew') checkBrewTrust(item.brewTrust);
             const backup = item.route === 'homebrew'
                 ? path.join(path.dirname(item.file), `.opencode-setup-recovery-${crypto.randomBytes(12).toString('hex')}`)
@@ -1804,17 +1822,20 @@ async function installChecked(options) {
             const item = old.find(entry => entry.file === original);
             if (item?.route === 'homebrew') checkBrewBackup(item, backup);
         }
+        checkAccountDirectories(directories);
         fs.linkSync(staged, destination); promoted = true;
         fs.unlinkSync(staged);
         runProbe(destination, release, stage);
         await verifySelection(destination);
-        safePath(destination, home);
+        checkAccountDirectories(directories);
+        checkPath(destination);
         if (!boundedRead(destination).equals(bytes)) fail('changed-copy');
         const remaining = options.commands ? [destination] : commands(home);
         if (remaining.some(file => !samePath(file, destination) && !foreignCommand(file, home))) fail('shadowed');
         const record = JSON.stringify({package: `@opencode/cli-${nativeTarget}`, version: release, sha512: digest(bytes)}) + '\n';
         const nextReceipt = path.join(stage, 'receipt'); fs.writeFileSync(nextReceipt, record, {mode: 0o600, flag: 'wx'});
-        safePath(receipt, home);
+        checkAccountDirectories(directories);
+        checkPath(receipt);
         if (previousReceipt ? !boundedRead(receipt).equals(previousReceipt) : fs.existsSync(receipt)) fail('changed-receipt');
         fs.renameSync(nextReceipt, receipt); completed = true;
         return old.length ? 'migrated' : 'installed';
@@ -1824,8 +1845,9 @@ async function installChecked(options) {
     } finally {
         if (!completed) {
             try {
+                if (promoted || backups.length) checkAccountDirectories(directories);
                 if (promoted) {
-                    safePath(destination, home);
+                    checkPath(destination);
                     if (!boundedRead(destination).equals(bytes)) fail('changed-copy');
                     fs.unlinkSync(destination);
                 }
@@ -9661,7 +9683,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 162 | Last changed: Match native Impeccable tabs and globstars"
+    echo -e "${GRAY}Version 163 | Last changed: Accept OpenCode account directory group write"
 
     if ! acquire_setup_lock; then
         return 1
