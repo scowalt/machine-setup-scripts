@@ -257,8 +257,13 @@ finally {
 }
 
 $originalCleanupUserProfile = $env:USERPROFILE
-$cleanupTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "impeccable-cleanup-$([guid]::NewGuid())"
+$originalImpeccableBan = $env:BAN_IMPECCABLE
+$cleanupTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "impeccable-exclusion-$([guid]::NewGuid())"
 $env:USERPROFILE = Join-Path $cleanupTestRoot "home"
+$env:BAN_IMPECCABLE = '1'
+function global:npx { throw 'Offline Impeccable exclusion invoked an installer' }
+function global:npm { throw 'Offline Impeccable exclusion invoked npm' }
+function global:Enable-SkillsCliNodeRuntime { throw 'Offline Impeccable exclusion attempted runtime provisioning' }
 $skillPaths = @(
     (Join-Path $env:USERPROFILE ".claude\skills\impeccable"),
     (Join-Path $env:USERPROFILE ".agents\skills\impeccable"),
@@ -303,23 +308,24 @@ try {
     Set-Content -Path $siblingSkill -Value "keep"
     Set-Content -Path $siblingAgent -Value "keep"
 
-    Remove-ImpeccableResources
-    Remove-ImpeccableResources
+    if (-not (Invoke-ImpeccableConvergence)) { throw 'Offline Impeccable exclusion failed' }
+    if (-not (Invoke-ImpeccableConvergence)) { throw 'Repeated offline Impeccable exclusion failed' }
 
     foreach ($path in @($skillPaths + $agentPaths)) {
         if (Test-Path -LiteralPath $path) {
-            throw "Legacy Impeccable cleanup left $path"
+            throw "Offline Impeccable exclusion left $path"
         }
     }
     if (-not (Test-Path -LiteralPath $siblingSkill) -or -not (Test-Path -LiteralPath $siblingAgent)) {
-        throw "Legacy Impeccable cleanup removed an unrelated sibling"
+        throw "Offline Impeccable exclusion removed an unrelated sibling"
     }
     if ($symlinkCreated -and -not (Test-Path -LiteralPath (Join-Path $symlinkTarget "sentinel"))) {
-        throw "Legacy Impeccable cleanup followed a symlink target"
+        throw "Offline Impeccable exclusion followed a symlink target"
     }
 }
 finally {
     $env:USERPROFILE = $originalCleanupUserProfile
+    $env:BAN_IMPECCABLE = $originalImpeccableBan
     Remove-Item -Recurse -Force $cleanupTestRoot -ErrorAction SilentlyContinue
 }
 

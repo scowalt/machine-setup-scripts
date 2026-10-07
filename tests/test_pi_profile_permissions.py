@@ -321,7 +321,7 @@ process.on('exit', () => { if (!fixtureRaced) { process.stdout.write('race-not-e
                 self.assertIn('PI_PROFILE_MUTATIONS_BLOCKED=1', main)
 
 
-    def test_blocked_pi_skill_cleanup_preserves_pi_but_continues_shared_cleanup(self):
+    def test_blocked_impeccable_convergence_preserves_both_copies_and_reports_incomplete(self):
         for script in SCRIPTS:
             if script == 'win.ps1' and not PWSH:
                 continue
@@ -337,29 +337,43 @@ process.on('exit', () => { if (!fixtureRaced) { process.stdout.write('race-not-e
                 settings.write_text('malformed PRIVATE-SENTINEL')
                 text = (ROOT / script).read_text()
                 windows = script == 'win.ps1'
-                names = ('Set-PiSkillOwnership', 'Remove-ImpeccableResources') if windows else ('configure_pi_skill_ownership', 'remove_impeccable_resources')
-                bodies = []
-                for name in names:
-                    signature = 'function ' + name + ' {' if windows else name + '() {'
-                    start = text.index(signature)
-                    bodies.append(text[start:text.index('\n}\n', start) + 2])
                 if windows:
                     fixture = self.root / 'blocked.ps1'
-                    fixture.write_text("$ErrorActionPreference='Stop'\n$script:PiProfileMutationsBlocked=$true\n"
-                                       "function Write-Warning($Message) {}\nfunction Write-Success($Message) {}\nfunction Write-Debug($Message) {}\n" +
-                                       '\n'.join(bodies) + '\nif (-not (Set-PiSkillOwnership)) { exit 1 }; Remove-ImpeccableResources\n')
+                    fixture.write_text(r'''
+$ErrorActionPreference='Stop'
+$tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile($env:FIXTURE_SOURCE,[ref]$tokens,[ref]$errors)
+if ($errors.Count) { throw 'Invalid fixture source' }
+foreach ($definition in $ast.EndBlock.Statements) {
+    if ($definition -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $definition.Name -in @('Set-PiSkillOwnership','Invoke-ImpeccableSkillPolicy','Invoke-ImpeccableConvergence')) {
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+}
+$script:PiProfileMutationsBlocked=$true
+function Write-Warning($Message) {}
+function Write-Success($Message) {}
+function Write-Debug($Message) {}
+function npx { throw 'Blocked exclusion invoked installer' }
+function npm { throw 'Blocked exclusion invoked npm' }
+if (-not (Set-PiSkillOwnership)) { throw 'Independent ownership gate failed' }
+if (Invoke-ImpeccableConvergence) { throw 'Blocked convergence reported success' }
+''')
                     command = [PWSH, '-NoProfile', '-NonInteractive', '-File', str(fixture)]
                 else:
+                    from extract_setup_fixture import definitions
                     fixture = self.root / 'blocked.sh'
-                    fixture.write_text('set -eu\nPI_PROFILE_MUTATIONS_BLOCKED=1\n'
-                                       'print_warning() { :; }; print_success() { :; }; print_debug() { :; };\n' +
-                                       '\n'.join(bodies) + '\nconfigure_pi_skill_ownership\nremove_impeccable_resources\n')
+                    fixture.write_text('set -eu\n' + definitions(text) + '\nPI_PROFILE_MUTATIONS_BLOCKED=1\n'
+                                       'print_warning() { :; }; print_success() { :; }; print_debug() { :; };\n'
+                                       'npm() { return 99; }; npx() { return 99; };\n'
+                                       'configure_pi_skill_ownership\nif converge_impeccable_skill; then exit 99; fi\n')
                     command = ['bash', str(fixture)]
-                result = subprocess.run(command, env=self.env, capture_output=True, text=True, timeout=30)
+                result = subprocess.run(command, env={**self.env, 'BAN_IMPECCABLE': '1', 'FIXTURE_SOURCE': str(ROOT / script)},
+                                        capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(settings.read_text(), 'malformed PRIVATE-SENTINEL')
                 self.assertEqual((pi_skill / 'SKILL.md').read_text(), 'PRIVATE-SENTINEL')
-                self.assertFalse(shared_skill.exists())
+                self.assertEqual((shared_skill / 'SKILL.md').read_text(), 'PRIVATE-SENTINEL')
 
     @unittest.skipIf(os.name == 'nt', 'Cross-platform extracted guards with a POSIX preflight-failure fixture')
     def test_real_mixed_cleanup_guards_preserve_both_profiles_and_continue_unrelated_work(self):

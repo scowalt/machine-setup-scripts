@@ -1,7 +1,9 @@
+from functools import lru_cache
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +26,11 @@ SCRIPTS = ['impeccable', 'impeccable.cmd', 'VERSION', 'command-metadata.json', '
            'live-browser-session.js', 'live-browser-ignores.js', 'live-browser-dom.js', 'modern-screenshot.umd.js',
            'data/font-index.json', 'data/font-index-failures.json']
 AGENTS = ['manual-edit-applier', 'asset-producer', 'documenter', 'finish-reviewer']
+
+
+@lru_cache(maxsize=6)
+def fixture_definitions(source):
+    return definitions(source)
 
 
 def native_engine():
@@ -153,14 +160,44 @@ require('node:https').get = (url, options, callback) => {
         visit(directory)
         return state
 
-    def adapter(self, shell='bash', success=True, blocked=False):
+    def adapter(self, shell='bash', success=True, blocked=False, entry=None):
         suffix = 'ps1' if shell == 'powershell' else 'bash'
         core = (ROOT / 'lib/impeccable-skill.cjs').read_text()
-        wrapper = (ROOT / ('lib/impeccable-skill.' + suffix)).read_text().replace('@IMPECCABLE_CORE@', core)
+        wrapper = (ROOT / entry).read_text() if entry else (ROOT / ('lib/impeccable-skill.' + suffix)).read_text().replace('@IMPECCABLE_CORE@', core)
         fixture = self.root / ('adapter.' + suffix)
         if shell == 'bash':
-            extracted = definitions(wrapper + '\nmain() {\n    :\n}\nrun_setup_tasks() {\n    :\n}\nsetup_load_environment() {\n    :\n}\n')
-            fixture.write_text('set -eu\n' + extracted + r'''
+            extracted = fixture_definitions(wrapper if entry else wrapper + '\nmain() {\n    :\n}\nrun_setup_tasks() {\n    :\n}\nsetup_load_environment() {\n    :\n}\n')
+            mocks = ''
+            if entry:
+                retained = {'impeccable_skill_policy', 'converge_impeccable_skill', 'main', 'run_setup_tasks',
+                            'setup_load_environment', 'setup_environment_failure', 'setup_trim', 'setup_environment_value',
+                            'fail_unsupported_headless', 'env_local_flag_is_one'}
+                names = set(re.findall(r'^(\w+)\(\)', extracted, re.M))
+                mocks = '\n'.join(f'{name}() {{ :; }}' for name in names - retained) + r'''
+record() { printf '%s\n' "$1" >> "$IMPECCABLE_TEST_ROOT/events"; }
+whoami() { printf 'fixture\n'; }
+create_env_local() { record environment-template; }
+brew() { :; }
+is_main_user() { return 0; }
+check_dotfiles_access() { return 1; }
+setup_dotfiles_deploy_key() { return 1; }
+bb_server_selection() { return 1; }
+prepare_pi_profile_permissions() { record permissions; [[ "${IMPECCABLE_TEST_BLOCKED:-0}" != 1 ]]; }
+setup_matt_pocock_skills() { record matt; [[ "${IMPECCABLE_TEST_EARLIER_FAILURE:-0}" != 1 ]]; }
+remove_rtk_resources() { record rtk; }
+remove_attention_span_resources() { record attention; }
+remove_simple_english_skill() { record simple-english; }
+remove_show_me_skill() { record show-me; }
+remove_pr_lens_skill() { record pr-lens; }
+configure_pi_opencode_go() { [[ "${IMPECCABLE_TEST_LATE_BLOCK:-0}" != 1 ]]; }
+remove_compound_engineering_resources() { record independent; }
+check_pending_reboot() { record reboot; }
+start_setup_log() { record log-start; }
+finish_setup_log() { record "final:$1"; return "$1"; }
+'''
+                for command_name in ('curl', 'npm', 'npx', 'pi', 'bb', 'chezmoi', 'sudo', 'systemctl', 'launchctl', 'kill', 'pkill', 'tmux'):
+                    mocks += f'\n{command_name}() {{ record FORBIDDEN:{command_name}; return 99; }}'
+            fixture.write_text(('set -e\n' if entry else 'set -eu\n') + extracted + '\n' + mocks + '\n' + r'''
 print_message() { :; }
 print_success() { printf '%s\n' "$1"; }
 print_warning() { printf '%s\n' "$1" >&2; }
@@ -175,7 +212,7 @@ npm() {
     esac
 }
 npx() { "${IMPECCABLE_TEST_PYTHON}" "${IMPECCABLE_TEST_MOCK}" --installer "$@"; }
-''' + f'\nPI_PROFILE_MUTATIONS_BLOCKED={int(blocked)}\nconverge_impeccable_skill\n')
+''' + ('\nmain\n' if entry else f'\nPI_PROFILE_MUTATIONS_BLOCKED={int(blocked)}\nconverge_impeccable_skill\n'))
             command = ['/bin/bash', '--noprofile', '--norc', str(fixture)]
         else:
             if not PWSH:
@@ -186,9 +223,40 @@ npx() { "${IMPECCABLE_TEST_PYTHON}" "${IMPECCABLE_TEST_MOCK}" --installer "$@"; 
 $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($env:IMPECCABLE_TEST_SOURCE,[ref]$tokens,[ref]$errors)
 if ($errors.Count) { throw 'invalid adapter source' }
+$retained=@('Invoke-ImpeccableSkillPolicy','Invoke-ImpeccableConvergence','Read-SetupEnvironment',
+    'ConvertFrom-SetupEnvironmentValue','Assert-HeadlessUnsupported','Test-EnvLocalFlag',
+    'Invoke-WindowsSetupTasks','Initialize-WindowsEnvironment')
 foreach ($statement in $ast.EndBlock.Statements) {
-    if ($statement -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) { throw 'non-definition adapter source' }
-    Invoke-Expression $statement.Extent.Text
+    if ($statement -is [System.Management.Automation.Language.FunctionDefinitionAst]) {
+        if ($env:IMPECCABLE_TEST_ENTRY -and $statement.Name -notin $retained) {
+            Set-Item -Path ('function:' + $statement.Name) -Value { $true }
+        } else { . ([scriptblock]::Create($statement.Extent.Text)) }
+    } elseif (-not $env:IMPECCABLE_TEST_ENTRY) { throw 'non-definition adapter source' }
+}
+if ($env:IMPECCABLE_TEST_ENTRY) {
+    function Record($Message) { Add-Content (Join-Path $env:IMPECCABLE_TEST_ROOT events) $Message }
+    function Write-Host { }
+    function Write-Debug { }
+    function Write-Section { }
+    function Get-SetupLogDirectory { Join-Path $env:IMPECCABLE_TEST_ROOT logs }
+    function Assert-SetupLogPath { param($Path,[switch]$AllowMissing) }
+    function Invoke-PendingSetupLogUploads { }
+    function Start-Transcript { param($Path,[switch]$NoClobber,$ErrorAction) }
+    function Complete-SetupLog { Record finalized }
+    function New-TokenPlaceholders { Record environment-template }
+    function Prepare-PiProfilePermissions { Record permissions; return $env:IMPECCABLE_TEST_BLOCKED -ne '1' }
+    function Setup-MattPocockSkills { Record matt; return $env:IMPECCABLE_TEST_EARLIER_FAILURE -ne '1' }
+    function Remove-RtkResources { Record rtk }
+    function Remove-AttentionSpanResources { Record attention }
+    function Remove-SimpleEnglishSkill { Record simple-english; return $true }
+    function Remove-ShowMeSkill { Record show-me; return $true }
+    function Remove-PrLensSkill { Record pr-lens; return $true }
+    function Set-PiOpenCodeGoProvider { return $env:IMPECCABLE_TEST_LATE_BLOCK -ne '1' }
+    function Remove-CompoundEngineeringResources { Record independent }
+    function Test-PendingReboot { Record reboot }
+    foreach ($name in @('curl','pi','bb','chezmoi','sudo','systemctl','launchctl','Stop-Process','Invoke-RestMethod','Invoke-WebRequest')) {
+        Set-Item -Path ('function:' + $name) -Value { throw 'unexpected external operation' }
+    }
 }
 function Write-Message($Message) { }
 function Write-Success($Message) { [Console]::WriteLine($Message) }
@@ -218,7 +286,14 @@ foreach ($key in @('HOME','USERPROFILE','CLAUDE_CONFIG_DIR','CODEX_HOME','PI_COD
     $saved[$key]=[Environment]::GetEnvironmentVariable($key)
 }
 $location=(Get-Location).Path
-$result=Invoke-ImpeccableConvergence
+$result=$false
+if ($env:IMPECCABLE_TEST_ENTRY) {
+    try { Initialize-WindowsEnvironment; $result=$true }
+    catch { [Console]::Error.WriteLine($_.Exception.Message) }
+} else {
+    $result=Invoke-ImpeccableConvergence
+    if ($result -isnot [bool]) { throw 'Convergence success stream is not one Boolean' }
+}
 foreach ($key in $saved.Keys) {
     if ([Environment]::GetEnvironmentVariable($key) -cne $saved[$key]) { throw "Environment restoration failed: $key" }
 }
@@ -227,6 +302,7 @@ if (-not $result) { exit 1 }
 ''')
             command = [PWSH, '-NoProfile', '-NonInteractive', '-File', str(fixture)]
             self.env['IMPECCABLE_TEST_SOURCE'] = str(source)
+            self.env['IMPECCABLE_TEST_ENTRY'] = entry or ''
         result = subprocess.run(command, env=self.env, cwd=self.root, stdin=subprocess.DEVNULL,
                                 text=True, capture_output=True, timeout=45)
         mock_errors = (self.root / 'installer-errors').read_text() if (self.root / 'installer-errors').exists() else ''

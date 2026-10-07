@@ -87,26 +87,10 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_contains "${file}" '^[[:space:]]+remove_pi_rpiv_packages \|\| _setup_had_errors=1$' 'Pi RPIV packages removal main wiring'
     assert_contains "${file}" '^[[:space:]]+setup_pi_companion_packages \|\| \{ _setup_had_errors=1; _pi_package_maintenance_ok=0; \}$' 'Pi companion package main wiring'
     assert_order "${file}" '^[[:space:]]+setup_pi_claude_bridge \|\| \{ _setup_had_errors=1; _pi_package_maintenance_ok=0; \}$' '^[[:space:]]+setup_pi_companion_packages \|\| \{ _setup_had_errors=1; _pi_package_maintenance_ok=0; \}$' 'Pi companion package setup after Pi Claude bridge'
-    assert_contains "${file}" '^remove_impeccable_resources\(\)' 'legacy Impeccable cleanup function'
-    assert_contains "${file}" '^[[:space:]]+remove_impeccable_resources$' 'legacy Impeccable cleanup wiring'
-    assert_order "${file}" '^[[:space:]]+elif install_pi_cli; then$' '^[[:space:]]+remove_impeccable_resources$' 'Pi setup runs before legacy Impeccable cleanup'
-    assert_not_contains "${file}" 'install_impeccable_skill|impeccable@latest install' 'Impeccable installer'
-    assert_not_contains "${file}" 'BAN_IMPECCABLE' 'retired Impeccable opt-out'
-    for path in \
-        '.claude/skills/impeccable' \
-        '.agents/skills/impeccable' \
-        '.cursor/skills/impeccable' \
-        '.gemini/skills/impeccable' \
-        '.pi/agent/skills/impeccable' \
-        '.cursor/agents/impeccable-manual-edit-applier.md' \
-        '.cursor/agents/impeccable-asset-producer.md' \
-        '.cursor/agents/impeccable-documenter.md' \
-        '.cursor/agents/impeccable-finish-reviewer.md'; do
-        assert_contains "${file}" "${path}" "legacy Impeccable cleanup path ${path}"
-    done
+    assert_not_contains "${file}" 'remove_impeccable_resources' 'unconditional Impeccable retirement'
     assert_contains "${file}" '^remove_compound_engineering_resources\(\)' 'legacy Compound Engineering cleanup function'
     assert_contains "${file}" '^[[:space:]]+remove_compound_engineering_resources$' 'legacy Compound Engineering cleanup wiring'
-    assert_order "${file}" '^[[:space:]]+remove_impeccable_resources$' '^[[:space:]]+remove_compound_engineering_resources$' 'Compound Engineering cleanup grouped with legacy Impeccable cleanup'
+    assert_order "${file}" '^[[:space:]]+converge_impeccable_skill \|\| _setup_had_errors=1$' '^[[:space:]]+remove_compound_engineering_resources$' 'independent Compound Engineering retirement after Impeccable convergence'
     assert_contains "${file}" '^[[:space:]]+lfg$' 'legacy Compound Engineering lfg skill in cleanup list'
     assert_contains "${file}" '_resource_path="\$\{_agent_dir\}/compound-engineering"' 'legacy Compound Engineering install manifest cleanup path'
 done
@@ -155,30 +139,12 @@ assert_contains win.ps1 'npm:pi-web-access' 'Pi Web Access package source'
 assert_contains win.ps1 '^[[:space:]]+if \(-not \(Remove-PiRpivPackages\)\) \{ [$]piSetupFailed = [$]true \}$' 'PowerShell Pi RPIV packages removal main wiring'
 assert_contains win.ps1 '^[[:space:]]+if \(-not \(Setup-PiCompanionPackages\)\) \{ [$]piSetupFailed = [$]true; [$]piPackageMaintenanceOk = [$]false \}$' 'Pi companion package main wiring'
 assert_order win.ps1 '^[[:space:]]+if \(-not \(Setup-PiClaudeBridge\)\) \{ [$]piSetupFailed = [$]true; [$]piPackageMaintenanceOk = [$]false \}$' '^[[:space:]]+if \(-not \(Setup-PiCompanionPackages\)\) \{ [$]piSetupFailed = [$]true; [$]piPackageMaintenanceOk = [$]false \}$' 'Pi companion package setup after Pi Claude bridge'
-assert_contains win.ps1 'function Remove-ImpeccableResources' 'legacy Impeccable cleanup function'
-assert_contains win.ps1 '^[[:space:]]+Remove-ImpeccableResources$' 'legacy Impeccable cleanup wiring'
-assert_order win.ps1 '^[[:space:]]+elseif \(Install-PiCli\) \{$' '^[[:space:]]+Remove-ImpeccableResources$' 'Pi setup runs before legacy Impeccable cleanup'
-assert_not_contains win.ps1 'Install-ImpeccableSkill|impeccable@latest install' 'Impeccable installer'
-assert_not_contains win.ps1 'BAN_IMPECCABLE' 'retired Impeccable opt-out'
-for path in \
-    '\.claude\\skills\\impeccable' \
-    '\.agents\\skills\\impeccable' \
-    '\.cursor\\skills\\impeccable' \
-    '\.gemini\\skills\\impeccable' \
-    '\.pi\\agent\\skills\\impeccable' \
-    '\.cursor\\agents\\impeccable-manual-edit-applier\.md' \
-    '\.cursor\\agents\\impeccable-asset-producer\.md' \
-    '\.cursor\\agents\\impeccable-documenter\.md' \
-    '\.cursor\\agents\\impeccable-finish-reviewer\.md'; do
-    assert_contains win.ps1 "${path}" "legacy Impeccable cleanup path ${path}"
-done
+assert_not_contains win.ps1 'Remove-ImpeccableResources' 'unconditional Impeccable retirement'
 assert_contains win.ps1 'function Remove-CompoundEngineeringResources' 'legacy Compound Engineering cleanup function'
 assert_contains win.ps1 '^[[:space:]]+Remove-CompoundEngineeringResources$' 'legacy Compound Engineering cleanup wiring'
-assert_order win.ps1 '^[[:space:]]+Remove-ImpeccableResources$' '^[[:space:]]+Remove-CompoundEngineeringResources$' 'Compound Engineering cleanup grouped with legacy Impeccable cleanup'
+assert_order win.ps1 '^[[:space:]]+if \(-not \(Invoke-ImpeccableConvergence\)\)' '^[[:space:]]+Remove-CompoundEngineeringResources$' 'independent Compound Engineering retirement after Impeccable convergence'
 assert_contains win.ps1 '\|lfg\)' 'legacy Compound Engineering lfg skill in cleanup pattern'
 assert_contains win.ps1 'Join-Path [$]agentDir "compound-engineering"' 'legacy Compound Engineering install manifest cleanup path'
-
-assert_not_contains CLAUDE.md 'BAN_IMPECCABLE' 'retired Impeccable setup guidance'
 
 source_without_main='s/^main "\$@"$/:/'
 for file in "${bash_setup_scripts[@]}"; do
@@ -208,10 +174,15 @@ for file in "${bash_setup_scripts[@]}"; do
         "${symlink_target}/sentinel"
     ln -s "${symlink_target}" "${cleanup_home}/.claude/skills/impeccable"
 
-    SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" HOME="${cleanup_home}" bash -c '
+    SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" \
+        HOME="${cleanup_home}" BAN_IMPECCABLE=1 bash -c '
+        set -e
         source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
-        remove_impeccable_resources
-        remove_impeccable_resources
+        ensure_skills_cli_node_runtime() { return 99; }
+        npm() { return 99; }
+        npx() { return 99; }
+        converge_impeccable_skill
+        converge_impeccable_skill
     '
 
     for path in \
@@ -224,7 +195,7 @@ for file in "${bash_setup_scripts[@]}"; do
         "${cleanup_home}/.cursor/agents/impeccable-asset-producer.md" \
         "${cleanup_home}/.cursor/agents/impeccable-documenter.md" \
         "${cleanup_home}/.cursor/agents/impeccable-finish-reviewer.md"; do
-        [[ ! -e "${path}" && ! -L "${path}" ]] || fail "${file}: legacy Impeccable cleanup left ${path}"
+        [[ ! -e "${path}" && ! -L "${path}" ]] || fail "${file}: offline Impeccable exclusion left ${path}"
     done
     [[ -f "${cleanup_home}/.agents/skills/keep-me/SKILL.md" ]] || fail "${file}: cleanup removed a sibling skill"
     [[ -f "${cleanup_home}/.cursor/agents/keep-me.md" ]] || fail "${file}: cleanup removed a sibling Cursor agent"
