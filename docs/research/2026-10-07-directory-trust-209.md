@@ -67,6 +67,14 @@ Explicit skips: Pi profiles 2 native Windows ACL/handle cases; runtime 1 cross-r
 
 Static checks: six embedding equality, Node syntax, all five modified Bash syntax/ShellCheck, whitespace, and PowerShell AST parse pass. All six setup banners incremented. Canonical Bash/PowerShell adapters, extraction helpers, runner and mandatory C filter are unchanged. Filter SHA-256: `1963233f54482e9fc8e0cdaf2ee7696e4ff4fdc09f42e96f72f4e713d1d0629f`.
 
+## Integration verification
+
+Merged current integration tip `3f8841b8043d9166ebc894b7a3a81fc0cab2e329` (BB refresh #212) into this slice. Only the five shared version-banner hunks conflicted; both component implementations were retained, and Impeccable embeddings regenerated. Final banners: macOS 285, Ubuntu 316, WSL 244, Pi 261, Bazzite 164, Windows 184. Impeccable and BB refresh embedding checks, Bash syntax/ShellCheck, Node syntax and whitespace passed.
+
+Post-merge `/tmp/setup-fixture-matrix-pwznawcl` passed the same five-entry suffix as `/tmp/setup-fixture-matrix-w6rzc8ty`: default/environment, extraction/containment, Impeccable convergence/embedding, real callers, and Pi profiles. Counts and skips are unchanged. This also verifies the comment-free final source; explanatory intent lives in this evidence rather than new source comments. No Impeccable or caller test was skipped.
+
+Commits use `LEFTHOOK=0` to avoid the hook's uncontained `bunx`/`uv` dependency resolution and mutable lint commands. Mandatory static checks and contained behavioral commands above were run explicitly; this is not a claim that the entire resolver-backed commit hook or final pre-push dispatcher passed.
+
 ## Limits and handoff to #217
 
 The final complete pre-push dispatcher/cross-component aggregate belongs to #217, including merged BB/OpenCode/retirement/AI-agent/reboot/CLT/Homebrew coverage and standalone Windows reliability. This slice has not claimed that aggregate. Tests use inert official-shaped artifacts and synthetic metadata, not live native setup, actual elevated account dispatch, native Apple/Windows/ARM/WSL/Bazzite readiness or usable skills. No containment refusal or unexpected real effect was observed; this is not a syscall-wide effects audit. The historical fixture incident and collector/telemetry uncertainty remain unchanged.
