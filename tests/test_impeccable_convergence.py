@@ -517,6 +517,58 @@ if (-not $result) { exit 1 }
         self.adapter(success=False)
         self.assertEqual(self.snapshot(), before)
 
+    def test_malformed_metadata_in_an_otherwise_complete_snapshot_never_replaces_working_artifacts(self):
+        self.adapter()
+        self.env.update(IMPECCABLE_TEST_MODE='malformed-frontmatter', IMPECCABLE_TEST_REVISION='replacement must not be promoted')
+        before = self.snapshot()
+        for shell in ('bash', 'powershell'):
+            with self.subTest(shell=shell):
+                result = self.adapter(shell, success=False)
+                self.assertNotIn('verified', result.stdout)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_official_five_provider_frontmatter_is_verified_and_preserved_byte_for_byte(self):
+        frontmatter = json.loads((ROOT / 'tests/fixtures/impeccable-frontmatter.json').read_text())['frontmatter']
+        descriptors = {provider: header + '\nInert official-shape payload; never execute.\n' for provider, header in frontmatter.items()}
+        self.env['IMPECCABLE_TEST_DESCRIPTORS'] = json.dumps(descriptors)
+        for shell in ('bash', 'powershell'):
+            self.adapter(shell)
+            for provider, text in descriptors.items():
+                self.assertEqual((self.home / provider / 'impeccable/SKILL.md').read_bytes(), text.encode())
+
+    def test_malformed_unknown_fields_and_unsupported_yaml_never_establish_verified_availability(self):
+        self.adapter()
+        cases = [
+            ('.agents/skills', '  broken: [\n'),
+            ('.claude/skills', 'future: [unfinished\n'),
+            ('.cursor/skills', 'future: "unfinished\n'),
+            ('.gemini/skills', 'future: a: b\n'),
+            ('.gemini/skills', 'future: value:\n'),
+            ('.agents/skills', '  broken: value:\n'),
+            ('.pi/agent/skills', 'metadata:\n  build: first\n  build: second\n'),
+            ('.pi/agent/skills', 'future:\n  broken: [\n'),
+            ('.pi/agent/skills', 'allowed-tools:\n  - [unfinished\n'),
+            ('.claude/skills', "future: 'one'junk'\n"),
+            ('.pi/agent/skills', 'future: [valid, but, unsupported]\n'),
+            ('.pi/agent/skills', 'future: |\n  valid but unsupported\n'),
+            ('.pi/agent/skills', 'future: &anchor value\nnext: *anchor\n'),
+        ]
+        for provider, extra in cases:
+            with self.subTest(provider=provider, extra=extra):
+                text = descriptor(provider).replace('\n---\n', '\n' + extra + '---\n')
+                self.env['IMPECCABLE_TEST_DESCRIPTORS'] = json.dumps({provider: text})
+                before = self.snapshot()
+                result = self.adapter(success=False)
+                self.assertNotIn('verified', result.stdout)
+                self.assertEqual(self.snapshot(), before)
+        for value in ('.5', '+.inf', '0xdead', 'true'):
+            with self.subTest(description=value):
+                self.env['IMPECCABLE_TEST_DESCRIPTORS'] = json.dumps({'.pi/agent/skills':
+                    '---\nname: impeccable\ndescription: ' + value + '\nversion: 4.5.0\n---\nInert.\n'})
+                before = self.snapshot()
+                self.adapter(success=False)
+                self.assertEqual(self.snapshot(), before)
+
     def test_malformed_identity_and_ignored_pi_descriptor_cannot_establish_availability(self):
         self.adapter()
         for mode in ('duplicate-name', 'empty-description', 'oversize-description'):
@@ -532,6 +584,97 @@ if (-not $result) { exit 1 }
         self.assertEqual(self.snapshot(), before)
         self.assertEqual((self.root / 'calls').read_bytes(), calls)
         self.assertEqual(ignore.read_text(), 'impeccable/\n')
+
+    def test_file_negation_cannot_reopen_an_ignored_pi_skill_directory_or_replace_prior_payload(self):
+        for profile in (self.home / '.pi/agent', self.home / 'selected pi'):
+            self.env['PI_CODING_AGENT_DIR'] = str(profile)
+            self.adapter()
+            ignore = self.put(profile / 'skills/.ignore', 'impeccable/\n!impeccable/SKILL.md\n')
+            before = self.snapshot()
+            calls = (self.root / 'calls').read_bytes()
+            for shell in ('bash', 'powershell'):
+                with self.subTest(profile=profile.name, shell=shell):
+                    result = self.adapter(shell, success=False)
+                    self.assertNotIn('verified', result.stdout)
+                    self.assertEqual(self.snapshot(), before)
+                    self.assertEqual((self.root / 'calls').read_bytes(), calls)
+                    self.assertEqual(ignore.read_text(), 'impeccable/\n!impeccable/SKILL.md\n')
+
+    def test_pi_ignore_rules_respect_native_scoping_directory_types_globs_and_ordered_parent_negation(self):
+        cases = [
+            ({'.ignore': 'impeccable/\n!impeccable/\n'}, True),
+            ({'.gitignore': 'impeccable/\n', '.ignore': '!impeccable/\n'}, True),
+            ({'.ignore': 'impeccable/\n!impeccable/\n', '.fdignore': 'impeccable/SKILL.md\n'}, False),
+            ({'.ignore': '/impeccable/\n!/impeccable/SKILL.md\n'}, False),
+            ({'.ignore': '*\n!impeccable/\n!impeccable/SKILL.md\n'}, True),
+            ({'.ignore': '**/impeccable/\n!**/SKILL.md\n'}, False),
+            ({'.ignore': 'impeccable/**\n!impeccable/SKILL.md\n'}, True),
+            ({'.ignore': 'impeccable/SKILL.md\n!impeccable/\n'}, False),
+            ({'.ignore': '/SKILL.md\n'}, False),
+            ({'.ignore': 'SKILL.md/\n'}, True),
+            ({'.fdignore': 'IMPECCABLE/\n'}, False),
+            ({'.gitignore': '*/SKILL.md\n'}, False),
+        ]
+        for profile in (self.home / '.pi/agent', self.home / 'selected pi'):
+            self.env['PI_CODING_AGENT_DIR'] = str(profile)
+            self.adapter()
+            for policies, success in cases:
+                with self.subTest(profile=profile.name, policies=policies):
+                    for name in ('.gitignore', '.ignore', '.fdignore'):
+                        (profile / 'skills' / name).unlink(missing_ok=True)
+                    files = [self.put(profile / 'skills' / name, text) for name, text in policies.items()]
+                    before = self.snapshot()
+                    calls = (self.root / 'calls').read_bytes()
+                    result = self.adapter(success=success)
+                    if success:
+                        self.assertIn('verified', result.stdout)
+                        self.assertEqual((profile / 'skills/impeccable/SKILL.md').read_text(), descriptor('.pi/agent/skills'))
+                    else:
+                        self.assertNotIn('verified', result.stdout)
+                        self.assertEqual(self.snapshot(), before)
+                        self.assertEqual((self.root / 'calls').read_bytes(), calls)
+                    self.assertEqual({file.name: file.read_text() for file in files}, policies)
+
+    def test_nested_pi_ignore_files_use_native_root_relative_prefixes_and_cannot_reopen_parents(self):
+        self.adapter()
+        cases = [
+            ({'.ignore': 'SKILL.md\n!SKILL.md\n'}, '', True),
+            ({'.gitignore': 'SKILL.md\n', '.ignore': '!SKILL.md\n'}, '', True),
+            ({'.ignore': '!/SKILL.md\n'}, 'impeccable/SKILL.md\n', True),
+            ({'.ignore': '/SKILL.md\n'}, '', False),
+            ({'.fdignore': '*.md\n'}, '', False),
+            ({'.ignore': 'impeccable/\n'}, '', True),
+            ({'.ignore': '!SKILL.md\n'}, 'impeccable/\n', False),
+        ]
+        root_ignore = self.home / '.pi/agent/skills/.ignore'
+        for policies, ancestor, success in cases:
+            with self.subTest(policies=policies, ancestor=ancestor):
+                self.put(root_ignore, ancestor)
+                self.env['IMPECCABLE_TEST_PI_IGNORES'] = json.dumps(policies)
+                before = self.snapshot()
+                result = self.adapter(success=success)
+                if success:
+                    self.assertIn('verified', result.stdout)
+                    skill = self.home / '.pi/agent/skills/impeccable'
+                    self.assertEqual({name: (skill / name).read_text() for name in policies}, policies)
+                else:
+                    self.assertNotIn('verified', result.stdout)
+                    self.assertEqual(self.snapshot(), before)
+                self.assertEqual(root_ignore.read_text(), ancestor)
+
+    def test_native_pi_root_descriptor_prevents_traversal_until_that_descriptor_is_ignored(self):
+        self.adapter()
+        root_descriptor = self.put(self.home / '.pi/agent/skills/SKILL.md', 'Unrelated root descriptor; never execute.\n')
+        before = self.snapshot()
+        calls = (self.root / 'calls').read_bytes()
+        result = self.adapter(success=False)
+        self.assertNotIn('verified', result.stdout)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual((self.root / 'calls').read_bytes(), calls)
+        ignore = self.put(root_descriptor.parent / '.ignore', '/SKILL.md\n!impeccable/SKILL.md\n')
+        self.adapter()
+        self.assertEqual(root_descriptor.read_text(), 'Unrelated root descriptor; never execute.\n')
+        self.assertEqual(ignore.read_text(), '/SKILL.md\n!impeccable/SKILL.md\n')
 
     def test_changed_source_or_user_selection_after_verification_is_not_promoted_or_overwritten(self):
         self.adapter()
@@ -663,6 +806,54 @@ if (-not $result) { exit 1 }
         self.adapter()
         self.assertIn('-' + str(shared), json.loads(settings.read_text())['skills'])
 
+    def test_source_relative_force_includes_preserve_user_choices_and_refuse_duplicate_pi_discovery(self):
+        self.adapter()
+        for profile in (self.home / '.pi/agent', self.home / 'selected pi'):
+            self.env['PI_CODING_AGENT_DIR'] = str(profile)
+            settings = profile / 'settings.json'
+            for entry in ('+skills/impeccable', '+./skills/impeccable', '+skills/impeccable/SKILL.md'):
+                for shell in ('bash', 'powershell'):
+                    with self.subTest(profile=profile.name, entry=entry, shell=shell):
+                        self.put(settings, json.dumps({'skills': [entry, 'custom'], 'theme': 'keep'}))
+                        before = self.snapshot()
+                        calls = (self.root / 'calls').read_bytes()
+                        result = self.adapter(shell, success=False)
+                        self.assertNotIn('verified', result.stdout)
+                        self.assertEqual(self.snapshot(), before)
+                        self.assertEqual((self.root / 'calls').read_bytes(), calls)
+
+    def test_native_pi_resource_paths_and_override_precedence_use_each_discovery_source(self):
+        self.adapter()
+        shared = self.home / '.agents/skills/impeccable'
+        for profile in (self.home / '.pi/agent', self.home / 'selected pi'):
+            self.env['PI_CODING_AGENT_DIR'] = str(profile)
+            direct = profile / 'skills/impeccable'
+            settings = profile / 'settings.json'
+            cases = [
+                (['+skills/impeccable', '-' + str(shared)], True),
+                (['!impeccable', '+' + str(direct)], True),
+                (['+~/.agents/skills/impeccable'], True),
+                (['+SKILL.md', '+impeccable'], True),
+                (['+skills/impeccable', '-skills/impeccable'], False),
+                (['+skills/impeccable', '-./skills/impeccable/SKILL.md'], False),
+                (['+.\\skills/impeccable'], False),
+                (['!skills/**/impeccable'], False),
+            ]
+            for entries, success in cases:
+                with self.subTest(profile=profile.name, entries=entries):
+                    self.put(settings, json.dumps({'skills': entries + ['custom'], 'theme': 'keep'}))
+                    before = self.snapshot()
+                    calls = (self.root / 'calls').read_bytes()
+                    result = self.adapter(success=success)
+                    if success:
+                        self.assertIn('verified', result.stdout)
+                        self.assertEqual(json.loads(settings.read_text())['skills'][:-1], entries + ['custom'])
+                        self.assertEqual((direct / 'SKILL.md').read_text(), descriptor('.pi/agent/skills'))
+                    else:
+                        self.assertNotIn('verified', result.stdout)
+                        self.assertEqual(self.snapshot(), before)
+                        self.assertEqual((self.root / 'calls').read_bytes(), calls)
+
     def test_selected_pi_profile_has_one_discovery_input_and_preserves_other_resource_selections(self):
         selected = self.home / 'selected pi'
         self.env['PI_CODING_AGENT_DIR'] = str(selected)
@@ -712,10 +903,12 @@ def installer_fixture():
     if os.environ.get('IMPECCABLE_TEST_MODE') == 'failed-command':
         print('PRIVATE-SENTINEL arbitrary failure output', file=sys.stderr)
         raise SystemExit(1)
+    descriptors = json.loads(os.environ.get('IMPECCABLE_TEST_DESCRIPTORS', '{}'))
+    assert set(descriptors).issubset(PROVIDERS) and all(isinstance(text, str) for text in descriptors.values())
     for provider in PROVIDERS:
         skill = home / provider / 'impeccable'
         skill.mkdir(parents=True)
-        (skill / 'SKILL.md').write_text(descriptor(provider) + os.environ.get('IMPECCABLE_TEST_REVISION', ''))
+        (skill / 'SKILL.md').write_text(descriptors.get(provider, descriptor(provider)) + os.environ.get('IMPECCABLE_TEST_REVISION', ''))
         for reference in REFERENCES + ['degraded/manual-edit-applier', 'degraded/asset-producer', 'degraded/documenter', 'degraded/finish-reviewer']:
             file = skill / ('reference/' + reference + '.md')
             file.parent.mkdir(parents=True, exist_ok=True)
@@ -735,6 +928,10 @@ def installer_fixture():
                 file.parent.mkdir(exist_ok=True)
                 file.write_text('Inert native agent metadata.\n')
     pi = home / '.pi/agent/skills/impeccable'
+    ignores = json.loads(os.environ.get('IMPECCABLE_TEST_PI_IGNORES', '{}'))
+    assert set(ignores).issubset(('.gitignore', '.ignore', '.fdignore')) and all(isinstance(text, str) for text in ignores.values())
+    for name, text in ignores.items():
+        (pi / name).write_text(text)
     mode = os.environ.get('IMPECCABLE_TEST_MODE', '')
     if mode == 'stage-leaf-link':
         (home / 'external-directory').symlink_to(real / 'foreign', target_is_directory=True)
@@ -750,6 +947,8 @@ def installer_fixture():
         file = pi / 'reference/layout.md'
         file.unlink()
         file.symlink_to(real / 'foreign/keep')
+    elif mode == 'malformed-frontmatter':
+        (pi / 'SKILL.md').write_text(descriptor('.pi/agent/skills').replace('\n---\n', '\nmetadata:\n  broken: [\n---\n'))
     elif mode == 'duplicate-name':
         (pi / 'SKILL.md').write_text(descriptor('.pi/agent/skills').replace('name: impeccable', 'name: impeccable\nname: wrong'))
     elif mode == 'empty-description':
