@@ -1,0 +1,73 @@
+# #211: Ubuntu BB server directory trust
+
+Implements only the Ubuntu server-maintenance slice of [#208](https://github.com/scowalt/machine-setup-scripts/issues/208). Account-owned ordinary directories accept group write without permission repair or group-privacy evidence. Other group members, including service accounts, can still tamper with children; this is an accepted risk, not proof of isolation. No live setup, override migration, BB/native installed-module execution, service operation or rollout was performed.
+
+## Gate inventory
+
+All production changes are in `ubuntu.sh`; these server helpers have no shared canonical module or other standalone embeddings. Ubuntu's banner advances from 314 to 315. The established native Ubuntu/non-root account selection is unchanged; this does not authorize root/system directories or additional managed paths.
+
+Evidence shorthand below refers to tests in `tests/test_bb_server_diagnostics.py`: **ordinary** = `test_ordinary_directory_modes_survive_complete_maintenance_and_caller`; **package** = `test_group_writable_package_tree_completes_real_install_config_and_caller`; **TMPDIR** = `test_reviewed_customization_completes_caller_with_native_config_preserved`; **race** = `test_accepted_directory_mode_change_invalidates_pre_mutation_snapshot`.
+
+| Active gate / use | Disposition | Behavioral evidence |
+| --- | --- | --- |
+| `setup_bb_server` HOME syntax; `bb_server_platform_ready` native Ubuntu, non-root and WSL exclusion | Unchanged eligibility/account boundary. No root/system or arbitrary HOME-link exception added. | BB server platform controls; headless contract. |
+| `bb_setup_directory_preflight`: HOME, `.config`, `.config/systemd`, `.config/systemd/user`, `.config/setup-bb-server`, `.bb` | Changed ordinary-directory mask from `022` to `002`; ownership, real-directory/type, link, supported-path and inspection checks unchanged. Removed blanket group-write/chmod advice. | **ordinary**, **TMPDIR**, **package**; individual-path controls in `test_bb_directory_preflight.py`. |
+| `bb_owned_safe_directory`: recognized mise prefix ancestors and drop-in directories | Changed directory mask to `002`; same account and real-directory checks. | **package**, **TMPDIR**; service inspection/mode/foreign controls. |
+| `setup_bb_server` state-directory `chmod 700` | Removed. `.config/setup-bb-server` contains non-secret endpoint, package-owner and lifecycle-script state, not a private scratch/credential container. Existing directory owner/group/mode must survive. New absent directories still use the existing `umask 077; mkdir -p`. | **ordinary** forbids any directory chmod/chown and checks inode/UID/GID/mode for 0700, 0755, 0770, 0775, 02775 twice; **package** repeats this through real installation/configuration. |
+| `bb_package_owner_path_valid`, package ownership markers and pending selection | Unchanged recognized mise version-prefix boundary and setup ownership; no adoption of unowned packages. | Existing `PACKAGE_FIXTURE`, diagnostics npm policy/ownership cases. |
+| `bb_package_owned_target_safe.safeDir` | Changed directory-only mask to `002` at prefix, package, bundles and native-dependency containers. | **package** completes real preflight/install/artifact/configuration/caller operations with all existing directories 02775. |
+| `bb_package_owned_target_safe.scanNativeTree` | Changed root/nested directory masks to `002`; mixed child checks explicitly retain `022` for non-directories. Links, wrong types, account ownership and regular-file hardlinks remain refused. | **package** includes nested native prebuild directories; nested writable file, world-writable directory and directory-link negative controls. |
+| `bb_package_owned_target_safe.safeFile`, command symlink identity | Unchanged `022`, single-link regular files, correct owner and exact approved command-link target. | **package** metadata/native file controls; existing package replacement-link contract. |
+| `bb_package_artifacts_ready` directory checker | Changed directory-only mask to `002`; package identity, stable version, native exports, bundles and command target unchanged. | **package** retains this real operation, loading only test-authored inert modules, not installed native modules or the app. Existing missing/prerelease/native-artifact cases remain. |
+| `bb_package_artifacts_ready` file checker | Unchanged nonempty regular-file, owner, hardlink and `022` rules. | **package**; existing `PACKAGE_FIXTURE` incomplete-artifact controls. |
+| `bb_unit_dropins_empty` and `bb_unit_dropins_snapshot` | Inherit ordinary-directory acceptance. Read/search access, finite enumeration, absence semantics, app-only customization and before/after metadata snapshots unchanged. | **package** completes maintenance with both empty drop-ins 02775; **TMPDIR** covers supported app plus empty ingress; **race** and service-preflight controls. |
+| `bb_tmpdir_snapshot.verified`: HOME/service/drop-in/cache ancestors | Changed ordinary directory mask to `002`; removed exact-0700 requirement only from the non-secret drop-in container. Descriptor-relative, no-follow, readable/searchable and same-account checks remain. | **TMPDIR**, twice through real native-config merge and ordinary caller; `test_tmpdir_ancestors_and_target_are_not_followed_or_scanned`. |
+| `bb_tmpdir_snapshot`: private target and override file | Unchanged exact 0700 for `.cache/bb/tmp`, exact 0600 single-link regular override file, narrow literal contents and supported path. Python is still required for content/descriptor validation, not group-privacy proof. | `test_tmpdir_artifact_types_and_permissions_never_trigger_repair` retains invalid target modes including 0770/0775/02700, file modes/types/hardlinks and absent target; content/selection controls. |
+| `bb_tmpdir_snapshot.identity`, empty-directory stat snapshots and loaded/pre-mutation selection comparison | Unchanged identity, UID/GID/mode/type and content comparisons. Newly eligible endpoint modes do not excuse changed evidence. | **race** changes 0775 to 02770 between preflight and mutation; service fixture injects UID/GID/mode/type/inode changes at descriptor verification. All refuse before lifecycle/package effects. |
+| `bb_unit_preflight`, broad/unknown/ingress overrides | Unchanged exact fragment/loaded-selection and supported-content authority. Accepting a container cannot import or retire its environment override. | `test_captured_two_override_refusal_survives_real_log_finalization` now uses 0775 ancestors/container; captured `env.conf` 0664 scenario remains incomplete in `test_bb_service_preflight.py`. |
+| `bb_owned_metadata_file`, `bb_owned_file`, `bb_owned_script` | Unchanged `022` regular-file rules, `077` private metadata rule, managed markers, ownership/type/link/hardlink checks. | **package** rejects writable config/unit/package files and non-private endpoint; existing diagnostics preserve malformed/unowned files. |
+| `bb_host_identity_ready`, `bb_native_app_ready`, generated guard identity and endpoint checks | Unchanged private `077` identity-file and exact-0600 guard endpoint rules, process ownership, local peer identity, native readiness and route selection. | **ordinary**, **package** credential controls; generated-guard/readiness/identity fixtures in BB server contract. |
+| `bb_config_merge_native.statManaged`, `lockFile`, `writeJson` | Already compatible with ordinary ancestors through caller preflight. File `022`, no-follow, hardlink/owner and native-lock identity checks unchanged; new locks/temp files remain 0600. | **package** performs real merge, preserves unrelated provider/key data and verifies 0600 results; lock-file refusal; native-config failure/partial-change and concurrent-writer fixtures. |
+| `bb_write_owned_content`, `bb_write_owned_unit`, `bb_write_bb_guard`, `bb_restore_bb_services` | Already compatible; private temporary regular-file modes (0600/0700), promotion and best-effort restoration unchanged. No ordinary-directory repair. | **package** install/readiness failures restore prior service path and preserve failure; existing recovery/write-error/guard fixtures. |
+| Shared runtime/npm policy, tailnet commands/ports, lingering, stopped-update ordering and saved endpoint | Unchanged non-permission prerequisites and lifecycle authority. Directory acceptance supplies no identity or readiness proof. | Existing diagnostics cover each failure label; **package** verifies stopped order, saved endpoint, later failure and prior independent error. |
+| `with_bb_dotfiles_umask` / Chezmoi policy | Unchanged regular-file-aware creation policy and explicit user configuration precedence. No new umask/dotfile change in this slice; server preflight now accepts the resulting 0775 directories. | Updated only old server-refusal expectations in `test_bb_dotfiles_umask.py`; native fixture sources/destinations remain temporary. |
+
+There was no directory-only NSS/initgroups/ACL/process privacy proof in these server helpers. **ordinary** and **package** forbid membership/ACL/process-privacy commands and ordinary-directory chmod/chown while retaining UID/account-name queries. Independent process/readiness mocks represent operational identity, not group exclusivity. Plugin-refresh internals and machine-preparation policy belong to other slices.
+
+## Red/green and validation
+
+Every behavioral invocation used this serialized, sanitized command prefix (no optional installed-code integrations):
+
+```bash
+flock /tmp/setup-208-coordination/fixtures.lock env -i PATH=/usr/bin:/bin \
+  /usr/bin/python3 -I tests/run-fixture-matrix.py \
+  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --pwsh /opt/microsoft/powershell/7/pwsh \
+  --tool-path /usr/bin:/bin:/tmp/setup-208-coordination/tools
+```
+
+Append the suite arguments in the table; the final two rows also used `--timeout 600` before those arguments.
+
+| Stage | Suite arguments | Artifact root / result |
+| --- | --- | --- |
+| Parent initial baseline | `tests/setup-default-contract.sh tests/test_fixture_containment.py` | `/tmp/setup-fixture-matrix-11ieec38`, parent-provided pass before implementation. |
+| Ordinary-directory red on unchanged production | `tests/test_bb_server_diagnostics.py` | `/tmp/setup-fixture-matrix-zkdlmju6`: 10 new subcases fail, exposing blanket group-write refusal and unconditional state-directory chmod. |
+| Ordinary-directory green | `tests/test_bb_server_diagnostics.py tests/test_bb_directory_preflight.py` | `/tmp/setup-fixture-matrix-opo3m8_c`: 2/2 pass. |
+| TMPDIR/container red before changing those gates | `tests/test_bb_server_diagnostics.py` | `/tmp/setup-fixture-matrix-vxpsd_zj`: supported customization fails at `preflight.unit-dropins`. |
+| TMPDIR/container green | `tests/test_bb_server_diagnostics.py tests/test_bb_service_preflight.py` | `/tmp/setup-fixture-matrix-1eq7f5g0`: 2/2 pass. |
+| Native package-tree red before changing those gates | `tests/test_bb_server_diagnostics.py` | `/tmp/setup-fixture-matrix-ca50vr0c`: two full-caller attempts fail at `npm.previous-target`. |
+| Native package-tree green | `tests/test_bb_server_diagnostics.py` | `/tmp/setup-fixture-matrix-c_r9iblf`: pass. |
+| Default/containment and first expanded server regression | `tests/setup-default-contract.sh tests/test_fixture_containment.py tests/bb-server-contract.sh` | `/tmp/setup-fixture-matrix-mflxktnf`: first two pass; server fails only five obsolete dotfiles preflight expectations, subsequently corrected to directory acceptance. Not counted as a green aggregate. |
+| Final focused/nearby matrix | `tests/bb-server-contract.sh tests/setup-reliability-contract.sh tests/shared-node-runtime-contract.sh tests/headless-contract.sh tests/pending-reboot-contract.sh` | `/tmp/setup-fixture-matrix-mew5bn4k`: **5/5 pass**. Server includes 71 Python methods plus generated-command, lifecycle, npm and native-lock shell fixtures. |
+
+`bash -n ubuntu.sh tests/bb-server-contract.sh`, ShellCheck on both, and `git diff --check` pass. Source loaders in the directory and server contracts now use the existing validated definitions-only extractor; no whole-script evaluation. The kernel/FD filter and runner are unchanged from integration baseline (`tests/fixture-no-network.c` SHA-256 `1963233f54482e9fc8e0cdaf2ee7696e4ff4fdc09f42e96f72f4e713d1d0629f`). Fixtures use private roots/stdio, inert external requests and synthetic local modules; no native tool prefix was linked to a real writable installation by this change.
+
+## Omissions and guidance for #217
+
+- The runtime-to-external-dotfiles integration is explicitly skipped (one unittest skip); optional installed Pi/BB/native-module integrations remain off. Linux PowerShell reliability/runtime cases ran, but native Windows ACL/PowerShell 5.1, macOS, ARM, WSL/Bazzite and real BB session/provider/GUI continuity are not verified. Offline success is not rollout evidence.
+- The complete cross-component dispatcher, plugin-refresh/preparation/desktop and broader weekly/AI-agent matrices remain with final integration #217. No new containment refusal or unexpected real effect was observed; this is not a syscall-wide effects audit and does not resolve the historical containment incident's remote-receipt uncertainty.
+- Trusted Markdownlint is unavailable; no package was installed. Markdown was reviewed manually. Native staged Gitleaks passes. Commit hooks that dispatch `bunx`/`uv` dependency resolution are disabled for this offline commit; ShellCheck was run directly, and the repository-wide comment-policy hook was not run. No comment-policy or dependency changes are included.
+- Update current BB-server agent guidance to accept account-owned ordinary HOME/service/package/data/cache ancestors and non-secret drop-in/state containers with group write, without permission repair. Explicitly retain private TMPDIR target, private override/credential files, native locks, loaded identity, readiness and recovery semantics.
+- Keep ADR 0011's non-permission guarantees intact. Clarify that “private TMPDIR customization” describes the target and override file, not every ancestor or containing directory. The broad environment override and #204/#207 migration/workflow prerequisites remain unresolved and independently required.
+- Describe `.config/setup-bb-server` as ordinary non-secret state with protected files; do not restore its old unconditional chmod or obsolete `update.state-mode` diagnostic. The native-config helper has no separate blanket directory mask: its caller preflight supplies the revised ancestor policy while its file/lock rules remain unchanged.
+- Shared CLAUDE.md, GLOSSARY and existing ADRs are intentionally untouched for #217 reconciliation.
