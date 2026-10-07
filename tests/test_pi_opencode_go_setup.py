@@ -344,6 +344,112 @@ class GoSetupTests(unittest.TestCase):
         self.catalog.chmod(0o666)
         self.assertEqual(self.run_helper().returncode, 1)
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX ordinary ancestors, not Windows ACL policy')
+    def test_group_writable_home_and_selected_ancestors_preserve_private_auth(self):
+        custom = self.home / 'profiles/team/active'
+        self.put(self.auth, {'keep': {'type': 'api_key', 'key': 'unrelated'}})
+        self.put(custom / 'auth.json', {'keep': {'type': 'api_key', 'key': 'unrelated'}})
+        ordinary = (self.home, custom.parent.parent, custom.parent)
+        metadata = lambda p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode, p.stat().st_dev, p.stat().st_ino)
+        for mode in (0o775, 0o2775):
+            for directory in ordinary:
+                directory.chmod(mode)
+            before = {p: metadata(p) for p in ordinary}
+            for selected in ('', str(custom), '~/profiles/team/active'):
+                self.active = selected
+                prelude = "const child = require('node:child_process');\n"
+                prelude += "for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync']) child[name] = () => { throw Error('forbidden privacy proof'); };\n"
+                prelude += "process.getgroups = () => { throw Error('unavailable group enumeration'); };\n"
+                result = self.run_helper(code=prelude + embedded('ubuntu.sh'))
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                for script in SCRIPTS:
+                    if script == 'win.ps1' and not PWSH:
+                        continue
+                    with self.subTest(mode=oct(mode), selected=bool(selected), script=script):
+                        result = self.run_helper(script, use_wrapper=True)
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        target = custom / 'auth.json' if selected else self.auth
+                        self.assertEqual(json.loads(target.read_text()), {
+                            'keep': {'type': 'api_key', 'key': 'unrelated'},
+                            'opencode-go': {'type': 'api_key', 'key': KEY}})
+                        self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+                        self.assertEqual(target.parent.stat().st_mode & 0o777, 0o700)
+                        self.assertFalse(target.with_suffix('.json.lock').exists())
+                        self.assertEqual({p: metadata(p) for p in ordinary}, before)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX ancestor trust and credential boundaries')
+    def test_writable_ancestors_do_not_authorize_other_owners_or_unsafe_files(self):
+        custom = self.home / 'profiles/active'
+        self.put(custom / 'auth.json', {'keep': {'type': 'api_key', 'key': KEY}})
+        self.active = str(custom)
+        self.home.chmod(0o775)
+        custom.parent.chmod(0o2775)
+        before = (custom / 'auth.json').read_bytes()
+        for target, change in ((self.home, 'world'), (custom.parent, 'world'),
+                               (custom.parent, 'root'), (custom.parent, 'foreign'),
+                               (custom, 'group'), (custom / 'auth.json', 'group'),
+                               (self.envfile, 'group')):
+            with self.subTest(target=target.name, change=change):
+                prelude = 'const target = ' + json.dumps(str(target)) + ';\n'
+                prelude += 'const change = ' + json.dumps(change) + ';\n'
+                prelude += r'''
+const f = require('node:fs'), original = f.lstatSync;
+f.lstatSync = (file, ...args) => {
+    const s = original(file, ...args);
+    if (file === target) {
+        if (change === 'world') s.mode |= 0o002;
+        if (change === 'group') s.mode |= 0o020;
+        if (change === 'root') s.uid = 0;
+        if (change === 'foreign') s.uid = process.getuid() + 1;
+    }
+    return s;
+};
+'''
+                result = self.run_helper(code=prelude + embedded('ubuntu.sh'))
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertEqual((custom / 'auth.json').read_bytes(), before)
+                self.assertFalse((custom / 'auth.json.lock').exists())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX ancestor snapshots at the native lock boundary')
+    def test_accepted_ancestor_mode_and_group_changes_block_credential_publication(self):
+        custom = self.home / 'profiles/active'
+        self.put(custom / 'auth.json', {'keep': {'type': 'api_key', 'key': KEY}})
+        self.active = str(custom)
+        custom.parent.chmod(0o775)
+        before = (custom / 'auth.json').read_bytes()
+        for change in ('mode', 'gid', 'uid', 'inode', 'type'):
+            with self.subTest(change=change):
+                (custom / 'auth.json').write_bytes(before)
+                prelude = 'const target = ' + json.dumps(str(custom.parent)) + ';\n'
+                prelude += 'const change = ' + json.dumps(change) + ';\n'
+                prelude += r'''
+const f = require('node:fs'), lstat = f.lstatSync, mkdir = f.mkdirSync;
+let raced = false;
+f.mkdirSync = (file, ...args) => {
+    const result = mkdir(file, ...args);
+    if (file.endsWith('/auth.json.lock')) raced = true;
+    return result;
+};
+f.lstatSync = (file, ...args) => {
+    const s = lstat(file, ...args);
+    if (file === target && raced) {
+        if (change === 'mode') s.mode |= 0o2000;
+        if (change === 'gid') s.gid += 1;
+        if (change === 'uid') s.uid += 1;
+        if (change === 'inode') s.ino += 1;
+        if (change === 'type') s.isDirectory = () => false;
+    }
+    return s;
+};
+process.on('exit', () => { if (!raced) process.stdout.write('race-not-exercised'); });
+'''
+                result = self.run_helper(code=prelude + embedded('ubuntu.sh'))
+                self.assertNotIn('race-not-exercised', result.stdout)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertEqual((custom / 'auth.json').read_bytes(), before)
+                self.assertFalse((custom / 'auth.json.lock').exists())
+                self.assertEqual(list(custom.glob('.opencode-go-*')), [])
+
     def test_linux_system_home_alias_policy_without_real_home_access(self):
         text = embedded("ubuntu.sh")
         function = "function systemHomeAlias" + text.split("function systemHomeAlias", 1)[1].split("function directoryChain", 1)[0]

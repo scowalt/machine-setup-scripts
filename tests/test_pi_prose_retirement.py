@@ -223,10 +223,18 @@ class RetirementTests(unittest.TestCase):
     def test_retirement_and_repeat_preserve_unrelated_state(self):
         self.seed(self.agent)
         self.seed(self.custom)
+        ordinary = [self.home]
+        for profile in (self.agent, self.custom):
+            ordinary.extend([profile / 'npm', profile / 'npm/node_modules'])
+        for directory in ordinary:
+            directory.chmod(0o2775)
+        metadata = lambda p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode, p.stat().st_dev, p.stat().st_ino)
+        original = {p: metadata(p) for p in ordinary}
         result = self.run_cleanup(self.custom)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_retired(self.agent)
         self.assert_retired(self.custom)
+        self.assertEqual({p: metadata(p) for p in ordinary}, original)
         before = self.snapshot()
         times = {p: p.stat().st_mtime_ns for p in self.root.rglob("*") if p.is_file()}
         result = self.run_cleanup(self.custom)
