@@ -60,6 +60,10 @@ _Avoid_: Any reachable bb server, enrolled execution machine
 An intentional, account-specific choice about how a local bb server runs. A customization does not by itself transfer responsibility for maintaining the server away from setup.
 _Avoid_: Unmanaged server, Plugin setting
 
+**Required bb workflow**:
+An enabled, configured provider or agent-tool capability that must be preserved during bb server maintenance unless the owner explicitly excludes it. An installed but unconfigured tool is not a required workflow.
+_Avoid_: Every installed tool, Every account environment variable
+
 **bb plugin**:
 An installed extension of a bb server's capabilities. Plugins belong to that server, not independently to each enrolled execution machine or connected desktop client.
 _Avoid_: BB installation, machine package
