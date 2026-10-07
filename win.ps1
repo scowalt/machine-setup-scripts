@@ -3519,8 +3519,10 @@ function matchesSkill(file, pattern, base, exact = false) {
         const segments = candidate.split(/\/+/);
         const match = (pi, fi) => {
             if (pi === parts.length) return fi === segments.length;
-            if (parts[pi] === '**') return match(pi + 1, fi) || fi < segments.length &&
-                !segments[fi].startsWith('.') && match(pi, fi + 1);
+            if (parts[pi] === '**') {
+                if (pi === parts.length - 1) return fi < segments.length && segments.slice(fi).every(segment => !segment.startsWith('.'));
+                return match(pi + 1, fi) || fi < segments.length && !segments[fi].startsWith('.') && match(pi, fi + 1);
+            }
             if (fi === segments.length || segments[fi].startsWith('.') && !parts[pi].startsWith('.') ||
                 !segments[fi] && /[*?]/.test(parts[pi])) return false;
             return expressions[pi].test(segments[fi]) && match(pi + 1, fi + 1);
@@ -3544,7 +3546,7 @@ function ignoredPiDescriptor(file, profile, skillDirectory = path.dirname(file))
                 if (!line.trim() || line.trim().startsWith('#')) continue;
                 const negated = line.startsWith('!');
                 if (negated) line = line.slice(1);
-                line = line.replace(/^\//, '').replace(/[ \t]+$/, '');
+                line = line.replace(/^\//, '').replace(/ +$/, '');
                 if (!line) continue;
                 if (/[\\\[\]]/.test(line) || line.startsWith('!') || line.length > 4096) fail('unverified-resource-selection');
                 const directoryOnly = line.endsWith('/');
@@ -8258,7 +8260,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 182 | Last changed: Verify native Impeccable discovery before success"
+    Write-Host "Version 183 | Last changed: Match native Impeccable tabs and globstars"
 
     Assert-HeadlessUnsupported
 

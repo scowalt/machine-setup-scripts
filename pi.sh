@@ -4101,8 +4101,10 @@ function matchesSkill(file, pattern, base, exact = false) {
         const segments = candidate.split(/\/+/);
         const match = (pi, fi) => {
             if (pi === parts.length) return fi === segments.length;
-            if (parts[pi] === '**') return match(pi + 1, fi) || fi < segments.length &&
-                !segments[fi].startsWith('.') && match(pi, fi + 1);
+            if (parts[pi] === '**') {
+                if (pi === parts.length - 1) return fi < segments.length && segments.slice(fi).every(segment => !segment.startsWith('.'));
+                return match(pi + 1, fi) || fi < segments.length && !segments[fi].startsWith('.') && match(pi, fi + 1);
+            }
             if (fi === segments.length || segments[fi].startsWith('.') && !parts[pi].startsWith('.') ||
                 !segments[fi] && /[*?]/.test(parts[pi])) return false;
             return expressions[pi].test(segments[fi]) && match(pi + 1, fi + 1);
@@ -4126,7 +4128,7 @@ function ignoredPiDescriptor(file, profile, skillDirectory = path.dirname(file))
                 if (!line.trim() || line.trim().startsWith('#')) continue;
                 const negated = line.startsWith('!');
                 if (negated) line = line.slice(1);
-                line = line.replace(/^\//, '').replace(/[ \t]+$/, '');
+                line = line.replace(/^\//, '').replace(/ +$/, '');
                 if (!line) continue;
                 if (/[\\\[\]]/.test(line) || line.startsWith('!') || line.length > 4096) fail('unverified-resource-selection');
                 const directoryOnly = line.endsWith('/');
@@ -9522,7 +9524,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 258 | Last changed: Verify native Impeccable discovery before success"
+    echo -e "${GRAY}Version 259 | Last changed: Match native Impeccable tabs and globstars"
 
     if ! acquire_setup_lock; then
         return 1
