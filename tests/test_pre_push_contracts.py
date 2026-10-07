@@ -83,7 +83,8 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(argv[4], '--tool-path')
         self.assertTrue(argv[5].startswith('/usr/bin:/bin:/tmp/setup-hook-tools-'))
         expected = ['tests/' + name for name in self.module.DIRECT_SUITES] + ['tests/' + name for name in sorted(self.shell_names)]
-        self.assertEqual(argv[6:], expected)
+        self.assertEqual(argv[6:8], ['--timeout', '900'])
+        self.assertEqual(argv[8:], expected)
         self.assertEqual(record['mode'], 0o700)
         self.assertEqual(record['tools'], {name: self.env[self.module.TOOLS[name]] for name in ('mise', 'chezmoi', 'bun')})
         self.assertFalse(Path(argv[5].split(':')[-1]).exists(), 'private dispatch tool links must be cleaned')

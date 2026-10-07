@@ -214,7 +214,7 @@ require('node:https').get = (url, options, callback) => {
         visit(directory)
         return state
 
-    def adapter(self, shell='bash', success=True, blocked=False, entry=None):
+    def adapter(self, shell='bash', success=True, blocked=False, entry=None, combined=False):
         suffix = 'ps1' if shell == 'powershell' else 'bash'
         core = (ROOT / 'lib/impeccable-skill.cjs').read_text()
         wrapper = (ROOT / entry).read_text() if entry else (ROOT / ('lib/impeccable-skill.' + suffix)).read_text().replace('@IMPECCABLE_CORE@', core)
@@ -226,6 +226,8 @@ require('node:https').get = (url, options, callback) => {
                 retained = {'impeccable_skill_policy', 'converge_impeccable_skill', 'main', 'run_setup_tasks',
                             'setup_load_environment', 'setup_environment_failure', 'setup_trim', 'setup_environment_value',
                             'fail_unsupported_headless', 'env_local_flag_is_one'}
+                if combined:
+                    retained.update(('retire_global_backlog_mcp', 'prepare_pi_profile_permissions', 'remove_pi_prose'))
                 names = set(re.findall(r'^(\w+)\(\)', extracted, re.M))
                 mocks = '\n'.join(f'{name}() {{ :; }}' for name in names - retained) + r'''
 record() { printf '%s\n' "$1" >> "$IMPECCABLE_TEST_ROOT/events"; }
@@ -249,6 +251,8 @@ check_pending_reboot() { record reboot; }
 start_setup_log() { record log-start; }
 finish_setup_log() { record "final:$1"; return "$1"; }
 '''
+                if combined:
+                    mocks = re.sub(r'^prepare_pi_profile_permissions\(\).*\n', '', mocks, flags=re.M)
                 for command_name in ('curl', 'npm', 'npx', 'pi', 'bb', 'chezmoi', 'sudo', 'systemctl', 'launchctl', 'kill', 'pkill', 'tmux'):
                     mocks += f'\n{command_name}() {{ record FORBIDDEN:{command_name}; return 99; }}'
             fixture.write_text(('set -e\n' if entry else 'set -eu\n') + extracted + '\n' + mocks + '\n' + r'''

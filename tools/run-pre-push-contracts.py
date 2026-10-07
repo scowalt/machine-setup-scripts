@@ -43,7 +43,7 @@ def suites():
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Version 1: run the complete pre-push contract set through mandatory containment.\n\nInvoked by lefthook under env -i and Python isolated mode. Tool arguments select\nexisting native executables only; never invoke a shim/package manager to find or\ninstall them. See --help for explicit selections when system tools are absent.\n')
+    parser = argparse.ArgumentParser(description='Version 2: run the expanded pre-push contracts with bounded 900-second suite deadlines through mandatory containment.\n\nInvoked by lefthook under env -i and Python isolated mode. Tool arguments select\nexisting native executables only; never invoke a shim/package manager to find or\ninstall them. See --help for explicit selections when system tools are absent.\n')
     for name, variable in TOOLS.items():
         parser.add_argument('--' + name, default='', help=f'native {name}; hook override: {variable}; default: {SYSTEM_PATH}')
     args = parser.parse_args(argv)
@@ -60,7 +60,7 @@ def main(argv=None):
             (tool_dir / name).symlink_to(tools[name])
         command = ['/usr/bin/python3', '-I', str(ROOT / 'tests/run-fixture-matrix.py'),
                    '--node', str(tools['node']), '--pwsh', str(tools['pwsh']),
-                   '--tool-path', SYSTEM_PATH + ':' + directory, *selected]
+                   '--tool-path', SYSTEM_PATH + ':' + directory, '--timeout', '900', *selected]
         try:
             return subprocess.call(command, cwd=ROOT, env={'PATH': SYSTEM_PATH},
                                    stdin=subprocess.DEVNULL, close_fds=True)

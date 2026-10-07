@@ -132,7 +132,7 @@ The same six-suite affected command above passes **6/6** again on the merged
 source at `/tmp/setup-fixture-matrix-ywo5o9_r`, including all 112 component and 3
 real-caller methods, Windows wrapper, CLT/Homebrew/reliability, headless and
 containment/default coverage. No skips. Full cross-component aggregate remains
-#217's obligation; these results do not substitute for it.
+issue #217's obligation; these results do not substitute for it.
 
 Integration advanced again during validation. A second merge includes `84de27a`
 (OpenCode #214 and Pi #215), again resolving only the three banners, now macOS

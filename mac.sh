@@ -517,7 +517,7 @@ CREDENTIAL_EOF
 }
 
 fix_zsh_compaudit() {
-    print_message "Fixing zsh compaudit insecure directories..."
+    print_message "Checking zsh completion permissions..."
 
     local current_user
     current_user=$(whoami || true)
@@ -537,12 +537,43 @@ fix_zsh_compaudit() {
         fi
     done
 
-    chmod -R go-w /opt/homebrew/share/zsh 2>/dev/null || true
-    chmod -R go-w /opt/homebrew/share/zsh-completions 2>/dev/null || true
-    chmod -R go-w /usr/local/share/zsh 2>/dev/null || true
-
-    zsh -c 'compaudit 2>/dev/null | xargs -I {} chmod go-w {} 2>/dev/null' || true
-    print_success "zsh directory permissions fixed."
+    local current_uid entry metadata owner mode mask permissions
+    local failed=0
+    current_uid=$(id -u) || return 1
+    while IFS= read -r -d '' entry; do
+        [[ -n "${entry}" ]] || { failed=1; continue; }
+        [[ ! -L "${entry}" && ( -d "${entry}" || -f "${entry}" ) ]] || continue
+        metadata=$(stat -f '%u %Lp' "${entry}" 2>/dev/null) || { failed=1; continue; }
+        if [[ ! "${metadata}" =~ ^([0-9]+)\ ([0-7]+)$ ]]; then
+            failed=1
+            continue
+        fi
+        owner=${BASH_REMATCH[1]}
+        mode=${BASH_REMATCH[2]}
+        mask=0022
+        permissions=go-w
+        if [[ -d "${entry}" && "${owner}" == "${current_uid}" && "${current_uid}" != 0 ]]; then
+            mask=0002
+            permissions=o-w
+        fi
+        if (( (8#${mode} & 8#${mask}) != 0 )); then
+            chmod "${permissions}" "${entry}" 2>/dev/null || failed=1
+        fi
+    done < <(
+        for dir in /opt/homebrew/share/zsh /opt/homebrew/share/zsh-completions /usr/local/share/zsh; do
+            [[ -d "${dir}" && ! -L "${dir}" ]] || continue
+            find "${dir}" \( -type d -o -type f \) -print0 || printf '\0'
+        done || true
+        while IFS= read -r entry; do
+            [[ -n "${entry}" ]] || continue
+            printf '%s\0' "${entry}"
+        done < <(zsh -c 'compaudit 2>/dev/null' || true) || true
+    )
+    if [[ "${failed}" -ne 0 ]]; then
+        print_warning "Could not verify or protect zsh completion permissions."
+        return 1
+    fi
+    print_debug "Zsh completion permission checks finished; account-owned directory group access preserved."
 }
 
 ensure_brew_item_trusted() {
@@ -10059,7 +10090,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 290 | Last changed: Merge Backlog with integrated directory trust${NC}"
+    echo -e "${GRAY}Version 291 | Last changed: Preserve ordinary completion directory group access${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -10100,7 +10131,7 @@ run_setup_tasks() {
 
         enable_screen_sharing
 
-        fix_zsh_compaudit
+        fix_zsh_compaudit || _setup_had_errors=1
 
         print_section "SSH Configuration"
         setup_ssh_key || return 1
@@ -10116,7 +10147,7 @@ run_setup_tasks() {
         brew_env=$(/opt/homebrew/bin/brew shellenv) || _setup_had_errors=1
         eval "${brew_env}"
 
-        fix_zsh_compaudit
+        fix_zsh_compaudit || _setup_had_errors=1
 
         print_section "SSH Configuration"
         add_github_to_known_hosts || return 1
