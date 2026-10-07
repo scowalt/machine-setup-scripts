@@ -1,0 +1,376 @@
+{
+  "aggregate_artifacts": "/tmp/setup-fixture-matrix-m_hjofth",
+  "dispatcher_command": "flock /tmp/setup-208-coordination/fixtures.lock env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tools/run-pre-push-contracts.py --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node --pwsh /opt/microsoft/powershell/7/pwsh --mise /home/scowalt/.local/bin/mise --chezmoi /home/scowalt/.local/bin/chezmoi --bun /home/scowalt/.bun/bin/bun",
+  "execution_commit_before_message_only_amend": "1ec7f52761968d853143eaeefe48eb7ecbed31d1",
+  "implementation_commit": "903640d122d33f1d226eff3b3536f9e2072219d8",
+  "integration_base": "0cb8771d60305530ef53bc5cf8f7aac1f12f460c",
+  "sha256": {
+    ".comment-policy/.gitignore": "862263fa1f46c20f0d1e4dac5ffcc75abd55c08211b2c3864c5f8764b9d87793",
+    ".comment-policy/README.md": "1933f3c53e3b8f7dcca563b0dd6f26247d63f31159a3b38c0c835b70d66e1e31",
+    ".comment-policy/check.py": "f683d4777b4440a32ad79363b144d607d0c64204f972e6cdc4b02e2008e99acd",
+    ".comment-policy/config.json": "ee675e46c218359db864c11df45a03997470fba055352f49bf21add8a3be719c",
+    ".comment-policy/requirements.txt": "8b0b1c49a1185f7f19933f369c126ffae927e2fbfa9a5e6b6f9e67728eabb950",
+    ".comment-policy/ruff.toml": "dd8bc3670db9a057b4aea6f481ce4a06dfce0e3334b6e7dba54feb3dd5190cd9",
+    ".comment-policy/test_check.py": "d0a9d814a92c676df0ebbf4f1016cd5fc137dc2745226277fe16f0f2b2d62fd6",
+    ".markdownlint.json": "c73f6177b1e4b341f59781f8b054e1df3f85b62e5894f49e05057beea329fc56",
+    ".shellcheckrc": "8ad2ea41caaa44cf03de26da470dc8ab6e96210b88525a3bf850dd16f202a139",
+    "bazzite.sh": "47cced0b4d22761f6bd297adac5a6013f43903ef835381dab7be2840b67348af",
+    "lefthook.yml": "4f4df7e9fdd51b69ebfd13eefd0ff3ee8a15e220aa83e2c7d18b0e31c166462a",
+    "lib/bb-plugin-refresh.bash": "df1579b49c52183b4f1bc99a37ca0dc5f4bae7c3b6a705dae1a95c87e52f75b1",
+    "lib/bb-plugin-refresh.py": "bf4f2c89afe095fb852d8b749c92aa47ebfe17c41806802969e79e1474d48bdd",
+    "lib/impeccable-skill.bash": "fbed03636a1a4ef041a4294bc30041409c60f79351db3a0846962d5900601829",
+    "lib/impeccable-skill.cjs": "626d73eb84849940d1514ff61d882d9c2ecfabc56be25d43896b1ae865be35dd",
+    "lib/impeccable-skill.ps1": "fe10df1fa3e0c2383eba97fc608b28566cd855db5e8bc53a1b69cb7517aec493",
+    "lib/opencode-cli.bash": "5503067c1f85bead40b41328f142cbfdd0fedd23a660f8899625f47a4d6c7039",
+    "lib/opencode-cli.cjs": "9acdba814aefd321ea4ec2d6c816891186f786714e8f86d8c82cba4a9b99f232",
+    "lib/opencode-cli.ps1": "e0c6ee14eed1e0cd0e51959bdfb95c5f2f07975a5f8e963e3054229926c020ae",
+    "lib/setup-policy.bash": "afb6b905bbb3389b43c46e297d22a4be7718fb39f328e2beca20c6d4d2656964",
+    "lib/setup-policy.ps1": "7d4065145347f9b49022144eda97c35538bbc0eb9d3eb8afd43d8e0aee47427a",
+    "mac.sh": "ac2e5caf01cf380692a0005238710950c1959bb17e9f1d25fd6a5b875836dd31",
+    "pi.sh": "9ec19bba32b7182c863300b84b52ddd0cc9db0624260d1183a1de7a49c1b60d3",
+    "tests/ai-coding-agent-contract.sh": "4110e814d14f3e03c09133de9ac474d3765d77ca696a2585b5564c4afdde55dc",
+    "tests/attention-span-removal-contract.sh": "03f951bfff7d7c3670d5ab145bee80b05308aea19f7c1518b7efc39f47e42f7c",
+    "tests/attention-span-removal-powershell.ps1": "a993f43752b66f6fdbae3a4a2ca065e06becad7a6db8f146f60bb4989333f59a",
+    "tests/backlog-mcp-retirement-contract.sh": "0b44f1f79143277063222e4cd83c4c1d4c9ec235f2c00acf08ebd118862c4c64",
+    "tests/backlog-mcp-windows.ps1": "79502c4a89eb3a571ffd8f8eceee8ef116c11f8f7761a3514cf5f1ee1a6514c2",
+    "tests/bash-compatibility-contract.sh": "50ef8e8494c6837808654677336ccd4cc9683ef205edb506771e3938ad721f65",
+    "tests/bb-desktop-contract.sh": "72b5465f56f187b5e0c5dc3ecaa7357f9017ca5b27c4aa2f93ead2bc0d58b791",
+    "tests/bb-desktop-windows-contract.ps1": "a5495ad0db96121ce898f4b32c2db9f0d6d135e250d61ef309dd72c29c57a551",
+    "tests/bb-machine-preparation-contract.sh": "c1b22e814256340919933cc71880840496eee8cfe33f6a6ce041ffa74c273378",
+    "tests/bb-machine-preparation-powershell.ps1": "a3ad5462eab4abd31ab3caa6ecd6b7fbf9024d694e24bfccbbfc46f17c1ec79c",
+    "tests/bb-plugin-refresh-contract.sh": "4a569129597c370bd494f0c0ab5bec9aa580f43e5dd4291e97ee3247bd1e8aa1",
+    "tests/bb-server-contract.sh": "0f9186d8995fd5563f382228670a9a60702944a762f7c4f3b929a11a8f07528c",
+    "tests/claude-code-installation-contract.sh": "dec49a6d5d474362973e089cca07a6b77dc027c101ec22810be58b4f05fb5825",
+    "tests/codex-profile-isolation-contract.sh": "a31edad9a027d6ff38e4a89015b0c3d9ca78b453e515f4ee4894112e7386baea",
+    "tests/directory-trust-integration-contract.sh": "00ce501e831e3c3f0c65881ce7f0214b03389474cc0f66d6155f10bff21f599f",
+    "tests/extract_setup_fixture.py": "eaa846829c993c9ef01db2935b118e16dd10444331deaa59fea4cec29ba6df5a",
+    "tests/fixture-no-network.c": "1963233f54482e9fc8e0cdaf2ee7696e4ff4fdc09f42e96f72f4e713d1d0629f",
+    "tests/fixtures/bb-desktop-operation.py": "a600844ea5aa9334b2a5857d670c7471a5759bdd63c297b958f6e5a98a1ae4ab",
+    "tests/fixtures/impeccable-frontmatter.json": "7edc3f8b1ea0f41127d1bf283cb65a42368b86133777cb2869d0ffa8c1d7dd17",
+    "tests/fixtures/matt-pocock-skills.json": "d343cf11662ec62ba3e1777a26479fc94a2ff1b7835cfd206f3ddb356be52c7d",
+    "tests/fixtures/opencode-cli-driver.cjs": "3f9df8742e7baf140f750253fbc92f11bc9073dcee26be48baaef1b65193f181",
+    "tests/fixtures/pi-ai-0.99.2-muse.json": "a479425b917a965a2ae92b47c7338688e5d302d82387d2892d586c62f9ef3485",
+    "tests/gitea-client-installation-contract.sh": "ca52876ff82a5c58523eae4146c0c47c8c1679118ffd43f86460e4dca02290b1",
+    "tests/headless-contract.sh": "beffa64acaf2c84b88cc82dc85cda4071dc74847797925c0ce39ee72908129b2",
+    "tests/impeccable-callers-contract.sh": "d2a7e798e98375a36534987395b3c6d123631b43e18b6768323d2827fecb92a2",
+    "tests/impeccable-skill-contract.sh": "8ea30668985d8ce0b5eddb2c0d013a67459fcd4eb2c062eb72e9a7345f5c2186",
+    "tests/infisical-non-management-contract.sh": "7b62db02fae1fa61bce7fb9c06fbd98973e3a7f27f255d965a2b3361f5f22453",
+    "tests/infisical-non-management-windows.ps1": "f73f8f2ef48543a0cccb1440584fe8b10d5b91abafc7630705b8dc784f0847df",
+    "tests/kubectl-installation-contract.sh": "ef2716a75c5b996450e6e5a11b755c7b81b349ff072e54e2404a08956994cfa1",
+    "tests/mock_managed_skills.py": "bc1ba6966fc9eab7f85b8a49b49ea78ca142b3373f3432dee56d703c92383592",
+    "tests/native_runtime_fixture.py": "997cccb5f458f8bc30ebbc76ae0bb099791e5cd8c5eff5d2f1fe09757a1b617b",
+    "tests/ntn-installation-contract.sh": "05280c25871b691967a4d4bb1953f3e73b34f76a1d1331a4623214686dd0c99d",
+    "tests/opencode-cli-contract.sh": "a6f63a84916822d96247b8ddd5fdd395e03d693c067438d6bd85b231500e9d4c",
+    "tests/opencode-cli.test.cjs": "a6a9acaa5dd6a077ab808a9c1f3575ee82809a8e0263e1c832c517c4ce8b9ba6",
+    "tests/opencode-go-wiring-contract.sh": "978d12e070111289247e0fa2c1edad5cebb8c67772e246aa228580d0ecd950e1",
+    "tests/paseo-non-management-contract.sh": "427e01f79fd1efb881806dc50f05bdcc4335b84f2634cc9cd562ac24e1147af7",
+    "tests/pending-reboot-contract.sh": "e00da8392dca0320ccb4bfd9d0a2f624ea4e777adc3b5fb50e6b67527b85baf5",
+    "tests/pi-askclaude-contract.sh": "2b0b06ee1773f24a11437bc71c688bf76f03e761980c11f24586f3a5fbdd7878",
+    "tests/pi-companion-packages-contract.sh": "ba31e012e775ffe16705bee6bb12b524f6194f03a8d8a2c25895e4487229bc7e",
+    "tests/pi-mcp-adapter-load.mjs": "cfa59e0992c616253d70a80640d6987c827ba3f39ebb7e78fb37cbb580202c5d",
+    "tests/pi-model-defaults-contract.sh": "6020a45afd3f1cd74694a23e29dcd565ead4fe2d2f43e56340926df8d1ee04c2",
+    "tests/pi-model-defaults-powershell.ps1": "b9c801e5f834bc13027a903d531263241e5efe0c8e98a6e68b1b55843737812c",
+    "tests/pi-opencode-go-contract.sh": "1d76a972955d92054725382ab2c1c21517028deb624a9b8d8672465fa616dc7e",
+    "tests/pi-package-maintenance-contract.sh": "d06012339a117b917967c2412b8037f199901b36c95d7427b5fa23322af7f9a7",
+    "tests/pi-profile-permissions-contract.sh": "afa66669efa41cfd538fcf0aa21f3001146466a2bb461a98840410c2df7b3c82",
+    "tests/pi-prose-contract.sh": "430bf4047a5a52f0126ca106ec63c248c8e4884721c98d7b60f91e13059f2ef7",
+    "tests/pi-rpiv-removal-contract.sh": "55afb21df33d652e87375896ada9a666cfe0bd6d7c66a4269a333b3ab81e14fd",
+    "tests/pi-skill-ownership-contract.sh": "0ae5e94575334dc181a8c40050db6d0cf7103a0bfc95ddf08dafbcc026860eac",
+    "tests/pi-subagents-removal-contract.sh": "a93a1f26e408f4e5dba6dc0bbc2bbe90cf16487dbb91ade0a0d68217e483b12c",
+    "tests/pi-zai-provider-contract.sh": "8c33d702cdef944c5c5eb5538d724f79fd06e3fe7fae8604a1ec04fdbf7bc06c",
+    "tests/rtk-removal-contract.sh": "9c9edcc58d8469cce1877461b9aeb0483fec332289910affbafa7c3d05ac3bdb",
+    "tests/run-fixture-matrix.py": "2455457d2b8a2beb31fdc562f120b40b8d7e798b1dec215ad5c030ea93028984",
+    "tests/setup-default-contract.sh": "4e3eac2f33c7268dee0ebf5ec06f29ce54fb0eb5c2d1b83a11ef3c3d2cc8f6a2",
+    "tests/setup-reliability-contract.sh": "eb436b70c5441b71383c00c2354a7ca8a2281fd48b3900a54ca941baaf069087",
+    "tests/setup-reliability-powershell.ps1": "e56411432a3b7830776c5c01d8443a69482ceb76482ebe9eb3aebe283a686a25",
+    "tests/shared-node-runtime-contract.sh": "8a568723506fdf6ffa8c6f87cd4605734a23924592648d5c70c21aaf2514056c",
+    "tests/shared-node-runtime-powershell.ps1": "c9c486cca95557f33640de16cc6f2cb36da6dc531ec17c601cee4ea98114c781",
+    "tests/simple-english-skill-contract.sh": "95c57f6fc559f8fd22bb846b843e43630fbf76cffab69747e5bb6ad7b0df7370",
+    "tests/telegram-alerts-contract.sh": "3c500583309b1b09ea11b6ede6cbdadc66e70b6ed33d2b6cc6e59fa27fa311a2",
+    "tests/telegram-alerts-powershell.ps1": "c96b668cb6baa37a56228060d36469bfb33d53de0f0ecc9da515114bb13a4906",
+    "tests/test_backlog_directory_trust.py": "43afe9dbaa0e8e912c14ef872ab3153c8f27c61af278ba149aef670c6bd4ec6b",
+    "tests/test_backlog_mcp_retirement.py": "94978806995a7acb01a27f7e8b6991881dd9adb0fcb8e743389e6568097d2d57",
+    "tests/test_backlog_windows_planner.py": "ff19fcb182cf1445260420e733cb83149b7632c586021d244993b327bf0b70bd",
+    "tests/test_bash_compatibility.py": "fdb4aab111b697eebe08399bee651ca854c52d136d5d3bde95549e5595f4d62a",
+    "tests/test_bb_desktop.py": "1138d52612e6b8694d5b8b2add6a98e5771af4f8902f81ccd0477e45dc1e8530",
+    "tests/test_bb_desktop_callers.py": "d2a0e7d4634974126e9324377cf71c58d0a18b9bea9b2a90ee1d6b780e5ca89e",
+    "tests/test_bb_directory_preflight.py": "3ee3df8a02ee029685807f74276da94a286a1b9e6f07a8ea9a0abdd2324ef6eb",
+    "tests/test_bb_dotfiles_umask.py": "d898054de38529dd99b035e722cba9eefccda9a6b601b2d8cec15442310fcbae",
+    "tests/test_bb_machine_preparation.py": "5ec9456338d6a5586f909a16733de0921171354df26caefb553178d91f2d7832",
+    "tests/test_bb_plugin_refresh.py": "51c88b0b8b929426169cd2801c7786a8506a90a2e0daaad92d51b149d44b8fa4",
+    "tests/test_bb_preparation_permissions.py": "df4dee1b8ba982eedfa96ec53fb209331d853327aec9ac6696baec1d2fa6ee12",
+    "tests/test_bb_server_diagnostics.py": "7ac2ce456db23644067f8572ee0573d2063f632990acc73b220d98735ff2f533",
+    "tests/test_bb_service_preflight.py": "d672248c3b2b659acea85e94bc1a9e84b351f7d554d8def05b8c2058ee5b37bf",
+    "tests/test_bb_service_trust.py": "29aa2c3e23b33072f4d9e094584e6b8f03be76a6a65073dec5a0a745669c58e9",
+    "tests/test_codex_profile_isolation.py": "f7503a561ea94f60636104cabeb6ca86bdf6704433838bca60d743c3265a1567",
+    "tests/test_directory_trust_integration.py": "44f52d2dfacb02027daf7d9e7c9de60787bf81db3304c422d4c23458baa1d35d",
+    "tests/test_fixture_containment.py": "a12f229105a4a656e6ba14e04990fe0616548db100f755207e59f7692ca2fd88",
+    "tests/test_headless.py": "2eebd5af09951a5dd47c87f8415aa435aefa8267aa8f7662557ee841a10ef247",
+    "tests/test_homebrew_results.py": "f9aa312e692d76415ef20663de86c4be4f023b60b7d8ccdfdb11829e360b6175",
+    "tests/test_impeccable_callers.py": "ee886512902b06a9192110d1466546c18e8708a9581d251abff6e99ced0b870f",
+    "tests/test_impeccable_convergence.py": "30650187deb096a37f3ba08568ddc7cb73494bc6a7a0ba10ded5652837876c3c",
+    "tests/test_impeccable_embedding.py": "d61b5e33bce5c27454dbcd223df5c73ce3a705564fc59bc098f2b1de8b6e69a2",
+    "tests/test_infisical_non_management.py": "336ea66bade0a17f577bc0fe4d501682c6709aec12a73aa0622a6766f9db8304",
+    "tests/test_macos_clt.py": "52c38061c2eea723e71b98b1c00607012f11aff24202f23fb0ace50ead6a7a18",
+    "tests/test_managed_skill_suite.py": "049e4a5c836ed788b60e8a2fb8f6e1770a38a8a1ab7018f92d47643ca7e9f187",
+    "tests/test_opencode_cli_callers.py": "265c0ce4b7d419775edefef99397bd6fbe486a41bc6c4f53ea5732efd05d7eeb",
+    "tests/test_opencode_go_wiring.py": "c48e7d5d405acacb75f9643b50f2052468607224633d77640cb15db907c976ea",
+    "tests/test_opencode_macos_preflight.py": "92dc4437c1c5667c64fab724939dabbe081356977a340476beddfe129893682a",
+    "tests/test_paseo_non_management.py": "a3ccbaf1fc1214e57643f4ebadd9b892489cd08a92c68b142e3a5bd413d66e7a",
+    "tests/test_pi_askclaude.py": "82809905c05054d8c2bf954c44b0658b6d44f8069cbc4d92dff3d165dbd0bfcb",
+    "tests/test_pi_model_defaults.py": "f2db251d687c5faa9646579bfb98411885c3b5744567a503a5340ff24f7322b8",
+    "tests/test_pi_opencode_go_setup.py": "09563a4fe0cd54a5d9eed3e6da0324f8687bef9e17aa2e77eb5f8c774f5f53cc",
+    "tests/test_pi_package_maintenance.py": "f3fed29f331d4496501259a8931f7648de52ccb05d7e680537693b569132107e",
+    "tests/test_pi_profile_permissions.py": "eb00f7af141e539bf126547b41a14c1bce86a1dcfeb4be0decb6e2932125c973",
+    "tests/test_pi_prose_retirement.py": "967aa654e8ffc7d07822a262d83eb6680d093d265e8f94262e996b0e2571cbaf",
+    "tests/test_pre_push_contracts.py": "757750bd7b94bd932179cc49bc5864e9afb7c91e42b76a23e408783a6f65ac70",
+    "tests/test_setup_environment.py": "9bdc3f0585c429075e814a5d608c983d4784eaa573be8c532b3a12bbbd2bd603",
+    "tests/test_setup_rollback.py": "9d6f2e8f5fcf834c01a1727d1c77349b14f7846285f3c4541dd2a2dbcb8ed1cc",
+    "tests/test_shared_node_convergence.py": "7fdc983ffe76f85cbefabb47d19924261cee6b4a76ecf2bbc973518aaee48859",
+    "tests/test_shared_node_runtime.py": "83513fb4a5333e83d38e6e2e068895bfdbdf5b5e5eba7698ab82d56412d41b60",
+    "tests/weekly-log-audit-regressions.sh": "2752a85d2de5199caee239a4215328b464d744c8226f5abdec5fde9cf0c6a15e",
+    "tests/windows-log-upload-contract.sh": "b1f6b1d8b64daba285c8aecc1007fa23d1d02e2aceeddb22805ef003fda7d4da",
+    "tests/windows-log-upload-powershell.ps1": "9f31ee5f1bc3582de261e7d87de077ffd7c8e8f4a2e50f16042b50497bca1eee",
+    "tools/embed-bb-plugin-refresh.py": "bdad5f4fa78ea8bd317795c3df03a0c5f0e7eb15859883c087bcf6e4f5cce458",
+    "tools/embed-impeccable-skill.py": "6d48290c67752dee564e38e6728ac1c8af99748b6b258c5eae9819a8eb59fb8a",
+    "tools/embed-opencode-cli.py": "59fcbbe58821ab09d49790173580eecb3690e030e99ff59dd3dc69b82c96fdf9",
+    "tools/embed-setup-policy.py": "fbefadf64e73d781a6185c33668c91928508680c13c3f112686cd4a9ea4eaaed",
+    "tools/run-pre-push-contracts.py": "1061d920ac8ae4da8a038763591f5f329a4839f5624a3a0108da7d6792144ded",
+    "ubuntu.sh": "067d69d0891d8d4b45b22da3225886c40be92b675619c7c89125aaa2f3301ac9",
+    "win.ps1": "a20f89d65df9dbb1d20a0bacf5cdf9d8b054413901b12de533c64169e520924c",
+    "wsl.sh": "9aad2dbd190b9ab2a2f36cb3a9f1461c5c85e869bc890731824b784403bebd7d"
+  },
+  "suite_results": [
+    {
+      "seconds": 7.8,
+      "status": 0,
+      "test": "tests/test_fixture_containment.py"
+    },
+    {
+      "seconds": 1.3,
+      "status": 0,
+      "test": "tests/test_pre_push_contracts.py"
+    },
+    {
+      "seconds": 2.0,
+      "status": 0,
+      "test": "tests/test_macos_clt.py"
+    },
+    {
+      "seconds": 0.4,
+      "status": 0,
+      "test": "tests/test_homebrew_results.py"
+    },
+    {
+      "seconds": 149.5,
+      "status": 0,
+      "test": "tests/test_managed_skill_suite.py"
+    },
+    {
+      "seconds": 7.7,
+      "status": 0,
+      "test": "tests/ai-coding-agent-contract.sh"
+    },
+    {
+      "seconds": 8.8,
+      "status": 0,
+      "test": "tests/attention-span-removal-contract.sh"
+    },
+    {
+      "seconds": 17.2,
+      "status": 0,
+      "test": "tests/backlog-mcp-retirement-contract.sh"
+    },
+    {
+      "seconds": 5.5,
+      "status": 0,
+      "test": "tests/bash-compatibility-contract.sh"
+    },
+    {
+      "seconds": 20.5,
+      "status": 0,
+      "test": "tests/bb-desktop-contract.sh"
+    },
+    {
+      "seconds": 174.1,
+      "status": 0,
+      "test": "tests/bb-machine-preparation-contract.sh"
+    },
+    {
+      "seconds": 39.0,
+      "status": 0,
+      "test": "tests/bb-plugin-refresh-contract.sh"
+    },
+    {
+      "seconds": 159.7,
+      "status": 0,
+      "test": "tests/bb-server-contract.sh"
+    },
+    {
+      "seconds": 0.3,
+      "status": 0,
+      "test": "tests/claude-code-installation-contract.sh"
+    },
+    {
+      "seconds": 0.4,
+      "status": 0,
+      "test": "tests/codex-profile-isolation-contract.sh"
+    },
+    {
+      "seconds": 15.4,
+      "status": 0,
+      "test": "tests/directory-trust-integration-contract.sh"
+    },
+    {
+      "seconds": 6.8,
+      "status": 0,
+      "test": "tests/gitea-client-installation-contract.sh"
+    },
+    {
+      "seconds": 5.0,
+      "status": 0,
+      "test": "tests/headless-contract.sh"
+    },
+    {
+      "seconds": 159.9,
+      "status": 0,
+      "test": "tests/impeccable-callers-contract.sh"
+    },
+    {
+      "seconds": 341.1,
+      "status": 0,
+      "test": "tests/impeccable-skill-contract.sh"
+    },
+    {
+      "seconds": 20.5,
+      "status": 0,
+      "test": "tests/infisical-non-management-contract.sh"
+    },
+    {
+      "seconds": 0.1,
+      "status": 0,
+      "test": "tests/kubectl-installation-contract.sh"
+    },
+    {
+      "seconds": 0.6,
+      "status": 0,
+      "test": "tests/ntn-installation-contract.sh"
+    },
+    {
+      "seconds": 118.0,
+      "status": 0,
+      "test": "tests/opencode-cli-contract.sh"
+    },
+    {
+      "seconds": 5.1,
+      "status": 0,
+      "test": "tests/opencode-go-wiring-contract.sh"
+    },
+    {
+      "seconds": 3.1,
+      "status": 0,
+      "test": "tests/paseo-non-management-contract.sh"
+    },
+    {
+      "seconds": 0.2,
+      "status": 0,
+      "test": "tests/pending-reboot-contract.sh"
+    },
+    {
+      "seconds": 4.0,
+      "status": 0,
+      "test": "tests/pi-askclaude-contract.sh"
+    },
+    {
+      "seconds": 0.4,
+      "status": 0,
+      "test": "tests/pi-companion-packages-contract.sh"
+    },
+    {
+      "seconds": 7.2,
+      "status": 0,
+      "test": "tests/pi-model-defaults-contract.sh"
+    },
+    {
+      "seconds": 27.3,
+      "status": 0,
+      "test": "tests/pi-opencode-go-contract.sh"
+    },
+    {
+      "seconds": 206.8,
+      "status": 0,
+      "test": "tests/pi-package-maintenance-contract.sh"
+    },
+    {
+      "seconds": 22.6,
+      "status": 0,
+      "test": "tests/pi-profile-permissions-contract.sh"
+    },
+    {
+      "seconds": 6.1,
+      "status": 0,
+      "test": "tests/pi-prose-contract.sh"
+    },
+    {
+      "seconds": 6.4,
+      "status": 0,
+      "test": "tests/pi-rpiv-removal-contract.sh"
+    },
+    {
+      "seconds": 6.9,
+      "status": 0,
+      "test": "tests/pi-skill-ownership-contract.sh"
+    },
+    {
+      "seconds": 0.2,
+      "status": 0,
+      "test": "tests/pi-subagents-removal-contract.sh"
+    },
+    {
+      "seconds": 0.2,
+      "status": 0,
+      "test": "tests/pi-zai-provider-contract.sh"
+    },
+    {
+      "seconds": 6.9,
+      "status": 0,
+      "test": "tests/rtk-removal-contract.sh"
+    },
+    {
+      "seconds": 2.7,
+      "status": 0,
+      "test": "tests/setup-default-contract.sh"
+    },
+    {
+      "seconds": 77.9,
+      "status": 0,
+      "test": "tests/setup-reliability-contract.sh"
+    },
+    {
+      "seconds": 88.4,
+      "status": 0,
+      "test": "tests/shared-node-runtime-contract.sh"
+    },
+    {
+      "seconds": 19.4,
+      "status": 0,
+      "test": "tests/simple-english-skill-contract.sh"
+    },
+    {
+      "seconds": 1.2,
+      "status": 0,
+      "test": "tests/telegram-alerts-contract.sh"
+    },
+    {
+      "seconds": 155.9,
+      "status": 0,
+      "test": "tests/weekly-log-audit-regressions.sh"
+    },
+    {
+      "seconds": 4.6,
+      "status": 0,
+      "test": "tests/windows-log-upload-contract.sh"
+    }
+  ],
+  "tested_tree": "74e3c660ce7bc3a7c9354547e918bfda08e41b22"
+}

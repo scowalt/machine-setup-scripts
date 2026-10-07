@@ -65,8 +65,50 @@ flock /tmp/setup-208-coordination/fixtures.lock env -i PATH=/usr/bin:/bin \
 | Same, corrected controls | `/tmp/setup-fixture-matrix-zwiutkma` | Pass. |
 | `--timeout 900 tests/setup-default-contract.sh tests/test_fixture_containment.py tests/impeccable-skill-contract.sh tests/impeccable-callers-contract.sh tests/directory-trust-integration-contract.sh tests/bb-plugin-refresh-contract.sh` | `/tmp/setup-fixture-matrix-2gd7dcjl` | 6/6 pass; both Impeccable contracts, combined callers and 76 refresh methods included. |
 | `tests/test_pre_push_contracts.py`, before dispatcher deadline change | `/tmp/setup-fixture-matrix-mc57biln` | Genuine red: exact dispatch argv lacked the explicit bounded timeout; six other methods passed. |
+| `tests/test_pre_push_contracts.py tests/setup-default-contract.sh tests/test_fixture_containment.py tests/directory-trust-integration-contract.sh`, final executable source | `/tmp/setup-fixture-matrix-a4u7c7zz` | 4/4 pass: deadline green, default/environment, actual extraction/containment and expanded combined/completion controls. |
+| Complete dispatcher below, final executable source | `/tmp/setup-fixture-matrix-m_hjofth` | **46/46 entries pass**, status 0 throughout; 1,915.1 suite-seconds, no timeout. Includes every audited #208 family and both added shell contracts. |
 
-The complete final dispatcher and final static/source-manifest results will be recorded after validation of the implementation commit. Earlier slice artifacts remain historical evidence, not substitutes for that aggregate.
+Exact complete-dispatch command (all native prerequisites already existed):
+
+```sh
+flock /tmp/setup-208-coordination/fixtures.lock env -i PATH=/usr/bin:/bin \
+ /usr/bin/python3 -I tools/run-pre-push-contracts.py \
+ --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+ --pwsh /opt/microsoft/powershell/7/pwsh \
+ --mise /home/scowalt/.local/bin/mise \
+ --chezmoi /home/scowalt/.local/bin/chezmoi \
+ --bun /home/scowalt/.bun/bin/bun
+```
+
+### Exact source and aggregate coverage
+
+Validated implementation: `903640d122d33f1d226eff3b3536f9e2072219d8`, tree **`74e3c660ce7bc3a7c9354547e918bfda08e41b22`**. The command ran as commit `1ec7f52761968d853143eaeefe48eb7ecbed31d1`; correcting its AI-attribution message afterward produced `903640d` with that identical tree. The [durable source/result manifest](2026-10-07-directory-trust-integration-source.json) records SHA-256 for all 134 executable/fixture/tool/lint-control sources and every suite's status/duration. Subsequent changes only finalize this evidence. Private logs, preflight diagnostics, results and a manifest copy remain in the aggregate artifact root.
+
+The aggregate reports 708 unittest method executions (including repeated suites and 16 explicit skips), plus 419 OpenCode Node cases (418 pass, one optional skip), native-tool fixture assertions and Bash/PowerShell contracts. These counts are not unique tests or native rollout. BB preparation/server/desktop/refresh, all skills/retirements, Pi profile/Go/package/runtime, OpenCode/callers, AI-agent, environment/default, reliability, weekly, headless, reboot and CLT/Homebrew all ran on the same source. Impeccable convergence again completed normally in 341.1 seconds, corroborating the deadline diagnosis. Shared Node's two Linux PowerShell modes each reported 1,409 assertions.
+
+| Explicit omission | Count / reason |
+| --- | --- |
+| Managed skills | Three installed CLI discovery/snapshot/external-dotfiles skips, repeated in weekly (six method executions). |
+| Bash compatibility | One native Bash 3.2 case: no existing `bash3.2` in the audited tool path. Static syntax/compatibility cases and current Bash ran. |
+| Paseo / AskClaude | One external-dotfiles case each. |
+| Pi Go | Two installed catalog/native proper-lockfile cases. |
+| Pi packages | Two installed registry/adapter-dotfiles cases. |
+| Pi profile | Two native Windows ACL/handle cases. |
+| Shared runtime | One external-dotfiles repair-to-skills case. |
+| OpenCode | One optional installed cmd-shim Node case. |
+| Backlog | Separate explicit native Windows handle/ACL omission; portable AST/C# compilation passed. |
+
+Optional integration variables stayed OFF. Missing native Bash 3.2 is an explicit coverage gap, not permission to install it. All five required dispatcher tools were available; no aggregate entry was omitted or treated as green after a failure.
+
+### Static, distribution and review state
+
+Final all-integrated-change checks (`75fc596..903640d`) pass: Bash syntax and ShellCheck on all 13 changed Bash files; AST parse of all changed Python; Node syntax for changed CJS; all four canonical embedding generators' `--check`; shared BB/desktop/Pi/retirement equality via their contracts; actual PowerShell AST/native-helper compilation via contained suites; whitespace; cached Markdownlint; full cached Python 3.14 comment-policy (294 files, zero violations); and installed Gitleaks `detect --log-opts=75fc596..HEAD --no-banner --redact` (10 commits, no leaks). Static logs: `/tmp/setup-208-coordination/217-{static,static-final,integrated-static}.log`, copied into aggregate artifacts. No tool download or resolver-backed hook ran; commits use command-local `LEFTHOOK=0`, not a hook-pass claim.
+
+Two static invocation/format findings were corrected without altering behavior: Markdownlint rejected a line-leading `#217` in #213's historical evidence (now `issue #217`), and this installed Gitleaks supports `detect`, not the initially attempted `git` subcommand. Their failures remain in the logs. The red/fixture-expectation failures above likewise remain recorded; none was a containment refusal or silently counted green.
+
+Final banners: macOS **291** (this slice's production edit), Ubuntu **322**, WSL **248**, Pi **265**, Bazzite **169**, Windows **187** (the other integrated banners unchanged). The dispatcher description advances to Version 2. README, kernel/FD filter, runner and extractor are byte-identical to `75fc596`; filter SHA-256 is `1963233f54482e9fc8e0cdaf2ee7696e4ff4fdc09f42e96f72f4e713d1d0629f`.
+
+The latest integration tip `0cb8771d60305530ef53bc5cf8f7aac1f12f460c` was merged before aggregate execution (`Already up to date`, ancestry verified). No implementation or aggregate blocker remains. Native/optional omissions above and parent independent review remain explicit; no push or issue closure was performed.
 
 ## Limitations
 
