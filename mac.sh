@@ -2026,7 +2026,7 @@ async function installChecked(options) {
     } finally {
         if (!completed) {
             try {
-                if (promoted || backups.length) checkAccountDirectories(directories);
+                checkAccountDirectories(directories);
                 if (promoted) {
                     checkPath(destination);
                     if (!boundedRead(destination).equals(bytes)) fail('changed-copy');
@@ -10090,7 +10090,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 291 | Last changed: Preserve ordinary completion directory group access${NC}"
+    echo -e "${GRAY}Version 292 | Last changed: Revalidate OpenCode directories before failed-stage cleanup${NC}"
 
     if ! acquire_setup_lock; then
         return 1
