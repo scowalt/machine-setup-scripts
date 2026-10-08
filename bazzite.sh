@@ -4017,6 +4017,7 @@ converge_impeccable_skill() {
     _stage=$(impeccable_skill_policy stage) || return 1
     print_message 'Installing/updating official global Impeccable skills without hooks...'
     if ! (
+        umask 077 || exit 1
         cd "${_stage}" || exit 1
         unset NODE_OPTIONS NODE_PATH IMPECCABLE_BIN IMPECCABLE_BUNDLE_PATH IMPECCABLE_DOWNLOAD_BASE \
             IMPECCABLE_SKILL_DIR IMPECCABLE_SELF IMPECCABLE_LAUNCHER_PROBE
@@ -9710,7 +9711,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 170 | Last changed: Revalidate OpenCode directories before failed-stage cleanup"
+    echo -e "${GRAY}Version 171 | Last changed: Isolate Impeccable installer creation mask"
 
     if ! acquire_setup_lock; then
         return 1

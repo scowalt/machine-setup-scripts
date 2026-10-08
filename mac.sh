@@ -4151,6 +4151,7 @@ converge_impeccable_skill() {
     _stage=$(impeccable_skill_policy stage) || return 1
     print_message 'Installing/updating official global Impeccable skills without hooks...'
     if ! (
+        umask 077 || exit 1
         cd "${_stage}" || exit 1
         unset NODE_OPTIONS NODE_PATH IMPECCABLE_BIN IMPECCABLE_BUNDLE_PATH IMPECCABLE_DOWNLOAD_BASE \
             IMPECCABLE_SKILL_DIR IMPECCABLE_SELF IMPECCABLE_LAUNCHER_PROBE
@@ -10090,7 +10091,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 292 | Last changed: Revalidate OpenCode directories before failed-stage cleanup${NC}"
+    echo -e "${GRAY}Version 293 | Last changed: Isolate Impeccable installer creation mask${NC}"
 
     if ! acquire_setup_lock; then
         return 1

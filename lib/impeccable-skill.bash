@@ -28,6 +28,7 @@ converge_impeccable_skill() {
     _stage=$(impeccable_skill_policy stage) || return 1
     print_message 'Installing/updating official global Impeccable skills without hooks...'
     if ! (
+        umask 077 || exit 1
         cd "${_stage}" || exit 1
         unset NODE_OPTIONS NODE_PATH IMPECCABLE_BIN IMPECCABLE_BUNDLE_PATH IMPECCABLE_DOWNLOAD_BASE \
             IMPECCABLE_SKILL_DIR IMPECCABLE_SELF IMPECCABLE_LAUNCHER_PROBE

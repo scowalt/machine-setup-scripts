@@ -17,9 +17,10 @@ class ImpeccableCallers(unittest.TestCase):
     adapter = convergence.ImpeccableConvergence.adapter
     captured_directories = convergence.ImpeccableConvergence.captured_directories
 
-    def run_entry(self, entry, success=True):
+    def run_entry(self, entry, success=True, creation_mask=None):
         self.put(self.root / 'events', '')
-        result = self.adapter('powershell' if entry == 'win.ps1' else 'bash', entry=entry, success=success)
+        result = self.adapter('powershell' if entry == 'win.ps1' else 'bash', entry=entry, success=success,
+                              creation_mask=creation_mask)
         events = (self.root / 'events').read_text().splitlines()
         expected = 'finalized' if entry == 'win.ps1' else 'final:' + str(int(not success))
         self.assertEqual(events[-1], expected)
@@ -60,6 +61,33 @@ class ImpeccableCallers(unittest.TestCase):
         self.assert_preserved_state(state)
         for operation in ('matt', 'independent', 'reboot', 'final:0'):
             self.assertIn(operation, events)
+
+    def test_bash_inherited_002_mask_preserves_state_and_disposes_partial_installs_through_finalization(self):
+        state = self.seed_preserved_state()
+        paths = self.captured_directories()
+        metadata = convergence.directory_metadata(paths)
+        for entry in BASH:
+            for mode in ('success', 'failed-after-write', 'repeat'):
+                with self.subTest(entry=entry, mode=mode):
+                    self.env['IMPECCABLE_TEST_MODE'] = mode
+                    before = self.snapshot()
+                    success = mode != 'failed-after-write'
+                    result, events = self.run_entry(entry, success=success, creation_mask=0o002)
+                    if success:
+                        self.assertIn('verified', result.stdout)
+                        for provider in convergence.PROVIDERS:
+                            skill = self.home / provider / 'impeccable'
+                            self.assertEqual((skill / 'SKILL.md').read_text(), convergence.descriptor(provider))
+                            self.assertEqual((skill / 'SKILL.md').stat().st_mode & 0o777, 0o600)
+                    else:
+                        self.assertIn('Impeccable: installer-failed.', result.stderr)
+                        self.assertNotIn('verified', result.stdout)
+                        self.assertEqual(self.snapshot(), before)
+                    self.assertNotIn('unsafe-owner-or-mode', result.stderr)
+                    self.assertEqual(convergence.directory_metadata(paths), metadata)
+                    self.assert_preserved_state(state)
+                    for operation in ('independent', 'reboot', 'final:' + str(int(not success))):
+                        self.assertIn(operation, events)
 
     def test_bash_required_installer_failure_survives_independent_work_reboot_and_finalization(self):
         self.captured_directories()
