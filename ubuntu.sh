@@ -1941,7 +1941,7 @@ async function installChecked(options) {
     } finally {
         if (!completed) {
             try {
-                if (promoted || backups.length) checkAccountDirectories(directories);
+                checkAccountDirectories(directories);
                 if (promoted) {
                     checkPath(destination);
                     if (!boundedRead(destination).equals(bytes)) fail('changed-copy');
@@ -11305,7 +11305,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 322 | Last changed: Merge Backlog with integrated directory trust"
+    echo -e "${GRAY}Version 323 | Last changed: Revalidate OpenCode directories before failed-stage cleanup"
 
     if ! acquire_setup_lock; then
         return 1

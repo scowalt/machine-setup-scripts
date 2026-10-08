@@ -180,6 +180,60 @@ for (const phase of ['staged', 'promoted', 'current', 'recovery']) for (const ch
         }
     });
 }
+for (const ancestor of ['.local', '.local/bin']) for (const substitution of ['directory', 'link']) for (const probeFails of [false, true]) {
+    test(`staged ${ancestor} ${substitution} substitution preserves cleanup trees and ${probeFails ? 'probe' : 'directory'} failure`, async t => {
+        const f = fixture(t), original = f.legacy(), boundary = path.join(f.home, ancestor);
+        fs.chmodSync(boundary, 0o2775);
+        const saved = path.join(f.home, 'saved-ancestor'), replacement = path.join(f.home, 'replacement');
+        const snapshot = directory => fs.readdirSync(directory).sort().flatMap(name => {
+            const file = path.join(directory, name), info = fs.lstatSync(file);
+            return [[file, info.dev, info.ino, info.uid, info.gid, info.mode, info.nlink, info.size, info.mtimeMs, info.ctimeMs,
+                info.isFile() ? fs.readFileSync(file) : null], ...(info.isDirectory() ? snapshot(file) : [])];
+        });
+        let replacementBin, savedBin, savedStage, replacementBefore, savedBefore;
+        const {api} = virtualPolicy(f, {}, {'node:child_process': {execFileSync: (file, args, options) => {
+            assert.deepEqual(Array.from(args), ['--version']);
+            assert.deepEqual(fs.readFileSync(file), f.binary, 'official inert bytes precede the staged probe');
+            assert.equal(f.probes.length, 0, 'no promotion or subsequent probe is allowed');
+            f.probes.push({file});
+            const stage = path.dirname(file), relativeBin = path.relative(boundary, path.dirname(f.dest));
+            assert.equal(path.dirname(options.cwd), stage);
+            fs.renameSync(boundary, saved);
+            if (substitution === 'link') {
+                fs.mkdirSync(replacement);
+                fs.symlinkSync(replacement, boundary);
+            } else fs.mkdirSync(boundary);
+            replacementBin = path.join(substitution === 'link' ? replacement : boundary, relativeBin);
+            savedBin = path.join(saved, relativeBin);
+            savedStage = path.join(savedBin, path.basename(stage));
+            fs.mkdirSync(replacementBin, {recursive: true});
+            const replacementStage = path.join(replacementBin, path.basename(stage));
+            fs.mkdirSync(replacementStage, {mode: 0o700});
+            fs.writeFileSync(path.join(replacementStage, 'sentinel'), 'INERT replacement stage must survive');
+            fs.mkdirSync(path.join(replacementBin, '.setup-opencode-cli.lock'), {mode: 0o700});
+            fs.writeFileSync(path.join(replacementBin, 'sentinel'), 'INERT unrelated replacement must survive');
+            replacementBefore = snapshot(replacementBin);
+            savedBefore = snapshot(savedBin);
+            if (probeFails) throw new Error('SECRET original probe exception');
+            return Buffer.from('opencode v2.0.18\n');
+        }}});
+        let diagnostic;
+        await assert.rejects(api.install({...f.options, probe: undefined}), error => {
+            diagnostic = api.failureResult(error); return true;
+        });
+        assert.deepEqual(snapshot(replacementBin), replacementBefore, 'cleanup must not touch the substituted stage, lock or sentinels');
+        assert.deepEqual(snapshot(savedBin), savedBefore, 'uncertain cleanup must retain original private transaction evidence');
+        assert.equal(fs.lstatSync(saved).mode & 0o7777, 0o2775);
+        for (const directory of [savedStage, path.join(savedBin, '.setup-opencode-cli.lock')]) {
+            assert.equal(fs.lstatSync(directory).mode & 0o777, 0o700);
+        }
+        assert.deepEqual(fs.readFileSync(path.join(savedStage, 'opencode')), f.binary);
+        assert.equal(fs.readFileSync(original, 'utf8'), 'INERT official 1.2.3');
+        assert.equal(fs.existsSync(f.dest), false);
+        assert.equal(fs.existsSync(path.join(savedBin, '.setup-opencode-cli.json')), false);
+        assert.equal(diagnostic, 'opencode-cli:recovery-required:policy-failed:installation:' + (probeFails ? 'version-probe' : 'changed-copy'));
+    });
+}
 test('official newer installed minor and major are preserved without execution', async t => {
     for (const release of ['2.1.0', '3.0.0']) {
         const f = fixture(t), bytes = f.publish('@opencode/cli-linux-x64-baseline', release);

@@ -1873,7 +1873,7 @@ async function installChecked(options) {
     } finally {
         if (!completed) {
             try {
-                if (promoted || backups.length) checkAccountDirectories(directories);
+                checkAccountDirectories(directories);
                 if (promoted) {
                     checkPath(destination);
                     if (!boundedRead(destination).equals(bytes)) fail('changed-copy');
@@ -8303,7 +8303,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 187 | Last changed: Merge Backlog with integrated directory trust"
+    Write-Host "Version 188 | Last changed: Revalidate OpenCode directories before failed-stage cleanup"
 
     Assert-HeadlessUnsupported
 
