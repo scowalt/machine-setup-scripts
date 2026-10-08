@@ -214,7 +214,8 @@ require('node:https').get = (url, options, callback) => {
         visit(directory)
         return state
 
-    def adapter(self, shell='bash', success=True, blocked=False, entry=None, combined=False, creation_mask=None):
+    def adapter(self, shell='bash', success=True, blocked=False, entry=None, combined=False,
+                creation_mask=None, stage_retained=False):
         suffix = 'ps1' if shell == 'powershell' else 'bash'
         core = (ROOT / 'lib/impeccable-skill.cjs').read_text()
         wrapper = (ROOT / entry).read_text() if entry else (ROOT / ('lib/impeccable-skill.' + suffix)).read_text().replace('@IMPECCABLE_CORE@', core)
@@ -373,11 +374,13 @@ if (-not $result) { exit 1 }
         result = subprocess.run(command, env=self.env, cwd=self.root, stdin=subprocess.DEVNULL,
                                 text=True, capture_output=True, timeout=45)
         mock_errors = (self.root / 'installer-errors').read_text() if (self.root / 'installer-errors').exists() else ''
+        if creation_mask is not None:
+            self.assertNotIn('Fixture caller creation mask changed', result.stderr)
         self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr + mock_errors)
         self.assertNotIn('PRIVATE-SENTINEL', result.stdout + result.stderr)
         if (self.root / 'stages').exists():
             for stage in (self.root / 'stages').read_text().splitlines():
-                self.assertFalse(os.path.lexists(stage), 'stage was not safely disposed')
+                self.assertEqual(os.path.lexists(stage), stage_retained, 'unexpected stage disposition')
         return result
 
     def test_inherited_002_mask_converges_without_changing_caller_or_existing_directories(self):
@@ -1263,6 +1266,15 @@ def installer_fixture():
         file.write(json.dumps(args) + '\n')
     with (root / 'stages').open('a') as file:
         file.write(str(home) + '\n')
+    native_modes = os.environ.get('IMPECCABLE_TEST_NATIVE_MODES') == '1'
+    if native_modes:
+        mask = os.umask(0)
+        os.umask(mask)
+        (root / 'installer-umask').write_text(oct(mask))
+        for name in ('.npm/_logs/install.log', '.npm/_cacache/content/blob'):
+            cache = home / name
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text('Inert npm cache created with inherited permissions.\n')
     if os.environ.get('IMPECCABLE_TEST_MODE') == 'failed-command':
         print('PRIVATE-SENTINEL arbitrary failure output', file=sys.stderr)
         raise SystemExit(1)
@@ -1283,13 +1295,17 @@ def installer_fixture():
         binary = skill / 'scripts/bin/linux-x64/impeccable'
         binary.parent.mkdir(parents=True)
         binary.write_bytes(native_engine())
-        binary.chmod(0o700)
-        (skill / 'scripts/impeccable').chmod(0o700)
+        binary.chmod((binary.stat().st_mode & 0o777) | 0o755 if native_modes else 0o700)
+        (skill / 'scripts/impeccable').chmod(0o755 if native_modes else 0o700)
         if provider == '.agents/skills':
             for name in ['openai.yaml'] + ['impeccable_' + agent.replace('-', '_') + '.toml' for agent in AGENTS]:
                 file = skill / 'agents' / name
                 file.parent.mkdir(exist_ok=True)
                 file.write_text('Inert native agent metadata.\n')
+        if native_modes:
+            for file in skill.rglob('*'):
+                if file.is_file() and file not in (binary, skill / 'scripts/impeccable'):
+                    file.chmod(0o600)
     pi = home / '.pi/agent/skills/impeccable'
     ignores = json.loads(os.environ.get('IMPECCABLE_TEST_PI_IGNORES', '{}'))
     assert set(ignores).issubset(('.gitignore', '.ignore', '.fdignore')) and all(isinstance(text, str) for text in ignores.values())
@@ -1335,6 +1351,14 @@ def installer_fixture():
         (home / '.cursor/agents/impeccable-documenter.md').unlink()
     if mode == 'failed-after-write':
         raise SystemExit(1)
+    if mode == 'unsafe-bundled-engine':
+        (home / '.claude/skills/impeccable/scripts/bin/linux-x64/impeccable').chmod(0o775)
+    if mode == 'unsafe-npm-cache':
+        (home / '.npm/_cacache/content/blob').chmod(0o664)
+    if native_modes:
+        paths = ['.claude/skills/impeccable/scripts/bin/linux-x64/impeccable',
+                 '.claude/agents/impeccable-documenter.md', '.npm/_cacache/content/blob']
+        (root / 'installer-modes.json').write_text(json.dumps({name: (home / name).stat().st_mode & 0o777 for name in paths}))
     print('PRIVATE-SENTINEL arbitrary installer output must not reach setup logs')
 
 
