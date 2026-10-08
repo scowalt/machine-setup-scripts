@@ -214,7 +214,7 @@ require('node:https').get = (url, options, callback) => {
         visit(directory)
         return state
 
-    def adapter(self, shell='bash', success=True, blocked=False, entry=None, combined=False):
+    def adapter(self, shell='bash', success=True, blocked=False, entry=None, combined=False, creation_mask=None):
         suffix = 'ps1' if shell == 'powershell' else 'bash'
         core = (ROOT / 'lib/impeccable-skill.cjs').read_text()
         wrapper = (ROOT / entry).read_text() if entry else (ROOT / ('lib/impeccable-skill.' + suffix)).read_text().replace('@IMPECCABLE_CORE@', core)
@@ -255,6 +255,15 @@ finish_setup_log() { record "final:$1"; return "$1"; }
                     mocks = re.sub(r'^prepare_pi_profile_permissions\(\).*\n', '', mocks, flags=re.M)
                 for command_name in ('curl', 'npm', 'npx', 'pi', 'bb', 'chezmoi', 'sudo', 'systemctl', 'launchctl', 'kill', 'pkill', 'tmux'):
                     mocks += f'\n{command_name}() {{ record FORBIDDEN:{command_name}; return 99; }}'
+            invocation = '\nmain\n' if entry else f'\nPI_PROFILE_MUTATIONS_BLOCKED={int(blocked)}\nconverge_impeccable_skill\n'
+            if creation_mask is not None:
+                invocation = f'\numask {creation_mask:03o}\n_fixture_mask=$(umask)\n_fixture_status=0\n' + invocation.rstrip() + r''' || _fixture_status=$?
+if [[ "$(umask)" != "${_fixture_mask}" ]]; then
+    printf 'Fixture caller creation mask changed\n' >&2
+    exit 98
+fi
+exit "${_fixture_status}"
+'''
             fixture.write_text(('set -e\n' if entry else 'set -eu\n') + extracted + '\n' + mocks + '\n' + r'''
 print_message() { :; }
 print_success() { printf '%s\n' "$1"; }
@@ -270,7 +279,7 @@ npm() {
     esac
 }
 npx() { "${IMPECCABLE_TEST_PYTHON}" "${IMPECCABLE_TEST_MOCK}" --installer "$@"; }
-''' + ('\nmain\n' if entry else f'\nPI_PROFILE_MUTATIONS_BLOCKED={int(blocked)}\nconverge_impeccable_skill\n'))
+''' + invocation)
             command = ['/bin/bash', '--noprofile', '--norc', str(fixture)]
         else:
             if not PWSH:
@@ -370,6 +379,31 @@ if (-not $result) { exit 1 }
             for stage in (self.root / 'stages').read_text().splitlines():
                 self.assertFalse(os.path.lexists(stage), 'stage was not safely disposed')
         return result
+
+    def test_inherited_002_mask_converges_without_changing_caller_or_existing_directories(self):
+        paths = self.captured_directories()
+        before = directory_metadata(paths)
+        sentinel = self.put(self.home / '.agents/skills/tdd/SKILL.md', 'independent managed skill')
+        result = self.adapter(creation_mask=0o002)
+        self.assertIn('verified', result.stdout)
+        self.assertNotIn('unsafe-owner-or-mode', result.stderr)
+        for provider in PROVIDERS:
+            skill = self.home / provider / 'impeccable'
+            self.assertEqual((skill / 'SKILL.md').read_text(), descriptor(provider))
+            self.assertEqual((skill / 'SKILL.md').stat().st_mode & 0o777, 0o600)
+            self.assertEqual((skill / 'reference').stat().st_mode & 0o777, 0o700)
+        self.assertEqual(directory_metadata(paths), before)
+        self.assertEqual(sentinel.read_text(), 'independent managed skill')
+
+    def test_inherited_002_mask_still_refuses_unsafe_existing_files_without_repair(self):
+        self.captured_directories()
+        settings = self.put(self.home / '.pi/agent/settings.json', '{}')
+        settings.chmod(0o664)
+        before = self.snapshot()
+        result = self.adapter(creation_mask=0o002, success=False)
+        self.assertIn('Impeccable: unsafe-owner-or-mode.', result.stderr)
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse((self.root / 'calls').exists())
 
     def test_fresh_convergence_installs_complete_pi_payload_without_hooks_or_user_state_changes(self):
         settings = self.put(self.home / '.pi/agent/settings.json', '{"theme":"keep","packages":["npm:keep"],"skills":["custom"]}')
@@ -1299,6 +1333,8 @@ def installer_fixture():
             (directory / ('impeccable-' + agent + '.md')).write_text('Inert official helper.\n')
     if mode == 'missing-helper':
         (home / '.cursor/agents/impeccable-documenter.md').unlink()
+    if mode == 'failed-after-write':
+        raise SystemExit(1)
     print('PRIVATE-SENTINEL arbitrary installer output must not reach setup logs')
 
 
