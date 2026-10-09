@@ -80,7 +80,7 @@ class ImpeccableCallers(unittest.TestCase):
                             self.assertEqual((skill / 'SKILL.md').read_text(), convergence.descriptor(provider))
                             self.assertEqual((skill / 'SKILL.md').stat().st_mode & 0o777, 0o600)
                     else:
-                        self.assertIn('Impeccable: installer-failed.', result.stderr)
+                        self.assertIn('phase=installer reason=unknown exit=1', result.stderr)
                         self.assertNotIn('verified', result.stdout)
                         self.assertEqual(self.snapshot(), before)
                     self.assertNotIn('unsafe-owner-or-mode', result.stderr)
@@ -97,7 +97,7 @@ class ImpeccableCallers(unittest.TestCase):
                 self.put(self.root / 'events', '')
                 before = self.snapshot()
                 result = self.adapter(entry=entry, success=False)
-                self.assertIn('Impeccable: installer-failed.', result.stdout + result.stderr)
+                self.assertIn('phase=installer reason=unknown exit=1', result.stdout + result.stderr)
                 self.assertEqual(self.snapshot(), before)
                 events = (self.root / 'events').read_text().splitlines()
                 for operation in ('matt', 'rtk', 'attention', 'simple-english', 'show-me', 'pr-lens', 'independent', 'reboot'):

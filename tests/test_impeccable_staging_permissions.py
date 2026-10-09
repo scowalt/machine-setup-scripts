@@ -93,7 +93,8 @@ class ImpeccableStagingPermissions(unittest.TestCase):
         before = self.snapshot()
         self.env['IMPECCABLE_TEST_MODE'] = 'unsafe-bundled-engine'
         result = self.run_adapter('ubuntu.sh', success=False, stage_retained=True)
-        self.assertEqual(result.stderr.count('Impeccable: unsafe-owner-or-mode.'), 2)
+        self.assertIn('phase=promotion reason=unsafe-owner-or-mode exit=1', result.stderr)
+        self.assertIn('phase=cleanup reason=unsafe-owner-or-mode exit=1', result.stderr)
         self.assertEqual(self.snapshot(), before)
         stage = Path((self.root / 'stages').read_text().strip())
         binary = stage / '.claude/skills/impeccable/scripts/bin/linux-x64/impeccable'
@@ -103,7 +104,7 @@ class ImpeccableStagingPermissions(unittest.TestCase):
     def test_explicitly_unsafe_cache_keeps_cleanup_failure_fatal(self):
         self.env['IMPECCABLE_TEST_MODE'] = 'unsafe-npm-cache'
         result = self.run_adapter('ubuntu.sh', success=False, stage_retained=True)
-        self.assertEqual(result.stderr.count('Impeccable: unsafe-owner-or-mode.'), 1)
+        self.assertEqual(result.stderr.count('phase=cleanup reason=unsafe-owner-or-mode exit=1'), 1)
         self.assertNotIn('verified', result.stdout)
         stage = Path((self.root / 'stages').read_text().strip())
         self.assertTrue(os.path.isdir(stage))

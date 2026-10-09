@@ -432,7 +432,8 @@ $ast=[System.Management.Automation.Language.Parser]::ParseFile($env:FIXTURE_SOUR
 if ($errors.Count) { throw 'Invalid fixture source' }
 foreach ($definition in $ast.EndBlock.Statements) {
     if ($definition -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-        $definition.Name -in @('Set-PiSkillOwnership','Invoke-ImpeccableSkillPolicy','Invoke-ImpeccableConvergence')) {
+        $definition.Name -in @('Set-PiSkillOwnership','Write-ImpeccableFailure','Invoke-ImpeccableCapture',
+            'Invoke-ImpeccableSkillPolicy','Invoke-ImpeccableConvergence')) {
         . ([scriptblock]::Create($definition.Extent.Text))
     }
 }
