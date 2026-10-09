@@ -513,13 +513,13 @@ check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
                              p.stat().st_gid, p.stat().st_mode) for p in directories}, before)
         self.assertEqual({p: p.read_bytes() for p in protected}, protected)
 
-    def test_captured_two_override_refusal_survives_real_log_finalization(self):
+    def test_optional_environment_reference_refusal_survives_real_log_finalization(self):
         override = self.customize()
         for directory in (self.home, self.home / '.config', self.home / '.config/systemd',
                           override.parent.parent, override.parent):
             directory.chmod(0o775)
         broad = self.seed('.config/systemd/user/setup-bb-app.service.d/20-env-local.conf',
-                          '[Service]\nEnvironmentFile=%h/.env.local\n')
+                          '[Service]\nEnvironmentFile=-%h/.env.local\n')
         broad.chmod(0o664)
         auth = self.seed('.bb/auth.json', '{"private":"' + SECRET + '"}')
         environment = self.seed('.env.local', 'UNRELATED=' + SECRET + '\n')
@@ -532,7 +532,7 @@ check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
         self.assertEqual({p: (p.stat().st_mode, p.read_bytes()) for p in protected}, before)
         self.assertEqual(self.events.read_text(), '')
         uploaded = Path(str(self.events) + '.uploaded').read_text()
-        for expected in ('[preflight.unit-dropins]', 'whole-file environment override',
+        for expected in ('[preflight.unit-dropins]', 'unsupported or unverified drop-in path',
                          'PLUGIN_REFRESH:block-default', 'INDEPENDENT_WORK',
                          'Setup completed with errors', 'Run log saved to:'):
             self.assertIn(expected, uploaded)

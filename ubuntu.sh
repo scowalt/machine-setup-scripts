@@ -10097,7 +10097,7 @@ def identity(value):
     return tuple(getattr(value, 'st_' + key) for key in
                  ('dev', 'ino', 'uid', 'gid', 'mode', 'nlink', 'size', 'mtime_ns', 'ctime_ns'))
 
-def verified(parent, name, directory=True, private=False):
+def verified(parent, name, directory=True, private=False, reference=False, metadata_only=False, fragment=False):
     before = os.stat(name, dir_fd=parent, follow_symlinks=False)
     if before.st_uid != os.getuid():
         raise ValueError()
@@ -10106,9 +10106,20 @@ def verified(parent, name, directory=True, private=False):
             raise ValueError()
         if private and stat.S_IMODE(before.st_mode) != 0o700:
             raise ValueError()
-    elif not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) != 0o600:
-        raise ValueError()
-    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    else:
+        mode = stat.S_IMODE(before.st_mode)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise ValueError()
+        if reference:
+            # Only the recognized non-secret reference may retain group write.
+            if mode & 0o7113 or not mode & 0o400:
+                raise ValueError()
+        elif fragment:
+            if mode & 0o022:
+                raise ValueError()
+        elif mode not in ((0o400, 0o600) if metadata_only else (0o600,)):
+            raise ValueError()
+    flags = (os.O_PATH if metadata_only else os.O_RDONLY) | os.O_NOFOLLOW | os.O_NONBLOCK
     if directory:
         flags |= os.O_DIRECTORY
     fd = os.open(name, flags, dir_fd=parent)
@@ -10125,36 +10136,50 @@ try:
     current = root
     for name in ('.config', 'systemd', 'user'):
         current = verified(current, name)
+    fragment = verified(current, 'setup-bb-app.service', directory=False, fragment=True)
+    fragment_content = os.read(fragment, 65537)
+    if (len(fragment_content) > 65536 or len(fragment_content) != os.fstat(fragment).st_size or
+            not fragment_content.startswith(b'# setup-managed bb app v1\n')):
+        raise ValueError()
     dropins = verified(current, 'setup-bb-app.service.d')
-    entries = os.listdir(dropins)
-    if '20-env-local.conf' in entries:
-        print('unsupported-environment-file')
-        sys.exit(1)
-    if entries != ['10-tmpdir.conf']:
+    entries = sorted(os.listdir(dropins))
+    environment = [name for name in entries if name in ('env.conf', '20-env-local.conf')]
+    if not entries or len(environment) > 1 or any(name not in ('10-tmpdir.conf', *environment) for name in entries):
         raise ValueError()
-    file = verified(dropins, '10-tmpdir.conf', directory=False)
-    content = os.read(file, 4097)
-    if len(content) != os.fstat(file).st_size:
+    contents = [(fragment, fragment_content, 65537)]
+    for name in entries:
+        file = verified(dropins, name, directory=False, reference=name in environment)
+        content = os.read(file, 4097)
+        if len(content) != os.fstat(file).st_size:
+            raise ValueError()
+        if name in environment:
+            if content != b'[Service]\nEnvironmentFile=%h/.env.local\n':
+                raise ValueError()
+            # Required account source: pin metadata without reading any values.
+            verified(root, '.env.local', directory=False, metadata_only=True)
+        else:
+            assignment = ('TMPDIR=' + home + '/.cache/bb/tmp').encode('ascii')
+            accepted = [b'[Service]\nEnvironment=' + value + ending
+                        for value in (assignment, b'"' + assignment + b'"')
+                        for ending in (b'', b'\n')]
+            if content not in accepted:
+                raise ValueError()
+            current = root
+            for component in ('.cache', 'bb', 'tmp'):
+                current = verified(current, component, private=component == 'tmp')
+        contents.append((file, content, 4097))
+    if sorted(os.listdir(dropins)) != entries:
         raise ValueError()
-    assignment = ('TMPDIR=' + home + '/.cache/bb/tmp').encode('ascii')
-    accepted = [b'[Service]\nEnvironment=' + value + ending
-                for value in (assignment, b'"' + assignment + b'"')
-                for ending in (b'', b'\n')]
-    if content not in accepted:
-        raise ValueError()
-    current = root
-    for name in ('.cache', 'bb', 'tmp'):
-        current = verified(current, name, private=name == 'tmp')
-    if os.listdir(dropins) != ['10-tmpdir.conf']:
-        raise ValueError()
-    os.lseek(file, 0, os.SEEK_SET)
-    if os.read(file, 4097) != content:
-        raise ValueError()
+    for file, content, limit in contents:
+        os.lseek(file, 0, os.SEEK_SET)
+        if os.read(file, limit) != content:
+            raise ValueError()
     for parent, name, fd, before in records:
         if before != identity(os.fstat(fd)) or before != identity(os.stat(name, dir_fd=parent, follow_symlinks=False)):
             raise ValueError()
-    digest = hashlib.sha256(repr([record[3] for record in records]).encode('ascii') + content).hexdigest()
-    print('tmpdir:' + digest)
+    digest = hashlib.sha256(repr((entries, [record[3] for record in records])).encode('ascii') +
+                            b''.join(content for _, content, _ in contents)).hexdigest()
+    print('dropins:' + ','.join(entries) + ':' + digest)
 except (OSError, ValueError):
     sys.exit(1)
 finally:
@@ -10177,11 +10202,8 @@ bb_unit_dropins_snapshot() {
     else
         _inspection_status=$?
         [[ "${_inspection_status}" -eq 2 && "${_name}" == setup-bb-app.service ]] || return 1
-        _snapshot=$(bb_tmpdir_snapshot) || {
-            [[ "${_snapshot}" != unsupported-environment-file ]] || printf '%s\n' "${_snapshot}"
-            return 1
-        }
-        [[ "${_snapshot}" =~ ^tmpdir:[a-f0-9]{64}$ ]] || return 1
+        _snapshot=$(bb_tmpdir_snapshot) || return 1
+        [[ "${_snapshot}" =~ ^dropins:(10-tmpdir\.conf(,(env|20-env-local)\.conf)?|(env|20-env-local)\.conf):[a-f0-9]{64}$ ]] || return 1
         printf '%s\n' "${_snapshot}"
     fi
 }
@@ -10201,8 +10223,14 @@ bb_unit_preflight() {
         esac
     done <<< "${_details}"
     [[ "${_seen_fragment}" -eq 1 && "${_seen_dropins}" -eq 1 ]] || return 1
-    if [[ "${_expected}" == tmpdir:* ]]; then
-        _selected="${HOME}/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf"
+    if [[ "${_expected}" == dropins:* ]]; then
+        [[ "${_expected}" =~ ^dropins:(10-tmpdir\.conf(,(env|20-env-local)\.conf)?|(env|20-env-local)\.conf):[a-f0-9]{64}$ ]] || return 1
+        local _selection="${BASH_REMATCH[1]}" _entry
+        local -a _entries=()
+        IFS=',' read -r -a _entries <<< "${_selection}"
+        for _entry in "${_entries[@]}"; do
+            _selected+="${_selected:+ }${HOME}/.config/systemd/user/setup-bb-app.service.d/${_entry}"
+        done
         [[ "${_name}" == setup-bb-app.service && "${_fragment}" == "${_file}" ]] || return 1
     fi
     if [[ "${_dropins}" != "${_selected}" ]]; then
@@ -10569,11 +10597,7 @@ setup_bb_server() {
     for _unit in setup-bb-app.service setup-bb-ingress.service; do
         if ! _snapshot=$(bb_unit_dropins_snapshot "${_unit}"); then
             bb_server_failure preflight.unit-dropins
-            if [[ "${_snapshot}" == unsupported-environment-file ]]; then
-                print_error "BB service preflight: ${_unit} has an unsupported whole-file environment override. Review the separately authorized migration before rerunning setup; BB setup is blocked and overrides are left unchanged."
-            else
-                print_error "BB service preflight: ${_unit} has an unsupported or unverified drop-in path at \$HOME/.config/systemd/user/${_unit}.d. Review its overrides before rerunning setup; BB setup is blocked and overrides are left unchanged."
-            fi
+            print_error "BB service preflight: ${_unit} has an unsupported or unverified drop-in path at \$HOME/.config/systemd/user/${_unit}.d. Review its overrides before rerunning setup; BB setup is blocked and overrides are left unchanged."
             return 1
         fi
         if [[ "${_unit}" == setup-bb-app.service ]]; then _app_customization="${_snapshot}"; else _ingress_customization="${_snapshot}"; fi
@@ -10594,8 +10618,11 @@ setup_bb_server() {
     fi
     bb_unit_preflight setup-bb-app.service "${_app}" "${_app_customization}" || { bb_server_failure preflight.app-unit; return 1; }
     bb_unit_preflight setup-bb-ingress.service "${_serve}" "${_ingress_customization}" || { bb_server_failure preflight.ingress-unit; return 1; }
-    if [[ "${_app_customization}" == tmpdir:* ]]; then
+    if [[ "${_app_customization}" == dropins:10-tmpdir.conf* ]]; then
         print_message 'BB service preflight: setup-bb-app.service private TMPDIR override verified; remaining maintenance and readiness checks still apply.'
+    fi
+    if [[ "${_app_customization}" == *env.conf:* || "${_app_customization}" == *20-env-local.conf:* ]]; then
+        print_message 'BB service preflight: reviewed account-environment reference verified; whole-account environment inheritance is preserved, not credential isolation. Remaining maintenance and readiness checks still apply.'
     fi
     if systemctl --user is-active --quiet setup-bb-app.service >/dev/null 2>&1; then _app_active=1; fi
     if systemctl --user is-active --quiet setup-bb-ingress.service >/dev/null 2>&1; then _ingress_active=1; fi
@@ -11460,7 +11487,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 325 | Last changed: Report controlled Impeccable failure diagnostics"
+    echo -e "${GRAY}Version 326 | Last changed: Preserve reviewed BB account-environment inheritance"
 
     if ! acquire_setup_lock; then
         return 1
