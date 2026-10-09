@@ -45,6 +45,14 @@ def metadata(value, path):
         selected = home + '/.cache/bb/tmp'
     elif inspection == 'tmpdir-foreign-ancestor' or inspection.startswith('tmpdir-directory-'):
         selected = home + '/.cache'
+    if inspection.startswith('env-'):
+        selected = home + '/.config/systemd/user/setup-bb-app.service.d/env.conf'
+        if '-source-' in inspection:
+            selected = home + '/.env.local'
+        elif '-parent-' in inspection:
+            selected = home + '/.config/systemd/user'
+        elif '-fragment-' in inspection:
+            selected = home + '/.config/systemd/user/setup-bb-app.service'
     if path != selected:
         return value
     if inspection == 'tmpdir-inspection-failed':
@@ -66,11 +74,30 @@ def metadata(value, path):
                 fields['st_mode'] = 0o100775
             else:
                 fields['st_' + field] += 1
+    if inspection.startswith('env-'):
+        if inspection.endswith('-failed') and ('-late-' not in inspection or os.environ.get('FIXTURE_PHASE') == 'late'):
+            raise OSError('fixture-secret')
+        if inspection.endswith('-foreign'):
+            fields['st_uid'] += 1
+        call = stats.get(path, 0)
+        stats[path] = call + 1
+        if inspection.endswith('-race') and (os.environ.get('FIXTURE_PHASE') == 'late' or
+                                              ('-late-' not in inspection and call)):
+            field = inspection.split('-')[-2]
+            if field == 'mode':
+                fields['st_mode'] ^= (0o200 if '-source-' in inspection else
+                                      0o044 if '-fragment-' in inspection else 0o020)
+            elif field == 'type':
+                fields['st_mode'] = 0o120777
+            else:
+                fields['st_' + field] += 1
     return SimpleNamespace(**fields)
 
 def open_fixture(name, flags, *, dir_fd=None):
     path = checked(name, dir_fd)
     assert flags & os.O_NOFOLLOW and not flags & (os.O_CREAT | os.O_TRUNC | os.O_RDWR | os.O_WRONLY)
+    if path == home + '/.env.local':
+        assert flags & os.O_PATH, 'credential source opened for content access'
     fd = real_open(name, flags, dir_fd=dir_fd)
     paths[fd] = path
     return fd
@@ -88,13 +115,23 @@ def listdir_fixture(fd):
 
 def read_fixture(fd, size):
     global reads
-    assert paths[fd] == home + '/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf', 'unrelated content read'
+    assert paths[fd] in [home + '/.config/systemd/user/setup-bb-app.service'] + [
+        home + '/.config/systemd/user/setup-bb-app.service.d/' + name
+        for name in ('10-tmpdir.conf', 'env.conf', '20-env-local.conf')], 'unrelated content read'
+    assert size <= (65537 if paths[fd].endswith('.service') else 4097), 'unbounded content read'
     result = real_read(fd, size)
     reads += 1
     if inspection == 'tmpdir-content-race' and reads > 1:
         return result + b'changed'
-    if inspection == 'tmpdir-short-read':
+    if inspection in ('tmpdir-short-read', 'env-short-read') and not paths[fd].endswith('.service'):
         return b'\n'.join(result.split(b'\n')[:2]) + b'\n'
+    if inspection in ('env-content-race', 'env-late-content-race', 'env-late-fragment-content-race'):
+        selected = home + '/.config/systemd/user/setup-bb-app.service'
+        if '-fragment-' not in inspection:
+            selected += '.d/env.conf'
+        if paths[fd] == selected and (os.environ.get('FIXTURE_PHASE') == 'late' or
+                                     ('-late-' not in inspection and reads > 2)):
+            return result.replace(b'\n', b'\r', 1)
     return result
 
 os.open = open_fixture
@@ -164,6 +201,12 @@ find() {
     /usr/bin/find "$@"
 }
 systemctl() {
+    if [[ "$FIXTURE_MODE" == checkpoint ]]; then
+        case "$*" in
+            '--user is-active --quiet setup-bb-app.service'|'--user is-active --quiet setup-bb-ingress.service') return 1 ;;
+            '--user is-enabled setup-bb-app.service') printf 'enabled\n'; return 0 ;;
+        esac
+    fi
     if [[ "$*" == '--user is-active --quiet setup-bb-app.service' ]]; then
         # Positive control reaches this boundary; NEVER inspect real services.
         printf 'NEXT_INERT_GATE\n' >&3; exit 73
@@ -190,14 +233,47 @@ systemctl() {
             missing) printf 'FragmentPath=%s\n' "$fragment"; return 0 ;;
             malformed) printf 'fixture-secret-invalid-property\n'; return 0 ;;
             failed) printf 'fixture-secret-systemd-error\n' >&2; return 1 ;;
-            reviewed)
-                dropins="$HOME/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf" ;;
+            reviewed) dropins="$FIXTURE_SELECTED" ;;
+            reviewed-extra) dropins="$FIXTURE_SELECTED /fixture-secret/extra.conf" ;;
+            reviewed-reversed)
+                local -a names=()
+                read -r -a names <<< "$FIXTURE_SELECTED"
+                dropins="${names[1]} ${names[0]}" ;;
+            reviewed-twice) dropins="$FIXTURE_SELECTED $FIXTURE_SELECTED" ;;
+            reviewed-late-missing)
+                [[ "${FIXTURE_PHASE:-}" == late ]] || dropins="$FIXTURE_SELECTED" ;;
             clean) ;;
             *) exit 97 ;;
         esac
     fi
     printf 'FragmentPath=%s\nDropInPaths=%s\n' "$fragment" "$dropins"
 }
+# Continue to the final pre-mutation checkpoint only with inert dependencies.
+if [[ "$FIXTURE_MODE" == checkpoint ]]; then
+    id() {
+        case "$*" in -u) printf '%s\n' "$FIXTURE_UID" ;; -un) printf 'fixture\n' ;; *) exit 97 ;; esac
+    }
+    command() {
+        case "$*" in
+            '-v tailscale'|'-v systemctl'|'-v loginctl') printf '/usr/bin/%s\n' "$2" ;;
+            *) printf 'FORBIDDEN_COMMAND_DISCOVERY\n' >&2; exit 97 ;;
+        esac
+    }
+    bb_tailnet_identity() { printf 'fixture.example.ts.net\n'; }
+    bb_package_preflight() {
+        export FIXTURE_PHASE=late
+        if [[ "$FIXTURE_INSPECTION" == env-late-selection-race ]]; then
+            /usr/bin/mv -- "$HOME/.config/systemd/user/setup-bb-app.service.d/env.conf" \
+                "$HOME/.config/systemd/user/setup-bb-app.service.d/20-env-local.conf"
+        fi
+    }
+    loginctl() { [[ "$*" == 'show-user fixture --property=Linger --value' ]] || exit 97; printf 'yes\n'; }
+    node() { [[ "$#" == 3 && "$1" == -e && "$3" == "$HOME" ]] || exit 97; }
+    mkdir() {
+        [[ "$*" == "-p -- $HOME/.config/setup-bb-server $HOME/.config/systemd/user $HOME/.bb" ]] || exit 97
+        printf 'NEXT_INERT_GATE\n' >&3; exit 73
+    }
+fi
 # The real ordinary caller runs only after all non-BB helpers are inert.
 check_dotfiles_access() { return 1; }
 setup_dotfiles_deploy_key() { return 1; }
@@ -212,6 +288,7 @@ case "$FIXTURE_MODE" in
     setup) setup_bb_server ;;
     unit) bb_unit_preflight "$FIXTURE_UNIT" "$HOME/.config/systemd/user/$FIXTURE_UNIT" ;;
     caller) main ;;
+    checkpoint) main ;;
     *) exit 97 ;;
 esac
 '''
@@ -309,14 +386,17 @@ class BbServicePreflightTests(unittest.TestCase):
             raise AssertionError('unknown fixture kind')
         return path
 
-    def run_preflight(self, unit=UNITS[0], mode='setup', systemd='clean', status=1, inspection=''):
+    def run_preflight(self, unit=UNITS[0], mode='setup', systemd='clean', status=1, inspection='',
+                      selection=('10-tmpdir.conf',)):
         before = snapshot(self.root)
         result = subprocess.run(
             ['/bin/bash', '--noprofile', '--norc', '-c', HARNESS, '_', str(self.helpers)],
             env={'PATH': str(self.empty_path), 'HOME': str(self.home), 'LANG': 'C',
                  'FIXTURE_UID': str(os.getuid()), 'FIXTURE_UNIT': unit,
                  'FIXTURE_MODE': mode, 'FIXTURE_SYSTEMD': systemd, 'FIXTURE_INSPECTION': inspection,
-                 'FIXTURE_PYTHON_ADAPTER': str(self.python_adapter)},
+                 'FIXTURE_PYTHON_ADAPTER': str(self.python_adapter),
+                 'FIXTURE_SELECTED': ' '.join(str(self.units / (UNITS[0] + '.d') / name)
+                                              for name in selection)},
             cwd=self.home, stdin=subprocess.DEVNULL, capture_output=True,
             text=True, close_fds=True, timeout=5,
         )
@@ -324,7 +404,17 @@ class BbServicePreflightTests(unittest.TestCase):
         self.assertNotIn('FORBIDDEN_', result.stdout + result.stderr)
         self.assertNotIn('fixture-secret', result.stdout + result.stderr)
         self.assertNotIn(str(self.home), result.stdout)
-        self.assertEqual(snapshot(self.root), before, 'Preflight/caller changed fixture state')
+        after = snapshot(self.root)
+        if inspection == 'env-late-selection-race':
+            # Only the fixture's deliberate rename may change names/timestamps.
+            directory = str((self.units / (UNITS[0] + '.d')).relative_to(self.root))
+            original = list(before.pop(directory + '/env.conf'))
+            original[8] = after[directory + '/20-env-local.conf'][8]
+            before[directory + '/20-env-local.conf'] = tuple(original)
+            original = list(before[directory])
+            original[7:9] = after[directory][7:9]
+            before[directory] = tuple(original)
+        self.assertEqual(after, before, 'Preflight/caller changed fixture state')
         return result
 
     def assert_diagnostic(self, result, unit):
@@ -349,27 +439,17 @@ class BbServicePreflightTests(unittest.TestCase):
                     self.assertIn('NEXT_INERT_GATE', result.stderr)
                     self.assertNotIn('BB server setup incomplete', result.stdout)
 
-    def test_broad_environment_override_needs_explicit_migration_and_stays_incomplete(self):
+    def test_legacy_environment_reference_reaches_next_caller_boundary_unchanged(self):
         dropins = self.add_dropin(UNITS[0], 'empty')
-        target = self.home / '.cache/bb/tmp'
-        target.mkdir(parents=True, mode=0o700)
-        broad = dropins / '20-env-local.conf'
-        broad.write_text('[Service]\nEnvironmentFile=%h/.env.local\n')
-        broad.chmod(0o664)
-        for with_tmpdir in (False, True):
-            if with_tmpdir:
-                override = dropins / '10-tmpdir.conf'
-                override.write_text('[Service]\nEnvironment=TMPDIR=' + str(target) + '\n')
-                override.chmod(0o600)
-            for _ in range(2):
-                result = self.run_preflight(mode='caller')
-                self.assert_diagnostic(result, UNITS[0])
-                self.assertIn('whole-file environment', result.stdout)
-                self.assertIn('separately authorized migration', result.stdout)
-                for expected in ('PLUGIN_REFRESH: block-default', 'UNAFFECTED_SKILLS',
-                                 'UNAFFECTED_PI_REFRESH', 'REBOOT_CHECK', 'FINAL_STATUS=1'):
-                    self.assertIn(expected, result.stdout)
-                self.assertNotIn('SYSTEMD_SHOW', result.stderr)
+        dropins.chmod(0o775)
+        override = dropins / '20-env-local.conf'
+        override.write_bytes(b'[Service]\nEnvironmentFile=%h/.env.local\n')
+        override.chmod(0o664)
+        for _ in range(2):
+            result = self.run_preflight(mode='caller', systemd='reviewed', status=73,
+                                        selection=(override.name,))
+            self.assertIn('NEXT_INERT_GATE', result.stderr)
+            self.assertNotIn('BB server setup incomplete', result.stdout)
 
     def test_captured_devinabox_override_differential_through_ordinary_caller(self):
         for relative, content in (
@@ -383,9 +463,9 @@ class BbServicePreflightTests(unittest.TestCase):
         dropins = self.add_dropin(UNITS[0], 'empty')
         broad = dropins / 'env.conf'
         cases = (
-            ('captured-775-env-664', 0o775, 0o664, 1),
+            ('captured-775-env-664', 0o775, 0o664, 73),
             ('same-775-directory-empty', 0o775, None, 73),
-            ('private-700-env-600', 0o700, 0o600, 1),
+            ('private-700-env-600', 0o700, 0o600, 73),
             ('safe-755-directory-empty', 0o755, None, 73),
             ('absent-directory', None, None, 73),
         )
@@ -409,28 +489,201 @@ class BbServicePreflightTests(unittest.TestCase):
                     self.assertTrue(stat.S_ISDIR(metadata.st_mode))
                     self.assertEqual((metadata.st_uid, stat.S_IMODE(metadata.st_mode)),
                                      (os.getuid(), directory_mode))
-                first = self.run_preflight(mode='caller', status=status)
-                second = self.run_preflight(mode='caller', status=status)
+                kwargs = dict(mode='caller', status=status, selection=(broad.name,),
+                              systemd='reviewed' if file_mode is not None else 'clean')
+                first = self.run_preflight(**kwargs)
+                second = self.run_preflight(**kwargs)
                 self.assertEqual((first.stdout, first.stderr), (second.stdout, second.stderr))
                 for result in (first, second):
                     self.assertIn('LOG_STARTED', result.stdout)
                     self.assertNotIn('Setup complete!', result.stdout)
-                    if status == 1:
+                    self.assertIn('NEXT_INERT_GATE', result.stderr)
+                    for unit in UNITS:
+                        self.assertIn('SYSTEMD_SHOW: ' + unit, result.stderr)
+                    self.assertNotIn('BB server setup incomplete', result.stdout)
+                    self.assertNotIn('PLUGIN_REFRESH:', result.stdout)
+                    self.assertNotIn('FINAL_STATUS=', result.stdout)
+
+    def environment_reference(self, name='env.conf'):
+        dropins = self.add_dropin(UNITS[0], 'empty')
+        dropins.chmod(0o775)
+        override = dropins / name
+        override.write_bytes(b'[Service]\nEnvironmentFile=%h/.env.local\n')
+        override.chmod(0o664)
+        return override
+
+    def test_environment_reference_requires_present_managed_fragment(self):
+        self.environment_reference()
+        (self.units / UNITS[0]).unlink()
+        result = self.run_preflight(mode='caller', systemd='reviewed', selection=('env.conf',))
+        self.assert_caller_refusal(result)
+
+    def test_environment_fragment_snapshot_invalidates_late_identity_changes(self):
+        self.environment_reference()
+        for field in ('ino', 'uid', 'gid', 'mode', 'size', 'mtime_ns', 'ctime_ns'):
+            with self.subTest(field=field):
+                result = self.run_preflight(mode='checkpoint', systemd='reviewed',
+                                            selection=('env.conf',),
+                                            inspection='env-late-fragment-' + field + '-race')
+                self.assert_caller_refusal(result)
+                self.assertIn('[preflight.app-unit]', result.stderr)
+
+    def test_environment_and_private_tmpdir_keep_both_ordered_inputs(self):
+        dropins, _, target = self.reviewed()
+        (target / 'existing-work').write_text('untouched\n')
+        for path in (self.home, self.home / '.config', self.home / '.config/systemd',
+                     self.units, dropins, self.home / '.cache', target.parent):
+            path.chmod(0o2775)
+        self.add_dropin(UNITS[1], 'empty').chmod(0o775)
+        for name in ('env.conf', '20-env-local.conf'):
+            override = dropins / name
+            override.write_bytes(b'[Service]\nEnvironmentFile=%h/.env.local\n')
+            for mode in (0o400, 0o600, 0o640, 0o644, 0o660, 0o664):
+                override.chmod(mode)
+                for _ in range(2):
+                    result = self.run_preflight(mode='caller', systemd='reviewed', status=73,
+                                                selection=('10-tmpdir.conf', name))
+                    self.assertIn('NEXT_INERT_GATE', result.stderr)
+            override.unlink()
+
+    def test_environment_content_is_exact_required_reference_only(self):
+        override = self.environment_reference()
+        original = override.read_bytes()
+        cases = (
+            b'', b'[Service]\n', original.rstrip(), original + b'\n',
+            original.replace(b'\n', b'\r\n'), original + b'# comment\n',
+            original.replace(b'EnvironmentFile=', b'EnvironmentFile=-'),
+            original.replace(b'%h/.env.local', str(self.home / '.env.local').encode()),
+            original.replace(b'%h/.env.local', b'$HOME/.env.local'),
+            original.replace(b'%h/.env.local', b'/fixture-secret/foreign'),
+            original.replace(b'%h/.env.local', b'"%h/.env.local"'),
+            original.replace(b'%h/.env.local', b'%h/.env.local %h/other'),
+            original.replace(b'%h/.env.local', b'%h/./.env.local'),
+            original + original, original + b'Environment=OTHER=fixture-secret\n',
+            original + b'ExecStart=/fixture-secret\n', original + b'\x00',
+            original + b'\xff', original + b'\\\n', b'x' * 8192,
+            original.replace(b'[Service]', b'[Unit]'),
+        )
+        for content in cases:
+            with self.subTest(content=content[:80]):
+                override.write_bytes(content)
+                result = self.run_preflight(mode='caller', systemd='reviewed', selection=(override.name,))
+                self.assert_caller_refusal(result)
+                self.assert_diagnostic(result, UNITS[0])
+                self.assertNotIn('SYSTEMD_SHOW', result.stderr)
+        override.write_bytes(original + b'Environment=EXTRA=fixture-secret\n')
+        self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed',
+                                  selection=(override.name,), inspection='env-short-read'))
+
+    def test_environment_reference_does_not_authorize_other_entries_or_ingress(self):
+        override = self.environment_reference()
+        for name in ('20-env-local.conf', '.hidden', 'extra.conf'):
+            extra = override.with_name(name)
+            extra.write_bytes(override.read_bytes())
+            extra.chmod(0o600)
+            self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed',
+                                                          selection=('env.conf',)))
+            extra.unlink()
+        renamed = override.with_name('other.conf')
+        override.rename(renamed)
+        self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed',
+                                                      selection=('other.conf',)))
+        ingress = self.add_dropin(UNITS[1], 'empty')
+        renamed.rename(ingress / 'env.conf')
+        self.assert_caller_refusal(self.run_preflight(mode='caller', unit=UNITS[1],
+                                                      systemd='reviewed', selection=('env.conf',)))
+
+    def test_environment_artifacts_and_credential_source_keep_distinct_permissions(self):
+        override = self.environment_reference()
+        for path, modes in ((override, (0o000, 0o200, 0o666, 0o704, 0o674, 0o665,
+                                       0o1664, 0o2664, 0o4664)),
+                            (self.home / '.env.local', (0o000, 0o200, 0o640, 0o644, 0o660,
+                                                       0o664, 0o666, 0o700, 0o1600, 0o2600, 0o4600))):
+            content = path.read_bytes()
+            for mode in modes:
+                with self.subTest(path=path.name, mode=oct(mode)):
+                    path.chmod(mode)
+                    self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed',
+                                                                  selection=(override.name,)))
+            path.chmod(0o600)
+            saved = path.with_name(path.name + '-saved') if path.name == '.env.local' else self.root / 'saved-reference'
+            path.rename(saved)
+            for kind in ('missing', 'link', 'dangling', 'directory', 'fifo', 'hardlink'):
+                with self.subTest(path=path.name, kind=kind):
+                    if kind == 'link':
+                        path.symlink_to(saved)
+                    elif kind == 'dangling':
+                        path.symlink_to(self.root / 'missing')
+                    elif kind == 'directory':
+                        path.mkdir()
+                    elif kind == 'fifo':
+                        os.mkfifo(path)
+                    elif kind == 'hardlink':
+                        os.link(saved, path)
+                    self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed',
+                                                                  selection=(override.name,)))
+                    if kind == 'directory':
+                        path.rmdir()
+                    elif kind != 'missing':
+                        path.unlink()
+                    self.assertEqual(saved.read_bytes(), content)
+            saved.rename(path)
+        for mode in (0o400, 0o600):
+            (self.home / '.env.local').chmod(mode)
+            self.run_preflight(mode='caller', systemd='reviewed', status=73, selection=('env.conf',))
+        # The exception is not shared with the unit or native credential boundary.
+        (self.units / UNITS[0]).chmod(0o664)
+        result = self.run_preflight(mode='caller', systemd='reviewed', selection=('env.conf',))
+        self.assert_caller_refusal(result)
+        self.assertIn('[preflight.app-unit-file]', result.stderr)
+
+    def test_environment_selection_must_match_complete_ordered_loaded_state(self):
+        dropins, _, _ = self.reviewed()
+        override = dropins / 'env.conf'
+        override.write_bytes(b'[Service]\nEnvironmentFile=%h/.env.local\n')
+        override.chmod(0o664)
+        for metadata in ('clean', 'loaded', 'foreign', 'absent', 'missing', 'malformed', 'failed',
+                         'duplicate-fragment', 'duplicate-dropins', 'reviewed-duplicate',
+                         'reviewed-extra', 'reviewed-reversed', 'reviewed-twice'):
+            with self.subTest(metadata=metadata):
+                result = self.run_preflight(mode='caller', systemd=metadata,
+                                            selection=('10-tmpdir.conf', 'env.conf'))
+                self.assert_caller_refusal(result)
+                self.assertIn('[preflight.app-unit]', result.stderr)
+        self.assert_caller_refusal(self.run_preflight(mode='checkpoint', systemd='reviewed-late-missing',
+                                                      selection=('10-tmpdir.conf', 'env.conf')))
+
+    def test_environment_snapshots_reject_metadata_content_and_parent_races(self):
+        self.environment_reference()
+        for target in ('reference', 'source', 'parent'):
+            for boundary in ('', 'late-'):
+                for field in ('dev', 'ino', 'uid', 'gid', 'mode', 'type', 'nlink', 'size', 'mtime_ns', 'ctime_ns'):
+                    with self.subTest(target=target, boundary=boundary, field=field):
+                        inspection = 'env-' + boundary + target + '-' + field + '-race'
+                        result = self.run_preflight(mode='checkpoint' if boundary else 'caller',
+                                                    systemd='reviewed', selection=('env.conf',),
+                                                    inspection=inspection)
                         self.assert_caller_refusal(result)
-                        self.assert_diagnostic(result, UNITS[0])
-                        self.assertIn('[preflight.unit-dropins]', result.stderr)
-                        self.assertNotIn('[diagnostic.unknown]', result.stderr)
-                        self.assertNotIn('SYSTEMD_SHOW', result.stderr)
-                        self.assertNotIn('PLUGIN_REFRESH: ready', result.stdout)
-                        self.assertIn('REBOOT_CHECK', result.stdout)
-                        self.assertIn('Setup completed with errors', result.stdout)
-                    else:
-                        self.assertIn('NEXT_INERT_GATE', result.stderr)
-                        for unit in UNITS:
-                            self.assertIn('SYSTEMD_SHOW: ' + unit, result.stderr)
-                        self.assertNotIn('BB server setup incomplete', result.stdout)
-                        self.assertNotIn('PLUGIN_REFRESH:', result.stdout)
-                        self.assertNotIn('FINAL_STATUS=', result.stdout)
+        for inspection in ('env-reference-foreign', 'env-source-foreign', 'env-parent-foreign',
+                           'env-reference-failed', 'env-source-failed', 'env-parent-failed',
+                           'env-late-source-failed',
+                           'env-content-race', 'env-late-content-race', 'env-late-fragment-content-race'):
+            with self.subTest(inspection=inspection):
+                result = self.run_preflight(mode='checkpoint' if '-late-' in inspection else 'caller',
+                                            systemd='reviewed', selection=('env.conf',), inspection=inspection)
+                self.assert_caller_refusal(result)
+        unchanged = self.run_preflight(mode='checkpoint', systemd='reviewed', selection=('env.conf',))
+        self.assertIn('NEXT_INERT_GATE', unchanged.stderr)
+        self.assertIn('[update.directories]', unchanged.stderr)
+
+    def test_changed_between_reviewed_legacy_names_invalidates_local_selection(self):
+        override = self.environment_reference()
+        result = self.run_preflight(mode='checkpoint', systemd='reviewed', selection=(override.name,),
+                                    inspection='env-late-selection-race')
+        self.assert_caller_refusal(result)
+        self.assertIn('[preflight.app-unit]', result.stderr)
+        # The new selection is independently acceptable, but not under the old snapshot.
+        self.run_preflight(mode='caller', systemd='reviewed', selection=('20-env-local.conf',), status=73)
 
     def reviewed(self):
         dropins = self.add_dropin(UNITS[0], 'empty')
