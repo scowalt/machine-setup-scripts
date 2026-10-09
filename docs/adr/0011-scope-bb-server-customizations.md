@@ -1,5 +1,7 @@
 # Scope BB server customizations without broad credential inheritance
 
+Partially superseded by [ADR 0013](0013-preserve-reviewed-bb-environment-inheritance.md): the recognized existing account-environment references may remain through ordinary maintenance, with owner-accepted exposure and a narrow non-secret reference-file exception. The retirement-first refusal below is historical for that case; maintenance responsibility, unknown/conflicting override refusal, private TMPDIR and credential boundaries remain in force.
+
 The [Beelink failure and agreed design](../plans/2026-10-06-bb-server-customizations.md) show that a healthy setup-managed bb server can still have an incomplete setup run because local overrides fail preflight. Keep setup responsible for maintenance and preserve the reviewed optional private TMPDIR customization, but continue rejecting unknown or conflicting overrides rather than treating all local customization as trusted or making the server unmanaged.
 
 [ADR 0012](0012-accept-account-owned-ordinary-directories.md) changes ordinary-directory trust, not customization authority: the reviewed TMPDIR target and override file remain private; their ordinary ancestors and non-secret drop-in/state containers need not be.
