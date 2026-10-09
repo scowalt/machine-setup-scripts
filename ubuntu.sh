@@ -3269,14 +3269,76 @@ ensure_skills_cli_node_runtime() {
 }
 
 : 'BEGIN_GENERATED_IMPECCABLE_SKILL'
+impeccable_skill_failure() {
+    local _phase="${1}" _reason="${2}" _status="${3:-unavailable}"
+    case "${_phase}" in
+        prerequisites|preflight|npm-configuration|staging|environment-isolation|installer|promotion|cleanup|removal) ;;
+        *) _phase=prerequisites ;;
+    esac
+    case "${_reason}" in
+        unknown|shared-runtime-unavailable|installer-runtime-unavailable|npm-configuration-unverified|environment-isolation-failed|stage-directory-unavailable|launch-failed|invalid-result|dns-resolution-failed|download-http-failed|download-failed|unsafe-path|linked-directory|not-directory|unsafe-owner-or-mode|unsafe-metadata|malformed-metadata|unsupported-file|removal-failed|invalid-skill-copy|incomplete-payload|invalid-skill-identity|invalid-engine-version|nonexecutable-payload|unsupported-artifact|unsafe-stage|pi-profiles-blocked|invalid-settings|invalid-inventory|pi-discovery-conflict|unverified-resource-selection|invalid-resource-json|inconsistent-snapshot|checksum-unavailable|engine-checksum-mismatch|modified-pi-copy|unverified-pi-copy|changed-copy|changed-directory|recovery-required|unsafe-file|outside-home|windows-acl-unverified|conflicting-profile-scope|unknown-operation|EACCES|EPERM|ENOENT|ENOSPC|EROFS|EBUSY) ;;
+        *) _reason=unknown ;;
+    esac
+    [[ "${_status}" =~ ^[0-9]{1,3}$ ]] || _status=unavailable
+    print_warning "Impeccable: phase=${_phase} reason=${_reason} exit=${_status}."
+}
+
 impeccable_skill_policy() {
-    if ! command -v node > /dev/null 2>&1; then
-        print_warning 'Impeccable: shared-runtime-unavailable.'
-        return 1
-    fi
-    env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - \
-        "${HOME}" "${PI_CODING_AGENT_DIR:-}" "${PI_PROFILE_MUTATIONS_BLOCKED:-0}" "$@" <<'IMPECCABLE_SKILL_JS'
+    local _code='' _result='' _status=0 _phase=preflight _kind="${1:-}" _reason=unknown
+    local -a _pipe_status=()
+    IFS= read -r -d '' _code <<'IMPECCABLE_SKILL_JS' || :
 'use strict';
+void 'BEGIN_IMPECCABLE_DIAGNOSTICS';
+const impeccableReasons = ["unknown", "shared-runtime-unavailable", "installer-runtime-unavailable",
+    "npm-configuration-unverified", "environment-isolation-failed", "stage-directory-unavailable",
+    "launch-failed", "invalid-result", "dns-resolution-failed", "download-http-failed", "download-failed",
+    "unsafe-path", "linked-directory", "not-directory", "unsafe-owner-or-mode", "unsafe-metadata",
+    "malformed-metadata", "unsupported-file", "removal-failed", "invalid-skill-copy", "incomplete-payload",
+    "invalid-skill-identity", "invalid-engine-version", "nonexecutable-payload", "unsupported-artifact",
+    "unsafe-stage", "pi-profiles-blocked", "invalid-settings", "invalid-inventory", "pi-discovery-conflict",
+    "unverified-resource-selection", "invalid-resource-json", "inconsistent-snapshot", "checksum-unavailable",
+    "engine-checksum-mismatch", "modified-pi-copy", "unverified-pi-copy", "changed-copy", "changed-directory",
+    "recovery-required", "unsafe-file", "outside-home", "windows-acl-unverified", "conflicting-profile-scope",
+    "unknown-operation", "EACCES", "EPERM", "ENOENT", "ENOSPC", "EROFS", "EBUSY"];
+function impeccableDiagnostic(text, kind) {
+    text = text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r\n?/g, '\n');
+    if (/[\x00-\x08\x0b-\x1f\x7f\ufffd]/.test(text)) return 'reason:unknown';
+    if (kind !== 'installer') {
+        const trimmed = text.trim();
+        if (!trimmed) return 'ok';
+        const reason = trimmed.match(/^Impeccable: ([a-zA-Z0-9-]+)\.$/)?.[1];
+        if (impeccableReasons.includes(reason)) return 'reason:' + reason;
+        if (kind === 'stage' && /^(?:\/|[A-Za-z]:[\\/])[^\n]*[\\/]setup-impeccable-[A-Za-z0-9]+$/.test(trimmed)) return 'stage:' + trimmed;
+        return 'reason:unknown';
+    }
+    const reasons = new Set();
+    for (const line of text.split('\n')) {
+        if (/^npm (?:ERR!|error) code (?:EAI_AGAIN|ENOTFOUND)$/.test(line)) reasons.add('dns-resolution-failed');
+        if (/^npm (?:ERR!|error) code E[45][0-9]{2}$/.test(line)) reasons.add('download-http-failed');
+        if (line.startsWith('Download failed: ')) {
+            reasons.add(line.includes('Dns Failed: resolve dns name ') ? 'dns-resolution-failed' : 'download-failed');
+        }
+    }
+    return 'reason:' + (reasons.size === 1 ? [...reasons][0] : 'unknown');
+}
+function impeccableReadDiagnostic(kind) {
+    let text = '', size = 0, overflow = false, finished = false;
+    const finish = () => {
+        if (finished) return;
+        finished = true;
+        process.stdout.write((overflow ? 'reason:unknown' : impeccableDiagnostic(text, kind)) + '\n');
+        text = '';
+    };
+    process.stdin.on('data', bytes => {
+        if (overflow) return;
+        size += bytes.length;
+        if (size > 65536) { overflow = true; text = ''; }
+        else text += bytes.toString('utf8');
+    });
+    process.stdin.on('error', () => { overflow = true; finish(); });
+    process.stdin.on('end', finish);
+}
+void 'END_IMPECCABLE_DIAGNOSTICS';
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -4049,56 +4111,148 @@ async function run() {
     } else fail('unknown-operation');
 }
 run().catch(error => {
-    const allowed = ['unsafe-path', 'linked-directory', 'not-directory', 'unsafe-owner-or-mode', 'unsafe-metadata',
-        'malformed-metadata', 'unsupported-file', 'removal-failed', 'invalid-skill-copy', 'incomplete-payload',
-        'invalid-skill-identity', 'invalid-engine-version', 'nonexecutable-payload', 'unsupported-artifact',
-        'unsafe-stage', 'pi-profiles-blocked', 'invalid-settings', 'invalid-inventory', 'pi-discovery-conflict',
-        'unverified-resource-selection', 'invalid-resource-json', 'inconsistent-snapshot', 'checksum-unavailable',
-        'engine-checksum-mismatch', 'modified-pi-copy', 'unverified-pi-copy', 'changed-copy', 'changed-directory', 'recovery-required', 'unsafe-file', 'outside-home', 'windows-acl-unverified', 'conflicting-profile-scope', 'unknown-operation'];
-    const reason = allowed.includes(error.message) ? error.message : ['EACCES', 'EPERM', 'ENOENT', 'ENOSPC', 'EROFS', 'EBUSY'].includes(error.code) ? error.code : 'operation-failed';
+    const reason = impeccableReasons.includes(error.message) ? error.message : ['EACCES', 'EPERM', 'ENOENT', 'ENOSPC', 'EROFS', 'EBUSY'].includes(error.code) ? error.code : 'unknown';
     process.stderr.write('Impeccable: ' + reason + '.\n');
     process.exitCode = 1;
 });
 IMPECCABLE_SKILL_JS
+    if [[ "${_kind}" == diagnostic ]]; then
+        local _begin="void 'BEGIN_IMPECCABLE_DIAGNOSTICS';" _end="void 'END_IMPECCABLE_DIAGNOSTICS';"
+        _code="${_code#*"${_begin}"}"
+        _code="${_code%%"${_end}"*}"
+        if ! _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs --eval \
+            "${_code}; impeccableReadDiagnostic(process.argv[1]);" -- "${2:-}" 2>/dev/null); then
+            cat > /dev/null
+            _result=reason:unknown
+        fi
+        case "${_result}" in
+            reason:*)
+                _reason="${_result#reason:}"
+                case "${_reason}" in
+                    unknown|shared-runtime-unavailable|installer-runtime-unavailable|npm-configuration-unverified|environment-isolation-failed|stage-directory-unavailable|launch-failed|invalid-result|dns-resolution-failed|download-http-failed|download-failed|unsafe-path|linked-directory|not-directory|unsafe-owner-or-mode|unsafe-metadata|malformed-metadata|unsupported-file|removal-failed|invalid-skill-copy|incomplete-payload|invalid-skill-identity|invalid-engine-version|nonexecutable-payload|unsupported-artifact|unsafe-stage|pi-profiles-blocked|invalid-settings|invalid-inventory|pi-discovery-conflict|unverified-resource-selection|invalid-resource-json|inconsistent-snapshot|checksum-unavailable|engine-checksum-mismatch|modified-pi-copy|unverified-pi-copy|changed-copy|changed-directory|recovery-required|unsafe-file|outside-home|windows-acl-unverified|conflicting-profile-scope|unknown-operation|EACCES|EPERM|ENOENT|ENOSPC|EROFS|EBUSY) ;;
+                    *) _reason=unknown ;;
+                esac
+                printf 'reason:%s\n' "${_reason}"
+                ;;
+            ok) printf 'ok\n' ;;
+            stage:*)
+                if [[ "${2:-}" == stage && "${_result}" != *$'\n'* ]]; then
+                    printf '%s\n' "${_result}"
+                else
+                    printf 'reason:unknown\n'
+                fi
+                ;;
+            *) printf 'reason:unknown\n' ;;
+        esac
+        return 0
+    fi
+    case "${_kind}" in
+        stage) _phase=staging ;;
+        promote) _phase=promotion ;;
+        dispose) _phase=cleanup ;;
+        remove) _phase=removal ;;
+        *) _phase=preflight ;;
+    esac
+    if ! command -v node > /dev/null 2>&1; then
+        impeccable_skill_failure "${_phase}" shared-runtime-unavailable
+        return 1
+    fi
+    _result=$(
+        # shellcheck disable=SC2312
+        if env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - \
+            "${HOME}" "${PI_CODING_AGENT_DIR:-}" "${PI_PROFILE_MUTATIONS_BLOCKED:-0}" "$@" \
+            <<< "${_code}" 2>&1 | impeccable_skill_policy diagnostic "${_kind}"; then
+            _pipe_status=("${PIPESTATUS[@]}")
+        else
+            _pipe_status=("${PIPESTATUS[@]}")
+        fi
+        printf '%s\n' "${_pipe_status[0]}"
+    )
+    _status="${_result##*$'\n'}"
+    _result="${_result%$'\n'*}"
+    if [[ "${_status}" == 0 ]]; then
+        if [[ "${_kind}" == stage && "${_result}" == stage:* ]]; then
+            printf '%s\n' "${_result#stage:}"
+            return 0
+        elif [[ "${_kind}" != stage && "${_result}" == ok ]]; then
+            return 0
+        fi
+        _reason=invalid-result
+    elif [[ "${_result}" == reason:* ]]; then
+        _reason="${_result#reason:}"
+    fi
+    impeccable_skill_failure "${_phase}" "${_reason}" "${_status}"
+    return 1
 }
 
 converge_impeccable_skill() {
-    local _stage='' _npm_userconfig='' _npm_globalconfig='' _failed=0
+    local _stage='' _npm_userconfig='' _npm_globalconfig='' _failed=0 _status=0 _result='' _reason=unknown
+    local -a _pipe_status=()
     if [[ "${BAN_IMPECCABLE:-}" == 1 ]]; then
         impeccable_skill_policy remove
         return
     fi
     if ! ensure_skills_cli_node_runtime || ! command -v npx > /dev/null 2>&1; then
-        print_warning 'Impeccable: installer-runtime-unavailable.'
+        impeccable_skill_failure prerequisites installer-runtime-unavailable
         return 1
     fi
     impeccable_skill_policy preflight || return 1
-    if ! _npm_userconfig=$(npm config get userconfig 2>/dev/null) || [[ -z "${_npm_userconfig}" ]] ||
-        ! _npm_globalconfig=$(npm config get globalconfig 2>/dev/null) || [[ -z "${_npm_globalconfig}" ]]; then
-        print_warning 'Impeccable: npm-configuration-unverified.'
+    _npm_userconfig=$(npm config get userconfig 2>/dev/null) || _status=$?
+    if [[ "${_status}" == 0 && -n "${_npm_userconfig}" ]]; then
+        _npm_globalconfig=$(npm config get globalconfig 2>/dev/null) || _status=$?
+    fi
+    if [[ "${_status}" != 0 || -z "${_npm_userconfig}" || -z "${_npm_globalconfig}" ]]; then
+        impeccable_skill_failure npm-configuration npm-configuration-unverified "${_status}"
         return 1
     fi
     _stage=$(impeccable_skill_policy stage) || return 1
     print_message 'Installing/updating official global Impeccable skills without hooks...'
-    if ! (
-        umask 077 || exit 1
-        cd "${_stage}" || exit 1
+    if (
+        _status=0
+        umask 077 2>/dev/null || _status=$?
+        if [[ "${_status}" != 0 ]]; then
+            impeccable_skill_failure environment-isolation environment-isolation-failed "${_status}"
+            exit 1
+        fi
+        cd "${_stage}" 2>/dev/null || _status=$?
+        if [[ "${_status}" != 0 ]]; then
+            impeccable_skill_failure staging stage-directory-unavailable "${_status}"
+            exit 1
+        fi
         unset NODE_OPTIONS NODE_PATH IMPECCABLE_BIN IMPECCABLE_BUNDLE_PATH IMPECCABLE_DOWNLOAD_BASE \
-            IMPECCABLE_SKILL_DIR IMPECCABLE_SELF IMPECCABLE_LAUNCHER_PROBE
-        HOME="${_stage}" USERPROFILE="${_stage}" \
-            CLAUDE_CONFIG_DIR="${_stage}/.claude" CODEX_HOME="${_stage}/.codex" PI_CODING_AGENT_DIR="${_stage}/.pi/agent" \
-            XDG_STATE_HOME="${_stage}/.state" XDG_CONFIG_HOME="${_stage}/.config" \
-            XDG_CACHE_HOME="${_stage}/.cache" XDG_DATA_HOME="${_stage}/.local/share" \
-            APPDATA="${_stage}/.appdata" LOCALAPPDATA="${_stage}/.localappdata" IMPECCABLE_HOME="${_stage}/.impeccable" \
-            TMPDIR="${_stage}/.tmp" TMP="${_stage}/.tmp" TEMP="${_stage}/.tmp" \
-            npm_config_userconfig="${_npm_userconfig}" NPM_CONFIG_USERCONFIG="${_npm_userconfig}" \
-            npm_config_globalconfig="${_npm_globalconfig}" NPM_CONFIG_GLOBALCONFIG="${_npm_globalconfig}" \
-            npx --yes impeccable@latest install --yes --scope=global \
-                --providers=claude,codex,cursor,gemini,pi --no-hooks < /dev/null > /dev/null 2>&1
+            IMPECCABLE_SKILL_DIR IMPECCABLE_SELF IMPECCABLE_LAUNCHER_PROBE 2>/dev/null || _status=$?
+        if [[ "${_status}" != 0 ]]; then
+            impeccable_skill_failure environment-isolation environment-isolation-failed "${_status}"
+            exit 1
+        fi
+        _result=$(
+            # shellcheck disable=SC2312
+            if HOME="${_stage}" USERPROFILE="${_stage}" \
+                CLAUDE_CONFIG_DIR="${_stage}/.claude" CODEX_HOME="${_stage}/.codex" PI_CODING_AGENT_DIR="${_stage}/.pi/agent" \
+                XDG_STATE_HOME="${_stage}/.state" XDG_CONFIG_HOME="${_stage}/.config" \
+                XDG_CACHE_HOME="${_stage}/.cache" XDG_DATA_HOME="${_stage}/.local/share" \
+                APPDATA="${_stage}/.appdata" LOCALAPPDATA="${_stage}/.localappdata" IMPECCABLE_HOME="${_stage}/.impeccable" \
+                TMPDIR="${_stage}/.tmp" TMP="${_stage}/.tmp" TEMP="${_stage}/.tmp" \
+                npm_config_userconfig="${_npm_userconfig}" NPM_CONFIG_USERCONFIG="${_npm_userconfig}" \
+                npm_config_globalconfig="${_npm_globalconfig}" NPM_CONFIG_GLOBALCONFIG="${_npm_globalconfig}" \
+                npx --yes impeccable@latest install --yes --scope=global \
+                    --providers=claude,codex,cursor,gemini,pi --no-hooks < /dev/null 2>&1 | \
+                impeccable_skill_policy diagnostic installer; then
+                _pipe_status=("${PIPESTATUS[@]}")
+            else
+                _pipe_status=("${PIPESTATUS[@]}")
+            fi
+            printf '%s\n' "${_pipe_status[0]}"
+        )
+        _status="${_result##*$'\n'}"
+        _reason="${_result%$'\n'*}"
+        if [[ "${_status}" != 0 ]]; then
+            impeccable_skill_failure installer "${_reason#reason:}" "${_status}"
+            exit 1
+        fi
     ); then
-        print_warning 'Impeccable: installer-failed.'
-        _failed=1
-    elif ! impeccable_skill_policy promote "${_stage}"; then
+        impeccable_skill_policy promote "${_stage}" || _failed=1
+    else
         _failed=1
     fi
     impeccable_skill_policy dispose "${_stage}" || _failed=1
@@ -11306,7 +11460,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 324 | Last changed: Isolate Impeccable installer creation mask"
+    echo -e "${GRAY}Version 325 | Last changed: Report controlled Impeccable failure diagnostics"
 
     if ! acquire_setup_lock; then
         return 1

@@ -27,11 +27,12 @@ class ImpeccableEmbedding(unittest.TestCase):
             for name in SCRIPTS:
                 self.assertEqual((root / name).read_bytes(), before[name])
                 self.assertNotIn('@IMPECCABLE_CORE@', (root / name).read_text())
+                self.assertNotIn('@IMPECCABLE_REASONS@', (root / name).read_text())
             for shell, name in [('bash', 'mac.sh'), ('powershell', 'win.ps1')]:
                 rendered = subprocess.run(command + ['--render', shell], check=True, capture_output=True, text=True, timeout=15).stdout
                 self.assertIn(rendered.rstrip(), (root / name).read_text())
             script = root / 'mac.sh'
-            script.write_text(script.read_text().replace('Impeccable: installer-failed.', 'outdated fixture diagnostic'))
+            script.write_text(script.read_text().replace('Impeccable: phase=', 'outdated fixture diagnostic'))
             result = subprocess.run(command + ['--check'], capture_output=True, text=True, timeout=15)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('mac.sh', result.stderr)

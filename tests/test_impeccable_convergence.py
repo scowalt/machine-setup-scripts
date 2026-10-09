@@ -70,6 +70,13 @@ class ImpeccableConvergence(unittest.TestCase):
         boundary = self.put(self.root / 'external-boundary.cjs', r'''
 const fs = require('node:fs');
 const path = require('node:path');
+if (process.env.IMPECCABLE_TEST_POLICY_OUTPUT && process.argv[5] === 'preflight') {
+    process.stdout.write('PRIVATE-SENTINEL arbitrary helper output\n');
+    process.exit(73);
+}
+if (process.env.IMPECCABLE_TEST_STAGE_FAILURE) {
+    fs.mkdtempSync = () => { const error = new Error('PRIVATE-SENTINEL'); error.code = 'ENOSPC'; throw error; };
+}
 if (process.env.IMPECCABLE_TEST_ALIAS_ROOT) {
     const root = process.env.IMPECCABLE_TEST_ALIAS_ROOT;
     const mapped = file => typeof file === 'string' && (file === '/' || file === '/home' || file.startsWith('/home/') || file === '/var' || file.startsWith('/var/')) ? path.join(root, file.slice(1)) : file;
@@ -146,10 +153,20 @@ fs.renameSync = (from, to) => {
 };
 const originalUnlink = fs.unlinkSync;
 fs.unlinkSync = file => {
+    if (process.env.IMPECCABLE_TEST_DISPOSE_FAILURE && process.argv[5] === 'dispose') {
+        const error = new Error('PRIVATE-SENTINEL cleanup failure'); error.code = 'EACCES'; throw error;
+    }
     if (process.env.IMPECCABLE_TEST_MODE === 'fail-backup-cleanup' && /\.setup-impeccable-[a-f0-9-]+\.old$/.test(String(file))) {
         const error = new Error('PRIVATE-SENTINEL cleanup failure'); error.code = 'EACCES'; throw error;
     }
     return originalUnlink(file);
+};
+const originalRmdir = fs.rmdirSync;
+fs.rmdirSync = file => {
+    if (process.env.IMPECCABLE_TEST_DISPOSE_FAILURE && process.argv[5] === 'dispose') {
+        const error = new Error('PRIVATE-SENTINEL cleanup failure'); error.code = 'EACCES'; throw error;
+    }
+    return originalRmdir(file);
 };
 require('node:https').get = (url, options, callback) => {
     if (typeof options === 'function') callback = options;
@@ -176,7 +193,12 @@ require('node:https').get = (url, options, callback) => {
     return request;
 };
 ''')
-        shim = self.put(commands / 'node', '#!/bin/bash\nexec ' + str(native) + ' --require ' + str(boundary) + ' "$@"\n')
+        shim = self.put(commands / 'node', '#!/bin/bash\n' + r'''
+if [[ "${IMPECCABLE_TEST_BAD_COLLECTOR:-}" == 1 && "${*: -1}" == installer ]]; then
+    printf 'PRIVATE-SENTINEL unrecognized collector result\n'
+    exit 74
+fi
+''' + '\nexec ' + str(native) + ' --require ' + str(boundary) + ' "$@"\n')
         shim.chmod(0o700)
         self.env['PATH'] = str(commands) + os.pathsep + self.env['PATH']
 
@@ -218,13 +240,15 @@ require('node:https').get = (url, options, callback) => {
                 creation_mask=None, stage_retained=False):
         suffix = 'ps1' if shell == 'powershell' else 'bash'
         core = (ROOT / 'lib/impeccable-skill.cjs').read_text()
-        wrapper = (ROOT / entry).read_text() if entry else (ROOT / ('lib/impeccable-skill.' + suffix)).read_text().replace('@IMPECCABLE_CORE@', core)
+        reasons = json.loads(re.search(r'const impeccableReasons = (\[[\s\S]*?\]);', core)[1])
+        selection = ','.join("'" + reason + "'" for reason in reasons) if shell == 'powershell' else '|'.join(reasons)
+        wrapper = (ROOT / entry).read_text() if entry else (ROOT / ('lib/impeccable-skill.' + suffix)).read_text().replace('@IMPECCABLE_REASONS@', selection).replace('@IMPECCABLE_CORE@', core)
         fixture = self.root / ('adapter.' + suffix)
         if shell == 'bash':
             extracted = fixture_definitions(wrapper if entry else wrapper + '\nmain() {\n    :\n}\nrun_setup_tasks() {\n    :\n}\nsetup_load_environment() {\n    :\n}\n')
             mocks = ''
             if entry:
-                retained = {'impeccable_skill_policy', 'converge_impeccable_skill', 'main', 'run_setup_tasks',
+                retained = {'impeccable_skill_failure', 'impeccable_skill_policy', 'converge_impeccable_skill', 'main', 'run_setup_tasks',
                             'setup_load_environment', 'setup_environment_failure', 'setup_trim', 'setup_environment_value',
                             'fail_unsupported_headless', 'env_local_flag_is_one'}
                 if combined:
@@ -265,7 +289,8 @@ if [[ "$(umask)" != "${_fixture_mask}" ]]; then
 fi
 exit "${_fixture_status}"
 '''
-            fixture.write_text(('set -e\n' if entry else 'set -eu\n') + extracted + '\n' + mocks + '\n' + r'''
+            strict = 'set -euo pipefail\nshopt -s inherit_errexit\n' if self.env.get('IMPECCABLE_TEST_STRICT_PIPELINE') else ('set -e\n' if entry else 'set -eu\n')
+            fixture.write_text(strict + extracted + '\n' + mocks + '\n' + r'''
 print_message() { :; }
 print_success() { printf '%s\n' "$1"; }
 print_warning() { printf '%s\n' "$1" >&2; }
@@ -279,7 +304,10 @@ npm() {
         *) return 91 ;;
     esac
 }
-npx() { "${IMPECCABLE_TEST_PYTHON}" "${IMPECCABLE_TEST_MOCK}" --installer "$@"; }
+npx() {
+    [[ "${IMPECCABLE_TEST_LAUNCH_FAILURE:-}" != 1 ]] || return 127
+    "${IMPECCABLE_TEST_PYTHON}" "${IMPECCABLE_TEST_MOCK}" --installer "$@"
+}
 ''' + invocation)
             command = ['/bin/bash', '--noprofile', '--norc', str(fixture)]
         else:
@@ -288,10 +316,11 @@ npx() { "${IMPECCABLE_TEST_PYTHON}" "${IMPECCABLE_TEST_MOCK}" --installer "$@"; 
             source = self.root / 'source.ps1'
             source.write_text(wrapper)
             fixture.write_text("$ErrorActionPreference='Stop'\n" + r'''
+if ($env:IMPECCABLE_TEST_LEGACY_ARGUMENTS -eq '1') { $PSNativeCommandArgumentPassing = 'Legacy' }
 $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($env:IMPECCABLE_TEST_SOURCE,[ref]$tokens,[ref]$errors)
 if ($errors.Count) { throw 'invalid adapter source' }
-$retained=@('Invoke-ImpeccableSkillPolicy','Invoke-ImpeccableConvergence','Read-SetupEnvironment',
+$retained=@('Write-ImpeccableFailure','Invoke-ImpeccableCapture','Invoke-ImpeccableSkillPolicy','Invoke-ImpeccableConvergence','Read-SetupEnvironment',
     'ConvertFrom-SetupEnvironmentValue','Assert-HeadlessUnsupported','Test-EnvLocalFlag',
     'Invoke-WindowsSetupTasks','Initialize-WindowsEnvironment')
 foreach ($statement in $ast.EndBlock.Statements) {
@@ -340,8 +369,9 @@ function npm {
 }
 function npx {
     param([Parameter(ValueFromRemainingArguments=$true)][object[]]$Arguments)
+    if ($env:IMPECCABLE_TEST_LAUNCH_FAILURE -eq '1') { throw 'PRIVATE-SENTINEL command launch failure' }
     $env:IMPECCABLE_TEST_ARGS = ConvertTo-Json -InputObject @($Arguments) -Compress
-    try { & $env:IMPECCABLE_TEST_PYTHON $env:IMPECCABLE_TEST_MOCK --installer 2> (Join-Path $env:IMPECCABLE_TEST_ROOT 'installer-errors') }
+    try { & $env:IMPECCABLE_TEST_PYTHON $env:IMPECCABLE_TEST_MOCK --installer }
     finally { $env:IMPECCABLE_TEST_ARGS = $null }
 }
 ''' + f'\n$script:PiProfileMutationsBlocked=${str(blocked).lower()}\n'
@@ -404,7 +434,7 @@ if (-not $result) { exit 1 }
         settings.chmod(0o664)
         before = self.snapshot()
         result = self.adapter(creation_mask=0o002, success=False)
-        self.assertIn('Impeccable: unsafe-owner-or-mode.', result.stderr)
+        self.assertIn('phase=preflight reason=unsafe-owner-or-mode exit=1', result.stderr)
         self.assertEqual(self.snapshot(), before)
         self.assertFalse((self.root / 'calls').exists())
 
@@ -878,7 +908,7 @@ if (-not $result) { exit 1 }
                                     IMPECCABLE_TEST_RACE_FIELD=field)
                     before = self.snapshot()
                     result = self.adapter(success=False)
-                    self.assertIn('Impeccable: ' + ('unsafe-owner-or-mode' if field == 'uid' else reason) + '.', result.stderr)
+                    self.assertIn('reason=' + ('unsafe-owner-or-mode' if field == 'uid' else reason) + ' exit=1', result.stderr)
                     self.assertEqual(self.snapshot(), before)
                     self.assertFalse((self.home / '.agents/.setup-impeccable.lock').exists())
 
@@ -890,7 +920,7 @@ if (-not $result) { exit 1 }
                         IMPECCABLE_TEST_REVISION='new payload', IMPECCABLE_TEST_RACE_PATH=str(self.home / '.agents'),
                         IMPECCABLE_TEST_RACE_FIELD='mode')
         result = self.adapter(success=False)
-        self.assertIn('Impeccable: recovery-required.', result.stderr)
+        self.assertIn('phase=promotion reason=recovery-required exit=1', result.stderr)
         lock = self.home / '.agents/.setup-impeccable.lock'
         self.assertEqual(lock.stat().st_mode & 0o777, 0o600)
         backups = list((self.home / '.claude/skills').glob('.setup-impeccable-*.old'))
@@ -945,7 +975,7 @@ if (-not $result) { exit 1 }
                     before = self.snapshot()
                     calls = (self.root / 'calls').read_bytes()
                     result = self.adapter(success=False)
-                    self.assertIn('Impeccable: unsafe-owner-or-mode.', result.stderr)
+                    self.assertIn('reason=unsafe-owner-or-mode exit=1', result.stderr)
                     self.assertEqual(self.snapshot(), before)
                     self.assertEqual((self.root / 'calls').read_bytes(), calls)
             boundary.chmod(0o700)
@@ -966,7 +996,7 @@ if (-not $result) { exit 1 }
                     before = self.snapshot()
                     calls = (self.root / 'calls').read_bytes()
                     result = self.adapter(success=False)
-                    self.assertIn('Impeccable: unsafe-owner-or-mode.', result.stderr)
+                    self.assertIn('reason=unsafe-owner-or-mode exit=1', result.stderr)
                     self.assertEqual(self.snapshot(), before)
                     self.assertEqual((self.root / 'calls').read_bytes(), calls)
             file.chmod(original)
@@ -983,7 +1013,7 @@ if (-not $result) { exit 1 }
         self.env['IMPECCABLE_TEST_MODE'] = 'unsafe-stage'
         before = self.snapshot()
         result = self.adapter(success=False)
-        self.assertIn('Impeccable: unsafe-stage.', result.stderr)
+        self.assertIn('phase=promotion reason=unsafe-stage exit=1', result.stderr)
         self.assertEqual(self.snapshot(), before)
 
     def test_root_system_boundary_stays_strict_but_account_ancestors_need_no_private_ancestor(self):
@@ -997,7 +1027,7 @@ if (-not $result) { exit 1 }
         before = self.snapshot()
         calls = (self.root / 'calls').read_bytes()
         result = self.adapter(success=False)
-        self.assertIn('Impeccable: unsafe-owner-or-mode.', result.stderr)
+        self.assertIn('phase=preflight reason=unsafe-owner-or-mode exit=1', result.stderr)
         self.assertEqual(self.snapshot(), before)
         self.assertEqual((self.root / 'calls').read_bytes(), calls)
         self.home.chmod(0o775)
@@ -1032,7 +1062,7 @@ if (-not $result) { exit 1 }
             self.env['BAN_IMPECCABLE'] = flag
             before = self.snapshot()
             result = self.adapter(success=False)
-            self.assertIn('Impeccable: unsafe-metadata.', result.stderr)
+            self.assertIn('reason=unsafe-metadata exit=1', result.stderr)
             self.assertEqual(self.snapshot(), before)
             self.assertEqual((self.root / 'calls').read_bytes(), calls)
 
@@ -1275,6 +1305,15 @@ def installer_fixture():
             cache = home / name
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text('Inert npm cache created with inherited permissions.\n')
+    if 'IMPECCABLE_TEST_INSTALLER_EXIT' in os.environ:
+        for stream, key in ((sys.stdout, 'STDOUT'), (sys.stderr, 'STDERR')):
+            stream.write(os.environ.get('IMPECCABLE_TEST_' + key, ''))
+            if os.environ.get('IMPECCABLE_TEST_OVERSIZED'):
+                for _ in range(1024):
+                    stream.write('PRIVATE-SENTINEL ' * 64)
+            stream.flush()
+        (root / 'output-drained').write_text('completed')
+        raise SystemExit(int(os.environ['IMPECCABLE_TEST_INSTALLER_EXIT']))
     if os.environ.get('IMPECCABLE_TEST_MODE') == 'failed-command':
         print('PRIVATE-SENTINEL arbitrary failure output', file=sys.stderr)
         raise SystemExit(1)
@@ -1359,6 +1398,8 @@ def installer_fixture():
         paths = ['.claude/skills/impeccable/scripts/bin/linux-x64/impeccable',
                  '.claude/agents/impeccable-documenter.md', '.npm/_cacache/content/blob']
         (root / 'installer-modes.json').write_text(json.dumps({name: (home / name).stat().st_mode & 0o777 for name in paths}))
+    if os.environ.get('IMPECCABLE_TEST_SUCCESS_NOISE'):
+        print(os.environ['IMPECCABLE_TEST_SUCCESS_NOISE'], file=sys.stderr)
     print('PRIVATE-SENTINEL arbitrary installer output must not reach setup logs')
 
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +14,14 @@ def render(root, shell):
     wrapper = (root / ('lib/impeccable-skill.' + suffix)).read_text().rstrip()
     if wrapper.count('@IMPECCABLE_CORE@') != 1:
         raise ValueError('Impeccable core placeholder must occur exactly once')
+    match = re.search(r'const impeccableReasons = (\[[\s\S]*?\]);', core)
+    if not match:
+        raise ValueError('Missing Impeccable diagnostic allowlist')
+    reasons = json.loads(match[1])
+    if not reasons or any(not re.fullmatch(r'[A-Za-z][A-Za-z0-9-]*', reason) for reason in reasons):
+        raise ValueError('Invalid Impeccable diagnostic allowlist')
+    selection = ','.join("'" + reason + "'" for reason in reasons) if suffix == 'ps1' else '|'.join(reasons)
+    wrapper = wrapper.replace('@IMPECCABLE_REASONS@', selection)
     marker = "$null = '" if suffix == 'ps1' else ": '"
     return (marker + "BEGIN_GENERATED_IMPECCABLE_SKILL'\n" + wrapper.replace('@IMPECCABLE_CORE@', core)
             + '\n' + marker + "END_GENERATED_IMPECCABLE_SKILL'\n")
@@ -50,7 +60,7 @@ def embed(root, check):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Version 1 | Embed synchronized standalone Impeccable skill convergence; callers/version banners are maintained separately.')
+    parser = argparse.ArgumentParser(description='Version 2 | Embed synchronized Impeccable policy and diagnostic allowlists; callers/version banners are maintained separately.')
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--root', type=Path, default=ROOT)
     parser.add_argument('--render', choices=('bash', 'powershell'))

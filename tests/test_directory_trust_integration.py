@@ -164,7 +164,7 @@ class CombinedOrdinaryCaller(unittest.TestCase):
                         self.assertIn('verified', result.stdout)
                         self.assertTrue((selected / 'skills/impeccable/SKILL.md').is_file())
                     else:
-                        self.assertIn('installer-failed', result.stdout + result.stderr)
+                        self.assertIn('phase=installer reason=unknown exit=1', result.stdout + result.stderr)
                     self.assertEqual(convergence.directory_metadata(paths), before)
                     events = (self.root / 'events').read_text().splitlines()
                     self.assertIn('independent', events)
