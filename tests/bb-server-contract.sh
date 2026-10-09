@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Version 2 | Last changed: Prove preserved environment inheritance during BB maintenance
 set -euo pipefail
 cd "$(dirname "$0")/.."
 tmp=$(mktemp -d)

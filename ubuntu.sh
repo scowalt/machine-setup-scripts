@@ -148,6 +148,18 @@ migrate_token_files() {
 }
 
 create_env_local() {
+    local _bb_reference_root="${HOME}/.config/systemd/user/setup-bb-app.service.d" _parent
+    for _parent in "${HOME}" "${HOME}/.config" "${HOME}/.config/systemd" "${HOME}/.config/systemd/user" "${_bb_reference_root}"; do
+        if [[ -L "${_parent}" || ( -e "${_parent}" && ( ! -d "${_parent}" || ! -r "${_parent}" || ! -x "${_parent}" ) ) ]]; then
+            print_debug 'Preserving account environment and legacy tokens: BB app reference path is unverified.'
+            return 0
+        fi
+    done
+    if [[ -e "${_bb_reference_root}/env.conf" || -L "${_bb_reference_root}/env.conf" ||
+          -e "${_bb_reference_root}/20-env-local.conf" || -L "${_bb_reference_root}/20-env-local.conf" ]]; then
+        print_debug 'Preserving account environment and legacy tokens: existing BB app environment reference.'
+        return 0
+    fi
     migrate_token_files
 
     if [[ ! -f "${HOME}/.env.local" ]]; then
@@ -10082,14 +10094,14 @@ bb_unit_dropins_empty() {
 }
 
 bb_tmpdir_snapshot() {
-    /usr/bin/python3 -I -S - "${HOME}" 2>/dev/null <<'BB_TMPDIR'
+    /usr/bin/python3 -I -S - "${HOME}" "${1:-dropins}" 2>/dev/null <<'BB_TMPDIR'
 import hashlib
 import os
 import re
 import stat
 import sys
 
-home = sys.argv[1]
+home, scope = sys.argv[1:]
 handles = []
 records = []
 
@@ -10129,8 +10141,41 @@ def verified(parent, name, directory=True, private=False, reference=False, metad
     records.append((parent, name, fd, identity(before)))
     return fd
 
+def managed_fragment(content):
+    text = content.decode('ascii')
+    binary = re.search(r'^Environment=BB_PACKAGE_BINARY=(.+)/bin/bb-app$', text, re.M)
+    tail = re.search(r'^Environment=BB_TAILSCALE_BIN=(/usr/(?:local/)?bin/tailscale)$', text, re.M)
+    origin = re.search(r'^Environment=BB_APP_URL=(https://[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\:([0-9]{1,5}))?)$', text, re.M)
+    if not binary or not tail or not origin:
+        raise ValueError()
+    prefix = binary[1]
+    version = re.fullmatch(re.escape(home) + r'/\.local/share/mise/installs/node/([A-Za-z0-9._+-]+)', prefix)
+    if not version or version[1] in ('.', '..') or (origin[2] and not 1 <= int(origin[2]) <= 65535):
+        raise ValueError()
+    expected = f'''# setup-managed bb app v1
+[Unit]
+Description=Setup-managed bb main server and local execution daemon
+StartLimitIntervalSec=0
+[Service]
+Type=simple
+TimeoutStartSec=180
+Environment=HOME={home}
+Environment=PATH={home}/.local/share/mise/shims:{prefix}/bin:{home}/.local/bin:{home}/.bun/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
+Environment=BB_PACKAGE_BINARY={prefix}/bin/bb-app
+Environment=BB_TAILSCALE_BIN={tail[1]}
+Environment=BB_APP_URL={origin[1]}
+ExecStart={home}/.config/setup-bb-server/bb-guard app-start
+ExecStartPost={home}/.config/setup-bb-server/bb-guard app-ready
+Restart=always
+RestartSec=10
+[Install]
+WantedBy=default.target
+'''
+    if text != expected:
+        raise ValueError()
+
 try:
-    if not re.fullmatch(r'/[a-zA-Z0-9_./-]+', home) or os.path.normpath(home) != home:
+    if scope not in ('dropins', 'fragment') or not re.fullmatch(r'/[a-zA-Z0-9_./-]+', home) or os.path.normpath(home) != home:
         raise ValueError()
     root = verified(None, home)
     current = root
@@ -10138,14 +10183,16 @@ try:
         current = verified(current, name)
     fragment = verified(current, 'setup-bb-app.service', directory=False, fragment=True)
     fragment_content = os.read(fragment, 65537)
-    if (len(fragment_content) > 65536 or len(fragment_content) != os.fstat(fragment).st_size or
-            not fragment_content.startswith(b'# setup-managed bb app v1\n')):
+    if len(fragment_content) > 65536 or len(fragment_content) != os.fstat(fragment).st_size:
         raise ValueError()
-    dropins = verified(current, 'setup-bb-app.service.d')
-    entries = sorted(os.listdir(dropins))
-    environment = [name for name in entries if name in ('env.conf', '20-env-local.conf')]
-    if not entries or len(environment) > 1 or any(name not in ('10-tmpdir.conf', *environment) for name in entries):
-        raise ValueError()
+    managed_fragment(fragment_content)
+    entries = []
+    if scope == 'dropins':
+        dropins = verified(current, 'setup-bb-app.service.d')
+        entries = sorted(os.listdir(dropins))
+        environment = [name for name in entries if name in ('env.conf', '20-env-local.conf')]
+        if not entries or len(environment) > 1 or any(name not in ('10-tmpdir.conf', *environment) for name in entries):
+            raise ValueError()
     contents = [(fragment, fragment_content, 65537)]
     for name in entries:
         file = verified(dropins, name, directory=False, reference=name in environment)
@@ -10168,7 +10215,7 @@ try:
             for component in ('.cache', 'bb', 'tmp'):
                 current = verified(current, component, private=component == 'tmp')
         contents.append((file, content, 4097))
-    if sorted(os.listdir(dropins)) != entries:
+    if scope == 'dropins' and sorted(os.listdir(dropins)) != entries:
         raise ValueError()
     for file, content, limit in contents:
         os.lseek(file, 0, os.SEEK_SET)
@@ -10179,7 +10226,7 @@ try:
             raise ValueError()
     digest = hashlib.sha256(repr((entries, [record[3] for record in records])).encode('ascii') +
                             b''.join(content for _, content, _ in contents)).hexdigest()
-    print('dropins:' + ','.join(entries) + ':' + digest)
+    print(('dropins:' + ','.join(entries) if scope == 'dropins' else 'fragment') + ':' + digest)
 except (OSError, ValueError):
     sys.exit(1)
 finally:
@@ -10188,24 +10235,36 @@ finally:
 BB_TMPDIR
 }
 
+bb_dropins_selection() {
+    [[ "$1" =~ ^dropins:(10-tmpdir\.conf(,(env|20-env-local)\.conf)?|(env|20-env-local)\.conf):[a-f0-9]{64}$ ]] || return 1
+    printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
 bb_unit_dropins_snapshot() {
-    local _name="$1" _directory="${HOME}/.config/systemd/user/$1.d" _snapshot _parent _inspection_status
+    local _name="$1" _directory="${HOME}/.config/systemd/user/$1.d" _snapshot _parent _inspection_status _fragment=''
     for _parent in "${HOME}" "${HOME}/.config" "${HOME}/.config/systemd" "${HOME}/.config/systemd/user"; do
         bb_setup_directory_preflight "${_parent}" >/dev/null || return 1
     done
     if [[ ! -e "${_directory}" && ! -L "${_directory}" ]]; then
-        printf 'absent\n'
+        _snapshot=absent
     elif bb_unit_dropins_empty "${_directory}"; then
         _snapshot=$(stat -c '%d:%i:%u:%g:%f:%y:%z' -- "${_directory}" 2>/dev/null) || return 1
         [[ -n "${_snapshot}" ]] || return 1
-        printf 'empty:%s\n' "${_snapshot}"
+        _snapshot="empty:${_snapshot}"
     else
         _inspection_status=$?
         [[ "${_inspection_status}" -eq 2 && "${_name}" == setup-bb-app.service ]] || return 1
         _snapshot=$(bb_tmpdir_snapshot) || return 1
-        [[ "${_snapshot}" =~ ^dropins:(10-tmpdir\.conf(,(env|20-env-local)\.conf)?|(env|20-env-local)\.conf):[a-f0-9]{64}$ ]] || return 1
+        bb_dropins_selection "${_snapshot}" >/dev/null || return 1
         printf '%s\n' "${_snapshot}"
+        return 0
     fi
+    if [[ "${_name}" == setup-bb-app.service && ( -e "${_directory%.d}" || -L "${_directory%.d}" ) ]]; then
+        _fragment=$(bb_tmpdir_snapshot fragment) || return 1
+        [[ "${_fragment}" =~ ^fragment:[a-f0-9]{64}$ ]] || return 1
+        _snapshot+=":${_fragment}"
+    fi
+    printf '%s\n' "${_snapshot}"
 }
 
 bb_unit_preflight() {
@@ -10224,8 +10283,8 @@ bb_unit_preflight() {
     done <<< "${_details}"
     [[ "${_seen_fragment}" -eq 1 && "${_seen_dropins}" -eq 1 ]] || return 1
     if [[ "${_expected}" == dropins:* ]]; then
-        [[ "${_expected}" =~ ^dropins:(10-tmpdir\.conf(,(env|20-env-local)\.conf)?|(env|20-env-local)\.conf):[a-f0-9]{64}$ ]] || return 1
-        local _selection="${BASH_REMATCH[1]}" _entry
+        local _selection _entry
+        _selection=$(bb_dropins_selection "${_expected}") || return 1
         local -a _entries=()
         IFS=',' read -r -a _entries <<< "${_selection}"
         for _entry in "${_entries[@]}"; do
@@ -11487,7 +11546,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 326 | Last changed: Preserve reviewed BB account-environment inheritance"
+    echo -e "${GRAY}Version 327 | Last changed: Preserve BB sources before initialization and verify managed fragments"
 
     if ! acquire_setup_lock; then
         return 1
