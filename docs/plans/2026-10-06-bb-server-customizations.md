@@ -2,6 +2,10 @@
 
 Status: Q1–Q6 agreed. [GitHub issue #197](https://github.com/scowalt/machine-setup-scripts/issues/197), labeled `ready-for-agent`, is the authoritative implementation contract; these notes retain the design history. The subsequent owner comment authorizes repository implementation and local commits through `implement-spec` on `integrate/bb-customizations-197`, superseding the design-stage no-commit wording below. Runtime work is tracked in #198 and the [one-time migration procedure](2026-10-06-bb-environment-override-migration.md) in #199. This authorization requires neither a push nor deployment; live migration, service restarts and setup execution remain separately authorized. No live remediation is established by these notes.
 
+## October 9 disposition
+
+[Spec #221](https://github.com/scowalt/machine-setup-scripts/issues/221) and [ADR 0013](../adr/0013-preserve-reviewed-bb-environment-inheritance.md) supersede Q2/Q5's retirement-first requirement and Q6's TMPDIR-only limit **only for the recognized existing app environment references**, including coexistence with reviewed TMPDIR. The owner accepts continued whole-account exposure to retain ordinary setup maintenance without a migration prerequisite. Preserve native inputs/precedence, unrelated state and all remaining trust boundaries. The original decisions, captured refusal and development plan below are history, not current acceptance criteria for that case. No live migration or rollout is established here.
+
 ## Evidence
 
 The [2026-10-06 Beelink Ubuntu setup log](https://logs.scowalt.com/logs/scott-beelink-ubuntu/2026-10-06-18-16-57-571.log) records an incomplete setup run at `preflight.unit-dropins` (lines 371–373), consequential BB plugin-refresh deferral (377), and final failure reporting (432). The ordinary Ubuntu version-309 caller preserves the error through unrelated work and logging.
