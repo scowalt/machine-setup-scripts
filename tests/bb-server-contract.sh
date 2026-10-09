@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Version 2 | Last changed: Prove preserved environment inheritance during BB maintenance
 set -euo pipefail
 cd "$(dirname "$0")/.."
 tmp=$(mktemp -d)
@@ -84,8 +85,8 @@ url="${*: -1}"
 if [[ -n "${BB_TEST_CURL_FAIL_ONCE_FILE:-}" && -e "${BB_TEST_CURL_FAIL_ONCE_FILE}" ]]; then rm -f -- "${BB_TEST_CURL_FAIL_ONCE_FILE}"; exit 22; fi
 [[ "${BB_TEST_CURL_FAIL:-0}" != 1 ]] || exit 22
 case "${url}" in
-    http://127.0.0.1:38886/health) printf '{"ok":%s,"launchId":"%s"}\n' "${BB_TEST_HEALTH_OK:-true}" "${BB_TEST_LAUNCH_ID:-fixture-launch}";;
-    http://127.0.0.1:38887/status) host_id="${BB_TEST_HOST_ID:-}"; if [[ -z "${host_id}" && -f "${HOME}/.bb/host-id" ]]; then host_id=$(<"${HOME}/.bb/host-id"); fi; printf '{"connected":%s,"hostId":"%s","serverUrl":"%s"}\n' "${BB_TEST_HOST_CONNECTED:-true}" "${host_id:-fixture-host}" "${BB_TEST_HOST_URL:-http://127.0.0.1:38886}";;
+    http://127.0.0.1:38886/health) printf 'native-health\n' >> "${BB_TEST_EVENTS}"; printf '{"ok":%s,"launchId":"%s"}\n' "${BB_TEST_HEALTH_OK:-true}" "${BB_TEST_LAUNCH_ID:-fixture-launch}";;
+    http://127.0.0.1:38887/status) printf 'native-host-status\n' >> "${BB_TEST_EVENTS}"; host_id="${BB_TEST_HOST_ID:-}"; if [[ -z "${host_id}" && -f "${HOME}/.bb/host-id" ]]; then host_id=$(<"${HOME}/.bb/host-id"); fi; printf '{"connected":%s,"hostId":"%s","serverUrl":"%s"}\n' "${BB_TEST_HOST_CONNECTED:-true}" "${host_id:-fixture-host}" "${BB_TEST_HOST_URL:-http://127.0.0.1:38886}";;
     *) exit 0;;
 esac
 MOCK
@@ -112,6 +113,10 @@ cat > "${tmp}/bin/bb-app" <<'MOCK'
 #!/usr/bin/env bash
 printf 'bb-app %s\n' "$*" >> "${BB_TEST_APP_LOG}"
 if [[ -n "${TMPDIR:-}" ]]; then printf 'tmpdir:%s\n' "${TMPDIR}" >> "${BB_TEST_APP_LOG}"; fi
+if [[ "${BB_TEST_REQUIRE_INHERITED:-0}" == 1 ]]; then
+    # New harmless child, not the app/provider: prove inheritance without values.
+    /bin/bash --noprofile --norc -c '[[ ${BB_FIXTURE_INPUT:-} == "${BB_TEST_EXPECT_INPUT}" ]] && printf "inherited-child-ready\n"' >> "${BB_TEST_APP_LOG}" || exit 1
+fi
 if [[ "${BB_TEST_GENERATE_ID:-0}" == 1 ]]; then
     mkdir -p "${HOME}/.bb"; chmod 700 "${HOME}/.bb"
     if [[ ! -e "${HOME}/.bb/host-id" ]]; then (umask 077; set -C; printf 'fresh-fixture-host-id\n' > "${HOME}/.bb/host-id") 2>/dev/null || [[ -f "${HOME}/.bb/host-id" ]]; fi
@@ -168,6 +173,13 @@ if override.exists():
     if kind != 'app' or override.read_text() != expected:
         raise SystemExit('unsupported fixture drop-in')
     env['TMPDIR'] = env['HOME'] + '/.cache/bb/tmp'
+references = [Path(unit + '.d/' + name) for name in ('env.conf', '20-env-local.conf')
+              if Path(unit + '.d/' + name).exists()]
+if references:
+    if kind != 'app' or len(references) != 1 or references[0].read_bytes() != b'[Service]\nEnvironmentFile=%h/.env.local\n':
+        raise SystemExit('unsupported fixture environment reference')
+    # Only the path crosses the parser pipe. Source values are never printed.
+    print('R\t' + env['HOME'] + '/.env.local')
 for key, value in env.items():
     print("E\t" + key + "\t" + value)
 for value in command:
@@ -175,7 +187,7 @@ for value in command:
 PY
 ) || exit 1
 declare -a unit_env=() command=() fixture_env=()
-unit_path='' unit_binary='' unit_home_value=''
+unit_path='' unit_binary='' unit_home_value='' reference_source=''
 while IFS=$'\t' read -r record key value; do
     case "${record}" in
         E)
@@ -187,14 +199,33 @@ while IFS=$'\t' read -r record key value; do
                 *) unit_env+=("${key}=${value}");;
             esac;;
         C) command+=("${key}");;
+        R) reference_source="${key}";;
         *) exit 1;;
     esac
 done <<< "${parsed}"
 [[ -n "${unit_home_value}" && -n "${unit_path}" && -n "${unit_binary}" && ${#command[@]} -eq 2 ]] || exit 1
 fixture_env=("PATH=${BB_TEST_TOOLS_DIR:-${BB_TEST_ROOT}/bin}:${unit_path}" "BB_TEST_UNIT_HOME=${unit_home_value}" "BB_TEST_RUNNER=${BB_TEST_RUNNER:-${BB_TEST_ROOT}/bin/run-systemd-unit}" "BB_TEST_TOOLS_DIR=${BB_TEST_TOOLS_DIR:-${BB_TEST_ROOT}/bin}" "BB_TEST_ROOT=${BB_TEST_ROOT}" "BB_TEST_DNS_FILE=${BB_TEST_DNS_FILE}" "BB_TEST_APP_LOG=${BB_TEST_APP_LOG}" "BB_TEST_SERVE_LOG=${BB_TEST_SERVE_LOG}" "BB_TEST_EVENTS=${BB_TEST_EVENTS}" "BB_TEST_MAIN_PID_FILE=${BB_TEST_ROOT}/main-pid" "BB_PROC_NET_ROOT=${BB_TEST_ROOT}/proc" "BB_TEST_LONG_BB=1")
-for key in BB_READY_ATTEMPTS BB_READY_INTERVAL BB_TEST_CURL_FAIL BB_TEST_CURL_FAIL_ONCE_FILE BB_TEST_HEALTH_OK BB_TEST_LAUNCH_ID BB_TEST_HOST_CONNECTED BB_TEST_HOST_ID BB_TEST_HOST_URL BB_TEST_LONG_SERVE BB_TEST_RECONNECT_CHANGE BB_TEST_GENERATE_ID; do
+for key in BB_READY_ATTEMPTS BB_READY_INTERVAL BB_TEST_CURL_FAIL BB_TEST_CURL_FAIL_ONCE_FILE BB_TEST_HEALTH_OK BB_TEST_LAUNCH_ID BB_TEST_HOST_CONNECTED BB_TEST_HOST_ID BB_TEST_HOST_URL BB_TEST_LONG_SERVE BB_TEST_RECONNECT_CHANGE BB_TEST_GENERATE_ID BB_TEST_REQUIRE_INHERITED BB_TEST_EXPECT_INPUT; do
     if [[ -n "${!key:-}" ]]; then fixture_env+=("${key}=${!key}"); fi
 done
+if [[ -n "${reference_source}" ]]; then
+    [[ "${reference_source}" == "${unit_home_value}/.env.local" && "${unit_home_value}" == "${BB_TEST_ROOT}/"* ]] || exit 1
+    # This fixture implements only a synthetic literal assignment, not a shell
+    # source or a general EnvironmentFile parser. exec keeps MainPID identity.
+    exec env -i "${unit_env[@]}" "${fixture_env[@]}" python3 - "${reference_source}" "${command[@]}" <<'INHERITED_INPUT'
+import os, re, sys
+from pathlib import Path
+try:
+    content = Path(sys.argv[1]).read_text()
+except OSError:
+    raise SystemExit('fixture required environment source unavailable') from None
+match = re.fullmatch(r'BB_FIXTURE_INPUT=([A-Za-z0-9_-]+)\n', content)
+if not match:
+    raise SystemExit('unsupported fixture environment syntax')
+environment = dict(os.environ, BB_FIXTURE_INPUT=match[1])
+os.execvpe(sys.argv[2], sys.argv[2:], environment)
+INHERITED_INPUT
+fi
 exec env -i "${unit_env[@]}" "${fixture_env[@]}" "${command[@]}"
 RUN_UNIT
 chmod +x "${tmp}/bin/"*
@@ -317,13 +348,12 @@ bb_package_preflight() {
     [[ ! -f "$HOME/.config/setup-bb-server/package-owner" ]] || BB_PACKAGE_OWNER=$(<"$HOME/.config/setup-bb-server/package-owner")
 }
 bb_install_package() {
+    [[ ! -e "$BB_TEST_ROOT/app-active" && ! -e "$BB_TEST_ROOT/ingress-active" ]] || return 97
     printf 'install\n' >> "$BB_TEST_EVENTS"
     [[ "${BB_TEST_INSTALL_FAIL:-0}" != 1 ]] || return 1
     if [[ "${BB_PACKAGE_OWNER}" != "$BB_PACKAGE_PATH" && ! -e "$HOME/.config/setup-bb-server/package-owner.next" ]]; then printf '%s\n' "$BB_PACKAGE_PATH" > "$HOME/.config/setup-bb-server/package-owner.next"; fi
 }
 bb_package_artifacts_ready() { return 0; }
-bb_host_identity_ready() { return 0; }
-bb_native_app_ready() { [[ "${BB_TEST_NATIVE_READY:-1}" == 1 ]]; }
 bb_local_ports_free() { [[ ! -e "$BB_TEST_ROOT/local-port-occupied" ]]; }
 tailscale() {
     case "$1 $2" in
@@ -342,7 +372,11 @@ systemctl() {
     case " $* " in
         *' show '*MainPID*) cat "$BB_TEST_ROOT/main-pid";;
         *' show '*)
-            if [[ "$3" == setup-bb-app.service && -f "$HOME/.config/systemd/user/$3.d/10-tmpdir.conf" ]]; then
+            if [[ "$3" == setup-bb-app.service && -n "${BB_TEST_REFERENCE_NAME:-}" ]]; then
+                selected="$HOME/.config/systemd/user/$3.d/${BB_TEST_REFERENCE_NAME}"
+                if [[ -f "$HOME/.config/systemd/user/$3.d/10-tmpdir.conf" ]]; then selected="$HOME/.config/systemd/user/$3.d/10-tmpdir.conf ${selected}"; fi
+                printf 'FragmentPath=%s\nDropInPaths=%s\n' "$HOME/.config/systemd/user/$3" "${selected}"
+            elif [[ "$3" == setup-bb-app.service && -f "$HOME/.config/systemd/user/$3.d/10-tmpdir.conf" ]]; then
                 printf 'FragmentPath=%s\nDropInPaths=%s\n' "$HOME/.config/systemd/user/$3" "$HOME/.config/systemd/user/$3.d/10-tmpdir.conf"
             else
                 printf 'FragmentPath=\nDropInPaths=\n'
@@ -355,6 +389,10 @@ systemctl() {
         *' enable setup-bb-app.service '*) printf 'enable-app\n' >> "$BB_TEST_EVENTS";;
         *' start setup-bb-app.service '*)
             printf 'start-app\n' >> "$BB_TEST_EVENTS"
+            if [[ "${BB_TEST_ARM_START_FAILURE:-0}" == 1 ]]; then
+                : > "${BB_TEST_CURL_FAIL_ONCE_FILE}"
+                unset BB_TEST_ARM_START_FAILURE
+            fi
             "$BB_TEST_RUNNER" app ExecStart & app_pid=$!
             printf '%s\n' "$app_pid" > "$BB_TEST_ROOT/main-pid"
             for _ in {1..100}; do
@@ -370,7 +408,15 @@ systemctl() {
     esac
 }
 loginctl() { printf 'yes\n'; }
-curl() { [[ "${BB_TEST_HTTPS_FAIL:-0}" != 1 ]]; }
+curl() {
+    case "${*: -1}" in
+        http://127.0.0.1:38886/health|http://127.0.0.1:38887/status) "$BB_TEST_ROOT/bin/curl" "$@";;
+        *)
+            [[ "$*" == *'https://test.example.ts.net:38443/ -o /dev/null' ]] || return 97
+            printf 'private-https\n' >> "$BB_TEST_EVENTS"
+            [[ "${BB_TEST_HTTPS_FAIL:-0}" != 1 ]];;
+    esac
+}
 sleep() { :; }
 
 # Known foreign backend listener or Serve route: no package/config/service write.
@@ -392,10 +438,14 @@ chmod 620 "$HOME/.bb/config.json"
 ! setup_bb_server
 ! grep -q '^install$' "$BB_TEST_EVENTS"
 chmod 600 "$HOME/.bb/config.json"
+# Start with a saved non-default private endpoint, not a fresh-port selection.
+mkdir -p "$HOME/.config/setup-bb-server"
+printf 'test.example.ts.net 38443 https://test.example.ts.net:38443\n' > "$HOME/.config/setup-bb-server/endpoint"
+chmod 600 "$HOME/.config/setup-bb-server/endpoint"
 setup_bb_server
-[[ "$(<"$HOME/.config/setup-bb-server/endpoint")" == 'test.example.ts.net 443 https://test.example.ts.net' ]]
+[[ "$(<"$HOME/.config/setup-bb-server/endpoint")" == 'test.example.ts.net 38443 https://test.example.ts.net:38443' ]]
 node - "$HOME/.bb/config.json" "$HOME/.bb/env.json" <<'NODE'
-const fs=require('fs'),c=JSON.parse(fs.readFileSync(process.argv[2])),e=JSON.parse(fs.readFileSync(process.argv[3]));if(c.config.BB_APP_URL!=='https://test.example.ts.net'||c.customModels[0].name!=='keep'||e.env.OPENAI_API_KEY!=='fixture-secret'||Object.hasOwn(e.env,'BB_APP_URL'))process.exit(1)
+const fs=require('fs'),c=JSON.parse(fs.readFileSync(process.argv[2])),e=JSON.parse(fs.readFileSync(process.argv[3]));if(c.config.BB_APP_URL!=='https://test.example.ts.net:38443'||c.customModels[0].name!=='keep'||e.env.OPENAI_API_KEY!=='fixture-secret'||Object.hasOwn(e.env,'BB_APP_URL'))process.exit(1)
 NODE
 grep -q 'bb-guard app-start' "$HOME/.config/systemd/user/setup-bb-app.service"
 grep -q 'bb-guard app-ready' "$HOME/.config/systemd/user/setup-bb-app.service"
@@ -427,6 +477,81 @@ start_app=$(grep -n '^start-app$' "$BB_TEST_EVENTS" | head -1 | cut -d: -f1)
 grep -Fx "tmpdir:${HOME}/.cache/bb/tmp" "$BB_TEST_APP_LOG"
 cmp "$BB_TEST_ROOT/prior-tmpdir" "$HOME/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf"
 [[ "$(<"$HOME/.cache/bb/tmp/keep")" == 'preserved temporary data' ]]
+# Generated unit/guard seam: both names, repeats, private reference and combined
+# TMPDIR. This is an inert child and native readiness JSON, never BB execution.
+export BB_TEST_REQUIRE_INHERITED=1
+printf '{"hostId":"fixture-host","private":"DO-NOT-LOG-INHERITED-FIXTURE"}\n' > "$HOME/.bb/auth.json"
+chmod 600 "$HOME/.bb/auth.json"
+printf 'unrelated projects\n' > "$HOME/.bb/project-data"
+printf 'unrelated service\n' > "$HOME/.config/systemd/user/unrelated.service"
+snapshot_inputs() {
+    python3 - "$HOME" <<'PRESERVED_INPUTS'
+import hashlib, json, sys
+from pathlib import Path
+home = Path(sys.argv[1])
+paths = [home / name for name in ('.env.local', '.bb/host-id', '.bb/auth.json',
+         '.bb/config.json', '.bb/env.json', '.bb/project-data',
+         '.config/systemd/user/unrelated.service', '.config/setup-bb-server/endpoint',
+         '.config/setup-bb-server/package-owner', '.cache/bb/tmp', '.cache/bb/tmp/keep')]
+directory = home / '.config/systemd/user/setup-bb-app.service.d'
+paths += [directory, *directory.iterdir()]
+result = {}
+for path in sorted(paths):
+    stat = path.lstat()
+    result[str(path.relative_to(home))] = [stat.st_dev, stat.st_ino, stat.st_uid,
+        stat.st_gid, stat.st_mode, stat.st_nlink,
+        hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None]
+print(json.dumps(result, sort_keys=True))
+PRESERVED_INPUTS
+}
+for selection in env.conf:664:alone 20-env-local.conf:664:alone env.conf:600:alone env.conf:664:combined 20-env-local.conf:600:combined; do
+    IFS=: read -r BB_TEST_REFERENCE_NAME reference_mode combination <<< "${selection}"
+    export BB_TEST_REFERENCE_NAME
+    rm -f "$HOME/.config/systemd/user/setup-bb-app.service.d/env.conf" "$HOME/.config/systemd/user/setup-bb-app.service.d/20-env-local.conf" "$HOME/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf"
+    if [[ "${combination}" == combined ]]; then cp "$BB_TEST_ROOT/prior-tmpdir" "$HOME/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf"; fi
+    printf '[Service]\nEnvironmentFile=%%h/.env.local\n' > "$HOME/.config/systemd/user/setup-bb-app.service.d/${BB_TEST_REFERENCE_NAME}"
+    chmod 775 "$HOME/.config/systemd/user/setup-bb-app.service.d"
+    chmod "${reference_mode}" "$HOME/.config/systemd/user/setup-bb-app.service.d/${BB_TEST_REFERENCE_NAME}"
+    for attempt in 1 2; do
+        # A changed synthetic source must reach the *new* child, not a cached
+        # input or inherited environment of the setup/fixture parent.
+        export BB_TEST_EXPECT_INPUT="DO-NOT-LOG-INHERITED-FIXTURE-${attempt}"
+        unset BB_FIXTURE_INPUT
+        printf 'BB_FIXTURE_INPUT=%s\n' "${BB_TEST_EXPECT_INPUT}" > "$HOME/.env.local"
+        chmod 600 "$HOME/.env.local"
+        snapshot_inputs > "$BB_TEST_ROOT/inherited-before"
+        : > "${BB_TEST_APP_LOG}"; : > "${BB_TEST_EVENTS}"; : > "${BB_TEST_SERVE_LOG}"
+        setup_bb_server
+        snapshot_inputs > "$BB_TEST_ROOT/inherited-after"
+        cmp "$BB_TEST_ROOT/inherited-before" "$BB_TEST_ROOT/inherited-after"
+        [[ "$(grep -c '^inherited-child-ready$' "${BB_TEST_APP_LOG}")" == 1 ]]
+        ! grep -q 'DO-NOT-LOG-INHERITED-FIXTURE' "${BB_TEST_APP_LOG}" "${BB_TEST_EVENTS}" "${BB_TEST_SERVE_LOG}"
+        [[ -e "$BB_TEST_ROOT/app-active" && -e "$BB_TEST_ROOT/ingress-active" ]]
+        grep -qx 'serve --https=38443 http://127.0.0.1:38886' "${BB_TEST_SERVE_LOG}"
+        python3 - "${BB_TEST_EVENTS}" <<'AUTOMATIC_READINESS'
+from pathlib import Path
+import sys
+events = Path(sys.argv[1]).read_text().splitlines()
+order = [events.index(name) for name in ('stop-ingress', 'stop-app', 'install', 'start-app', 'ingress-queued', 'private-https')]
+assert order == sorted(order)
+assert events.count('install') == 1
+assert events[-1] == 'private-https'
+ready = events[events.index('start-app') + 1:]
+assert ready.index('native-health') < ready.index('native-host-status') < ready.index('ingress-queued')
+assert 'native-host-status' in ready[ready.index('ingress-queued') + 1:]
+AUTOMATIC_READINESS
+    done
+done
+# The unit runner models a required, not optional source at child startup.
+# Removing only this synthetic source cannot silently launch an empty child.
+mv "$HOME/.env.local" "$BB_TEST_ROOT/required-source"
+: > "${BB_TEST_APP_LOG}"
+if "$BB_TEST_RUNNER" app ExecStart > "$BB_TEST_ROOT/missing-source.log" 2>&1; then exit 1; fi
+[[ ! -s "${BB_TEST_APP_LOG}" ]]
+grep -qx 'fixture required environment source unavailable' "$BB_TEST_ROOT/missing-source.log"
+mv "$BB_TEST_ROOT/required-source" "$HOME/.env.local"
+printf 'inherited generated-unit/child/readiness cases passed\n'
+
 # A native-lock timeout during an update leaves metadata byte-for-byte intact,
 # then restores the formerly running app and ingress without a stale rollback.
 cp "$HOME/.bb/config.json" "$BB_TEST_ROOT/locked-config"
@@ -437,17 +562,17 @@ export BB_TEST_NATIVE_LOCK_FAIL=1
 unset BB_TEST_NATIVE_LOCK_FAIL
 node - "$HOME/.bb/config.json" "$HOME/.bb/env.json" <<'NODE'
 const fs = require("fs"), c = JSON.parse(fs.readFileSync(process.argv[2])), e = JSON.parse(fs.readFileSync(process.argv[3]));
-if (c.concurrentEditor !== "latest" || e.concurrentEditor !== "latest" || c.config.BB_APP_URL !== "https://test.example.ts.net" || c.customModels[0].name !== "keep" || e.env.OPENAI_API_KEY !== "fixture-secret") process.exit(1);
+if (c.concurrentEditor !== "latest" || e.concurrentEditor !== "latest" || c.config.BB_APP_URL !== "https://test.example.ts.net:38443" || c.customModels[0].name !== "keep" || e.env.OPENAI_API_KEY !== "fixture-secret") process.exit(1);
 NODE
 [[ -e "$BB_TEST_ROOT/app-active" && -e "$BB_TEST_ROOT/ingress-active" ]]
 grep -q '^start-app$' "$BB_TEST_EVENTS"
 grep -q '^ingress-queued$' "$BB_TEST_EVENTS"
-BB_TEST_NATIVE_READY=0
+export BB_TEST_HOST_CONNECTED=false
 : > "$BB_TEST_EVENTS"
 ! setup_bb_server
 ! grep -q '^stop-' "$BB_TEST_EVENTS"
 ! grep -q '^install$' "$BB_TEST_EVENTS"
-unset BB_TEST_NATIVE_READY
+unset BB_TEST_HOST_CONNECTED
 # An npm failure retains the old package owner and restores its active service.
 : > "$BB_TEST_EVENTS"
 BB_TEST_INSTALL_FAIL=1
@@ -460,15 +585,16 @@ BB_TEST_HTTPS_FAIL=1
 ! setup_bb_server
 unset BB_TEST_HTTPS_FAIL
 [[ -e "$BB_TEST_ROOT/app-active" && -e "$BB_TEST_ROOT/ingress-active" ]]
-[[ "$(<"$HOME/.config/setup-bb-server/endpoint")" == 'test.example.ts.net 443 https://test.example.ts.net' ]]
+[[ "$(<"$HOME/.config/setup-bb-server/endpoint")" == 'test.example.ts.net 38443 https://test.example.ts.net:38443' ]]
 # A one-shot generated readiness failure restores the prior active service and ingress.
 cp "$HOME/.config/systemd/user/setup-bb-app.service" "$BB_TEST_ROOT/prior-app-unit"
 cp "$HOME/.config/setup-bb-server/bb-guard" "$BB_TEST_ROOT/prior-bb-guard"
 : > "$BB_TEST_EVENTS"
-export BB_TEST_CURL_FAIL_ONCE_FILE="$BB_TEST_ROOT/fail-next-health" BB_READY_ATTEMPTS=1
-: > "$BB_TEST_CURL_FAIL_ONCE_FILE"
+export BB_TEST_CURL_FAIL_ONCE_FILE="$BB_TEST_ROOT/fail-next-health" BB_READY_ATTEMPTS=1 BB_TEST_ARM_START_FAILURE=1
 ! setup_bb_server
-unset BB_TEST_CURL_FAIL_ONCE_FILE BB_READY_ATTEMPTS
+unset BB_TEST_CURL_FAIL_ONCE_FILE BB_READY_ATTEMPTS BB_TEST_ARM_START_FAILURE
+[[ "$(grep -c '^install$' "$BB_TEST_EVENTS")" == 1 ]]
+[[ "$(grep -c '^start-app$' "$BB_TEST_EVENTS")" == 2 ]]
 cmp "$BB_TEST_ROOT/prior-app-unit" "$HOME/.config/systemd/user/setup-bb-app.service"
 cmp "$BB_TEST_ROOT/prior-bb-guard" "$HOME/.config/setup-bb-server/bb-guard"
 [[ -e "$BB_TEST_ROOT/app-active" && -e "$BB_TEST_ROOT/ingress-active" ]]
@@ -477,7 +603,7 @@ printf 'renamed.example.ts.net\n' > "$BB_TEST_DNS_FILE"
 : > "$BB_TEST_EVENTS"
 ! setup_bb_server
 ! grep -q '^install$' "$BB_TEST_EVENTS"
-[[ "$(<"$HOME/.config/setup-bb-server/endpoint")" == 'test.example.ts.net 443 https://test.example.ts.net' ]]
+[[ "$(<"$HOME/.config/setup-bb-server/endpoint")" == 'test.example.ts.net 38443 https://test.example.ts.net:38443' ]]
 SETUP_FIXTURE
 
 BB_TEST_ROOT="${tmp}/fresh-setup" BB_TEST_TOOLS_DIR="${tmp}/bin" BB_TEST_RUNNER="${tmp}/bin/run-systemd-unit" BB_TEST_HELPERS="${tmp}/helpers.sh" PATH="${tmp}/bin:${PATH}" BB_READY_ATTEMPTS=5 BB_READY_INTERVAL=0 bash <<'FRESH_SETUP_FIXTURE'

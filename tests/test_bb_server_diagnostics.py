@@ -54,8 +54,14 @@ npm() {
 # Actual preflight remains intact. Installation alone is replaced with inert
 # bookkeeping, never npm, an application, a service or an installed module.
 bb_install_package() {
+    if [[ ${READINESS_EVIDENCE:-0} == 1 ]]; then
+        [[ $app_active == 0 && $ingress_active == 0 ]] || { event forbidden-running-install; return 97; }
+    fi
     event install; installed=1
     [[ ${FAIL_INSTALL:-0} != 1 ]] || { bb_server_failure npm.install; return 1; }
+    if [[ ${READINESS_EVIDENCE:-0} == 1 ]]; then
+        printf 'updated inert package\n' > "$HOME/.config/setup-bb-server/fixture-package-revision"
+    fi
     if [[ ! -f "$HOME/.config/setup-bb-server/package-owner" ]]; then
         printf '%s\n' "$BB_PACKAGE_PATH" > "$HOME/.config/setup-bb-server/package-owner.next"
     fi
@@ -71,7 +77,14 @@ tailscale() {
         'version --daemon') printf '{"short":"1.102.4","daemonLong":"1.102.4"}\n' ;;
         'status --json') printf '{"BackendState":"Running","Self":{"DNSName":"fixture.example.ts.net."}}\n' ;;
         'serve status')
-            if [[ ${FAIL_ROUTE:-} == occupied ]]; then printf '{"TCP":{"443":{},"38443":{},"38444":{},"38445":{}}}\n'
+            if [[ ${READINESS_EVIDENCE:-0} == 1 ]]; then
+                event route-inspection
+                if [[ $ingress_active == 1 ]]; then
+                    proxy=38886
+                    if [[ ${FAIL_NATIVE:-} == route && $installed == 1 && ${restoring:-0} == 0 ]]; then proxy=39999; fi
+                    printf '{"Foreground":{"fixture":{"TCP":{"38443":{"HTTPS":true}},"Web":{"fixture.example.ts.net:38443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:%s"}}}}}},"TCP":{"45454":{"HTTPS":true}},"Web":{"unrelated.example.ts.net:45454":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:45555"}}}}}\n' "$proxy"
+                else printf '{}\n'; fi
+            elif [[ ${FAIL_ROUTE:-} == occupied ]]; then printf '{"TCP":{"443":{},"38443":{},"38444":{},"38445":{}}}\n'
             elif [[ $ingress_active == 1 && ! ( ${FAIL_READY:-} == route && $installed == 1 ) ]]; then
                 printf '{"Foreground":{"fixture":{"TCP":{"443":{"HTTPS":true}},"Web":{"fixture.example.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:38886"}}}}}}}\n'
             else printf '{}\n'; fi ;;
@@ -87,7 +100,9 @@ systemctl() {
                 mv "$HOME/.config/systemd/user" "$HOME/.config/systemd/renamed"
                 ln -s "$HOME/.config/systemd/renamed" "$HOME/.config/systemd/user"
             fi
-            if [[ ${TMPDIR_CUSTOMIZATION:-0} == 1 && $3 == setup-bb-app.service ]]; then
+            if [[ -n ${REVIEWED_DROPINS:-} && $3 == setup-bb-app.service ]]; then
+                printf 'FragmentPath=%s\nDropInPaths=%s\n' "$HOME/.config/systemd/user/$3" "$REVIEWED_DROPINS"
+            elif [[ ${TMPDIR_CUSTOMIZATION:-0} == 1 && $3 == setup-bb-app.service ]]; then
                 printf 'FragmentPath=%s\nDropInPaths=%s\n' "$HOME/.config/systemd/user/$3" "$HOME/.config/systemd/user/$3.d/10-tmpdir.conf"
             else
                 printf '%s\n' "${UNIT_DETAILS:-FragmentPath=}" 'DropInPaths='
@@ -97,12 +112,18 @@ systemctl() {
             [[ ${FAIL_READY:-} != app-active || $installed == 0 ]] && [[ $app_active == 1 ]] ;;
         *' is-active '*setup-bb-ingress.service)
             [[ ${FAIL_READY:-} != ingress-active || $installed == 0 ]] && [[ $ingress_active == 1 ]] ;;
-        *' stop setup-bb-ingress.service') event stop-ingress; [[ ${STUCK:-} == ingress ]] || ingress_active=0 ;;
+        *' stop setup-bb-ingress.service')
+            event stop-ingress
+            if [[ $installed == 1 ]]; then restoring=1; fi
+            [[ ${STUCK:-} == ingress ]] || ingress_active=0 ;;
         *' stop setup-bb-app.service') event stop-app; [[ ${STUCK:-} == app ]] || app_active=0 ;;
         *' daemon-reload') event reload ;;
         *' enable setup-bb-app.service') event enable ;;
         *' disable setup-bb-app.service') event disable ;;
-        *' start setup-bb-app.service') event start-app; app_active=1; ingress_active=1 ;;
+        *' start setup-bb-app.service')
+            event start-app
+            if [[ ${FAIL_NATIVE:-} == start && ${restoring:-0} == 0 ]]; then noisy_failure; return 1; fi
+            app_active=1; ingress_active=1 ;;
         *' start setup-bb-ingress.service') event start-ingress; ingress_active=1 ;;
         *) event UNEXPECTED-systemctl; return 97 ;;
     esac
@@ -279,6 +300,281 @@ check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
                     self.assertEqual(sentinel.read_text(), '{"private":"' + SECRET + '"}')
                     self.assertEqual(sentinel.stat().st_mode & 0o7777, 0o600)
                     self.assertIn('bb-guard app-start', (self.home / '.config/systemd/user/setup-bb-app.service').read_text())
+
+    def inherited_environment(self):
+        """Captured service selection; all inputs and native addons are synthetic."""
+        self.active()
+        directory = self.home / '.config/systemd/user/setup-bb-app.service.d'
+        directory.mkdir(mode=0o775)
+        directory.chmod(0o775)
+        reference = self.seed(str(directory.relative_to(self.home)) + '/env.conf',
+                              '[Service]\nEnvironmentFile=%h/.env.local\n')
+        reference.chmod(0o664)
+        self.env.update(REVIEWED_DROPINS=str(reference), READINESS_EVIDENCE='1')
+        self.seed('.env.local', 'UNRELATED=' + SECRET + '\n')
+        self.seed('.bb/host-id', 'fixture-host\n')
+        self.seed('.bb/auth.json', '{"hostId":"fixture-host","private":"' + SECRET + '"}')
+        self.seed('.bb/env.json', '{"env":{"KEY":"' + SECRET + '"}}')
+        self.seed('.bb/config.json', '{"config":{"BB_APP_URL":"https://fixture.example.ts.net:38443"},"providers":{"keep":"native"}}')
+        self.seed('.config/setup-bb-server/endpoint', 'fixture.example.ts.net 38443 https://fixture.example.ts.net:38443\n')
+        self.seed('.config/setup-bb-server/fixture-package-revision', 'prior inert package\n')
+        self.seed('.bb/project-data', 'unrelated projects and sessions\n')
+        self.seed('.config/systemd/user/unrelated.service', 'unrelated service\n')
+        self.package.mkdir()
+        self.seed(str(self.package.relative_to(self.home)) + '/package.json', '{"name":"bb-app"}')
+        native = self.package / 'node_modules/fs-native-extensions'
+        native.mkdir(parents=True)
+        (native / 'index.js').write_text('''const fs=require('fs');
+exports.tryLock=()=>{
+  fs.appendFileSync(process.env.EVENTS, 'native-lock\\n');
+  if(process.env.FAIL_NATIVE==='lock') throw new Error('DO-NOT-LOG-FIXTURE-SECRET');
+  return true;
+};
+exports.unlock=()=>{fs.appendFileSync(process.env.EVENTS, 'native-unlock\\n')};
+''')
+        return reference
+
+    def preserved_inputs(self, reference):
+        paths = [self.home / name for name in ('.env.local', '.bb/host-id', '.bb/auth.json',
+                 '.bb/env.json', '.bb/config.json', '.bb/project-data',
+                 '.config/systemd/user/unrelated.service', '.config/setup-bb-server/endpoint',
+                 '.config/setup-bb-server/package-owner')]
+        if reference.parent.exists():
+            paths += [reference.parent, *reference.parent.iterdir()]
+        if (self.home / '.cache/bb/tmp').exists():
+            paths += [self.home / '.cache/bb/tmp', self.home / '.cache/bb/tmp/keep']
+        return {p: (p.lstat().st_dev, p.lstat().st_ino, p.lstat().st_uid, p.lstat().st_gid,
+                    p.lstat().st_mode, p.lstat().st_nlink,
+                    p.read_bytes() if p.is_file() else None) for p in paths if p.exists()}
+
+    def logged_maintenance(self, *, env=None, extra=''):
+        logging = '\n'.join(simple_function(self.source, name) for name in
+                            ('start_setup_log', 'finish_setup_log', 'bb_native_app_ready'))
+        # Transport/process observations only. Native JSON/identity/route checks,
+        # locks, caller aggregation and logging remain the actual implementation.
+        logging += r'''
+upload_log() { cp -- "$SETUP_LOG_FILE" "$EVENTS.uploaded"; }
+date() { printf '%s\n' "$FIXTURE_RUN"; }
+check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
+bb_managed_app_process() {
+    event managed-process
+    [[ ${FAIL_NATIVE:-} != process || $installed == 0 || ${restoring:-0} == 1 ]]
+}
+curl() {
+    local phase=${FAIL_NATIVE:-} late=0
+    if [[ $installed == 1 && ${restoring:-0} == 0 ]]; then late=1; fi
+    case "${*: -1}" in
+        http://127.0.0.1:38886/health)
+            event native-health
+            if [[ $phase == health && $late == 1 ]]; then noisy_failure; return 1; fi
+            if [[ $phase == malformed && $late == 1 ]]; then printf 'DO-NOT-LOG-FIXTURE-SECRET'; return; fi
+            printf '{"ok":true,"launchId":"fixture-launch"}\n' ;;
+        http://127.0.0.1:38887/status)
+            event native-host-status
+            if [[ $phase == host-status && $late == 1 ]]; then noisy_failure; return 1; fi
+            local host=fixture-host connected=true url=http://127.0.0.1:38886
+            if [[ $late == 1 ]]; then
+                case "$phase" in host-id) host=foreign-host;; disconnected) connected=false;; host-url) url=http://foreign.invalid;; esac
+            fi
+            printf '{"connected":%s,"hostId":"%s","serverUrl":"%s"}\n' "$connected" "$host" "$url" ;;
+        *)
+            [[ "$*" == *'https://fixture.example.ts.net:38443/ -o /dev/null' ]] || { event UNEXPECTED-https; return 97; }
+            event private-https
+            [[ $phase != https || $late == 0 ]] || noisy_failure ;;
+    esac
+}
+'''
+        self.events.write_text('')
+        self.log_attempt = getattr(self, 'log_attempt', 0) + 1
+        result = self.run_code('main', extra=self.ordinary_caller() + '\n' + logging + '\n' + extra,
+                               env=dict(env or {}, FIXTURE_RUN='run-' + str(self.log_attempt)),
+                               log_paths=True, native_config=True)
+        uploaded = Path(str(self.events) + '.uploaded').read_text()
+        self.assertNotIn(SECRET, uploaded)
+        self.assertNotIn('[diagnostic.unknown]', uploaded)
+        self.assertNotIn('forbidden', self.events.read_text())
+        for expected in ('INDEPENDENT_WORK', 'REBOOT_CHECK', 'Run log saved to:'):
+            self.assertIn(expected, uploaded)
+        return result, uploaded, self.events.read_text().splitlines()
+
+    def test_captured_environment_reference_completes_logged_ordinary_maintenance(self):
+        reference = self.inherited_environment()
+        for name, mode, combined in (('env.conf', 0o664, False), ('20-env-local.conf', 0o664, False),
+                                     ('env.conf', 0o600, False), ('env.conf', 0o664, True),
+                                     ('20-env-local.conf', 0o600, True)):
+            reference = reference.rename(reference.with_name(name))
+            reference.chmod(mode)
+            if combined and not (reference.parent / '10-tmpdir.conf').exists():
+                target = self.home / '.cache/bb/tmp'
+                target.mkdir(parents=True, mode=0o700)
+                self.seed('.cache/bb/tmp/keep', 'existing temporary data\n')
+                self.seed(str(reference.parent.relative_to(self.home)) + '/10-tmpdir.conf',
+                          '[Service]\nEnvironment=TMPDIR=' + str(target) + '\n')
+            self.env['REVIEWED_DROPINS'] = ' '.join(str(p) for p in sorted(reference.parent.iterdir()))
+            before = self.preserved_inputs(reference)
+            for attempt in range(2):
+                with self.subTest(name=name, mode=oct(mode), combined=combined, attempt=attempt):
+                    result, uploaded, events = self.logged_maintenance()
+                    self.assertEqual(result.returncode, 0, result)
+                    self.assertIn('PLUGIN_REFRESH:ready', uploaded)
+                    self.assertIn('BB available privately at https://fixture.example.ts.net:38443', uploaded)
+                    self.assertNotIn('Setup completed with errors', uploaded)
+                    order = [events.index(e) for e in ('stop-ingress', 'stop-app', 'install', 'native-lock',
+                                                       'native-unlock', 'start-app')]
+                    self.assertEqual(order, sorted(order))
+                    after_start = events[events.index('start-app') + 1:]
+                    self.assertEqual(after_start, ['managed-process', 'native-health', 'native-host-status',
+                                                  'route-inspection', 'private-https'])
+                    self.assertEqual(self.preserved_inputs(reference), before)
+                    self.assertEqual(sorted(p.name for p in reference.parent.iterdir()),
+                                     (['10-tmpdir.conf'] if combined else []) + [name])
+
+    def test_ordinary_maintenance_does_not_seed_environment_inheritance(self):
+        reference = self.inherited_environment()
+        reference.unlink()
+        (self.home / '.env.local').unlink()
+        reference.parent.rmdir()
+        del self.env['REVIEWED_DROPINS']
+        for selection in ('absent', 'empty', 'tmpdir-only'):
+            with self.subTest(selection=selection):
+                if selection == 'empty':
+                    reference.parent.mkdir(mode=0o775)
+                    reference.parent.chmod(0o775)
+                if selection == 'tmpdir-only':
+                    target = self.home / '.cache/bb/tmp'
+                    target.mkdir(parents=True, mode=0o700)
+                    self.seed('.cache/bb/tmp/keep', 'existing temporary data\n')
+                    self.seed(str(reference.parent.relative_to(self.home)) + '/10-tmpdir.conf',
+                              '[Service]\nEnvironment=TMPDIR=' + str(target) + '\n')
+                    self.env['TMPDIR_CUSTOMIZATION'] = '1'
+                before = self.preserved_inputs(reference)
+                result, uploaded, events = self.logged_maintenance()
+                self.assertEqual(result.returncode, 0, result)
+                self.assertIn('PLUGIN_REFRESH:ready', uploaded)
+                self.assertEqual(events[-1], 'private-https')
+                self.assertEqual(self.preserved_inputs(reference), before)
+                self.assertFalse((self.home / '.env.local').exists())
+                self.assertFalse(reference.exists())
+                self.assertFalse(reference.with_name('20-env-local.conf').exists())
+                if selection == 'absent':
+                    self.assertFalse(reference.parent.exists())
+
+    def test_inherited_environment_failures_restore_services_not_original_success(self):
+        reference = self.inherited_environment()
+        before = self.preserved_inputs(reference)
+        units = [self.home / ('.config/systemd/user/setup-bb-' + kind + '.service')
+                 for kind in ('app', 'ingress')]
+        prior_units = {p: p.read_bytes() for p in units}
+        for failure, label in (('install', 'npm.install'), ('lock', 'config.locks'),
+                               ('start', 'update.start-app'), ('process', 'readiness.process'),
+                               ('health', 'readiness.health'), ('host-status', 'readiness.host-status'),
+                               ('host-id', 'readiness.native'), ('host-url', 'readiness.native'),
+                               ('disconnected', 'readiness.native'), ('malformed', 'readiness.native'),
+                               ('route', 'readiness.route'), ('https', 'readiness.https')):
+            with self.subTest(failure=failure):
+                revision = self.seed('.config/setup-bb-server/fixture-package-revision', 'prior inert package\n')
+                env = {'FAIL_INSTALL': '1'} if failure == 'install' else {'FAIL_NATIVE': failure}
+                result, uploaded, events = self.logged_maintenance(env=env)
+                self.assertEqual(result.returncode, 1, result)
+                self.assertIn('[' + label + ']', uploaded)
+                self.assertIn('PLUGIN_REFRESH:block-default', uploaded)
+                self.assertIn('Setup completed with errors', uploaded)
+                self.assertNotIn('BB available privately', uploaded)
+                self.assertNotIn('restoration incomplete', uploaded)
+                self.assertNotIn('[restore.', uploaded)
+                self.assertEqual(events.count('install'), 1)
+                self.assertLess(events.index('stop-ingress'), events.index('stop-app'))
+                self.assertLess(events.index('stop-app'), events.index('install'))
+                self.assertLess(events.index('install'), events.index('start-app'))
+                self.assertEqual(events[-4:], ['managed-process', 'native-health', 'native-host-status', 'start-ingress'])
+                self.assertEqual(self.preserved_inputs(reference), before)
+                self.assertEqual({p: p.read_bytes() for p in units}, prior_units)
+                # Restoration restores prior services, not a package rollback.
+                self.assertEqual(revision.read_text(), 'prior inert package\n' if failure == 'install'
+                                 else 'updated inert package\n')
+
+        result, uploaded, events = self.logged_maintenance(env={'FAIL_INSTALL': '1', 'FAIL_RESTORE_ARTIFACTS': '1'})
+        self.assertEqual(result.returncode, 1, result)
+        self.assertLess(uploaded.index('[npm.install]'), uploaded.index('[restore.artifacts]'))
+        self.assertIn('restoration incomplete', uploaded)
+        self.assertIn('PLUGIN_REFRESH:block-default', uploaded)
+        self.assertNotIn('start-app', events)
+        self.assertEqual(self.preserved_inputs(reference), before)
+
+    def test_inherited_environment_success_does_not_clear_unrelated_failure(self):
+        reference = self.inherited_environment()
+        before = self.preserved_inputs(reference)
+        result, uploaded, events = self.logged_maintenance(extra='update_dependencies() { return 1; }')
+        self.assertEqual(result.returncode, 1, result)
+        self.assertIn('PLUGIN_REFRESH:ready', uploaded)
+        self.assertIn('BB available privately at https://fixture.example.ts.net:38443', uploaded)
+        self.assertIn('Setup completed with errors', uploaded)
+        self.assertNotIn('BB server setup incomplete', uploaded)
+        self.assertEqual(events[-1], 'private-https')
+        self.assertEqual(self.preserved_inputs(reference), before)
+
+    def test_inherited_environment_unsafe_neighbors_fail_before_stop_and_finalize(self):
+        reference = self.inherited_environment()
+        source = self.home / '.env.local'
+        for case in ('extra-entry', 'duplicate', 'optional', 'source-missing', 'source-public',
+                     'reference-world-write', 'reference-executable', 'reference-link',
+                     'loaded-selection', 'loaded-fragment', 'late-mode'):
+            with self.subTest(case=case):
+                env, extra, added = {}, '', None
+                if case in ('extra-entry', 'duplicate'):
+                    added = self.seed(str(reference.parent.relative_to(self.home)) +
+                                      ('/.hidden' if case == 'extra-entry' else '/20-env-local.conf'), reference.read_text())
+                elif case == 'optional':
+                    reference.write_text('[Service]\nEnvironmentFile=-%h/.env.local\n')
+                elif case == 'source-missing':
+                    source.unlink()
+                elif case == 'source-public':
+                    source.chmod(0o640)
+                elif case == 'reference-world-write':
+                    reference.chmod(0o666)
+                elif case == 'reference-executable':
+                    reference.chmod(0o764)
+                elif case == 'reference-link':
+                    added = self.seed('reference-target', reference.read_text())
+                    reference.unlink()
+                    reference.symlink_to(added)
+                elif case == 'loaded-selection':
+                    env['REVIEWED_DROPINS'] = str(reference) + ' /unverified/extra.conf'
+                elif case == 'loaded-fragment':
+                    extra = 'systemctl() { printf "FragmentPath=/unverified/app.service\\nDropInPaths=%s\\n" "$REVIEWED_DROPINS"; }'
+                elif case == 'late-mode':
+                    extra = 'loginctl() { chmod 600 "$HOME/.config/systemd/user/setup-bb-app.service.d/env.conf"; printf "yes\\n"; }'
+                before = self.preserved_inputs(reference)
+                if case == 'late-mode':
+                    item = list(before[reference]); item[4] = 0o100600
+                    before[reference] = tuple(item)
+                result, uploaded, events = self.logged_maintenance(env=env, extra=extra)
+                self.assertEqual(result.returncode, 1, result)
+                self.assertRegex(uploaded, r'\[preflight\.(unit-dropins|app-unit)\]')
+                self.assertIn('PLUGIN_REFRESH:block-default', uploaded)
+                self.assertIn('Setup completed with errors', uploaded)
+                self.assertNotIn('BB available privately', uploaded)
+                self.assertFalse(set(events) & {'stop-ingress', 'stop-app', 'install', 'native-lock', 'start-app'})
+                self.assertEqual(self.preserved_inputs(reference), before)
+                if reference.is_symlink():
+                    reference.unlink()
+                reference.write_text('[Service]\nEnvironmentFile=%h/.env.local\n')
+                reference.chmod(0o664)
+                self.seed('.env.local', 'UNRELATED=' + SECRET + '\n')
+                if added:
+                    added.unlink()
+
+    def test_existing_selection_gates_do_not_activate_inherited_environment(self):
+        reference = self.inherited_environment()
+        before = self.preserved_inputs(reference)
+        for extra, status in (('BB_SERVER=0', 0), ('unset BB_SERVER', 0),
+                              ('bb_native_ubuntu_id() { printf "debian\\n"; }', 1)):
+            with self.subTest(gate=extra):
+                result, uploaded, events = self.logged_maintenance(extra=extra)
+                self.assertEqual(result.returncode, status, result)
+                self.assertEqual(events, [])
+                self.assertNotIn('BB available privately', uploaded)
+                self.assertEqual(self.preserved_inputs(reference), before)
 
     def test_changed_customization_before_mutation_keeps_caller_incomplete(self):
         override = self.customize()
