@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 
+from bb_managed_unit_fixture import managed_app_unit, managed_ingress_unit
 from extract_setup_fixture import definitions, validate_function
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -183,6 +184,7 @@ class BbServerDiagnostics(unittest.TestCase):
             if path.is_dir():
                 path.chmod(0o700)
         self.home.chmod(0o700)
+        self.seed('.env.local', '')
 
     def seed(self, name, value):
         target = self.home / name
@@ -192,8 +194,8 @@ class BbServerDiagnostics(unittest.TestCase):
 
     def active(self):
         self.env['ACTIVE'] = '1'
-        self.seed('.config/systemd/user/setup-bb-app.service', '# setup-managed bb app v1\n')
-        self.seed('.config/systemd/user/setup-bb-ingress.service', '# setup-managed bb ingress v1\n')
+        self.seed('.config/systemd/user/setup-bb-app.service', managed_app_unit(self.home))
+        self.seed('.config/systemd/user/setup-bb-ingress.service', managed_ingress_unit(self.home))
         self.seed('.config/setup-bb-server/endpoint', 'fixture.example.ts.net 443 https://fixture.example.ts.net\n')
         self.seed('.config/setup-bb-server/package-owner', str(self.package) + '\n')
 
@@ -244,6 +246,8 @@ class BbServerDiagnostics(unittest.TestCase):
     def ordinary_caller(self):
         names = re.findall(r'^(\w+)\(\) [({]', self.source, re.M)
         retained = {'setup_bb_server', 'run_setup_tasks', 'main',
+                    'create_env_local', 'migrate_token_files', 'setup_load_environment',
+                    'setup_environment_failure', 'setup_trim', 'setup_environment_value',
                     'print_error', 'print_warning', 'print_message', 'print_success'}
         stubs = '\n'.join(name + '() { :; }' for name in names
                           if not name.startswith('bb_') and name not in retained)
@@ -302,7 +306,6 @@ check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
                     self.assertIn('bb-guard app-start', (self.home / '.config/systemd/user/setup-bb-app.service').read_text())
 
     def inherited_environment(self):
-        """Captured service selection; all inputs and native addons are synthetic."""
         self.active()
         directory = self.home / '.config/systemd/user/setup-bb-app.service.d'
         directory.mkdir(mode=0o775)
@@ -310,6 +313,8 @@ check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
         reference = self.seed(str(directory.relative_to(self.home)) + '/env.conf',
                               '[Service]\nEnvironmentFile=%h/.env.local\n')
         reference.chmod(0o664)
+        self.seed('.config/systemd/user/setup-bb-app.service',
+                  managed_app_unit(self.home, origin='https://fixture.example.ts.net:38443'))
         self.env.update(REVIEWED_DROPINS=str(reference), READINESS_EVIDENCE='1')
         self.seed('.env.local', 'UNRELATED=' + SECRET + '\n')
         self.seed('.bb/host-id', 'fixture-host\n')
@@ -350,8 +355,6 @@ exports.unlock=()=>{fs.appendFileSync(process.env.EVENTS, 'native-unlock\\n')};
     def logged_maintenance(self, *, env=None, extra=''):
         logging = '\n'.join(simple_function(self.source, name) for name in
                             ('start_setup_log', 'finish_setup_log', 'bb_native_app_ready'))
-        # Transport/process observations only. Native JSON/identity/route checks,
-        # locks, caller aggregation and logging remain the actual implementation.
         logging += r'''
 upload_log() { cp -- "$SETUP_LOG_FILE" "$EVENTS.uploaded"; }
 date() { printf '%s\n' "$FIXTURE_RUN"; }
@@ -447,17 +450,110 @@ curl() {
                     self.seed(str(reference.parent.relative_to(self.home)) + '/10-tmpdir.conf',
                               '[Service]\nEnvironment=TMPDIR=' + str(target) + '\n')
                     self.env['TMPDIR_CUSTOMIZATION'] = '1'
+                source = self.home / '.env.local'
+                source.unlink(missing_ok=True)
                 before = self.preserved_inputs(reference)
                 result, uploaded, events = self.logged_maintenance()
                 self.assertEqual(result.returncode, 0, result)
                 self.assertIn('PLUGIN_REFRESH:ready', uploaded)
                 self.assertEqual(events[-1], 'private-https')
-                self.assertEqual(self.preserved_inputs(reference), before)
-                self.assertFalse((self.home / '.env.local').exists())
+                self.assertTrue(source.is_file())
+                self.assertEqual(source.stat().st_mode & 0o777, 0o600)
+                self.assertIn('# Machine-specific environment variables', source.read_text())
+                after = self.preserved_inputs(reference)
+                after.pop(source)
+                self.assertEqual(after, before)
                 self.assertFalse(reference.exists())
                 self.assertFalse(reference.with_name('20-env-local.conf').exists())
                 if selection == 'absent':
                     self.assertFalse(reference.parent.exists())
+
+    def test_reference_source_and_legacy_tokens_survive_real_initialization(self):
+        reference = self.inherited_environment()
+        source = self.home / '.env.local'
+        for state, mode, status in (('existing', 0o400, 0), ('missing', None, 1),
+                                    ('unsafe', 0o640, 1)):
+            with self.subTest(state=state):
+                source.unlink(missing_ok=True)
+                if mode is not None:
+                    self.seed('.env.local', 'UNRELATED=' + SECRET + '\n').chmod(mode)
+                tokens = [self.seed(name, key + '=' + SECRET + '\n') for name, key in
+                          (('.gh_token', 'GH_TOKEN'), ('.op_token', 'OP_SERVICE_ACCOUNT_TOKEN'))]
+                before = self.preserved_inputs(reference)
+                token_state = {p: (p.read_bytes(), p.stat().st_mode, p.stat().st_ino,
+                                   p.stat().st_mtime_ns, p.stat().st_ctime_ns) for p in tokens}
+                result, uploaded, events = self.logged_maintenance()
+                self.assertEqual(result.returncode, status, result)
+                self.assertEqual(self.preserved_inputs(reference), before)
+                self.assertEqual({p: (p.read_bytes(), p.stat().st_mode, p.stat().st_ino,
+                                      p.stat().st_mtime_ns, p.stat().st_ctime_ns) for p in tokens}, token_state)
+                if status:
+                    self.assertIn('[preflight.unit-dropins]', uploaded)
+                    self.assertIn('PLUGIN_REFRESH:block-default', uploaded)
+                    self.assertFalse(set(events) & {'stop-ingress', 'stop-app', 'install', 'start-app'})
+                else:
+                    self.assertIn('PLUGIN_REFRESH:ready', uploaded)
+                    self.assertIn('private-https', events)
+
+    def test_no_reference_keeps_legacy_migration_and_data_only_loading(self):
+        reference = self.inherited_environment()
+        reference.unlink()
+        reference.parent.rmdir()
+        self.env.pop('REVIEWED_DROPINS')
+        source = self.seed('.env.local', 'BB_SERVER=1\nUNRELATED=' + SECRET + '\n')
+        source.chmod(0o400)
+        token = self.seed('.gh_token', "export GH_TOKEN='literal-$(never-run);value'\n")
+        result, uploaded, events = self.logged_maintenance(extra='''
+unset BB_SERVER
+setup_matt_pocock_skills() {
+    [[ "$GH_TOKEN" == 'literal-$(never-run);value' ]] || return 97
+    printf 'INDEPENDENT_WORK\\n'
+}
+''')
+        self.assertEqual(result.returncode, 0, result)
+        self.assertFalse(token.exists())
+        self.assertIn("GH_TOKEN='literal-$(never-run);value'", source.read_text())
+        self.assertIn('UNRELATED=' + SECRET, source.read_text())
+        self.assertEqual(source.stat().st_mode & 0o777, 0o600)
+        self.assertIn('PLUGIN_REFRESH:ready', uploaded)
+        self.assertIn('private-https', events)
+
+    def test_unsafe_reference_paths_do_not_recreate_source_or_migrate_tokens(self):
+        reference = self.inherited_environment()
+        source = self.home / '.env.local'
+        source.unlink()
+        token = self.seed('.gh_token', 'GH_TOKEN=' + SECRET + '\n')
+        for state in ('legacy-name', 'dangling-reference', 'linked-directory', 'wrong-type-directory'):
+            with self.subTest(state=state):
+                selected = reference
+                if state == 'legacy-name':
+                    selected = reference.rename(reference.with_name('20-env-local.conf'))
+                elif state == 'dangling-reference':
+                    reference.unlink()
+                    reference.symlink_to(self.root / 'missing-reference')
+                elif state == 'linked-directory':
+                    reference.parent.rename(self.home / 'saved-dropins')
+                    reference.parent.symlink_to(self.home / 'saved-dropins', target_is_directory=True)
+                elif state == 'wrong-type-directory':
+                    reference.parent.rename(self.home / 'saved-dropins')
+                    reference.parent.write_text('not a directory\n')
+                self.env['REVIEWED_DROPINS'] = str(selected)
+                result, uploaded, events = self.logged_maintenance()
+                self.assertEqual(result.returncode, 1, result)
+                self.assertFalse(source.exists())
+                self.assertEqual(token.read_text(), 'GH_TOKEN=' + SECRET + '\n')
+                self.assertIn('[preflight.unit-dropins]', uploaded)
+                self.assertIn('PLUGIN_REFRESH:block-default', uploaded)
+                self.assertFalse(set(events) & {'stop-ingress', 'stop-app', 'install', 'start-app'})
+                if state == 'legacy-name':
+                    selected.rename(reference)
+                elif state == 'dangling-reference':
+                    reference.unlink()
+                    reference.write_text('[Service]\nEnvironmentFile=%h/.env.local\n')
+                    reference.chmod(0o664)
+                else:
+                    reference.parent.unlink()
+                    (self.home / 'saved-dropins').rename(reference.parent)
 
     def test_inherited_environment_failures_restore_services_not_original_success(self):
         reference = self.inherited_environment()
@@ -489,7 +585,6 @@ curl() {
                 self.assertEqual(events[-4:], ['managed-process', 'native-health', 'native-host-status', 'start-ingress'])
                 self.assertEqual(self.preserved_inputs(reference), before)
                 self.assertEqual({p: p.read_bytes() for p in units}, prior_units)
-                # Restoration restores prior services, not a package rollback.
                 self.assertEqual(revision.read_text(), 'prior inert package\n' if failure == 'install'
                                  else 'updated inert package\n')
 
@@ -563,6 +658,35 @@ curl() {
                 self.seed('.env.local', 'UNRELATED=' + SECRET + '\n')
                 if added:
                     added.unlink()
+
+    def test_marked_custom_app_fragments_refuse_before_stop_and_finalize(self):
+        reference = self.inherited_environment()
+        fragment = self.home / '.config/systemd/user/setup-bb-app.service'
+        original = fragment.read_text()
+        for selection in ('environment', 'empty', 'absent'):
+            if selection == 'empty':
+                reference.unlink()
+                self.env.pop('REVIEWED_DROPINS')
+            elif selection == 'absent':
+                reference.parent.rmdir()
+            for content in (original.replace('[Service]\n', '[Service]\nExecStop=/unsupported/hook\n'),
+                            original.replace('Type=simple\n', 'Type=simple\nEnvironmentFile=/other\n'),
+                            original.replace('Restart=always', 'Restart=no'),
+                            original.replace(' app-ready\n', ' ingress-start\n'),
+                            original.replace('Environment=HOME=', 'Environment=EXTRA='),
+                            original.replace('/bin/bb-app\n', '/bin/other\n')):
+                with self.subTest(selection=selection, content=content):
+                    fragment.write_text(content)
+                    before = self.preserved_inputs(reference)
+                    result, uploaded, events = self.logged_maintenance()
+                    self.assertEqual(result.returncode, 1, result)
+                    self.assertIn('[preflight.unit-dropins]', uploaded)
+                    self.assertIn('PLUGIN_REFRESH:block-default', uploaded)
+                    self.assertIn('Setup completed with errors', uploaded)
+                    self.assertFalse(set(events) & {'stop-ingress', 'stop-app', 'install', 'native-lock', 'start-app'})
+                    self.assertEqual(fragment.read_text(), content)
+                    self.assertEqual(self.preserved_inputs(reference), before)
+        fragment.write_text(original)
 
     def test_existing_selection_gates_do_not_activate_inherited_environment(self):
         reference = self.inherited_environment()

@@ -7,13 +7,14 @@ import subprocess
 import tempfile
 import unittest
 
+from bb_managed_unit_fixture import managed_app_unit, managed_ingress_unit
 from extract_setup_fixture import validate_function
 
 ROOT = Path(__file__).resolve().parents[1]
 UNITS = ('setup-bb-app.service', 'setup-bb-ingress.service')
 REAL = ('bb_server_failure', 'bb_setup_directory_preflight', 'bb_owned_metadata_file', 'bb_owned_file',
         'bb_owned_script', 'bb_owned_safe_directory', 'bb_unit_dropins_empty', 'bb_tmpdir_snapshot',
-        'bb_unit_dropins_snapshot', 'bb_unit_preflight', 'setup_bb_server',
+        'bb_dropins_selection', 'bb_unit_dropins_snapshot', 'bb_unit_preflight', 'setup_bb_server',
         'bb_server_selection', 'bb_server_restore_process_override',
         'run_setup_tasks', 'main')
 PYTHON_ADAPTER = r'''
@@ -26,7 +27,8 @@ assert sys.argv[1:4] == ['-I', '-S', '-']
 home = sys.argv[4]
 assert home == os.environ['HOME']
 program = sys.stdin.read()
-sys.argv = ['-', home]
+assert sys.argv[5] in ('dropins', 'fragment')
+sys.argv = ['-', home, sys.argv[5]]
 inspection = os.environ.get('FIXTURE_INSPECTION', '')
 real_open, real_stat, real_fstat = os.open, os.stat, os.fstat
 real_listdir, real_read = os.listdir, os.read
@@ -151,7 +153,13 @@ set -uo pipefail
 # suppresses systemctl stderr. No inherited nonstandard descriptor is used.
 exec 3>&2
 source "$1"
-/usr/bin/python3() { builtin command /usr/bin/python3 -I -S "$FIXTURE_PYTHON_ADAPTER" "$@"; }
+/usr/bin/python3() {
+    if [[ -n "${FIXTURE_SNAPSHOT_OUTPUT:-}" ]]; then
+        printf '%s\n' "$FIXTURE_SNAPSHOT_OUTPUT"
+    else
+        builtin command /usr/bin/python3 -I -S "$FIXTURE_PYTHON_ADAPTER" "$@"
+    fi
+}
 print_error() { printf 'ERROR: %s\n' "$1"; }
 print_message() { printf 'INFO: %s\n' "$1"; }
 print_warning() { printf 'WARNING: %s\n' "$1"; }
@@ -286,7 +294,7 @@ finish_setup_log() { printf 'FINAL_STATUS=%s\n' "$1"; return "$1"; }
 BOLD='' NC='' GRAY='' GREEN='' BB_SERVER=1
 case "$FIXTURE_MODE" in
     setup) setup_bb_server ;;
-    unit) bb_unit_preflight "$FIXTURE_UNIT" "$HOME/.config/systemd/user/$FIXTURE_UNIT" ;;
+    unit) bb_unit_preflight "$FIXTURE_UNIT" "$HOME/.config/systemd/user/$FIXTURE_UNIT" "${FIXTURE_EXPECTED:-}" ;;
     caller) main ;;
     checkpoint) main ;;
     *) exit 97 ;;
@@ -351,9 +359,8 @@ class BbServicePreflightTests(unittest.TestCase):
             directory.mkdir(parents=True, exist_ok=True)
             directory.chmod(0o700)
         self.units = self.home / '.config/systemd/user'
-        for unit, marker in zip(UNITS, ('# setup-managed bb app v1',
-                                       '# setup-managed bb ingress v1')):
-            (self.units / unit).write_text(marker + '\n')
+        for unit, content in zip(UNITS, (managed_app_unit(self.home), managed_ingress_unit(self.home))):
+            (self.units / unit).write_text(content)
             (self.units / unit).chmod(0o600)
         for relative in ('.env.local', '.bb/auth.json'):
             (self.home / relative).write_text('fixture-secret: preserve without reading\n')
@@ -387,7 +394,7 @@ class BbServicePreflightTests(unittest.TestCase):
         return path
 
     def run_preflight(self, unit=UNITS[0], mode='setup', systemd='clean', status=1, inspection='',
-                      selection=('10-tmpdir.conf',)):
+                      selection=('10-tmpdir.conf',), snapshot_output='', expected_snapshot=''):
         before = snapshot(self.root)
         result = subprocess.run(
             ['/bin/bash', '--noprofile', '--norc', '-c', HARNESS, '_', str(self.helpers)],
@@ -395,6 +402,7 @@ class BbServicePreflightTests(unittest.TestCase):
                  'FIXTURE_UID': str(os.getuid()), 'FIXTURE_UNIT': unit,
                  'FIXTURE_MODE': mode, 'FIXTURE_SYSTEMD': systemd, 'FIXTURE_INSPECTION': inspection,
                  'FIXTURE_PYTHON_ADAPTER': str(self.python_adapter),
+                 'FIXTURE_SNAPSHOT_OUTPUT': snapshot_output, 'FIXTURE_EXPECTED': expected_snapshot,
                  'FIXTURE_SELECTED': ' '.join(str(self.units / (UNITS[0] + '.d') / name)
                                               for name in selection)},
             cwd=self.home, stdin=subprocess.DEVNULL, capture_output=True,
@@ -406,7 +414,6 @@ class BbServicePreflightTests(unittest.TestCase):
         self.assertNotIn(str(self.home), result.stdout)
         after = snapshot(self.root)
         if inspection == 'env-late-selection-race':
-            # Only the fixture's deliberate rename may change names/timestamps.
             directory = str((self.units / (UNITS[0] + '.d')).relative_to(self.root))
             original = list(before.pop(directory + '/env.conf'))
             original[8] = after[directory + '/20-env-local.conf'][8]
@@ -517,6 +524,73 @@ class BbServicePreflightTests(unittest.TestCase):
         (self.units / UNITS[0]).unlink()
         result = self.run_preflight(mode='caller', systemd='reviewed', selection=('env.conf',))
         self.assert_caller_refusal(result)
+
+    def test_snapshot_and_loaded_selection_both_refuse_invalid_selection_grammar(self):
+        self.environment_reference()
+        digest = 'a' * 64
+        invalid = [f'dropins:{names}:{digest}' for names in
+                   ('', 'other.conf', 'env.conf,20-env-local.conf', 'env.conf,10-tmpdir.conf',
+                    '10-tmpdir.conf,10-tmpdir.conf', 'env.conf,env.conf', '../env.conf')]
+        invalid += ['dropins:env.conf:' + 'A' * 64, 'dropins:env.conf:' + 'a' * 63,
+                    'dropins:env.conf:' + digest + ':extra', 'dropins:env.conf:' + digest + '\nextra']
+        for value in invalid:
+            with self.subTest(snapshot=value):
+                result = self.run_preflight(mode='caller', systemd='reviewed', selection=('env.conf',),
+                                            snapshot_output=value)
+                self.assert_caller_refusal(result)
+                self.assertNotIn('SYSTEMD_SHOW', result.stderr)
+                self.run_preflight(mode='unit', systemd='reviewed', selection=('env.conf',),
+                                   expected_snapshot=value)
+
+    def test_prior_generated_fragment_variants_retain_compatibility(self):
+        self.environment_reference()
+        fragment = self.units / UNITS[0]
+        for version, origin, tailscale in (
+            ('22.20.0', 'https://prior.example.ts.net', '/usr/local/bin/tailscale'),
+            ('24.20.0', 'https://fixture.example.ts.net:38443', '/usr/bin/tailscale'),
+            ('24.20.0+local', 'https://other.example.ts.net:65535', '/usr/local/bin/tailscale'),
+        ):
+            with self.subTest(version=version, origin=origin, tailscale=tailscale):
+                fragment.write_text(managed_app_unit(self.home, version=version, origin=origin, tailscale=tailscale))
+                self.run_preflight(mode='caller', systemd='reviewed', selection=('env.conf',), status=73)
+
+    def test_managed_fragment_requires_complete_exact_body(self):
+        self.environment_reference()
+        fragment = self.units / UNITS[0]
+        original = fragment.read_text()
+        for content in ('# setup-managed bb app v1\n', original + '\n',
+                        original.replace('\n', '\r\n'), original.rstrip(),
+                        original + '[Service]\nExecStop=/unsupported/hook\n',
+                        original.replace('Type=simple\n', 'Type=simple\nExecStop=/unsupported/hook\n'),
+                        original.replace('Type=simple\n', 'Type=simple\nEnvironmentFile=/other\n'),
+                        original.replace('Restart=always', 'Restart=no'),
+                        original.replace(' app-start\n', ' app-ready\n'),
+                        original.replace('TimeoutStartSec=180\n', ''),
+                        original.replace('Type=simple\n', 'Type=simple\nType=simple\n'),
+                        original.replace('/24.20.0/bin/bb-app', '/../bin/bb-app'),
+                        original.replace('/bin/bb-app', '/bin/bb-app;other'),
+                        original.replace('Environment=PATH=', 'Environment=PATH=/other:'),
+                        original.replace('/usr/bin/tailscale\n', '/other/tailscale\n'),
+                        original.replace('https://fixture.example.ts.net', 'http://fixture.example.ts.net'),
+                        original.replace('https://fixture.example.ts.net', 'https://fixture.example.ts.net:65536'),
+                        original.replace('https://fixture.example.ts.net', 'https://fixture.example.ts.net/other'),
+                        original + '\x00', original + '\u00ff', original + 'x' * 65536):
+            with self.subTest(content=content):
+                fragment.write_text(content)
+                result = self.run_preflight(mode='caller', systemd='reviewed', selection=('env.conf',))
+                self.assert_caller_refusal(result)
+                self.assertNotIn('SYSTEMD_SHOW', result.stderr)
+
+    def test_no_reference_fragment_snapshots_reject_late_changes(self):
+        for selection in ('absent', 'empty'):
+            if selection == 'empty':
+                self.add_dropin(UNITS[0], 'empty')
+            for field in ('ino', 'uid', 'gid', 'mode', 'size', 'mtime_ns', 'ctime_ns', 'content'):
+                with self.subTest(selection=selection, field=field):
+                    result = self.run_preflight(mode='checkpoint',
+                                                inspection='env-late-fragment-' + field + '-race')
+                    self.assert_caller_refusal(result)
+                    self.assertIn('[preflight.app-unit]', result.stderr)
 
     def test_environment_fragment_snapshot_invalidates_late_identity_changes(self):
         self.environment_reference()
@@ -631,7 +705,6 @@ class BbServicePreflightTests(unittest.TestCase):
         for mode in (0o400, 0o600):
             (self.home / '.env.local').chmod(mode)
             self.run_preflight(mode='caller', systemd='reviewed', status=73, selection=('env.conf',))
-        # The exception is not shared with the unit or native credential boundary.
         (self.units / UNITS[0]).chmod(0o664)
         result = self.run_preflight(mode='caller', systemd='reviewed', selection=('env.conf',))
         self.assert_caller_refusal(result)
@@ -682,7 +755,6 @@ class BbServicePreflightTests(unittest.TestCase):
                                     inspection='env-late-selection-race')
         self.assert_caller_refusal(result)
         self.assertIn('[preflight.app-unit]', result.stderr)
-        # The new selection is independently acceptable, but not under the old snapshot.
         self.run_preflight(mode='caller', systemd='reviewed', selection=('20-env-local.conf',), status=73)
 
     def reviewed(self):
