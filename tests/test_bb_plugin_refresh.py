@@ -23,7 +23,7 @@ def definitions_only(text=None):
     tree = ast.parse(path.read_text() if text is None else text)
     modules = {'ctypes', 'http.client', 'json', 'os', 're', 'signal', 'socket',
                'stat', 'subprocess', 'sys', 'time'}
-    constants = {'MAX_BYTES', 'MAX_PROCESSES', 'MAX_PLUGINS'}
+    constants = {'MAX_BYTES', 'MAX_PROCESSES'}
 
     def check_function(node):
         args = node.args
@@ -84,10 +84,6 @@ def plugin(identity='tracking', source='npm:fixture@^1', enabled=True):
             'enabled': enabled, 'status': 'running' if enabled else 'disabled', 'updateState': {}}
 
 
-def resolved(version):
-    return {'version': version, 'display': 'npm:fixture@' + version}
-
-
 class FakeApi:
     def __init__(self, plugins=None, outcomes=None):
         self.plugins = {p['id']: copy.deepcopy(p) for p in (plugins or [plugin()])}
@@ -102,41 +98,22 @@ class FakeApi:
         self.verified = True
 
     def request(self, method, path, payload=None):
-        assert self.verified
+        assert self.verified and (method, path) == ('GET', '/api/v1/plugins/safe-mode')
         self.calls.append((method, path, payload))
-        if path == '/api/v1/plugins/safe-mode':
-            return {'enabled': self.safe}
-        if path == '/api/v1/plugins':
-            return {'plugins': copy.deepcopy(list(self.plugins.values()))}
-        if path.endswith('/source'):
-            row = self.plugins[path.split('/')[-2]]
-            return {'requested': row['source'], 'resolved': resolved(row['version'])['display'],
-                    'subdirectory': 'nested/plugin', 'range': '^1', 'tagPrefix': 'fixture/',
-                    'history': [], 'engines': {}}
-        if path.endswith('/updates/check'):
-            entries = []
-            for identity, row in self.plugins.items():
-                outcome = self.outcomes[identity]
-                entry = {'id': identity, 'installed': resolved(row['version']), 'outcome': outcome}
-                if outcome == 'update-available':
-                    entry['candidate'] = resolved('1.1.0')
-                if outcome == 'incompatible':
-                    entry['blocked'] = {'version': '9.0.0', 'reasons': ['bb-engine']}
-                entries.append(entry)
-            return {'results': entries}
-        assert method == 'POST' and path.endswith('/update'), (method, path)
-        identity = path.split('/')[-2]
-        result = self.results.get(identity, 'updated')
-        if isinstance(result, Exception):
-            raise result
-        row = self.plugins[identity]
-        answer = {'applied': result == 'updated', 'from': resolved(row['version']),
-                  'to': resolved('1.1.0'), 'outcome': result}
-        if result == 'updated':
-            row['version'] = '1.1.0'
-            self.outcomes[identity] = 'current'
-        self.after_update(identity)
-        return answer
+        return {'enabled': self.safe}
+
+    def update(self):
+        for identity, row in self.plugins.items():
+            if self.outcomes[identity] != 'update-available':
+                continue
+            self.calls.append(('POST', '/api/v1/plugins/' + identity + '/update', {}))
+            result = self.results.get(identity, 'updated')
+            if isinstance(result, Exception):
+                raise result
+            if result == 'updated':
+                row['version'] = '1.1.0'
+                self.outcomes[identity] = 'current'
+            self.after_update(identity)
 
     def mutations(self):
         return [call for call in self.calls if call[1].endswith('/update')]
@@ -266,86 +243,32 @@ class Policy(unittest.TestCase):
             self.assertEqual(P.run(), 1)
         self.assertEqual(output.getvalue(), 'BB_PLUGIN_REFRESH failed discovery unknown-failure\n')
 
-    def test_current_pinned_local_bundled_and_incompatible_are_preserved(self):
-        rows = [plugin('current'), plugin('pin', 'npm:fixture@1.0.0'),
-                plugin('local', 'path:/inert/development'), plugin('builtin', 'builtin:fixture'),
-                plugin('incompatible')]
-        rows[3]['provenance'] = 'builtin'
-        api = FakeApi(rows, dict(zip([r['id'] for r in rows], ['current', 'pinned', 'pinned', 'pinned', 'incompatible'])))
-        before = copy.deepcopy(api.plugins)
-        self.assertEqual(P.refresh(api), ('checked', False))
-        self.assertEqual(api.plugins, before)
-        self.assertFalse(api.mutations())
+    def test_native_cli_owns_plugin_selection_and_zero_exit_outcomes(self):
+        for outcome in ('current', 'pinned', 'incompatible', 'unavailable', 'update-available'):
+            api = FakeApi(outcomes={'tracking': outcome})
+            api.results['tracking'] = 'rolled-back'
+            with self.subTest(outcome=outcome), patch.object(api, 'update', wraps=api.update) as update:
+                self.assertEqual(P.refresh(api), 'completed')
+                update.assert_called_once_with()
+                self.assertEqual([c for c in api.calls if c[0] == 'GET'],
+                                 [('GET', '/api/v1/plugins/safe-mode', None)])
 
-    def test_update_preserves_disabled_status_and_source_intent(self):
-        for enabled in (True, False):
-            with self.subTest(enabled=enabled):
-                api = FakeApi([plugin(enabled=enabled)])
-                self.assertEqual(P.refresh(api), ('updated', False))
-                row = api.plugins['tracking']
-                self.assertEqual(row['enabled'], enabled)
-                self.assertEqual(row['source'], 'npm:fixture@^1')
-                self.assertEqual(row['status'], 'running' if enabled else 'disabled')
-                self.assertEqual(len(api.mutations()), 1)
-
-    def test_safe_mode_does_not_check_update_sources(self):
+    def test_safe_mode_defers_without_executing_cli(self):
         api = FakeApi()
         api.safe = True
-        self.assertEqual(P.refresh(api), ('safe-mode', False))
+        with patch.object(api, 'update', side_effect=AssertionError('CLI forbidden')):
+            self.assertEqual(P.refresh(api), 'safe-mode')
         self.assertEqual(len(api.calls), 1)
 
-    def test_safe_mode_race_retains_prior_failures(self):
-        for unavailable in (False, True):
-            api = FakeApi([plugin('first'), plugin('second')],
-                          {'first': 'unavailable' if unavailable else 'current', 'second': 'update-available'})
-            api.results['second'] = P.Refusal('safe-mode')
-            self.assertEqual(P.refresh(api), ('safe-mode', unavailable))
-
-    def test_unavailable_rollback_and_partial_failure_are_not_success(self):
-        for failure in ('rolled-back', P.Refusal('native-request-failed'), P.Refusal('operation-timeout')):
-            api = FakeApi([plugin('first'), plugin('second')])
-            api.results['first'] = failure
-            self.assertEqual(P.refresh(api), ('updated', True))
-            self.assertEqual(len(api.mutations()), 2)
-        api = FakeApi(outcomes={'tracking': 'unavailable'})
-        self.assertEqual(P.refresh(api), ('checked', True))
-        self.assertFalse(api.mutations())
-
-    def test_zero_exit_equivalent_false_success_and_intent_changes_are_refused(self):
-        mutations = [lambda api: api.plugins['tracking'].update(enabled=False),
-                     lambda api: api.plugins['tracking'].update(source='npm:other'),
-                     lambda api: api.plugins['tracking'].update(status='degraded'),
-                     lambda api: api.plugins['tracking']['updateState'].update(lastFailure={'at': 42}),
-                     lambda api: api.plugins['tracking'].update(version='1.0.0')]
-        for mutation in mutations:
-            api = FakeApi()
-            api.after_update = lambda _, api=api, mutation=mutation: mutation(api)
-            with self.subTest(mutation=mutation), self.assertRaises(P.Refusal):
-                P.refresh(api)
-        api = FakeApi()
-        api.results['tracking'] = 'current'
-        self.assertEqual(P.refresh(api), ('checked', True))
-
-    def test_malformed_results_and_dev_mode_fail_before_updates(self):
-        for shape in (None, {}, {'results': []}, {'results': [None]},
-                      {'results': [{'id': 'tracking', 'installed': resolved('1.0.0'), 'outcome': 'skipped'}]},
-                      {'results': [{'id': 'tracking', 'installed': resolved('1.0.0'), 'outcome': 'current', 'devMode': True}]}):
-            api = FakeApi()
-            native = api.request
-            api.request = lambda method, path, payload=None: shape if path.endswith('/updates/check') else native(method, path, payload)
-            with self.subTest(shape=shape), self.assertRaises(P.Refusal):
-                P.refresh(api)
-            self.assertFalse(api.mutations())
+    def test_malformed_identity_json_and_safe_mode_fail_before_cli(self):
         for raw in ('{"ok":true,"ok":false}', '{', '{"x":NaN}'):
             with self.assertRaises(P.Refusal):
                 P.object_json(raw)
-
-    def test_bundled_or_path_update_selection_is_not_applied(self):
-        for source in ('path:/inert', 'builtin:fixture'):
-            api = FakeApi([plugin(source=source)])
-            with self.assertRaises(P.Refusal):
+        for shape in (None, {}, {'enabled': 'false'}):
+            api = FakeApi()
+            api.request = lambda *_: shape
+            with patch.object(api, 'update', side_effect=AssertionError('CLI forbidden')), self.assertRaises(P.Refusal):
                 P.refresh(api)
-            self.assertFalse(api.mutations())
 
 
 class Discovery(unittest.TestCase):
@@ -361,6 +284,11 @@ class Discovery(unittest.TestCase):
         self.entry.write_text('throw Error("fixture must not execute BB");\n')
         (self.entry.parent / 'start-server.js').write_text('throw Error("fixture must not execute BB");\n')
         (self.package / 'package.json').write_text(json.dumps({'name': 'bb-app', 'version': '0.44.0', 'bin': {'bb-server': 'dist/bb-server.js'}}))
+        (self.root / 'node').write_text('inert node fixture; never execute')
+        cli = self.package / 'host-daemon/dist/bb'
+        cli.parent.mkdir(parents=True)
+        cli.write_text('throw Error("fixture must not execute BB");\n')
+        (cli.parent / 'bb-chunks').mkdir()
         self.records = {}
         self.proc = types.SimpleNamespace(table=lambda: list(self.records), read=lambda pid: self.records.get(pid),
                                           peer_owned=lambda *_: True, database_open=lambda _: False)
@@ -413,7 +341,16 @@ class Discovery(unittest.TestCase):
                 return types.SimpleNamespace(status=200, getheader=lambda _: None, read=lambda _: raw)
             return types.SimpleNamespace(sock=types.SimpleNamespace(getsockname=lambda: ('127.0.0.1', 49999)),
                 connect=lambda: None, request=request, getresponse=response, close=lambda: None)
-        with patch.object(P.http.client, 'HTTPConnection', side_effect=connection):
+        native_run = P.subprocess.run
+        def execute(args, **kwargs):
+            if args[2:] == ['plugin', 'update', '--all', '--yes']:
+                self.assertEqual(args[:2], [str(self.root / 'node'), str(self.package / 'host-daemon/dist/bb')])
+                self.assertEqual(kwargs['env']['BB_SERVER_URL'], 'http://127.0.0.1:39001')
+                api.update()
+                return types.SimpleNamespace(returncode=0)
+            return native_run(args, **kwargs)
+        with patch.object(P.http.client, 'HTTPConnection', side_effect=connection), \
+                patch.object(P.subprocess, 'run', side_effect=execute):
             yield requests
 
     def run_policy(self, api=None, policy='ready', native_api=False, environment=None):
@@ -446,6 +383,80 @@ class Discovery(unittest.TestCase):
             self.records[32106] = (['node', str(self.home / '.bb-machines/host-daemon/dist/index.js')], {}, b'1')
         return data
 
+    def test_native_cli_uses_verified_package_node_and_explicit_local_selection_for_any_version(self):
+        self.server()
+        manifest = self.package / 'package.json'
+        for version in ('0.44.0', '0.45.0', '0.99.17'):
+            metadata = json.loads(manifest.read_text())
+            metadata['version'] = version
+            manifest.write_text(json.dumps(metadata))
+            files = self.files()
+            server = P.discover(files, self.proc)[0][0]
+            api = P.NativeApi(files, self.proc, server, P.time.monotonic() + 10)
+            with self.subTest(version=version), \
+                    patch.dict(P.os.environ, {'BB_CLI': '/forbidden/override', 'BB_SERVER_URL': 'https://remote.invalid',
+                        'NODE_OPTIONS': '--import=/forbidden/module', 'HTTP_PROXY': 'http://proxy.invalid',
+                        'BB_THREAD_ID': 'unrelated-thread'}, clear=True), \
+                    patch.object(P.subprocess, 'run', return_value=types.SimpleNamespace(returncode=0,
+                        stdout=b'rolled-back unavailable secret-sentinel', stderr=b'secret-sentinel')) as native:
+                api.update()
+            args, kwargs = native.call_args
+            self.assertEqual(args[0], [str(self.root / 'node'), str(self.package / 'host-daemon/dist/bb'),
+                                      'plugin', 'update', '--all', '--yes'])
+            self.assertEqual(kwargs['env'], {'HOME': str(self.home), 'PATH': str(self.root) + ':/usr/bin:/bin',
+                'BB_DATA_DIR': str(self.home / '.bb'), 'BB_SERVER_URL': 'http://127.0.0.1:39001',
+                'BB_CLI_REEXEC': '1', 'ELECTRON_RUN_AS_NODE': '1', 'NO_COLOR': '1', 'NODE_ENV': 'production',
+                'BB_APP_VERSION': version})
+            self.assertEqual(kwargs['cwd'], self.home / '.bb')
+            self.assertEqual((kwargs['stdin'], kwargs['stdout'], kwargs['stderr']), (subprocess.DEVNULL,) * 3)
+            self.assertTrue(kwargs['close_fds'])
+            self.assertGreater(kwargs['timeout'], 0)
+            self.assertLessEqual(kwargs['timeout'], 10)
+            native.assert_called_once()
+
+    def test_native_cli_failures_and_timeouts_are_controlled_and_aggregate(self):
+        self.server()
+        for error, reason in ((None, 'native-command-failed'),
+                              (subprocess.TimeoutExpired('inert-command', 1, output=b'secret-sentinel'), 'operation-timeout'),
+                              (OSError('secret-sentinel'), 'unknown-failure')):
+            files = self.files()
+            server = P.discover(files, self.proc)[0][0]
+            api = P.NativeApi(files, self.proc, server, P.time.monotonic() + 10)
+            with self.subTest(reason=reason), patch.object(api, 'verify'), \
+                    patch.object(api, 'request', return_value={'enabled': False}), \
+                    patch.object(P.subprocess, 'run', side_effect=error,
+                        return_value=types.SimpleNamespace(returncode=1, stdout=b'secret-sentinel', stderr=b'secret-sentinel')):
+                status, output = self.run_policy(api)
+            self.assertEqual((status, output), (1, f'BB_PLUGIN_REFRESH failed update {reason}\n'))
+
+    def test_unsafe_or_changed_cli_and_process_never_execute_native_command(self):
+        self.server()
+        cli = self.package / 'host-daemon/dist/bb'
+        for case in ('link', 'empty', 'writable', 'changed-process', 'changed-cli'):
+            cli.unlink(missing_ok=True)
+            cli.write_text('inert CLI')
+            cli.chmod(0o600)
+            files = self.files()
+            server = P.discover(files, self.proc)[0][0]
+            api = P.NativeApi(files, self.proc, server, P.time.monotonic() + 10)
+            if case == 'link':
+                cli.unlink()
+                cli.symlink_to(self.entry)
+            elif case == 'empty':
+                cli.write_text('')
+            elif case == 'writable':
+                cli.chmod(0o660)
+            elif case == 'changed-cli':
+                files.inspect(cli)
+                cli.write_text('changed inert CLI')
+            with self.subTest(case=case), patch.object(P.subprocess, 'run', side_effect=AssertionError('CLI forbidden')):
+                if case == 'changed-process':
+                    with patch.object(self.proc, 'read', return_value=None), self.assertRaises(P.Refusal):
+                        api.update()
+                else:
+                    with self.assertRaises(P.Refusal):
+                        api.update()
+
     def test_account_owned_data_package_and_ancestors_refresh_without_permission_repairs(self):
         for selection in ('default', 'explicit-default', 'custom', 'custom-outside-home'):
             selected = self.root / 'manual/data' if selection == 'custom-outside-home' else (
@@ -470,9 +481,9 @@ class Discovery(unittest.TestCase):
                         patch.object(P.os, 'listxattr', side_effect=AssertionError('ACL proof forbidden')), \
                         self.darwin_http(api, data=data) as requests:
                     self.assertEqual(self.run_policy(native_api=True, environment=environment),
-                                     (0, 'BB_PLUGIN_REFRESH updated\n'))
+                                     (0, 'BB_PLUGIN_REFRESH completed\n'))
                     self.assertEqual(self.run_policy(native_api=True, environment=environment),
-                                     (0, 'BB_PLUGIN_REFRESH checked\n'))
+                                     (0, 'BB_PLUGIN_REFRESH completed\n'))
                     self.assertEqual(api.mutations(), [('POST', '/api/v1/plugins/tracking/update', {})])
                     self.assertTrue(set((method, path) for method, path, _ in requests) <= {
                         ('GET', '/health'), ('GET', '/api/v1/system/config'),
@@ -629,7 +640,7 @@ class Discovery(unittest.TestCase):
             preserved = copy.deepcopy(api.plugins)
             with self.subTest(daemon=daemon), self.darwin_http(api, data=custom) as requests:
                 self.assertEqual(self.run_policy(native_api=True, environment={'BB_DATA_DIR': str(custom)}),
-                                 (0, 'BB_PLUGIN_REFRESH updated\n'))
+                                 (0, 'BB_PLUGIN_REFRESH completed\n'))
             self.assertEqual(requests[:2], [('GET', '/health', None), ('GET', '/api/v1/system/config', None)])
             self.assertEqual(api.plugins['pin'], preserved['pin'])
             self.assertEqual(api.plugins['local'], preserved['local'])
@@ -640,7 +651,7 @@ class Discovery(unittest.TestCase):
         self.assertEqual((default.stat(), (custom / 'bb.db').read_bytes()), before)
         custom.chmod(0o775)
         with self.darwin_http(FakeApi(), data=custom):
-            self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH updated\n'))
+            self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH completed\n'))
 
     @contextlib.contextmanager
     def database_activity(self, data, kind):
@@ -674,7 +685,7 @@ class Discovery(unittest.TestCase):
                 with self.database_activity(data, kind) as writes, self.darwin_http(api) as requests:
                     result = self.run_policy(native_api=True)
                 self.assertTrue(writes, 'synthetic database activity must occur in red and green')
-                self.assertEqual(result, (0, 'BB_PLUGIN_REFRESH updated\n'))
+                self.assertEqual(result, (0, 'BB_PLUGIN_REFRESH completed\n'))
                 self.assertEqual(requests[:2], [('GET', '/health', None), ('GET', '/api/v1/system/config', None)])
                 self.assertEqual(len(api.mutations()), 1)
                 self.assertFalse(api.plugins['tracking']['enabled'])
@@ -694,7 +705,7 @@ class Discovery(unittest.TestCase):
         api = FakeApi()
         with patch.object(P.os, 'open', side_effect=open_path), self.darwin_http(api) as requests:
             result = self.run_policy(native_api=True)
-        self.assertEqual(result, (0, 'BB_PLUGIN_REFRESH updated\n'))
+        self.assertEqual(result, (0, 'BB_PLUGIN_REFRESH completed\n'))
         self.assertEqual(len(api.mutations()), 1)
         self.assertEqual(requests[:2], [('GET', '/health', None), ('GET', '/api/v1/system/config', None)])
         self.assertEqual((data / 'bb.db').read_bytes()[:16], b'SQLite format 3\0')
@@ -754,7 +765,7 @@ class Discovery(unittest.TestCase):
                 info.st_uid = 0
             return info
         with patch.object(P.os, 'stat', side_effect=metadata), self.darwin_http(FakeApi()):
-            self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH updated\n'))
+            self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH completed\n'))
 
     def test_refresh_revalidates_accepted_directory_metadata_before_each_request(self):
         data = self.server()
@@ -1049,80 +1060,28 @@ class Discovery(unittest.TestCase):
         self.assertEqual(output, 'BB_PLUGIN_REFRESH failed discovery changed-local-state\n')
         self.assertEqual((data / 'bb.db').read_bytes(), original)
 
-    def test_source_failure_survives_later_update_success_safe_mode_and_verification_failure(self):
+    def test_native_failures_identify_the_operation_without_exception_text(self):
         self.server()
-        for later in ('updated', 'safe-mode', 'verification-failure'):
-            with self.subTest(later=later):
-                api = FakeApi([plugin('first'), plugin('second')],
-                              {'first': 'unavailable', 'second': 'update-available'})
-                if later == 'safe-mode':
-                    api.results['second'] = P.Refusal('safe-mode')
-                if later == 'verification-failure':
-                    api.after_update = lambda _: api.plugins['second'].update(source='npm:secret-path-sentinel')
-                status, output = self.run_policy(api)
-                self.assertEqual(status, 1)
-                self.assertIn('BB_PLUGIN_REFRESH failed update-check source-unavailable\n', output)
-                self.assertEqual(output.count('BB_PLUGIN_REFRESH failed'), 1)
-                if later != 'verification-failure':
-                    self.assertIn('BB_PLUGIN_REFRESH ' + later, output)
-                self.assertNotIn('sentinel', output)
-                self.assertEqual(len(api.mutations()), 1)
-                result = run_wrapper(output, status)
-                self.assertEqual(result.returncode, 1)
-                self.assertIn('update-check / source-unavailable', result.stdout)
-                self.assertNotIn('sentinel', result.stdout + result.stderr)
-
-    def test_native_failures_identify_the_operation_without_response_or_exception_text(self):
-        self.server()
-        cases = (
-            ('identity', 'identity', 'unverified-main-server'),
-            ('inventory', 'inventory', 'malformed-result'),
-            ('source', 'source-check', 'unverified-source-intent'),
-            ('check', 'update-check', 'malformed-result'),
-            ('rolled-back', 'update', 'rolled-back'),
-            ('timeout', 'update', 'operation-timeout'),
-            ('unknown-refusal', 'update', 'unknown-failure'),
-            ('unknown-exception', 'update', 'unknown-failure'),
-            ('current', 'verification', 'update-unverified'),
-            ('activation', 'verification', 'activation-unverified'),
-            ('final-unavailable', 'verification', 'source-unavailable'),
-        )
+        cases = (('identity', 'identity', 'unverified-main-server'),
+                 ('inventory', 'inventory', 'malformed-result'),
+                 ('timeout', 'update', 'operation-timeout'),
+                 ('unknown-exception', 'update', 'unknown-failure'))
         for case, operation, reason in cases:
+            api = FakeApi()
+            if case == 'identity':
+                api.verify = lambda: P.need(False, 'unverified-main-server')
+            elif case == 'inventory':
+                api.request = lambda *_: {'enabled': 'secret-sentinel'}
+            else:
+                api.results['tracking'] = P.Refusal('operation-timeout') if case == 'timeout' else RuntimeError('secret-sentinel')
             with self.subTest(case=case):
-                api = FakeApi()
-                native = api.request
-                def request(method, path, payload=None):
-                    if case == 'inventory' and path == '/api/v1/plugins':
-                        return {'plugins': 'secret-path-sentinel'}
-                    if case == 'source' and path.endswith('/source'):
-                        return {'requested': '/secret-path-sentinel'}
-                    if case == 'check' and path.endswith('/updates/check'):
-                        return {'results': [{'secret': 'secret-path-sentinel'}]}
-                    return native(method, path, payload)
-                api.request = request
-                if case == 'identity':
-                    api.verify = lambda: P.need(False, 'unverified-main-server')
-                if case in ('rolled-back', 'current'):
-                    api.results['tracking'] = case
-                if case == 'timeout':
-                    api.results['tracking'] = P.Refusal('operation-timeout')
-                if case == 'unknown-refusal':
-                    api.results['tracking'] = P.Refusal('safe-mode\n/secret-path-sentinel')
-                if case == 'unknown-exception':
-                    api.results['tracking'] = RuntimeError('/secret-path-sentinel')
-                if case == 'activation':
-                    api.after_update = lambda _: api.plugins['tracking'].update(status='secret-path-sentinel')
-                if case == 'final-unavailable':
-                    api.after_update = lambda _: api.outcomes.update(tracking='unavailable')
                 status, output = self.run_policy(api)
                 self.assertEqual(status, 1)
                 self.assertIn(f'BB_PLUGIN_REFRESH failed {operation} {reason}\n', output)
                 self.assertNotIn('sentinel', output)
-                self.assertLess(len(output), 200)
                 result = run_wrapper(output, status)
                 self.assertEqual(result.returncode, 1)
                 self.assertIn(f'{operation} / {reason}.', result.stdout)
-                self.assertNotIn('sentinel', result.stdout + result.stderr)
 
     def test_later_server_deferral_cannot_erase_an_earlier_server_failure(self):
         self.server()
@@ -1140,7 +1099,7 @@ class Discovery(unittest.TestCase):
         self.server(613)
         api = FakeApi([plugin(enabled=False)])
         with self.darwin_inventory(f'{os.getuid()} 613\n'.encode()) as native, self.darwin_http(api):
-            self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH updated\n'))
+            self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH completed\n'))
         self.assertGreater(native.argmax_reads, 1, 'native limit is honored during revalidation too')
         self.assertEqual(native.argmax_reads, len(native.private_reads))
         self.assertEqual(native.procargs_capacities, [1048576] * len(native.private_reads))
@@ -1268,7 +1227,7 @@ class Discovery(unittest.TestCase):
                     api = FakeApi(rows, {'disabled': 'update-available', 'pin': 'pinned', 'local': 'pinned'})
                     preserved = copy.deepcopy(api.plugins)
                     with self.darwin_inventory(table) as native, self.darwin_http(api) as requests:
-                        self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH updated\n'))
+                        self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH completed\n'))
                     self.assertTrue(native.private_reads)
                     self.assertEqual(set(native.private_reads), {100})
                     self.assertEqual(api.plugins['pin'], preserved['pin'])
@@ -1292,12 +1251,11 @@ class Discovery(unittest.TestCase):
                               {'first': 'unavailable', 'second': 'update-available'})
                 api.safe = case == 'safe-mode'
                 if case == 'failure-then-safe':
-                    api.results['second'] = P.Refusal('safe-mode')
+                    api.results['second'] = P.Refusal('native-command-failed')
                 with self.darwin_inventory(table) as native, self.darwin_http(api) as requests:
                     status, output = self.run_policy(policy=policy, native_api=True)
                 if case == 'failure-then-safe':
-                    self.assertEqual((status, output), (1, 'BB_PLUGIN_REFRESH safe-mode\n'
-                                     'BB_PLUGIN_REFRESH failed update-check source-unavailable\n'))
+                    self.assertEqual((status, output), (1, 'BB_PLUGIN_REFRESH failed update native-command-failed\n'))
                 else:
                     expected = 'readiness-deferred\nBB_PLUGIN_REFRESH absent' if case == 'readiness' else case
                     self.assertEqual((status, output), (0, f'BB_PLUGIN_REFRESH {expected}\n'))
@@ -1319,13 +1277,13 @@ class Discovery(unittest.TestCase):
                 manifest.write_bytes(original)
                 if fault == 'contract':
                     metadata = json.loads(original)
-                    metadata['version'] = '0.45.0'
+                    metadata['bin']['bb-server'] = 'unexpected-entry'
                     manifest.write_text(json.dumps(metadata))
                 with self.darwin_inventory(table) as native, self.darwin_http(api, fault) as requests, \
                         patch.object(P.time, 'monotonic', side_effect=range(1000)), patch.object(P.time, 'sleep'):
                     native.peer = fault != 'peer'
                     status, output = self.run_policy(native_api=True)
-                expected = {'contract': 'discovery unsupported-native-contract', 'peer': 'identity unverified-peer',
+                expected = {'contract': 'discovery unverified-main-server', 'peer': 'identity unverified-peer',
                             'health': 'identity unverified-main-server', 'data': 'identity unverified-main-server'}[fault]
                 self.assertEqual((status, output), (1, 'BB_PLUGIN_REFRESH failed ' + expected + '\n'))
                 self.assertFalse(api.calls)
@@ -1400,7 +1358,7 @@ class Discovery(unittest.TestCase):
                 api = FakeApi()
                 with self.darwin_inventory(account + b' 100\n') as native, self.darwin_http(api):
                     native.identity_rows[100] = raw
-                    self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH updated\n'))
+                    self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH completed\n'))
                 self.assertTrue(native.private_reads)
                 self.assertEqual(set(native.private_reads), {100})
                 self.assertEqual(len(api.mutations()), 1)
@@ -1524,7 +1482,7 @@ class Discovery(unittest.TestCase):
         with self.assertRaises(P.Refusal):
             P.discover(files, self.proc)
 
-    def test_unrelated_server_entries_are_ignored_but_unknown_bb_contract_is_not(self):
+    def test_unrelated_server_entries_are_ignored_but_invalid_bb_identity_is_not(self):
         entry = self.home / 'unrelated/server/dist/index.js'
         entry.parent.mkdir(parents=True)
         entry.write_text('never execute')
@@ -1534,11 +1492,11 @@ class Discovery(unittest.TestCase):
         self.server()
         manifest = self.package / 'package.json'
         metadata = json.loads(manifest.read_text())
-        metadata['version'] = '0.45.0'
+        metadata['bin']['bb-server'] = 'unexpected-entry'
         manifest.write_text(json.dumps(metadata))
-        with self.assertRaisesRegex(P.Refusal, 'unsupported-native-contract'):
+        with self.assertRaisesRegex(P.Refusal, 'unverified-main-server'):
             P.discover(self.files(), self.proc)
-        self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery unsupported-native-contract\n'))
+        self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery unverified-main-server\n'))
 
     def test_live_launcher_without_verified_main_is_not_called_stopped(self):
         data = self.data()
@@ -1583,21 +1541,18 @@ class Discovery(unittest.TestCase):
                 server = P.discover(files, self.proc)[0][0]
                 native_api = P.NativeApi(files, self.proc, server, P.time.monotonic() + 10)
                 api = FakeApi()
-                fake_request = api.request
-                api.request = lambda method, path, payload=None: (
-                    native_api.request(method, path, payload) if path.endswith('/update')
-                    else fake_request(method, path, payload))
+                api.request = native_api.request
                 def close():
                     if close_fails:
                         raise RuntimeError('cleanup-secret-path-sentinel')
-                response = types.SimpleNamespace(status=422, getheader=lambda _: None,
-                    read=lambda _: json.dumps({'error': 'plugin safe mode is on; turn it off with `bb plugin safe-mode off` before you update "tracking"'}).encode())
+                response = types.SimpleNamespace(status=200, getheader=lambda _: None,
+                    read=lambda _: b'{"enabled":true}')
                 connection = types.SimpleNamespace(sock=types.SimpleNamespace(getsockname=lambda: ('127.0.0.1', 49999)),
                     connect=lambda: None, request=lambda *_: None, getresponse=lambda: response, close=close)
                 with patch.object(P.http.client, 'HTTPConnection', return_value=connection):
                     status, output = self.run_policy(api)
                 self.assertEqual(status, int(close_fails))
-                self.assertEqual(output, 'BB_PLUGIN_REFRESH failed update unknown-failure\n' if close_fails
+                self.assertEqual(output, 'BB_PLUGIN_REFRESH failed inventory unknown-failure\n' if close_fails
                                  else 'BB_PLUGIN_REFRESH safe-mode\n')
 
     def test_peer_proof_precedes_every_request_no_cli_proxy_redirect_or_reconnect(self):
@@ -1810,13 +1765,13 @@ api = module.FakeApi([module.plugin(enabled=False)])
 api.safe = config['case'] == 'safe-mode'
 if config['case'] == 'update-failed':
     api.results['tracking'] = module.P.Refusal('operation-timeout')
-with f.darwin_http(api, data=Path(config['data'])) as requests, \
-        patch.object(module.P.subprocess, 'run', side_effect=AssertionError('external execution forbidden')), \
+with patch.object(module.P.subprocess, 'run', side_effect=AssertionError('external execution forbidden')), \
         patch.object(module.P.os, 'getgroups', side_effect=AssertionError('group proof forbidden')), \
         patch.object(module.P.os, 'getgrouplist', side_effect=AssertionError('initgroups proof forbidden')), \
-        patch.object(module.P.os, 'listxattr', side_effect=AssertionError('ACL proof forbidden')):
+        patch.object(module.P.os, 'listxattr', side_effect=AssertionError('ACL proof forbidden')), \
+        f.darwin_http(api, data=Path(config['data'])) as requests:
     status, output = f.run_policy(native_api=True, environment=config['environment'])
-Path(os.environ['FIXTURE_RESULT']).write_text(json.dumps({'requests': requests, 'plugins': api.plugins}))
+Path(os.environ['FIXTURE_RESULT']).write_text(json.dumps({'requests': requests, 'updates': api.mutations(), 'plugins': api.plugins}))
 print(output, end='')
 sys.exit(status)
 '''
@@ -1896,7 +1851,7 @@ DOTFILES_ACCESS_METHOD=none
                                 self.assertNotIn('FORBIDDEN:', result.stdout + result.stderr)
                                 self.assertNotIn('sentinel', result.stdout + result.stderr)
                                 report = json.loads((fixture.root / 'result.json').read_text())
-                                updates = [r for r in report['requests'] if r[1].endswith('/update')]
+                                updates = report['updates']
                                 if case in ('updated', 'update-failed'):
                                     self.assertEqual(updates, [['POST', '/api/v1/plugins/tracking/update', {}]])
                                 else:
@@ -1997,13 +1952,13 @@ DOTFILES_ACCESS_METHOD=none
                             'bun', 'pi', 'bb', 'chezmoi', 'sudo', 'kill', 'pkill', 'tailscale'):
                     code += f'\n{cmd}() {{ echo FORBIDDEN:{cmd}; return 99; }}'
                 code += '\nmain\n'
-                cases = [('BB_PLUGIN_REFRESH checked', 0, 0, 0),
+                cases = [('BB_PLUGIN_REFRESH completed', 0, 0, 0),
                          ('BB_PLUGIN_REFRESH stopped', 0, 0, 0),
                          ('BB_PLUGIN_REFRESH safe-mode', 0, 0, 0),
                          ('BB_PLUGIN_REFRESH failed discovery writable-local-state', 0, 0, 1),
-                         ('BB_PLUGIN_REFRESH checked', 1, 0, 1),
+                         ('BB_PLUGIN_REFRESH completed', 1, 0, 1),
                          ('secret-path-sentinel', 0, 0, 1),
-                         ('BB_PLUGIN_REFRESH checked', 0, 1, 1),
+                         ('BB_PLUGIN_REFRESH completed', 0, 1, 1),
                          ('BB_PLUGIN_REFRESH safe-mode', 0, 1, 1)]
                 cases = [(*case, 1) for case in cases]
                 cases += [(text, status, earlier, int(bool(status or earlier)), selection)
@@ -2096,8 +2051,8 @@ upload_log() { cp -- "$SETUP_LOG_FILE" "$HOME/completed-upload.log"; }
                    'BB_PLUGIN_REFRESH failed discovery writable-local-state /secret-path-sentinel',
                    'BB_PLUGIN_REFRESH failed discovery writable-local-state\rsecret-path-sentinel',
                    'BB_PLUGIN_REFRESH failed discovery writable-local-state\nsecret-path-sentinel',
-                   'BB_PLUGIN_REFRESH checked\n' * 700)
-        for text, status in [(text, 0) for text in refused] + [('BB_PLUGIN_REFRESH checked', 1)]:
+                   'BB_PLUGIN_REFRESH completed\n' * 700)
+        for text, status in [(text, 0) for text in refused] + [('BB_PLUGIN_REFRESH completed', 1)]:
             with self.subTest(text=text[:90], status=status):
                 result = run_wrapper(text, status)
                 self.assertEqual(result.returncode, 1)
@@ -2109,8 +2064,8 @@ upload_log() { cp -- "$SETUP_LOG_FILE" "$HOME/completed-upload.log"; }
 
     def test_wrapper_suppresses_uncontrolled_output_and_retains_status(self):
         source = (ROOT / 'lib/bb-plugin-refresh.bash').read_text().split('\nbb_plugin_refresh_payload()', 1)[0]
-        for text, status, expected in [('BB_PLUGIN_REFRESH checked', 0, 0),
-                                       ('BB_PLUGIN_REFRESH updated', 1, 1),
+        for text, status, expected in [('BB_PLUGIN_REFRESH completed', 0, 0),
+                                       ('BB_PLUGIN_REFRESH completed', 1, 1),
                                        ('BB_PLUGIN_REFRESH safe-mode', 0, 0),
                                        ('BB_PLUGIN_REFRESH stopped', 0, 0),
                                        ('BB_PLUGIN_REFRESH failed', 0, 1),

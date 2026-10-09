@@ -2,6 +2,8 @@
 
 Historical alias: this was branch-local TASK-60 before rebasing onto `adce1d4`. Upstream TASK-60 belongs to the unrelated README cleanup and remains unchanged. The branch record was recreated through the Backlog CLI as TASK-64; original task bytes remain in Git recovery stashes. Validation artifacts below retain their original names and pre-rebase scope.
 
+Policy supersession: the [2026-10-09 owner-approved native CLI delegation](2026-10-09-bb-plugin-refresh-045-contract.md#owner-approved-simplification-and-validation) removes the release allowlist and independent per-plugin result verification described below. Local identity/readiness/trust gates remain; native CLI exit semantics now determine command completion. The source review and validation history below retain their original scope and limitations.
+
 ## Read-only sources
 
 Inspected the installed `bb-app` **0.44.0** package under `/home/scowalt/.local/share/mise/installs/node/24.20.0/lib/node_modules/bb-app`, without executing its CLI, importing its modules, querying a live server, or executing plugins.

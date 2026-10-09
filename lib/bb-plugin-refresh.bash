@@ -17,18 +17,17 @@ refresh_bb_plugins() {
             'BB_PLUGIN_REFRESH readiness-deferred') print_warning 'Managed BB plugin refresh deferred because normal server readiness failed.' ;;
             'BB_PLUGIN_REFRESH stopped') print_warning 'Stopped local BB main-server plugin refresh deferred; no server was started.' ;;
             'BB_PLUGIN_REFRESH safe-mode') print_warning 'BB plugin refresh deliberately deferred: native safe mode remains enabled.' ;;
-            'BB_PLUGIN_REFRESH checked') print_message 'BB native plugin check completed; pinned, local and incompatible selections preserved.' ;;
-            'BB_PLUGIN_REFRESH updated') print_message 'BB native plugin updates processed; final verification determines success.' ;;
+            'BB_PLUGIN_REFRESH completed') print_message 'BB native plugin update command completed; BB determines update outcomes.' ;;
             'BB_PLUGIN_REFRESH failed') print_error 'BB plugin refresh failed: helper-result / unverified-result.'; _bb_refresh_status=1; _bb_refresh_diagnostic=1 ;;
             'BB_PLUGIN_REFRESH failed '*)
-                if [[ ! "${_bb_refresh_line}" =~ ^BB_PLUGIN_REFRESH\ failed\ (preflight|discovery|identity|inventory|source-check|update-check|update|verification)\ ([a-z-]+)$ ]]; then
+                if [[ ! "${_bb_refresh_line}" =~ ^BB_PLUGIN_REFRESH\ failed\ (preflight|discovery|identity|inventory|update|verification)\ ([a-z-]+)$ ]]; then
                     print_error 'BB plugin refresh failed: helper-result / unverified-result.'
                     return 1
                 fi
                 _bb_refresh_operation=${BASH_REMATCH[1]}
                 _bb_refresh_reason=${BASH_REMATCH[2]}
                 case "${_bb_refresh_reason}" in
-                    activation-failed|activation-unverified|ambiguous-endpoint|ambiguous-main-server|ambiguous-process|changed-local-state|changed-plugin-intent|changed-plugin-inventory|changed-preserved-plugin|changed-process|changed-source-resolution|foreign-local-state|foreign-process|incomplete-results|malformed-result|native-request-failed|operation-timeout|process-proof-unavailable|rolled-back|server-move-in-progress|source-unavailable|unexpected-update-selection|unsupported-account|unsupported-native-contract|unsupported-platform|unverified-compatibility|unverified-home|unverified-local-state|unverified-main-server|unverified-peer|unverified-policy|unverified-result|unverified-source-intent|update-unverified|writable-local-state|unknown-failure) ;;
+                    ambiguous-endpoint|ambiguous-main-server|ambiguous-process|changed-local-state|changed-process|foreign-local-state|foreign-process|malformed-result|native-command-failed|native-request-failed|operation-timeout|process-proof-unavailable|server-move-in-progress|unsupported-account|unsupported-native-contract|unsupported-platform|unverified-home|unverified-local-state|unverified-main-server|unverified-peer|unverified-policy|unverified-result|writable-local-state|unknown-failure) ;;
                     *) print_error 'BB plugin refresh failed: helper-result / unverified-result.'; return 1 ;;
                 esac
                 print_error "BB plugin refresh failed: ${_bb_refresh_operation} / ${_bb_refresh_reason}."

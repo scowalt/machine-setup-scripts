@@ -8348,18 +8348,17 @@ refresh_bb_plugins() {
             'BB_PLUGIN_REFRESH readiness-deferred') print_warning 'Managed BB plugin refresh deferred because normal server readiness failed.' ;;
             'BB_PLUGIN_REFRESH stopped') print_warning 'Stopped local BB main-server plugin refresh deferred; no server was started.' ;;
             'BB_PLUGIN_REFRESH safe-mode') print_warning 'BB plugin refresh deliberately deferred: native safe mode remains enabled.' ;;
-            'BB_PLUGIN_REFRESH checked') print_message 'BB native plugin check completed; pinned, local and incompatible selections preserved.' ;;
-            'BB_PLUGIN_REFRESH updated') print_message 'BB native plugin updates processed; final verification determines success.' ;;
+            'BB_PLUGIN_REFRESH completed') print_message 'BB native plugin update command completed; BB determines update outcomes.' ;;
             'BB_PLUGIN_REFRESH failed') print_error 'BB plugin refresh failed: helper-result / unverified-result.'; _bb_refresh_status=1; _bb_refresh_diagnostic=1 ;;
             'BB_PLUGIN_REFRESH failed '*)
-                if [[ ! "${_bb_refresh_line}" =~ ^BB_PLUGIN_REFRESH\ failed\ (preflight|discovery|identity|inventory|source-check|update-check|update|verification)\ ([a-z-]+)$ ]]; then
+                if [[ ! "${_bb_refresh_line}" =~ ^BB_PLUGIN_REFRESH\ failed\ (preflight|discovery|identity|inventory|update|verification)\ ([a-z-]+)$ ]]; then
                     print_error 'BB plugin refresh failed: helper-result / unverified-result.'
                     return 1
                 fi
                 _bb_refresh_operation=${BASH_REMATCH[1]}
                 _bb_refresh_reason=${BASH_REMATCH[2]}
                 case "${_bb_refresh_reason}" in
-                    activation-failed|activation-unverified|ambiguous-endpoint|ambiguous-main-server|ambiguous-process|changed-local-state|changed-plugin-intent|changed-plugin-inventory|changed-preserved-plugin|changed-process|changed-source-resolution|foreign-local-state|foreign-process|incomplete-results|malformed-result|native-request-failed|operation-timeout|process-proof-unavailable|rolled-back|server-move-in-progress|source-unavailable|unexpected-update-selection|unsupported-account|unsupported-native-contract|unsupported-platform|unverified-compatibility|unverified-home|unverified-local-state|unverified-main-server|unverified-peer|unverified-policy|unverified-result|unverified-source-intent|update-unverified|writable-local-state|unknown-failure) ;;
+                    ambiguous-endpoint|ambiguous-main-server|ambiguous-process|changed-local-state|changed-process|foreign-local-state|foreign-process|malformed-result|native-command-failed|native-request-failed|operation-timeout|process-proof-unavailable|server-move-in-progress|unsupported-account|unsupported-native-contract|unsupported-platform|unverified-home|unverified-local-state|unverified-main-server|unverified-peer|unverified-policy|unverified-result|writable-local-state|unknown-failure) ;;
                     *) print_error 'BB plugin refresh failed: helper-result / unverified-result.'; return 1 ;;
                 esac
                 print_error "BB plugin refresh failed: ${_bb_refresh_operation} / ${_bb_refresh_reason}."
@@ -8396,7 +8395,6 @@ import time
 
 MAX_BYTES = 8388608
 MAX_PROCESSES = 32768
-MAX_PLUGINS = 1024
 
 
 class Refusal(Exception):
@@ -8411,19 +8409,15 @@ class Diagnostics:
     def record(self, error):
         if self.first is not None:
             return
-        operations = ('preflight', 'discovery', 'identity', 'inventory', 'source-check',
-                      'update-check', 'update', 'verification')
-        reasons = ('activation-failed', 'activation-unverified', 'ambiguous-endpoint',
-                   'ambiguous-main-server', 'ambiguous-process', 'changed-local-state',
-                   'changed-plugin-intent', 'changed-plugin-inventory', 'changed-preserved-plugin',
-                   'changed-process', 'changed-source-resolution', 'foreign-local-state',
-                   'foreign-process', 'incomplete-results', 'malformed-result',
-                   'native-request-failed', 'operation-timeout', 'process-proof-unavailable', 'rolled-back',
-                   'server-move-in-progress', 'source-unavailable', 'unexpected-update-selection', 'unsupported-account',
-                   'unsupported-native-contract', 'unsupported-platform', 'unverified-compatibility',
-                   'unverified-home', 'unverified-local-state', 'unverified-main-server',
-                   'unverified-peer', 'unverified-policy', 'unverified-result',
-                   'unverified-source-intent', 'update-unverified', 'writable-local-state')
+        operations = ('preflight', 'discovery', 'identity', 'inventory', 'update', 'verification')
+        reasons = ('ambiguous-endpoint', 'ambiguous-main-server', 'ambiguous-process',
+                   'changed-local-state', 'changed-process', 'foreign-local-state',
+                   'foreign-process', 'malformed-result', 'native-command-failed',
+                   'native-request-failed', 'operation-timeout', 'process-proof-unavailable',
+                   'server-move-in-progress', 'unsupported-account', 'unsupported-native-contract',
+                   'unsupported-platform', 'unverified-home', 'unverified-local-state',
+                   'unverified-main-server', 'unverified-peer', 'unverified-policy',
+                   'unverified-result', 'writable-local-state')
         reason = error.args[0] if type(error) is Refusal and len(error.args) == 1 else None
         if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
             reason = 'operation-timeout'
@@ -8790,8 +8784,6 @@ def verify_package(files, entry):
         workspace = files.json(entry.parents[1] / 'package.json', optional=True)
         need(not isinstance(workspace, dict) or workspace.get('name') != '@bb/server', 'unsupported-native-contract')
         return False
-    version = metadata.get('version')
-    need(version == '0.44.0', 'unsupported-native-contract')
     need(metadata.get('bin', {}).get('bb-server') == 'dist/bb-server.js', 'unverified-main-server')
     files.inspect(entry)
     files.inspect(root / 'server/dist/start-server.js')
@@ -8898,13 +8890,6 @@ class NativeApi:
             need(len(raw) <= MAX_BYTES, 'malformed-result')
             need(self.processes.read(s['pid']) == s['record'], 'changed-process')
             result = object_json(raw)
-            if response.status == 422 and method == 'POST' and path.endswith('/update'):
-                identity = path.split('/')[-2]
-                refusal = ('plugin safe mode is on; turn it off with `bb plugin safe-mode off` '
-                           'before you update "' + identity + '"')
-                if isinstance(result, dict) and result.get('error') == refusal:
-                    failed = False   
-                    raise Refusal('safe-mode')
             need(response.status == 200, 'native-request-failed')   
             failed = False
             return result
@@ -8929,23 +8914,27 @@ class NativeApi:
         need(isinstance(config, dict) and isinstance(config.get('dataDir'), str)
              and self.files.normalize(config['dataDir']) == self.server['data'], 'unverified-main-server')
 
-
-def plugin_map(result):
-    need(isinstance(result, dict) and isinstance(result.get('plugins'), list), 'malformed-result')
-    need(len(result['plugins']) <= MAX_PLUGINS, 'malformed-result')
-    plugins = {}
-    for plugin in result['plugins']:
-        need(isinstance(plugin, dict), 'malformed-result')
-        identity = plugin.get('id')
-        need(isinstance(identity, str) and re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}', identity),
-             'malformed-result')
-        need(identity not in plugins and type(plugin.get('enabled')) is bool, 'malformed-result')
-        need(plugin.get('provenance') in ('builtin', 'direct', 'catalog'), 'malformed-result')
-        need(all(isinstance(plugin.get(key), str) and plugin[key] for key in ('source', 'version', 'status')),
-             'malformed-result')
-        need(isinstance(plugin.get('updateState'), dict), 'malformed-result')
-        plugins[identity] = plugin
-    return plugins
+    def update(self):
+        server = self.server
+        node = Path(server['record'][0][0])
+        cli = server['entry'].parents[2] / 'host-daemon/dist/bb'
+        self.files.inspect(node)
+        need(self.files.inspect(cli).st_size > 0, 'unverified-main-server')
+        self.files.inspect(cli.parent / 'bb-chunks', directory=True)
+        need(self.processes.read(server['pid']) == server['record'], 'changed-process')
+        need(verify_package(self.files, server['entry']), 'unverified-main-server')
+        self.files.inspect(server['data'], directory=True)
+        remaining = self.deadline - time.monotonic()
+        need(remaining > 0, 'operation-timeout')
+        env = {'HOME': str(self.files.home), 'PATH': str(node.parent) + ':/usr/bin:/bin',
+               'BB_DATA_DIR': str(server['data']), 'BB_SERVER_URL': f"http://127.0.0.1:{server['port']}",
+               'BB_CLI_REEXEC': '1', 'ELECTRON_RUN_AS_NODE': '1', 'NO_COLOR': '1', 'NODE_ENV': 'production',
+               'BB_APP_VERSION': self.files.json(server['entry'].parents[2] / 'package.json')['version']}
+        result = subprocess.run([str(node), str(cli), 'plugin', 'update', '--all', '--yes'],
+                                cwd=server['data'], env=env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=remaining, close_fds=True)
+        need(result.returncode == 0, 'native-command-failed')
 
 
 def safe_mode(api):
@@ -8954,119 +8943,20 @@ def safe_mode(api):
     return state['enabled']
 
 
-def resolution(value):
-    return (isinstance(value, dict) and isinstance(value.get('version'), str)
-            and bool(value['version']) and isinstance(value.get('display'), str))
-
-
 def refresh(api, diagnostics=None):
     diagnostics = diagnostics if diagnostics is not None else Diagnostics()
     diagnostics.operation = 'identity'
     api.verify()
     diagnostics.operation = 'inventory'
     if safe_mode(api):
-        return 'safe-mode', False
-    before = plugin_map(api.request('GET', '/api/v1/plugins'))
-    sources = {}
-    diagnostics.operation = 'source-check'
-    for identity, plugin in before.items():
-        source = api.request('GET', '/api/v1/plugins/' + identity + '/source')
-        need(isinstance(source, dict) and source.get('requested') == plugin['source']
-             and isinstance(source.get('resolved'), str), 'unverified-source-intent')
-        sources[identity] = source
-    targets = {}
-    diagnostics.operation = 'update-check'
-    checks = api.request('POST', '/api/v1/plugins/updates/check', {})
-    need(isinstance(checks, dict) and isinstance(checks.get('results'), list), 'malformed-result')
-    need(len(checks['results']) == len(before), 'incomplete-results')
-    checked = {}
-    failed = False
-    updated = False
-    for entry in checks['results']:
-        need(isinstance(entry, dict) and entry.get('id') in before and entry['id'] not in checked,
-             'malformed-result')
-        need(resolution(entry.get('installed')), 'malformed-result')
-        need(entry.get('outcome') in ('current', 'update-available', 'pinned', 'incompatible', 'unavailable'),
-             'malformed-result')
-        need(not entry.get('devMode'), 'unverified-compatibility')
-        if entry['outcome'] == 'incompatible':
-            blocked = entry.get('blocked')
-            need(isinstance(blocked, dict) and isinstance(blocked.get('version'), str)
-                 and isinstance(blocked.get('reasons'), list) and bool(blocked['reasons'])
-                 and all(isinstance(r, str) and r for r in blocked['reasons']), 'malformed-result')
-        need(sources[entry['id']]['resolved'] == entry['installed']['display'], 'changed-source-resolution')
-        checked[entry['id']] = entry
-    for identity, entry in checked.items():
-        diagnostics.operation = 'update-check'
-        plugin = before[identity]
-        outcome = entry['outcome']
-        if outcome == 'unavailable':
-            diagnostics.record(Refusal('source-unavailable'))
-            failed = True
-            continue
-        if outcome != 'update-available':
-            continue
-        need(plugin['provenance'] != 'builtin' and not plugin['source'].startswith(('path:', 'builtin:')),
-             'unexpected-update-selection')
-        need(resolution(entry.get('candidate')), 'malformed-result')
-        diagnostics.operation = 'update'
-        if safe_mode(api):
-            return 'safe-mode', failed
-        try:
-            result = api.request('POST', '/api/v1/plugins/' + identity + '/update', {})
-            need(isinstance(result, dict) and type(result.get('applied')) is bool
-                 and resolution(result.get('from')), 'malformed-result')
-            need(result.get('outcome') in ('current', 'updated', 'rolled-back'), 'malformed-result')
-            if result['outcome'] == 'rolled-back':
-                diagnostics.record(Refusal('rolled-back'))
-                failed = True
-            elif result['outcome'] == 'updated':
-                need(result['applied'] is True and resolution(result.get('to')), 'malformed-result')
-                updated = True
-                targets[identity] = result['to']
-            else:
-                need(result['applied'] is False, 'malformed-result')
-                targets[identity] = result['from']
-        except Refusal as error:
-            if type(error) is Refusal and error.args == ('safe-mode',):
-                return 'safe-mode', failed
-            diagnostics.record(error)
-            failed = True
-    diagnostics.operation = 'verification'
-    after = plugin_map(api.request('GET', '/api/v1/plugins'))
-    need(before.keys() == after.keys(), 'changed-plugin-inventory')
-    for identity, old in before.items():
-        new = after[identity]
-        source = api.request('GET', '/api/v1/plugins/' + identity + '/source')
-        need(isinstance(source, dict) and all(source.get(key) == sources[identity].get(key)
-             for key in ('requested', 'subdirectory', 'range', 'tagPrefix', 'registry')), 'changed-plugin-intent')
-        if identity in targets:
-            need(source.get('resolved') == targets[identity]['display'], 'update-unverified')
-        need(all(new[key] == old[key] for key in ('source', 'provenance', 'enabled')), 'changed-plugin-intent')
-        if checked[identity]['outcome'] in ('pinned', 'incompatible'):
-            need(new['version'] == old['version'], 'changed-preserved-plugin')
-        if checked[identity]['outcome'] == 'update-available':
-            need(new['status'] in (('running',) if new['enabled'] else ('disabled',)), 'activation-unverified')
-        failure = new['updateState'].get('lastFailure')
-        need(failure is None or failure == old['updateState'].get('lastFailure'), 'activation-failed')
-    final = api.request('POST', '/api/v1/plugins/updates/check', {})
-    need(isinstance(final, dict) and isinstance(final.get('results'), list), 'malformed-result')
-    remaining = final['results']
-    need(len(remaining) == len(before) and {e.get('id') for e in remaining if isinstance(e, dict)} == set(before),
-         'incomplete-results')
-    for entry in remaining:
-        need(resolution(entry.get('installed')) and not entry.get('devMode'), 'malformed-result')
-        if entry['id'] in targets:
-            need(entry['installed'] == targets[entry['id']], 'update-unverified')
-        if entry.get('outcome') not in ('current', 'pinned', 'incompatible'):
-            diagnostics.record(Refusal('source-unavailable' if entry.get('outcome') == 'unavailable'
-                                      else 'update-unverified'))
-            failed = True
-    return ('updated' if updated else 'checked'), failed
+        return 'safe-mode'
+    diagnostics.operation = 'update'
+    api.update()
+    return 'completed'
 
 
 def run():
-    labels = {'safe-mode', 'checked', 'updated', 'stopped', 'absent', 'failed'}
+    labels = {'safe-mode', 'completed'}
     diagnostics = Diagnostics()
     try:
         need(os.getuid() != 0, 'unsupported-account')
@@ -9089,12 +8979,9 @@ def run():
         for server in servers:
             try:
                 diagnostics.operation = 'verification'
-                state, error = refresh(NativeApi(files, processes, server, deadline), diagnostics)
+                state = refresh(NativeApi(files, processes, server, deadline), diagnostics)
                 need(state in labels, 'unverified-result')
                 print('BB_PLUGIN_REFRESH ' + state)
-                failed = failed or error
-                if error:
-                    diagnostics.record(Refusal('unverified-result'))
             except Exception as error:
                 failed = True
                 diagnostics.record(error)
@@ -9721,7 +9608,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 268 | Last changed: Report controlled Impeccable failure diagnostics"
+    echo -e "${GRAY}Version 269 | Last changed: Delegate BB plugin refresh to the native CLI"
 
     if ! acquire_setup_lock; then
         return 1
