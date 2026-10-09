@@ -1,5 +1,7 @@
 # Retire the reviewed BB environment override
 
+**Historical procedure; superseded for the preserved-reference path.** [Spec #221](https://github.com/scowalt/machine-setup-scripts/issues/221) and [ADR 0013](../adr/0013-preserve-reviewed-bb-environment-inheritance.md) support the recognized existing app reference, alone or with reviewed private TMPDIR, rather than requiring retirement before ordinary maintenance. The original refusal, approval and recovery rules below describe that earlier retirement proposal, not prerequisites for the supported update path. They authorize no live action and establish no completed migration; any future retirement needs a newly reviewed scope.
+
 This is a **one-time operator procedure, not an executable migration or authorization to act**. [#197](https://github.com/scowalt/machine-setup-scripts/issues/197) authorizes repository implementation; [ADR 0011](../adr/0011-scope-bb-server-customizations.md) requires separate live approval. Ordinary setup must leave the captured two-file Beelink state blocked. TMPDIR-only acceptance requires the reviewed #198 runtime change, not just this document or file retirement. Removing one blocker does not certify the remaining setup or deployment.
 
 ## 1. Authorize and establish prerequisites — no mutation

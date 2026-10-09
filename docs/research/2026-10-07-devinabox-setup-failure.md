@@ -1,5 +1,7 @@
 # Devinabox Ubuntu setup v311: APT recovery and blocked BB maintenance
 
+**Historical diagnosis, not current maintenance prerequisites.** [ADR 0012](../adr/0012-accept-account-owned-ordinary-directories.md) supersedes the ordinary-directory refusals described below; [spec #221](https://github.com/scowalt/machine-setup-scripts/issues/221) and [ADR 0013](../adr/0013-preserve-reviewed-bb-environment-inheritance.md) supersede retirement-first refusal for the recognized existing app environment references. Original observations, uncertainty and consumed query approval remain unchanged. The configuration-review/retirement next steps below are historical for that preserved-reference path; this annotation supplies no new native evidence, live authorization or completed migration claim.
+
 ## Conclusion and evidence boundary
 
 The uploaded run has **two independent required-operation failures**: HTTP 404 fetching two librsvg security archives, and BB's local service-drop-in preflight refusal. Later independent successes do not erase either failure from that run. Subsequent native evidence establishes that **both packages were upgraded afterward and BB's app/ingress are currently running**, with positive local app/host health checks. The BB customization blocker remains present. This is not evidence that BB went down, nor a completed setup or provider-readiness verification. [Log L60–72, L212–219, L274][log]; [native follow-up][native]; [setup caller][ubuntu].
