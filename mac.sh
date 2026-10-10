@@ -1773,7 +1773,7 @@ function inspectBrewCopy(file) {
     const receiptPath = path.join(path.dirname(path.dirname(binary)), 'INSTALL_RECEIPT.json');
     inspect(binary, 'file'); inspect(receiptPath, 'file');
     const receipt = json(boundedRead(receiptPath));
-    if (receipt?.source?.tap !== 'anomalyco/tap') fail('brew-origin');
+    if (!['anomalyco/tap', 'homebrew/core'].includes(receipt?.source?.tap)) fail('brew-origin');
     inspect(path.join(prefix, 'var/homebrew/pinned/opencode'), 'pin', true);
     const trust = {command: file, link, snapshots};
     checkBrewTrust(trust);
@@ -5345,7 +5345,8 @@ const fail = message => { throw new RetirementError(message); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 const same = (a, b) => a && b && a.dev === b.dev && a.ino === b.ino && a.mode === b.mode && a.uid === b.uid && a.gid === b.gid &&
-    a.nlink === b.nlink && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+    (a.isDirectory() && b.isDirectory() ||
+        a.nlink === b.nlink && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs);
 function info(file) { try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } }
 function absolute(value) {
     if (!value || !path.isAbsolute(value) || value.split(/[\\/]/).some(part => part === '..' || part === '.')) fail('unsafe-path');
@@ -10132,7 +10133,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 295 | Last changed: Delegate BB plugin refresh to the native CLI${NC}"
+    echo -e "${GRAY}Version 297 | Last changed: Ignore unrelated Backlog directory activity${NC}"
 
     if ! acquire_setup_lock; then
         return 1
