@@ -134,6 +134,31 @@ print_error() { printf '%s\n' "$1" >&2; }
                 self.assert_directories(before)
                 self.assertEqual({p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode, p.stat().st_ino) for p in self.files}, files_before)
 
+    def test_unrelated_sibling_creation_does_not_block_retirement(self):
+        for file in self.files[1:]:
+            file.unlink()
+        self.codex.unlink()
+        before = self.directories(0o2775)
+        metadata = self.files[0]
+        metadata_before = metadata.stat()
+        sibling = self.home / 'unrelated-sibling'
+        prelude = f'''const testFs=require('node:fs'), originalRead=testFs.readSync;
+let changed=false;
+testFs.readSync=(...args)=>{{
+    if(!changed) {{changed=true; testFs.mkdirSync({json.dumps(str(sibling))}, {{mode:0o700}});}}
+    return originalRead(...args);
+}};
+'''
+        self.assertEqual(self.helper(prelude=prelude).stdout.strip(), 'removed')
+        self.assertEqual(json.loads(metadata.read_text()), {'mcpServers': {'keep': {}}, 'custom': 'keep'})
+        self.assertEqual(self.sentinel.read_text(), self.text)
+        self.assertTrue(sibling.is_dir())
+        self.assert_directories(before)
+        metadata_after = metadata.stat()
+        for field in ('st_dev', 'st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_nlink'):
+            self.assertEqual(getattr(metadata_after, field), getattr(metadata_before, field))
+        self.assertEqual(self.helper().stdout.strip(), 'absent')
+
     def test_managed_toml_parser_prefixes_accept_directories_but_not_group_writable_executables(self):
         for prefix in ('.pyenv/versions/3.12.77', '.local/share/mise/installs/python/3.12.77'):
             with self.subTest(prefix=prefix):
@@ -208,7 +233,7 @@ testFs.lstatSync=(file,...args)=>{{if(file==={json.dumps(str(directory))}) {{con
     def test_accepted_mode_group_owner_type_and_inode_changes_invalidate_retirement_snapshot(self):
         self.directories(0o775)
         for field, value in (('mode', 's.mode ^ 0o020'), ('gid', 's.gid + 1'), ('uid', 's.uid + 1'),
-                             ('mode', '0o100775'), ('ino', 's.ino + 1')):
+                             ('mode', '0o100775'), ('ino', 's.ino + 1'), ('dev', 's.dev + 1')):
             prelude = f'''const testFs=require('node:fs'), originalStat=testFs.lstatSync, originalRead=testFs.readSync;
 let reads=0, raced=false;
 testFs.readSync=(...args)=>{{if(++reads==={len(self.files) + 1}) raced=true; return originalRead(...args);}};

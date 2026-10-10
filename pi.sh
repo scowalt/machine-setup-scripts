@@ -5617,7 +5617,8 @@ const fail = message => { throw new RetirementError(message); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 const same = (a, b) => a && b && a.dev === b.dev && a.ino === b.ino && a.mode === b.mode && a.uid === b.uid && a.gid === b.gid &&
-    a.nlink === b.nlink && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+    (a.isDirectory() && b.isDirectory() ||
+        a.nlink === b.nlink && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs);
 function info(file) { try { return fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } }
 function absolute(value) {
     if (!value || !path.isAbsolute(value) || value.split(/[\\/]/).some(part => part === '..' || part === '.')) fail('unsafe-path');
@@ -9608,7 +9609,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 270 | Last changed: Support homebrew/core OpenCode migration"
+    echo -e "${GRAY}Version 271 | Last changed: Ignore unrelated Backlog directory activity"
 
     if ! acquire_setup_lock; then
         return 1
