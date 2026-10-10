@@ -2003,7 +2003,7 @@ function inspectBrewCopy(file) {
     const receiptPath = path.join(path.dirname(path.dirname(binary)), 'INSTALL_RECEIPT.json');
     inspect(binary, 'file'); inspect(receiptPath, 'file');
     const receipt = json(boundedRead(receiptPath));
-    if (receipt?.source?.tap !== 'anomalyco/tap') fail('brew-origin');
+    if (!['anomalyco/tap', 'homebrew/core'].includes(receipt?.source?.tap)) fail('brew-origin');
     inspect(path.join(prefix, 'var/homebrew/pinned/opencode'), 'pin', true);
     const trust = {command: file, link, snapshots};
     checkBrewTrust(trust);
@@ -9608,7 +9608,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 269 | Last changed: Delegate BB plugin refresh to the native CLI"
+    echo -e "${GRAY}Version 270 | Last changed: Support homebrew/core OpenCode migration"
 
     if ! acquire_setup_lock; then
         return 1

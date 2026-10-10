@@ -1620,7 +1620,7 @@ function inspectBrewCopy(file) {
     const receiptPath = path.join(path.dirname(path.dirname(binary)), 'INSTALL_RECEIPT.json');
     inspect(binary, 'file'); inspect(receiptPath, 'file');
     const receipt = json(boundedRead(receiptPath));
-    if (receipt?.source?.tap !== 'anomalyco/tap') fail('brew-origin');
+    if (!['anomalyco/tap', 'homebrew/core'].includes(receipt?.source?.tap)) fail('brew-origin');
     inspect(path.join(prefix, 'var/homebrew/pinned/opencode'), 'pin', true);
     const trust = {command: file, link, snapshots};
     checkBrewTrust(trust);
@@ -8423,7 +8423,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 189 | Last changed: Report controlled Impeccable failure diagnostics"
+    Write-Host "Version 190 | Last changed: Support homebrew/core OpenCode migration"
 
     Assert-HeadlessUnsupported
 

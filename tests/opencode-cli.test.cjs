@@ -1205,8 +1205,9 @@ function darwinHomebrewFixture(t, release = '1.18.33', revision = '', prefix = '
     f.publish('@opencode/cli-' + f.options.target, '2.0.18');
     return f;
 }
-test('owner Homebrew 1.18.30_2 capture migrates with group-writable bin Cellar and var ancestors', async t => {
+for (const tap of ['anomalyco/tap', 'homebrew/core']) test(`${tap} Homebrew 1.18.30_2 Mac capture migrates command-only and repeats`, async t => {
     const f = darwinHomebrewFixture(t, '1.18.30', '_2');
+    f.put(f.cellar + '/INSTALL_RECEIPT.json', JSON.stringify({source: {tap}}));
     const writable = new Set([f.prefix + '/bin', f.prefix + '/Cellar', f.prefix + '/var', f.prefix + '/var/homebrew']);
     for (const dir of darwinBrewDirectories(f)) fs.chmodSync(f.mapped(dir), writable.has(dir) ? 0o775 : 0o755);
     fs.rmSync(f.mapped(f.prefix + '/var/homebrew/pinned'), {recursive: true});
