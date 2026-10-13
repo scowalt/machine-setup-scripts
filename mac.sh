@@ -324,6 +324,150 @@ EOF
     fi
 }
 
+headless_homebrew_gh_token() {
+    # shellcheck disable=SC2016
+    /usr/bin/env -u PERL5OPT -u PERL5LIB -u PERLLIB -u PERL5DB -u PERL_UNICODE -u PERLIO \
+        /usr/bin/perl -e '
+        use strict;
+        use warnings;
+        use IO::Select;
+        use Errno qw(EINTR);
+        use POSIX qw(setpgid WNOHANG _exit);
+        use Time::HiRes qw(clock_gettime CLOCK_MONOTONIC sleep);
+        my ($gh, $seconds) = @ARGV;
+        exit 70 unless defined($gh) && $gh =~ m{\A/} && defined($seconds) &&
+            $seconds =~ /\A[0-9]+(?:\.[0-9]+)?\z/ && $seconds > 0 && $seconds <= 10;
+        my $deadline = clock_gettime(CLOCK_MONOTONIC) + $seconds;
+        my $stop = 0;
+        $SIG{CHLD} = "DEFAULT";
+        $SIG{HUP} = sub { $stop = 129; };
+        $SIG{INT} = sub { $stop = 130; };
+        $SIG{TERM} = sub { $stop = 143; };
+        pipe(my $reader, my $writer) or exit 70;
+        my $pid = fork();
+        exit 70 unless defined($pid);
+        if ($pid == 0) {
+            close($reader);
+            setpgid(0, 0) == 0 or _exit(126);
+            open(STDIN, "<", "/dev/null") or _exit(126);
+            open(STDOUT, ">&", $writer) or _exit(126);
+            open(STDERR, ">", "/dev/null") or _exit(126);
+            close($writer);
+            $ENV{GH_PROMPT_DISABLED} = "1";
+            $ENV{GH_NO_UPDATE_NOTIFIER} = "1";
+            $ENV{GH_NO_EXTENSION_UPDATE_NOTIFIER} = "1";
+            delete($ENV{GH_DEBUG});
+            exec {$gh} $gh, "auth", "token", "--hostname", "github.com";
+            _exit(127);
+        }
+        close($writer);
+        my ($output, $eof, $reaped, $status) = ("", 0, 0, 70);
+        my $selector = IO::Select->new($reader);
+        my $ok = eval {
+            while (1) {
+                if ($stop) { $status = $stop; last; }
+                my $remaining = $deadline - clock_gettime(CLOCK_MONOTONIC);
+                if ($remaining <= 0) { $status = 124; last; }
+                my $interval = $remaining < 0.05 ? $remaining : 0.05;
+                if (!$eof && $selector->can_read($interval)) {
+                    my $count = sysread($reader, my $chunk, 1024);
+                    if (!defined($count)) {
+                        next if $! == EINTR;
+                        die "read";
+                    }
+                    if ($count == 0) { $eof = 1; }
+                    else {
+                        $output .= $chunk;
+                        if (length($output) > 8192) { $status = 65; last; }
+                    }
+                } elsif ($eof) { sleep($interval); }
+                if ($eof) {
+                    my $waited = waitpid($pid, WNOHANG);
+                    if ($waited == $pid) {
+                        $reaped = 1;
+                        $status = $? == 0 ? 0 : 1;
+                        last;
+                    }
+                    if ($waited == -1) {
+                        next if $! == EINTR;
+                        $reaped = 1;
+                        die "wait";
+                    }
+                }
+            }
+            1;
+        };
+        $status = 70 unless $ok;
+        if (!$reaped) {
+            kill("KILL", -$pid);
+            kill("KILL", $pid);
+            for (1..20) {
+                my $waited = waitpid($pid, WNOHANG);
+                if ($waited == $pid) { $reaped = 1; last; }
+                if ($waited == -1) {
+                    next if $! == EINTR;
+                    last;
+                }
+                sleep(0.01);
+            }
+            $status = 70 unless $reaped;
+        }
+        close($reader);
+        exit $status if $status;
+        $output =~ s/\r?\n\z//;
+        exit 65 unless $output =~ /\A[A-Za-z0-9_.-]+\z/;
+        print $output;
+    ' "$1" "${2:-10}" 2>/dev/null
+}
+
+prepare_headless_homebrew_auth() {
+    [[ "${HEADLESS:-}" == "1" ]] || return 0
+    local _gh='' _token='' _status=0 _failed=0 _tracing=0
+    case "$-" in *x*) _tracing=1; set +x ;; *) ;; esac
+
+    if [[ -n "${HOMEBREW_GITHUB_API_TOKEN:-}" ]]; then
+        _token="${HOMEBREW_GITHUB_API_TOKEN}"
+    elif ! _gh=$(type -P gh 2>/dev/null) || [[ ! -f "${_gh}" || ! -x "${_gh}" ]]; then
+        _status=127
+    elif [[ ! -x /usr/bin/perl || ! -x /usr/bin/env ]]; then
+        _status=70
+    else
+        [[ "${_gh}" == /* ]] || _gh="${PWD}/${_gh}"
+        if _token=$(headless_homebrew_gh_token "${_gh}" 10); then
+            _status=0
+        else
+            _status=$?
+        fi
+    fi
+    if [[ "${_status}" -eq 0 ]] && { [[ -z "${_token}" || "${#_token}" -gt 8192 ]] || [[ "${_token}" == *[!A-Za-z0-9_.-]* ]]; }; then
+        _status=65
+    fi
+    case "${_status}" in
+        0)
+            export HOMEBREW_GITHUB_API_TOKEN="${_token}"
+            print_debug "Headless Homebrew authentication prepared; credential values hidden."
+            ;;
+        124)
+            print_error "Cannot start headless Homebrew setup: gh credential lookup timed out after 10 seconds. Resolve gh Keychain access in a graphical session, then rerun setup."
+            _failed=1 ;;
+        127)
+            print_error "Cannot start headless Homebrew setup: gh CLI unavailable. Install gh and run: gh auth login --hostname github.com"
+            _failed=1 ;;
+        1)
+            print_error "Cannot start headless Homebrew setup: gh could not retrieve a GitHub credential. Run gh auth login --hostname github.com, or resolve existing gh Keychain access in a graphical session."
+            _failed=1 ;;
+        65)
+            print_error "Cannot start headless Homebrew setup: credential output is empty or malformed. Verify the gh login or explicit Homebrew token; credential values were not logged."
+            _failed=1 ;;
+        *)
+            print_error "Cannot start headless Homebrew setup: native credential supervision failed. Setup requires working /usr/bin/perl and /usr/bin/env; no credential fallback was attempted."
+            _failed=1 ;;
+    esac
+    _token=''
+    [[ "${_tracing}" -ne 1 ]] || set -x
+    return "${_failed}"
+}
+
 is_main_user() {
     [[ "${HOME}" == "/Users/scowalt" ]]
 }
@@ -10133,7 +10277,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 297 | Last changed: Ignore unrelated Backlog directory activity${NC}"
+    echo -e "${GRAY}Version 298 | Last changed: Block headless Homebrew Keychain waits${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -10142,7 +10286,7 @@ run_setup_tasks() {
     create_env_local
 
     setup_load_environment || return 1
-
+    prepare_headless_homebrew_auth || return 1
 
     print_section "Xcode Command Line Tools"
     install_xcode_cli_tools || _setup_had_errors=1
