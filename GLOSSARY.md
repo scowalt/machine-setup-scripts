@@ -28,6 +28,10 @@ _Avoid_: Corporate machine, office machine
 A machine designated for graphical desktop use rather than headless operation. Its classification does not depend on an active graphical session during setup.
 _Avoid_: Machine with an active display, locally executed setup
 
+**Headless Homebrew authentication**:
+Operator-independent access to the GitHub credentials used during Homebrew maintenance. A stored login alone does not establish that its credentials can be retrieved without interaction.
+_Avoid_: Unlocked Keychain, Logged-in GitHub CLI
+
 **Gitea client**:
 The Tea command-line client used from a workstation to interact with Gitea instances.
 _Avoid_: Gitea CLI, Gitea server command
