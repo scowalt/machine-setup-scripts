@@ -139,7 +139,9 @@ if os.environ.get('NATIVE')=='1':
 if args==rebuild: sys.exit(int(os.environ.get('FAIL_REBUILD','0')))
 files=json.loads((root/'package.json').read_text()); pkg=pathlib.Path(prefix)/'lib/node_modules/bb-app'
 for name, contents in files.items():
-    dest=pkg/name; dest.parent.mkdir(parents=True,exist_ok=True); dest.write_text(contents); dest.chmod(0o700 if name.startswith('dist/') else 0o600)
+    dest=pkg/name; dest.parent.mkdir(parents=True,exist_ok=True); dest.write_text(contents)
+    mode=int(os.environ.get('FIXTURE_PACKAGE_MODE','600'),8)
+    dest.chmod(mode | (0o110 if 'FIXTURE_PACKAGE_MODE' in os.environ else 0o100) if name.startswith('dist/') else mode)
 for name, dest in json.loads(files['package.json'])['bin'].items():
     link=pathlib.Path(prefix)/'bin'/name; link.parent.mkdir(parents=True,exist_ok=True)
     if not link.is_symlink(): link.symlink_to('../lib/node_modules/bb-app/'+dest)
@@ -235,9 +237,11 @@ brew() { :; }
                     metadata = {p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in directories}
                     self.package(version)
                     self.events.write_text('')
-                    out = self.run_caller(platform, WORK_MACHINE='1', HEADLESS='0')
+                    out = self.run_caller(platform, WORK_MACHINE='1', HEADLESS='0', FIXTURE_PACKAGE_MODE='664')
                     self.assertIn('not enrolled and no BB service created', out)
                     self.assertEqual(json.loads((self.pkg / 'package.json').read_text())['version'], version)
+                    self.assertTrue(all(p.stat().st_mode & 0o020 for p in self.pkg.rglob('*') if p.is_file()))
+                    self.assertEqual((self.prefix.parent / 'owner.json').stat().st_mode & 0o777, 0o600)
                     self.assertEqual(metadata, {p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in directories})
                     self.assertEqual((sentinel / 'keep').read_text(), 'unchanged')
                     for relative in ['.bb', '.bb-machines', '.local/bin', '.config/systemd']:
@@ -259,12 +263,39 @@ brew() { :; }
                     self.assertFalse((self.home / '.bb').exists())
                     self.assertEqual((self.home / '.local/share').stat().st_mode & 0o777, 0o775)
 
-    def test_preparation_directory_acceptance_keeps_private_marker_and_regular_files_strict(self):
+    def test_package_group_write_is_accepted_by_read_only_preflight_and_verification(self):
+        self.run_helper()
+        package_lock = self.pkg.parent / '.package-lock.json'
+        package_lock.write_text('{"name":"inert-bb-fixture"}')
+        for p in self.prefix.rglob('*'):
+            if p.is_dir() and not p.is_symlink():
+                p.chmod(0o2775)
+        for mode in (0o660, 0o664, 0o770, 0o775):
+            for p in self.prefix.rglob('*'):
+                if p.is_file() and not p.is_symlink():
+                    p.chmod(mode | 0o110 if p.parent == self.pkg / 'dist' else mode)
+            before = snapshot(self.home)
+            identities = {p: (p.lstat().st_dev, p.lstat().st_ino, p.lstat().st_uid, p.lstat().st_gid, p.lstat().st_nlink)
+                          for p in self.prefix.rglob('*')}
+            for _ in range(2):
+                for operation in ('preflight', 'verify'):
+                    with self.subTest(mode=oct(mode), operation=operation):
+                        result = subprocess.run(['/bin/bash', '-c',
+                                                 'source "$FIXTURE_ROOT/helpers.sh"; bb_machine_package_state_payload "$1"',
+                                                 'fixture', operation], env=self.env, cwd=self.home,
+                                                text=True, capture_output=True, timeout=20)
+                        self.assertEqual((result.returncode, result.stdout), (0, 'ok\n'), result.stderr + result.stdout)
+                        self.assertEqual(snapshot(self.home), before)
+                        self.assertEqual({p: (p.lstat().st_dev, p.lstat().st_ino, p.lstat().st_uid, p.lstat().st_gid, p.lstat().st_nlink)
+                                          for p in identities}, identities)
+
+    def test_preparation_keeps_private_marker_and_world_writable_files_strict(self):
         self.run_helper()
         for directory in [self.prefix.parent, self.prefix, self.pkg, self.pkg / 'node_modules']:
             directory.chmod(0o2775)
-        for relative, mode in [('owner.json', 0o640), ('npm/lib/node_modules/bb-app/package.json', 0o664),
-                               ('npm/lib/node_modules/bb-app/node_modules/node-pty/index.js', 0o664)]:
+        for relative, mode in [('owner.json', 0o640), ('owner.json', 0o660),
+                               ('npm/lib/node_modules/bb-app/package.json', 0o666),
+                               ('npm/lib/node_modules/bb-app/node_modules/node-pty/index.js', 0o666)]:
             with self.subTest(relative=relative):
                 file = self.prefix.parent / relative
                 original = file.stat().st_mode & 0o777
@@ -274,6 +305,19 @@ brew() { :; }
                 self.run_helper(expected=1)
                 self.assertEqual(snapshot(self.home), before)
                 self.assertNotIn('npm ', self.log())
+                file.chmod(original)
+        for file in (self.pkg / 'package.json', self.pkg / 'node_modules/node-pty/index.js'):
+            with self.subTest(hardlink=file):
+                original = file.stat().st_mode & 0o777
+                file.chmod(0o664)
+                linked = self.root / 'extra-package-link'
+                os.link(file, linked)
+                self.events.write_text('')
+                before = snapshot(self.home)
+                self.run_helper(expected=1)
+                self.assertEqual(snapshot(self.home), before)
+                self.assertNotIn('npm ', self.log())
+                linked.unlink()
                 file.chmod(original)
         self.run_helper()
 

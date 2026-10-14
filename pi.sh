@@ -8481,7 +8481,7 @@ class LocalFiles:
         except ValueError:
             return path
 
-    def inspect(self, path, directory=False, optional=False, volatile=False):
+    def inspect(self, path, directory=False, optional=False, volatile=False, account_group_write=False):
         path = self.normalize(path)
         need(path.is_absolute() and '..' not in path.parts, 'unverified-local-state')
         chain = list(reversed(path.parents)) + [path]
@@ -8498,7 +8498,8 @@ class LocalFiles:
                  'unverified-local-state')
             need(info.st_uid in (0, self.uid), 'foreign-local-state')
             sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-            mask = 0o002 if is_dir and info.st_uid == self.uid and info.st_uid != 0 else 0o022
+            mask = (0o002 if info.st_uid == self.uid and info.st_uid != 0
+                    and (is_dir or account_group_write) else 0o022)
             need(not info.st_mode & mask or sticky_tmp, 'writable-local-state')
             if not is_dir:
                 need(info.st_nlink == 1, 'unverified-local-state')
@@ -8578,9 +8579,9 @@ class LocalFiles:
             if completed and close_failed:
                 raise Refusal('unverified-local-state')
 
-    def read(self, path, optional=False, header=False):
+    def read(self, path, optional=False, header=False, account_group_write=False):
         path = self.normalize(path)
-        info = self.inspect(path, optional=optional, volatile=header)
+        info = self.inspect(path, optional=optional, volatile=header, account_group_write=account_group_write)
         if info is None:
             return None
         def stable(observed):
@@ -8607,8 +8608,8 @@ class LocalFiles:
                 except Exception:
                     pass   
 
-    def json(self, path, optional=False):
-        raw = self.read(path, optional)
+    def json(self, path, optional=False, account_group_write=False):
+        raw = self.read(path, optional, account_group_write=account_group_write)
         return None if raw is None else object_json(raw)
 
 
@@ -8775,7 +8776,7 @@ def main_entry(argv):
 def verify_package(files, entry):
     root = entry.parents[2]
     try:
-        metadata = files.json(root / 'package.json', optional=True)
+        metadata = files.json(root / 'package.json', optional=True, account_group_write=True)
     except (Refusal, OSError):
         if root.name != 'bb-app':
             return False   
@@ -8786,8 +8787,8 @@ def verify_package(files, entry):
         need(not isinstance(workspace, dict) or workspace.get('name') != '@bb/server', 'unsupported-native-contract')
         return False
     need(metadata.get('bin', {}).get('bb-server') == 'dist/bb-server.js', 'unverified-main-server')
-    files.inspect(entry)
-    files.inspect(root / 'server/dist/start-server.js')
+    files.inspect(entry, account_group_write=True)
+    files.inspect(root / 'server/dist/start-server.js', account_group_write=True)
     return True
 
 
@@ -8852,7 +8853,7 @@ def discover(files, processes, configured_data=None, block_default=False):
                  and isinstance(moved.get('oldCopyEntries'), list), 'unverified-local-state')
             continue   
         need(files.read(data / 'server-import.json', optional=True) is None, 'server-move-in-progress')
-        runtime = files.json(data / 'bb-app-runtime.json', optional=True)
+        runtime = files.json(data / 'bb-app-runtime.json', optional=True, account_group_write=True)
         if runtime is not None:
             need(isinstance(runtime, dict) and type(runtime.get('pid')) is int, 'unverified-local-state')
             need(processes.read(runtime['pid']) is None, 'unverified-main-server')
@@ -8919,8 +8920,8 @@ class NativeApi:
         server = self.server
         node = Path(server['record'][0][0])
         cli = server['entry'].parents[2] / 'host-daemon/dist/bb'
-        self.files.inspect(node)
-        need(self.files.inspect(cli).st_size > 0, 'unverified-main-server')
+        self.files.inspect(node, account_group_write=True)
+        need(self.files.inspect(cli, account_group_write=True).st_size > 0, 'unverified-main-server')
         self.files.inspect(cli.parent / 'bb-chunks', directory=True)
         need(self.processes.read(server['pid']) == server['record'], 'changed-process')
         need(verify_package(self.files, server['entry']), 'unverified-main-server')
@@ -8930,7 +8931,7 @@ class NativeApi:
         env = {'HOME': str(self.files.home), 'PATH': str(node.parent) + ':/usr/bin:/bin',
                'BB_DATA_DIR': str(server['data']), 'BB_SERVER_URL': f"http://127.0.0.1:{server['port']}",
                'BB_CLI_REEXEC': '1', 'ELECTRON_RUN_AS_NODE': '1', 'NO_COLOR': '1', 'NODE_ENV': 'production',
-               'BB_APP_VERSION': self.files.json(server['entry'].parents[2] / 'package.json')['version']}
+               'BB_APP_VERSION': self.files.json(server['entry'].parents[2] / 'package.json', account_group_write=True)['version']}
         result = subprocess.run([str(node), str(cli), 'plugin', 'update', '--all', '--yes'],
                                 cwd=server['data'], env=env, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -9080,17 +9081,17 @@ function chain(dir, serviceInspection = false) {
   if (!stickyRoot) check(!(s.mode & (s.uid === uid && uid !== 0 ? 0o002 : 0o022)), 'writable-boundary');
   return privateParent || ((s.uid === uid || s.uid === 0) && !(s.mode & 0o077));
 }
-function regular(f) {
+function regular(f, packageArtifact = false) {
   context('artifact', f);
   const s = fs.lstatSync(f); observed = s;
   check(!s.isSymbolicLink(), 'linked-path');
   check(s.uid === uid, 'unsafe-ownership');
-  check(!(s.mode & 0o022), 'writable-boundary');
+  check(!(s.mode & (packageArtifact && uid !== 0 ? 0o002 : 0o022)), 'writable-boundary');
   check(s.isFile() && s.nlink === 1 && s.size > 0, 'unsafe-file');
   return s;
 }
-function json(f) {
-  check(regular(f).size < 1048576, 'unsafe-file');
+function json(f, packageArtifact = false) {
+  check(regular(f, packageArtifact).size < 1048576, 'unsafe-file');
   try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { check(false, 'malformed-metadata'); }
 }
 const serviceGroupProgram = String.raw`
@@ -9310,7 +9311,7 @@ function tree(dir) {
       const t = stat(target); check(!t || (t.isFile() && !t.isSymbolicLink()), 'linked-path');
     } else if (s.isDirectory()) tree(f);
     else {
-      check(!(s.mode & 0o022), 'writable-boundary');
+      check(!(s.mode & (uid !== 0 ? 0o002 : 0o022)), 'writable-boundary');
       check(s.isFile() && s.nlink === 1, 'unsafe-file');
     }
   }
@@ -9354,7 +9355,7 @@ try {
     if (stat(prefix)) {
       tree(prefix);
       for (const f of [path.join(pkg, 'package.json'), path.join(prefix, 'lib/node_modules/.package-lock.json')]) {
-        if (stat(f)) { const j = json(f); check(j && typeof j === 'object' && !Array.isArray(j)); if (f === path.join(pkg, 'package.json')) check(j.name === 'bb-app'); }
+        if (stat(f)) { const j = json(f, true); check(j && typeof j === 'object' && !Array.isArray(j)); if (f === path.join(pkg, 'package.json')) check(j.name === 'bb-app'); }
       }
       for (const [dir, allowed] of [[prefix, ['bin', 'lib']], [path.join(prefix, 'lib'), ['node_modules']]]) {
         context('directory', dir); observed = stat(dir);
@@ -9383,23 +9384,23 @@ try {
     }
     for (const dir of [path.join(prefix, 'lib/node_modules'), path.join(prefix, 'bin')]) fs.mkdirSync(dir, {recursive: true, mode: 0o700});
   } else if (mode === 'verify') {
-    const j = json(path.join(pkg, 'package.json'));
+    const j = json(path.join(pkg, 'package.json'), true);
     check(j.name === 'bb-app' && /^\d+\.\d+\.\d+$/.test(j.version));
     check(Array.isArray(j.os) && j.os.includes(process.platform));
     for (const [bin, entry] of Object.entries(bins)) {
-      check(j.bin?.[bin] === entry); regular(path.join(pkg, entry));
+      check(j.bin?.[bin] === entry); regular(path.join(pkg, entry), true);
       const f = path.join(prefix, 'bin', bin);
       context('artifact', f); observed = fs.lstatSync(f);
       check(fs.lstatSync(f).isSymbolicLink() && fs.realpathSync(f) === fs.realpathSync(path.join(pkg, entry)));
       check(fs.statSync(f).mode & 0o111);
     }
-    for (const entry of ['server/dist/index.js', 'app/dist/index.html', 'host-daemon/dist/bb', 'host-daemon/dist/daemon-bundle.mjs', 'host-daemon/dist/bb-provider-bridge-worker.mjs', 'host-daemon/dist/bb-parcel-watcher-child.mjs', 'host-daemon/dist/bb-plugin-host-worker.mjs']) regular(path.join(pkg, entry));
+    for (const entry of ['server/dist/index.js', 'app/dist/index.html', 'host-daemon/dist/bb', 'host-daemon/dist/daemon-bundle.mjs', 'host-daemon/dist/bb-provider-bridge-worker.mjs', 'host-daemon/dist/bb-parcel-watcher-child.mjs', 'host-daemon/dist/bb-plugin-host-worker.mjs']) regular(path.join(pkg, entry), true);
     const chunks = path.join(pkg, 'host-daemon/dist/bb-chunks'); chain(chunks);
-    check(fs.readdirSync(chunks).some(n => n.endsWith('.js') && regular(path.join(chunks, n))));
+    check(fs.readdirSync(chunks).some(n => n.endsWith('.js') && regular(path.join(chunks, n), true)));
     const require = createRequire(path.join(pkg, 'package.json'));
     for (const name of ['better-sqlite3', 'node-pty', '@parcel/watcher', 'fs-native-extensions']) {
       context('artifact', path.join(pkg, 'node_modules', name));
-      const entry = require.resolve(name); check(inside(entry, pkg)); regular(entry);
+      const entry = require.resolve(name); check(inside(entry, pkg)); regular(entry, true);
       const loaded = require(name);
       if (name === 'better-sqlite3') { const db = new loaded(':memory:'); db.close(); }
       if (name === 'node-pty') check(typeof loaded.spawn === 'function');
@@ -9609,7 +9610,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 272 | Last changed: Follow current Pi MCP adapter releases"
+    echo -e "${GRAY}Version 273 | Last changed: Accept account-owned BB package group write"
 
     if ! acquire_setup_lock; then
         return 1

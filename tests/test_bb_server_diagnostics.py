@@ -802,6 +802,54 @@ find() {
         self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
         self.assertEqual({p: (p.stat().st_mode, p.read_bytes()) for p in protected}, before)
 
+    def test_root_owned_package_files_keep_strict_write_mask(self):
+        self.package.mkdir(parents=True, exist_ok=True)
+        manifest = self.package / 'package.json'
+        manifest.write_text('{"name":"bb-app","version":"0.46.0"}')
+        native = self.package / 'node_modules/fs-native-extensions/prebuilds/fixture.node'
+        native.parent.mkdir(parents=True)
+        native.write_text('inert native artifact, never loaded')
+        patch = self.root / 'root-file-metadata.cjs'
+        patch.write_text('const fs=require("node:fs"),original=fs.lstatSync; process.getuid=()=>0;'
+                         'fs.lstatSync=(...args)=>{const s=original(...args);s.uid=0;return s;};')
+        for target in (manifest, native):
+            for mode in (0o644, 0o664):
+                for file in (manifest, native):
+                    file.chmod(0o644)
+                target.chmod(mode)
+                before = self.snapshot()
+                with self.subTest(target=target, mode=oct(mode)):
+                    result = self.run_code('bb_package_owned_target_safe "$FIXTURE_PREFIX" "$FIXTURE_PACKAGE"',
+                                           extra='node() { builtin command node --require "$FIXTURE_ROOT_METADATA" "$@"; }',
+                                           env={'FIXTURE_PREFIX': str(self.prefix), 'FIXTURE_PACKAGE': str(self.package),
+                                                'FIXTURE_ROOT_METADATA': str(patch)})
+                    self.assertEqual(result.returncode, int(mode == 0o664), result)
+                    self.assertEqual(self.snapshot(), before)
+
+    def test_group_writable_existing_package_preflight_preserves_files(self):
+        self.active()
+        nested = self.package / 'node_modules/fs-native-extensions/prebuilds/linux-x64/nested/fixture.node'
+        nested.parent.mkdir(parents=True)
+        manifest = self.package / 'package.json'
+        manifest.write_text('{"name":"bb-app","version":"0.46.0"}')
+        nested.write_text('inert native artifact, never loaded')
+        for directory in (self.home, *self.home.rglob('*')):
+            if directory.is_dir():
+                directory.chmod(0o775)
+        for mode in (0o660, 0o664, 0o770, 0o775):
+            for file in (manifest, nested):
+                file.chmod(mode)
+            before = self.snapshot()
+            with self.subTest(mode=oct(mode)):
+                result = self.run_code('bb_package_preflight', extra=r'''
+chmod() { event forbidden-permission-repair; return 97; }
+chown() { event forbidden-ownership-repair; return 97; }
+''')
+                self.assertEqual(result.returncode, 0, result)
+                self.assertEqual(result.stderr, '')
+                self.assertEqual(self.snapshot(), before)
+                self.assertEqual(self.events.read_text(), '')
+
     def test_group_writable_package_tree_completes_real_install_config_and_caller(self):
         self.active()
         files = {
@@ -823,7 +871,9 @@ find() {
             path = self.package / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
-            path.chmod(0o600)
+            path.chmod(0o775 if relative in ('dist/bb-app.js', 'host-daemon/dist/bb') else 0o664)
+        package_before = {self.package / name: ((self.package / name).stat().st_mode,
+                          (self.package / name).read_bytes()) for name in files}
         (self.prefix / 'bin/bb-app').symlink_to('../lib/node_modules/bb-app/dist/bb-app.js')
         config = self.seed('.bb/config.json', '{"config":{"BB_APP_URL":"https://old.invalid"},"providers":{"keep":"native"}}')
         env = self.seed('.bb/env.json', '{"env":{"BB_APP_URL":"https://old.invalid","KEY":"' + SECRET + '"}}')
@@ -869,6 +919,7 @@ check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
                 self.assertEqual({p: (p.stat().st_dev, p.stat().st_ino, p.stat().st_uid,
                                      p.stat().st_gid, p.stat().st_mode) for p in directories}, before)
                 self.assertEqual({p: p.read_bytes() for p in protected}, protected)
+                self.assertEqual({p: (p.stat().st_mode, p.read_bytes()) for p in package_before}, package_before)
                 for name in ('config.json', 'env.json', '.config.json.lock', '.env.json.lock'):
                     self.assertEqual((self.home / '.bb' / name).stat().st_mode & 0o7777, 0o600)
 
@@ -878,9 +929,9 @@ check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
             ('.bb/.config.json.lock', 0o620, 'config.locks'),
             ('.config/setup-bb-server/endpoint', 0o640, 'preflight.endpoint-file'),
             ('.config/systemd/user/setup-bb-app.service', 0o664, 'preflight.app-unit-file'),
-            (str(self.package.relative_to(self.home)) + '/package.json', 0o660, 'npm.previous-target'),
+            (str(self.package.relative_to(self.home)) + '/package.json', 0o666, 'npm.previous-target'),
             (str(self.package.relative_to(self.home)) + '/node_modules/fs-native-extensions/prebuilds/linux-x64/nested/fixture.node',
-             0o660, 'npm.previous-target'),
+             0o666, 'npm.previous-target'),
         ):
             with self.subTest(unsafe_file=relative):
                 target = self.home / relative
