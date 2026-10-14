@@ -40,6 +40,7 @@ class WiringTests(unittest.TestCase):
 prepare_pi_profile_permissions() { record permissions; [[ "${SCENARIO}" != permissions-failure ]]; }
 disable_pi_askclaude() { record askclaude; [[ "${SCENARIO}" != askclaude-failure ]]; }
 remove_pi_prose() { record retirement; [[ "${SCENARIO}" != retirement-failure ]]; }
+configure_bb_pi_trust() { record workspace-trust; [[ "${SCENARIO}" != trust-failure ]]; }
 install_pi_cli() { record pi-install; [[ "${SCENARIO}" != pi-failure ]]; }
 prepare_pi_mcp_adapter() { record packages; [[ "${SCENARIO}" != package-failure ]]; }
 configure_pi_opencode_go() { record go; [[ "${SCENARIO}" != go-failure ]]; }
@@ -68,6 +69,8 @@ configure_pi_opencode_go() { record go; [[ "${SCENARIO}" != go-failure ]]; }
                 self.assertEqual(calls[-1], "result:0:1")
                 self.assertLess(calls.index("permissions"), calls.index("askclaude"))
                 self.assertLess(calls.index("askclaude"), calls.index("retirement"))
+                self.assertLess(calls.index("retirement"), calls.index("workspace-trust"))
+                self.assertLess(calls.index("workspace-trust"), calls.index("pi-install"))
                 self.assertLess(calls.index("pi-install"), calls.index("go"))
                 self.assertLess(calls.index("go"), calls.index("packages"))
                 self.assertLess(calls.index("packages"), calls.index("setup_pi_mcp_adapter"))
@@ -75,15 +78,15 @@ configure_pi_opencode_go() { record go; [[ "${SCENARIO}" != go-failure ]]; }
 
     def test_failures_are_aggregated_and_block_package_operations(self):
         for name in BASH:
-            for scenario in ("permissions-failure", "askclaude-failure", "retirement-failure", "pi-failure", "go-failure",
+            for scenario in ("permissions-failure", "askclaude-failure", "retirement-failure", "trust-failure", "pi-failure", "go-failure",
                              "package-failure"):
                 with self.subTest(script=name, scenario=scenario):
                     calls = self.run_bash(name, scenario)
-                    ready = 0 if scenario in ("permissions-failure", "askclaude-failure", "retirement-failure", "pi-failure", "go-failure") else 1
+                    ready = 0 if scenario in ("permissions-failure", "askclaude-failure", "retirement-failure", "trust-failure", "pi-failure", "go-failure") else 1
                     self.assertEqual(calls[-1], f"result:1:{ready}")
                     self.assertNotIn("setup_pi_mcp_adapter", calls)
                     self.assertNotIn("refresh_pi_packages", calls)
-                    if scenario in ("permissions-failure", "askclaude-failure", "retirement-failure", "pi-failure"):
+                    if scenario in ("permissions-failure", "askclaude-failure", "retirement-failure", "trust-failure", "pi-failure"):
                         self.assertNotIn("go", calls)
                     if scenario in ("permissions-failure", "askclaude-failure"):
                         self.assertNotIn("retirement", calls)
@@ -125,6 +128,7 @@ configure_pi_opencode_go() { record go; [[ "${SCENARIO}" != go-failure ]]; }
 function Prepare-PiProfilePermissions { $script:calls += 'permissions'; $env:SCENARIO -ne 'permissions-failure' }
 function Disable-PiAskClaude { $script:calls += 'askclaude'; $env:SCENARIO -ne 'askclaude-failure' }
 function Remove-PiProse { $script:calls += 'retirement'; $env:SCENARIO -ne 'retirement-failure' }
+function Configure-BbPiTrust { $script:calls += 'workspace-trust'; $env:SCENARIO -ne 'trust-failure' }
 function Install-PiCli { $script:calls += 'pi-install'; $env:SCENARIO -ne 'pi-failure' }
 function Prepare-PiMcpAdapter { $script:calls += 'packages'; $env:SCENARIO -ne 'package-failure' }
 function Set-PiOpenCodeGoProvider { $script:calls += 'go'; $env:SCENARIO -ne 'go-failure' }
@@ -139,7 +143,7 @@ function Set-PiOpenCodeGoProvider { $script:calls += 'go'; $env:SCENARIO -ne 'go
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp) / "wiring.ps1"
             fixture.write_text(code)
-            for scenario in ("success", "permissions-failure", "askclaude-failure", "retirement-failure", "pi-failure", "go-failure",
+            for scenario in ("success", "permissions-failure", "askclaude-failure", "retirement-failure", "trust-failure", "pi-failure", "go-failure",
                              "package-failure", "typed-catalog", "incompatible-catalog"):
                 with self.subTest(scenario=scenario):
                     real_catalog = scenario.endswith('-catalog')
@@ -169,6 +173,8 @@ function Set-PiOpenCodeGoProvider { $script:calls += 'go'; $env:SCENARIO -ne 'go
                     if scenario == "success":
                         self.assertLess(state["calls"].index("permissions"), state["calls"].index("askclaude"))
                         self.assertLess(state["calls"].index("askclaude"), state["calls"].index("retirement"))
+                        self.assertLess(state["calls"].index("retirement"), state["calls"].index("workspace-trust"))
+                        self.assertLess(state["calls"].index("workspace-trust"), state["calls"].index("pi-install"))
                         self.assertLess(state["calls"].index("pi-install"), state["calls"].index("go"))
                         self.assertLess(state["calls"].index("go"), state["calls"].index("packages"))
                         self.assertLess(state["calls"].index("packages"), state["calls"].index("Setup-PiMcpAdapter"))

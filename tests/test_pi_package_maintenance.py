@@ -131,7 +131,7 @@ print_error() { printf 'ERROR: %s\\n' "$*"; }
 
     def test_setup_final_status_and_log_finalization(self):
         for script in (*BASH, *(['win.ps1'] if PWSH else [])):
-            for failure in ('adapter', 'bridge', 'companions', 'goal', 'subagents', 'rpiv', 'refresh', 'prose', 'prepare', 'permissions', 'askclaude-policy', 'none'):
+            for failure in ('adapter', 'bridge', 'companions', 'goal', 'subagents', 'rpiv', 'refresh', 'prose', 'prepare', 'permissions', 'askclaude-policy', 'workspace-trust', 'none'):
                 with self.subTest(script=script, failure=failure):
                     text = (ROOT / script).read_text()
                     windows = script.endswith('.ps1')
@@ -144,6 +144,7 @@ print_error() { printf 'ERROR: %s\\n' "$*"; }
                         code += '\nfunction Prepare-PiProfilePermissions { return $' + ('false' if failure == 'permissions' else 'true') + ' }'
                         code += '\nfunction Remove-PiProse { return $' + ('false' if failure == 'prose' else 'true') + ' }'
                         code += '\nfunction Disable-PiAskClaude { return $' + ('false' if failure == 'askclaude-policy' else 'true') + ' }'
+                        code += '\nfunction Configure-BbPiTrust { return $' + ('false' if failure == 'workspace-trust' else 'true') + ' }'
                         code += '\nfunction Update-PiPackages { Write-Host "PACKAGE-STEP:refresh"; return $' + ('false' if failure == 'refresh' else 'true') + ' }'
                         code += '''
 function Test-EnvLocalFlag { return $false }
@@ -164,6 +165,7 @@ function Complete-SetupLog { Write-Host 'LOG-FINALIZED' }
                         code += '\nprepare_pi_profile_permissions() { return ' + ('1' if failure == 'permissions' else '0') + '; }'
                         code += '\nremove_pi_prose() { return ' + ('1' if failure == 'prose' else '0') + '; }'
                         code += '\ndisable_pi_askclaude() { return ' + ('1' if failure == 'askclaude-policy' else '0') + '; }'
+                        code += '\nconfigure_bb_pi_trust() { return ' + ('1' if failure == 'workspace-trust' else '0') + '; }'
                         code += '\nrefresh_pi_packages() { echo "PACKAGE-STEP:refresh"; return ' + ('1' if failure == 'refresh' else '0') + '; }'
                         code += '''
 print_warning() { printf '%s\\n' "$*"; }
@@ -181,14 +183,14 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                     self.assertIn('UNRELATED-CONTINUED', result.stdout)
                     self.assertIn('LOG-FINALIZED', result.stdout)
                     if failure != 'none': self.assertNotIn('Setup complete!', result.stdout)
-                    if failure in ('prose', 'prepare', 'permissions', 'askclaude-policy'):
+                    if failure in ('prose', 'prepare', 'permissions', 'askclaude-policy', 'workspace-trust'):
                         self.assertNotIn('PACKAGE-STEP:', result.stdout)
                     else:
                         self.assertIn('PACKAGE-STEP:goal', result.stdout)
                         self.assertLess(result.stdout.index('PACKAGE-STEP:adapter'), result.stdout.index('PACKAGE-STEP:subagents'))
                     if failure in FUNCTIONS and failure != 'refresh':
                         self.assertNotIn('PACKAGE-STEP:refresh', result.stdout)
-                    elif failure not in ('prose', 'prepare', 'permissions', 'askclaude-policy'):
+                    elif failure not in ('prose', 'prepare', 'permissions', 'askclaude-policy', 'workspace-trust'):
                         self.assertIn('PACKAGE-STEP:refresh', result.stdout)
 
     def run_real_trust_caller(self, script, prior_failure=False):
@@ -197,6 +199,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
         if windows:
             names = re.findall(r'^function ([\w-]+)(?:\s|\()', text, re.M)
             real = ('Prepare-PiProfilePermissions', 'Disable-PiAskClaude', 'Remove-PiProse',
+                    'Configure-BbPiTrust', 'Invoke-BbPiTrustPolicy',
                     'Set-PiOpenCodeGoProvider', 'Prepare-PiMcpAdapter', 'Setup-PiMcpAdapter', 'Update-PiPackages')
             code = r'''$ErrorActionPreference='Stop'
 $tokens=$null; $errors=$null
@@ -234,6 +237,7 @@ function Complete-SetupLog { Write-Host 'LOG-FINALIZED' }
             names = re.findall(r'^(\w+)\(\) \{', text, re.M)
             from extract_setup_fixture import definitions
             real = ('prepare_pi_profile_permissions', 'disable_pi_askclaude', 'remove_pi_prose',
+                    'configure_bb_pi_trust', 'bb_pi_trust_policy',
                     'configure_pi_opencode_go', 'prepare_pi_mcp_adapter', 'setup_pi_mcp_adapter', 'refresh_pi_packages')
             code = definitions(text) + '\n'
             code += '\n'.join(n + '() { return 0; }' for n in names if n not in real)
@@ -310,6 +314,8 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                             {'source': ADAPTER, 'extensions': ['index.ts'], 'skills': []}, 'npm:unrelated'])
                         self.assertEqual({p: metadata(p) for p in ordinary}, before)
                         self.assertEqual(case.agent.stat().st_mode & 0o7777, 0o700)
+                        trust = case.agent / 'trust.json'
+                        self.assertTrue(json.loads(trust.read_text())[str(case.home / '.bb/plugins/environment-git-worktree/host-data/worktrees')])
                         self.assertEqual(auth.stat().st_mode & 0o7777, 0o600)
                         if selected:
                             self.assertEqual((default / 'auth.json').read_text(), 'inactive fixture credential')
@@ -319,18 +325,18 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                         self.assertFalse(any('pi-prose' in str(call) for call in calls))
                     if script not in ('ubuntu.sh', 'win.ps1'):
                         continue
-                    for failure in ('earlier', 'permissions', 'credential', 'prose', 'adapter', 'install', 'resource', 'refresh'):
+                    for failure in ('earlier', 'permissions', 'credential', 'prose', 'workspace-trust', 'adapter', 'install', 'resource', 'refresh'):
                         with self.subTest(failure=failure):
                             callsfile = case.statefile.with_suffix('.calls')
                             callsfile.unlink(missing_ok=True)
-                            target = case.agent / ('npm/package.json' if failure == 'adapter' else 'settings.json')
+                            target = case.agent / ('npm/package.json' if failure == 'adapter' else 'trust.json' if failure == 'workspace-trust' else 'settings.json')
                             original = target.read_bytes()
                             credential = auth.read_bytes()
                             if failure == 'permissions':
                                 case.home.chmod(0o2777)
                             elif failure == 'credential':
                                 auth.chmod(0o644)
-                            elif failure in ('prose', 'adapter'):
+                            elif failure in ('prose', 'workspace-trust', 'adapter'):
                                 target.write_text('{malformed-fixture-do-not-log')
                             elif failure in ('install', 'refresh'):
                                 case.state['fail'] = 'install' if failure == 'install' else 'update'
@@ -346,7 +352,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                                 self.assertNotIn('malformed-fixture-do-not-log', result.stdout + result.stderr)
                                 self.assertEqual(auth.read_bytes(), credential)
                                 calls = [json.loads(line) for line in callsfile.read_text().splitlines()] if callsfile.exists() else []
-                                if failure in ('permissions', 'credential', 'prose', 'adapter'):
+                                if failure in ('permissions', 'credential', 'prose', 'workspace-trust', 'adapter'):
                                     self.assertEqual(calls, [])
                                 self.assertEqual(['update', '--extensions', '--no-approve'] in calls, failure in ('earlier', 'refresh'))
                             finally:

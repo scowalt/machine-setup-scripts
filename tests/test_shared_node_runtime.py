@@ -260,7 +260,7 @@ state.write_text(json.dumps(data))
                 with self.subTest(script=script, healthy=healthy):
                     f = self.fixture(version='24.20.0' if healthy else None, install_failure=not healthy)
                     command = ('PI_PROFILE_MUTATIONS_BLOCKED=0; disable_pi_askclaude() { return 0; }; '
-                               'remove_pi_prose() { return 0; }; prepare_pi_mcp_adapter() { return 0; }; '
+                               'remove_pi_prose() { return 0; }; configure_bb_pi_trust() { return 0; }; prepare_pi_mcp_adapter() { return 0; }; '
                                'remove_pi_subagents() { touch "$HOME/cleanup-ran"; }; '
                                'remove_pi_rpiv_packages() { touch "$HOME/cleanup-ran"; };\n' + block)
                     f.run(script, command)

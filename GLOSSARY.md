@@ -116,6 +116,14 @@ _Avoid_: Extension file, Pi installation
 The single user-level Pi configuration selected for a setup run. It is distinct from project-scoped configuration and other global profiles.
 _Avoid_: All Pi profiles, project profile
 
+**Pi project trust**:
+A decision allowing Pi to load project-provided settings and resources in a folder. It is distinct from approval of an MCP server definition and does not isolate execution.
+_Avoid_: MCP approval, filesystem sandbox
+
+**MCP definition approval**:
+Approval of a repository's named MCP server with its complete effective definition. A changed definition requires a separate approval.
+_Avoid_: Folder trust, blanket server trust
+
 **Pi package refresh**:
 An update of registered packages in the active global Pi profile, including setup-managed and user-added packages. It is distinct from updating Pi itself.
 _Avoid_: Pi self-update, extension reload

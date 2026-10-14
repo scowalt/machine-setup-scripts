@@ -481,6 +481,7 @@ try {
     }
     function Disable-PiAskClaude { return $true }
     function Remove-PiProse { return $true }
+    function Configure-BbPiTrust { return $true }
     function Prepare-PiMcpAdapter { return $true }
     function Test-EnvLocalFlag { return $true }
     Reset-Fixture
