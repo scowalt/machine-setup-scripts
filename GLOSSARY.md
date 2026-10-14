@@ -120,6 +120,10 @@ _Avoid_: All Pi profiles, project profile
 An update of registered packages in the active global Pi profile, including setup-managed and user-added packages. It is distinct from updating Pi itself.
 _Avoid_: Pi self-update, extension reload
 
+**Setup-imposed version freeze**:
+A setup-owned restriction that keeps a managed tool on an older release despite newer upstream releases. It is distinct from user-selected versions, supported release channels, and temporary upgrade holds.
+_Avoid_: User pin, release channel
+
 **Disabled Pi resource**:
 An extension, skill, prompt, or theme excluded from activation while its containing package remains registered. A disabled resource is distinct from an excluded package.
 _Avoid_: Removed package, package opt-out

@@ -16,7 +16,9 @@ assert.equal(path.resolve(cwd), path.dirname(os.homedir()));
 assert.ok(path.basename(cwd).startsWith('pi-maintenance-'));
 assert.deepEqual(fs.readdirSync(os.homedir()), ['.pi']);
 const packageDir = path.join(agentDir, 'npm/node_modules/pi-mcp-adapter');
-assert.equal(JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'))).version, '2.32.1');
+const metadata = JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json')));
+assert.equal(metadata.name, 'pi-mcp-adapter');
+assert.match(metadata.version, /^\d+\.\d+\.\d+(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
 const blocked = () => { throw new Error('Network is forbidden in the adapter load fixture'); };
 globalThis.fetch = blocked;
 net.Socket.prototype.connect = blocked;
@@ -24,21 +26,21 @@ tls.connect = blocked;
 http.request = http.get = https.request = https.get = blocked;
 syncBuiltinESMExports();
 const { DefaultResourceLoader, SettingsManager } = await import(pathToFileURL(sdk).href);
-const pin = 'npm:pi-mcp-adapter@2.32.1';
+const source = 'npm:pi-mcp-adapter';
 for (const [entry, expected] of [
-  [pin, true],
-  [{ source: pin, skills: [] }, true],
-  [{ source: pin, extensions: ['index.ts'] }, true],
-  [{ source: pin, extensions: ['+./index.ts'] }, true],
-  [{ source: pin, extensions: ['*.ts', '+index.ts'] }, true],
-  [{ source: pin, extensions: ['!*', '+./index.ts'] }, true],
-  [{ source: pin, autoload: false, extensions: ['!index.ts', '+index.ts'] }, true],
-  [{ source: pin, extensions: ['+index.ts', '-index.ts'] }, false],
-  [{ source: pin, autoload: false, extensions: ['+index.ts'] }, true],
-  [{ source: pin, extensions: [] }, false],
-  [{ source: pin, extensions: ['./index.ts'] }, false],
-  [{ source: pin, extensions: ['-index.ts'] }, false],
-  [{ source: pin, autoload: false }, false],
+  [source, true],
+  [{ source, skills: [] }, true],
+  [{ source, extensions: ['index.ts'] }, true],
+  [{ source, extensions: ['+./index.ts'] }, true],
+  [{ source, extensions: ['*.ts', '+index.ts'] }, true],
+  [{ source, extensions: ['!*', '+./index.ts'] }, true],
+  [{ source, autoload: false, extensions: ['!index.ts', '+index.ts'] }, true],
+  [{ source, extensions: ['+index.ts', '-index.ts'] }, false],
+  [{ source, autoload: false, extensions: ['+index.ts'] }, true],
+  [{ source, extensions: [] }, false],
+  [{ source, extensions: ['./index.ts'] }, false],
+  [{ source, extensions: ['-index.ts'] }, false],
+  [{ source, autoload: false }, false],
 ]) {
   const loader = new DefaultResourceLoader({
     cwd, agentDir,
@@ -57,4 +59,4 @@ for (const [entry, expected] of [
     assert.ok(extensions[0].commands.has('mcp'), '/mcp command must register');
   }
 }
-console.log('PASS: pinned adapter loads MCP tools and /mcp; disabled filters stay inactive (no network or model calls).');
+console.log('PASS: unpinned adapter loads MCP tools and /mcp; disabled filters stay inactive (no network or model calls).');

@@ -67,7 +67,8 @@ class NonManagement(unittest.TestCase):
                 self.assertIn('OPENCODE_GO_API_KEY', executable)
                 self.assertIn('muse-spark-1.3-contributor', executable)
                 self.assertIn('gpt-6-astra', executable)
-                self.assertIn('pi-mcp-adapter@2.32.1', executable)
+                self.assertIn('npm:pi-mcp-adapter', executable)
+                self.assertNotIn('npm:pi-mcp-adapter@', executable)
 
     def test_real_bash_runners_preserve_state_and_aggregate_pi_failures(self):
         for name in BASH:
