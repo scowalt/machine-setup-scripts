@@ -429,6 +429,125 @@ class Discovery(unittest.TestCase):
                 status, output = self.run_policy(api)
             self.assertEqual((status, output), (1, f'BB_PLUGIN_REFRESH failed update {reason}\n'))
 
+    def test_group_writable_package_node_and_cli_refresh_without_repairs(self):
+        data = self.server()
+        paths = [self.package / 'package.json', self.entry, self.entry.parent / 'start-server.js',
+                 self.package / 'host-daemon/dist/bb', self.root / 'node']
+        for path in paths:
+            path.chmod(0o775 if path.name in ('bb', 'node') else 0o664)
+        for directory in (self.home, self.package, self.entry.parent):
+            directory.chmod(0o775)
+        before = {path: (P.fingerprint(path.stat()), path.read_bytes()) for path in paths}
+        for platform in ('linux', 'darwin'):
+            for attempt in range(2):
+                api = FakeApi()
+                with self.subTest(platform=platform, attempt=attempt), \
+                        patch.object(P.sys, 'platform', platform), \
+                        patch.object(P.subprocess, 'run', side_effect=AssertionError('external operation forbidden')), \
+                        self.darwin_http(api, data=data):
+                    self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH completed\n'))
+                self.assertEqual(len(api.mutations()), 1)
+                self.assertEqual({path: (P.fingerprint(path.stat()), path.read_bytes()) for path in paths}, before)
+        with patch.object(P.http.client, 'HTTPConnection', side_effect=AssertionError('request forbidden')):
+            self.assertEqual(self.run_policy(policy='block-default'),
+                             (0, 'BB_PLUGIN_REFRESH readiness-deferred\nBB_PLUGIN_REFRESH absent\n'))
+
+    def test_group_writable_runtime_marker_defers_without_mutation(self):
+        data = self.data()
+        marker = data / 'bb-app-runtime.json'
+        marker.write_text('{"pid":12345}')
+        for mode in (0o660, 0o664, 0o770, 0o775):
+            marker.chmod(mode)
+            before = P.fingerprint(marker.stat()), marker.read_bytes()
+            with self.subTest(mode=oct(mode)), \
+                    patch.object(P.subprocess, 'run', side_effect=AssertionError('command forbidden')), \
+                    patch.object(P.http.client, 'HTTPConnection', side_effect=AssertionError('request forbidden')):
+                self.assertEqual(self.run_policy(native_api=True), (0, 'BB_PLUGIN_REFRESH stopped\n'))
+            self.assertEqual((P.fingerprint(marker.stat()), marker.read_bytes()), before)
+        for value in ('{', '{"pid":"12345"}'):
+            marker.write_text(value)
+            self.assertEqual(self.run_policy()[0], 1)
+        marker.write_text('{"pid":12345}')
+        marker.chmod(0o666)
+        self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery writable-local-state\n'))
+        marker.chmod(0o664)
+        self.records[12345] = (['inert-launcher'], {}, b'1')
+        self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery unverified-main-server\n'))
+
+    def test_group_write_exception_keeps_root_foreign_and_link_guards(self):
+        data = self.server()
+        runtime = data / 'bb-app-runtime.json'
+        runtime.write_text('{"pid":12345}')
+        targets = [self.package / 'package.json', self.entry, self.entry.parent / 'start-server.js',
+                   self.package / 'host-daemon/dist/bb', self.root / 'node', runtime]
+        native_stat = os.stat
+        fields = ('st_dev', 'st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_size',
+                  'st_mtime_ns', 'st_ctime_ns', 'st_nlink')
+        for target in targets:
+            target.chmod(0o664)
+            original = target.stat()
+            for fault, value, reason in (('st_uid', 0, 'writable-local-state'),
+                                         ('st_uid', os.getuid() + 1, 'foreign-local-state'),
+                                         ('st_mode', P.stat.S_IFREG | 0o666, 'writable-local-state'),
+                                         ('st_nlink', 2, 'unverified-local-state'),
+                                         ('st_mode', P.stat.S_IFLNK | 0o664, 'unverified-local-state')):
+                def metadata(path, *args, **kwargs):
+                    info = native_stat(path, *args, **kwargs)
+                    if (info.st_dev, info.st_ino) == (original.st_dev, original.st_ino):
+                        info = types.SimpleNamespace(**{name: getattr(info, name) for name in fields})
+                        setattr(info, fault, value)
+                    return info
+                with self.subTest(target=target.name, fault=fault, value=value), \
+                        patch.object(P.os, 'stat', side_effect=metadata), \
+                        patch.object(P.subprocess, 'run', side_effect=AssertionError('command forbidden')):
+                    if target == runtime:
+                        previous = self.records.pop(100)
+                        try:
+                            result = self.run_policy()
+                        finally:
+                            self.records[100] = previous
+                    elif target in (self.root / 'node', self.package / 'host-daemon/dist/bb'):
+                        server = P.discover(self.files(), self.proc)[0][0]
+                        with self.assertRaisesRegex(P.Refusal, reason):
+                            P.NativeApi(self.files(), self.proc, server, P.time.monotonic() + 10).update()
+                        continue
+                    else:
+                        result = self.run_policy()
+                self.assertEqual(result, (1, 'BB_PLUGIN_REFRESH failed discovery ' + reason + '\n'))
+            target.chmod(0o600)
+
+    def test_group_write_does_not_extend_to_database_settings_or_credentials(self):
+        data = self.data()
+        for name in ('bb.db', 'server-moved.json', 'server-import.json', 'config.json',
+                     'env.json', 'auth.json', 'host-id', '.config.json.lock'):
+            file = data / name
+            if not file.exists():
+                file.write_text('inert protected metadata')
+            file.chmod(0o664)
+            with self.subTest(name=name), self.assertRaisesRegex(P.Refusal, 'writable-local-state'):
+                self.files().read(file)
+            file.chmod(0o600)
+
+    def test_refresh_revalidates_accepted_group_writable_package_mode(self):
+        self.server()
+        manifest = self.package / 'package.json'
+        manifest.chmod(0o664)
+        original = manifest.stat()
+        native_stat = os.stat
+        fields = ('st_dev', 'st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_size',
+                  'st_mtime_ns', 'st_ctime_ns', 'st_nlink')
+        with self.darwin_http(FakeApi()) as requests:
+            def metadata(path, *args, **kwargs):
+                info = native_stat(path, *args, **kwargs)
+                if requests and (info.st_dev, info.st_ino) == (original.st_dev, original.st_ino):
+                    info = types.SimpleNamespace(**{name: getattr(info, name) for name in fields})
+                    info.st_mode = P.stat.S_IFREG | 0o660
+                return info
+            with patch.object(P.os, 'stat', side_effect=metadata):
+                self.assertEqual(self.run_policy(native_api=True),
+                                 (1, 'BB_PLUGIN_REFRESH failed identity changed-local-state\n'))
+            self.assertEqual(requests, [('GET', '/health', None)])
+
     def test_unsafe_or_changed_cli_and_process_never_execute_native_command(self):
         self.server()
         cli = self.package / 'host-daemon/dist/bb'
@@ -445,7 +564,7 @@ class Discovery(unittest.TestCase):
             elif case == 'empty':
                 cli.write_text('')
             elif case == 'writable':
-                cli.chmod(0o660)
+                cli.chmod(0o666)
             elif case == 'changed-cli':
                 files.inspect(cli)
                 cli.write_text('changed inert CLI')
@@ -802,7 +921,7 @@ class Discovery(unittest.TestCase):
             ('st_uid', 0), ('st_uid', os.getuid() + 1), ('st_mode', P.stat.S_IFDIR | 0o777),
             ('st_mode', P.stat.S_IFLNK | 0o775), ('st_mode', P.stat.S_IFREG | 0o644))]
         cases += [(target, field, value) for target in (data / 'bb.db', self.package / 'package.json', self.entry)
-                  for field, value in (('st_mode', P.stat.S_IFREG | 0o660), ('st_nlink', 2),
+                  for field, value in (('st_mode', P.stat.S_IFREG | (0o660 if target == data / 'bb.db' else 0o666)), ('st_nlink', 2),
                                        ('st_mode', P.stat.S_IFLNK | 0o600))]
         for target, field, value in cases:
             original = native_stat(target)
@@ -1746,7 +1865,7 @@ class Callers(unittest.TestCase):
         self.assertIn('BB_PLUGIN_REFRESH failed update operation-timeout', failure_then_deferral[1])
         return absent, refusal, failure_then_deferral
 
-    def test_real_refresh_runs_inside_ordinary_callers_with_group_writable_directories(self):
+    def test_real_refresh_runs_inside_ordinary_callers_with_group_writable_directories_and_bb_files(self):
         driver = r'''
 import importlib.util, json, os, sys, types
 from pathlib import Path
@@ -1823,6 +1942,16 @@ DOTFILES_ACCESS_METHOD=none
                             fixture.server(data=data)
                         if case == 'file-failed':
                             (data / 'bb.db').chmod(0o660)
+                        code_files = [fixture.package / 'package.json', fixture.entry,
+                                      fixture.entry.parent / 'start-server.js', fixture.root / 'node',
+                                      fixture.package / 'host-daemon/dist/bb']
+                        if case == 'stopped':
+                            runtime = data / 'bb-app-runtime.json'
+                            runtime.write_text('{"pid":12345}')
+                            code_files.append(runtime)
+                        for file in code_files:
+                            file.chmod(0o775 if file.name in ('bb', 'node') else 0o664)
+                        file_before = {file: (P.fingerprint(file.stat()), file.read_bytes()) for file in code_files}
                         paths = [fixture.home, data, *fixture.entry.parents[:6]]
                         if custom:
                             paths.append(data.parent)
@@ -1861,6 +1990,8 @@ DOTFILES_ACCESS_METHOD=none
                                 self.assertFalse(report['plugins']['tracking']['enabled'])
                                 self.assertEqual(report['plugins']['tracking']['version'], '1.1.0' if case == 'updated' else '1.0.0')
                                 self.assertEqual({path: path.stat() for path in paths}, before)
+                                self.assertEqual({file: (P.fingerprint(file.stat()), file.read_bytes())
+                                                  for file in code_files}, file_before)
                     finally:
                         fixture.doCleanups()
 
