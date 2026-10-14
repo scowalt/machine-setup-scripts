@@ -6848,8 +6848,7 @@ function Prepare-PiMcpAdapter {
     const fs = require('node:fs');
     const path = require('node:path');
     const [agentDir, disabled, mode] = process.argv.slice(2);
-    const version = '2.32.1';
-    const source = `npm:pi-mcp-adapter@${version}`;
+    const source = 'npm:pi-mcp-adapter';
     const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
     const isAdapter = value => typeof value === 'string' && /^npm:pi-mcp-adapter(?:@[^\s]+)?$/.test(value);
     function stat(file) {
@@ -6891,12 +6890,13 @@ function Prepare-PiMcpAdapter {
             if (manifest.data && field in manifest.data && !isObject(manifest.data[field])) throw new Error('invalid dependencies');
         }
         if (mode === 'verify') {
-            if (disabled !== '1' && (installed.data?.name !== 'pi-mcp-adapter' || installed.data?.version !== version ||
-                manifest.data?.dependencies?.['pi-mcp-adapter'] !== version ||
+            const version = installed.data?.version;
+            const dependency = manifest.data?.dependencies?.['pi-mcp-adapter'];
+            if (disabled !== '1' && (installed.data?.name !== 'pi-mcp-adapter' || typeof version !== 'string' ||
+                !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(version) ||
+                !['latest', version, `^${version}`, `~${version}`].includes(dependency) ||
                 !packages.some(entry => (typeof entry === 'string' ? entry : entry.source) === source))) throw new Error('unverified adapter');
             if (disabled !== '1') {
-                // 2.32.1 declares one extension. Do not execute it during live setup:
-                // extension startup can connect MCP servers or run configured commands.
                 const resources = installed.data.pi?.extensions;
                 const entryPoint = stat(path.join(store, 'node_modules/pi-mcp-adapter/index.ts'));
                 if (!Array.isArray(resources) || resources.length !== 1 || resources[0] !== './index.ts' ||
@@ -6947,7 +6947,7 @@ function Prepare-PiMcpAdapter {
                     const deps = manifest.data[field];
                     if (!deps || !Object.hasOwn(deps, 'pi-mcp-adapter')) continue;
                     if (disabled === '1') { delete deps['pi-mcp-adapter']; changed = true; }
-                    else if (deps['pi-mcp-adapter'] !== version) { deps['pi-mcp-adapter'] = version; changed = true; }
+                    else if (deps['pi-mcp-adapter'] !== 'latest') { deps['pi-mcp-adapter'] = 'latest'; changed = true; }
                 }
                 if (changed) changes.push(manifest);
             }
@@ -6971,7 +6971,7 @@ function Prepare-PiMcpAdapter {
         if (error.message === 'adapter activation') {
             console.error('Pi MCP adapter enablement could not be verified. Existing filters were preserved. Use pi config in the active global profile to enable index.ts, or set BAN_PI_MCP_ADAPTER=1 for an intentional opt-out.');
         } else {
-            console.error('Pi MCP adapter metadata/resource validation failed; inspect the active profile and reinstall the pinned package if needed. npm security settings were not changed.');
+            console.error('Pi MCP adapter metadata/resource validation failed; inspect the active profile and reinstall the package if needed. npm security settings were not changed.');
         }
         process.exitCode = 1;
     }
@@ -6983,7 +6983,7 @@ function Prepare-PiMcpAdapter {
             Write-Warning $activationMessage
         }
         else {
-            Write-Warning "Pi MCP adapter metadata/resource validation failed; inspect the active profile and reinstall the pinned package if needed. npm security settings were not changed."
+            Write-Warning "Pi MCP adapter metadata/resource validation failed; inspect the active profile and reinstall the package if needed. npm security settings were not changed."
         }
         return $false
     }
@@ -6991,7 +6991,7 @@ function Prepare-PiMcpAdapter {
 }
 
 function Setup-PiMcpAdapter {
-    $package = "npm:pi-mcp-adapter@2.32.1"
+    $package = "npm:pi-mcp-adapter"
 
     if (-not (Prepare-PiMcpAdapter)) { return $false }
     if (Test-EnvLocalFlag "BAN_PI_MCP_ADAPTER") {
@@ -7001,7 +7001,7 @@ function Setup-PiMcpAdapter {
 
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
         Write-Warning "npm not found. Cannot install Pi MCP adapter."
-        Write-Debug "Install Node.js/npm, then run: pi install npm:pi-mcp-adapter@2.32.1"
+        Write-Debug "Install Node.js/npm, then run: pi install npm:pi-mcp-adapter"
         return $false
     }
 
@@ -7011,13 +7011,8 @@ function Setup-PiMcpAdapter {
     }
 
     Write-Message "Installing/updating Pi MCP adapter..."
-    $savedExact = $env:npm_config_save_exact
-    try {
-        $env:npm_config_save_exact = 'true'
-        $output = & pi install $package 2>&1
-        $installStatus = $LASTEXITCODE
-    }
-    finally { $env:npm_config_save_exact = $savedExact }
+    $output = & pi install $package 2>&1
+    $installStatus = $LASTEXITCODE
     if ($installStatus -eq 0) {
         $listOutput = & pi list 2>&1
         $listText = ($listOutput | Out-String)
@@ -8424,7 +8419,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 191 | Last changed: Ignore unrelated Backlog directory activity"
+    Write-Host "Version 192 | Last changed: Follow current Pi MCP adapter releases"
 
     Assert-HeadlessUnsupported
 

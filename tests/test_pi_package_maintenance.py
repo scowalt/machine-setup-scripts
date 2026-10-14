@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 BASH = ('mac.sh', 'ubuntu.sh', 'wsl.sh', 'pi.sh', 'bazzite.sh')
 PWSH = os.environ.get('PWSH_BIN') or shutil.which('pwsh')
 NODE = subprocess.check_output(['node', '-p', 'process.execPath'], text=True).strip()
-PIN = 'npm:pi-mcp-adapter@2.32.1'
+ADAPTER = 'npm:pi-mcp-adapter'
+LATEST_VERSION = '5.3.0'
 FUNCTIONS = {
     'adapter': ('setup_pi_mcp_adapter', 'Setup-PiMcpAdapter'),
     'bridge': ('setup_pi_claude_bridge', 'Setup-PiClaudeBridge'),
@@ -50,8 +51,9 @@ elif action=='install':
     if package.startswith('npm:pi-mcp-adapter'):
         store=agent/'npm'; store.mkdir(parents=True,exist_ok=True)
         manifest=store/'package.json'; value=json.loads(manifest.read_text()) if manifest.exists() else {}
-        version='2.33.0' if state.get('wrong_version') else '2.32.1'
+        version=state.get('latest_version', '5.3.0')
         value.setdefault('dependencies',{})['pi-mcp-adapter']=version if os.environ.get('npm_config_save_exact')=='true' else '^'+version
+        if state.get('bad_dependency'): value['dependencies']['pi-mcp-adapter']='^99.0.0'
         manifest.write_text(json.dumps(value))
         installed=store/'node_modules/pi-mcp-adapter';installed.mkdir(parents=True,exist_ok=True)
         metadata={'name':'pi-mcp-adapter','version':version,'pi':{'extensions':['./index.ts']}}
@@ -303,9 +305,9 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                             'opencode-go': {'type': 'api_key', 'key': KEY}})
                         self.assertFalse(retired.exists())
                         self.assertEqual(sentinel.read_text(), '{custom malformed prose is preserved')
-                        self.assertEqual(json.loads((case.agent / 'npm/package.json').read_text())['dependencies']['pi-mcp-adapter'], '2.32.1')
+                        self.assertEqual(json.loads((case.agent / 'npm/package.json').read_text())['dependencies']['pi-mcp-adapter'], '^' + LATEST_VERSION)
                         self.assertEqual(json.loads((case.agent / 'settings.json').read_text())['packages'], [
-                            {'source': PIN, 'extensions': ['index.ts'], 'skills': []}, 'npm:unrelated'])
+                            {'source': ADAPTER, 'extensions': ['index.ts'], 'skills': []}, 'npm:unrelated'])
                         self.assertEqual({p: metadata(p) for p in ordinary}, before)
                         self.assertEqual(case.agent.stat().st_mode & 0o7777, 0o700)
                         self.assertEqual(auth.stat().st_mode & 0o7777, 0o600)
@@ -372,8 +374,8 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
         for script in (*BASH, *(['win.ps1'] if PWSH else [])):
             with self.subTest(script=script):
                 settings, manifest = self.seed_affected_store()
-                settings['packages'][0]['source'] = PIN
-                manifest['dependencies']['pi-mcp-adapter'] = '2.32.1'
+                settings['packages'][0]['source'] = ADAPTER
+                manifest['dependencies']['pi-mcp-adapter'] = '^' + LATEST_VERSION
                 ordinary = (self.home, self.agent / 'npm')
                 for directory in ordinary:
                     directory.chmod(0o2775)
@@ -416,7 +418,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
             for script in (*BASH, *(['win.ps1'] if PWSH else [])):
                 with self.subTest(script=script, entry=entry):
                     settings, _ = self.seed_affected_store()
-                    settings['packages'][0] = dict(source=PIN, skills=[], **entry)
+                    settings['packages'][0] = dict(source=ADAPTER, skills=[], **entry)
                     target = self.agent / 'settings.json'
                     target.write_text(json.dumps(settings))
                     result = self.run_helper(script, 'adapter')
@@ -434,7 +436,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
             for script in (*BASH, *(['win.ps1'] if PWSH else [])):
                 with self.subTest(script=script, entry=entry):
                     settings, _ = self.seed_affected_store()
-                    settings['packages'][0] = dict(source=PIN, **entry)
+                    settings['packages'][0] = dict(source=ADAPTER, **entry)
                     target = self.agent / 'settings.json'
                     target.write_text(json.dumps(settings))
                     result = self.run_helper(script, 'adapter')
@@ -463,14 +465,23 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
         for script in (*BASH, *(['win.ps1'] if PWSH else [])):
             with self.subTest(script=script):
                 settings, _ = self.seed_affected_store()
-                settings['packages'].insert(0, {'source': PIN, 'extensions': []})
+                settings['packages'].insert(0, {'source': ADAPTER, 'extensions': []})
                 (self.agent / 'settings.json').write_text(json.dumps(settings))
                 result = self.run_helper(script, 'adapter')
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertNotIn('SUCCESS:', result.stdout)
 
-    def test_wrong_installed_version_fails_validation(self):
-        self.state['wrong_version'] = True
+    def test_invalid_or_prerelease_installed_version_fails_validation(self):
+        for version in ('invalid', '', '5.4.0-beta.1'):
+            self.state['latest_version'] = version
+            for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+                with self.subTest(script=script, version=version):
+                    result = self.run_helper(script, 'adapter')
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertNotIn('SUCCESS:', result.stdout)
+
+    def test_installed_version_must_match_native_dependency_selection(self):
+        self.state['bad_dependency'] = True
         for script in (*BASH, *(['win.ps1'] if PWSH else [])):
             with self.subTest(script=script):
                 result = self.run_helper(script, 'adapter')
@@ -547,9 +558,12 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
     @unittest.skipUnless(os.environ.get('PI_ADAPTER_DOTFILES_SOURCE'),
                          'Set PI_ADAPTER_DOTFILES_SOURCE for the cross-repository render/setup fixture')
     def test_dotfiles_and_setup_keep_adapter_and_bridge_enabled_across_repeated_runs(self):
-        template = Path(os.environ['PI_ADAPTER_DOTFILES_SOURCE']) / 'private_dot_pi/agent/private_settings.json.tmpl'
+        dotfiles = Path(os.environ['PI_ADAPTER_DOTFILES_SOURCE'])
+        template = dotfiles / 'private_dot_pi/agent/private_settings.json.tmpl'
         config = self.root / 'chezmoi.json'; config.write_text('{}')
         source = self.root / 'empty-source'; source.mkdir()
+        shared = source / '.chezmoitemplates'; shared.mkdir()
+        shutil.copy2(dotfiles / '.chezmoitemplates/pi-model-policy.json', shared)
         for script in (*BASH, *(['win.ps1'] if PWSH else [])):
             for work in ('0', '1'):
                 for disabled in ('0', '1'):
@@ -576,7 +590,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                                 'execute-template', '--file', str(template),
                             ], env=self.env, cwd=self.root, capture_output=True, text=True, check=True)
                             settings = json.loads(rendered.stdout)
-                            self.assertEqual(PIN in settings['packages'], disabled != '1')
+                            self.assertEqual(ADAPTER in settings['packages'], disabled != '1')
                             self.assertEqual(settings['packages'].count('npm:pi-claude-bridge'), 1,
                                              'Dotfiles must retain the enabled bridge registration without another install')
                             target.write_text(rendered.stdout)
@@ -826,7 +840,10 @@ print_warning() { printf '%s\\n' "$*" >&2; }
         cli('bash', str(fixture))
         sdk = Path(os.environ['PI_PACKAGE_CLI']).resolve().with_name('index.js')
         loaded = cli(NODE, str(ROOT / 'tests/pi-mcp-adapter-load.mjs'), str(sdk), str(self.agent), str(self.root))
-        self.assertIn('PASS: pinned adapter loads MCP tools', loaded.stdout)
+        self.assertIn('PASS: unpinned adapter loads MCP tools', loaded.stdout)
+        installed_version = json.loads((self.agent / 'npm/node_modules/pi-mcp-adapter/package.json').read_text())['version']
+        self.assertRegex(installed_version, r'^\d+\.\d+\.\d+$')
+        self.assertNotEqual(installed_version, '2.32.1')
         cli('pi', 'install', 'npm:is-number@7.0.0')
         store = self.agent / 'npm'
         metadata = json.loads(cli('npm', 'view', 'pi-mcp-adapter@2.33.0', '--json').stdout)
@@ -850,9 +867,9 @@ print_warning() { printf '%s\\n' "$*" >&2; }
         installed = store / 'node_modules/pi-mcp-adapter/package.json'
         installed.write_text(json.dumps({'name': 'pi-mcp-adapter', 'version': '2.33.0', 'dependencies': metadata['dependencies']}))
         for _ in range(2): cli('bash', str(fixture))
-        self.assertEqual(json.loads(installed.read_text())['version'], '2.32.1')
+        self.assertEqual(json.loads(installed.read_text())['version'], installed_version)
         self.assertEqual(json.loads((self.agent / 'settings.json').read_text())['packages'],
-                         [{'source': PIN, 'skills': []}, 'npm:is-number@7.0.0'])
+                         [{'source': ADAPTER, 'skills': []}, 'npm:is-number@7.0.0'])
         self.env['BAN_PI_MCP_ADAPTER'] = '1'
         cli('bash', str(fixture))
         cli('pi', 'install', 'npm:is-number@7.0.0')
@@ -862,15 +879,57 @@ print_warning() { printf '%s\\n' "$*" >&2; }
         self.assertEqual(userconfig.read_text(), '')
         self.assertEqual(globalconfig.read_text(), '')
 
-    def test_adapter_uses_compatible_exact_pin(self):
+    def test_adapter_follows_latest_across_major_releases(self):
+        for version in (LATEST_VERSION, '6.0.0', '12.10.2'):
+            self.state['latest_version'] = version
+            for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+                with self.subTest(script=script, version=version):
+                    self.seed_affected_store()
+                    calls = self.statefile.with_suffix('.calls'); calls.unlink(missing_ok=True)
+                    result = self.run_helper(script, 'adapter')
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn(ADAPTER, self.state['packages'])
+                    self.assertEqual([json.loads(line) for line in calls.read_text().splitlines()],
+                                     [['install', ADAPTER], ['list']])
+                    manifest = json.loads((self.agent / 'npm/package.json').read_text())
+                    self.assertEqual(manifest['dependencies']['pi-mcp-adapter'], '^' + version)
+                    installed = self.agent / 'npm/node_modules/pi-mcp-adapter/package.json'
+                    self.assertEqual(json.loads(installed.read_text())['version'], version)
+
+    def test_latest_policy_failure_never_falls_back_or_weakens_npm_security(self):
         for script in (*BASH, *(['win.ps1'] if PWSH else [])):
             with self.subTest(script=script):
+                settings, _ = self.seed_affected_store()
+                store = self.agent / 'npm'
+                installed = store / 'node_modules/pi-mcp-adapter/package.json'
+                installed.parent.mkdir(parents=True, exist_ok=True)
+                installed.write_text('{"name":"pi-mcp-adapter","version":"2.32.1"}')
+                before = installed.read_bytes()
+                policy = (self.home / '.npmrc').read_bytes()
+                lock = (store / 'package-lock.json').read_bytes()
+                calls = self.statefile.with_suffix('.calls'); calls.unlink(missing_ok=True)
                 self.state['restricted'] = True
                 result = self.run_helper(script, 'adapter')
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn(PIN, self.state['packages'])
-                manifest = json.loads((self.agent / 'npm/package.json').read_text())
-                self.assertEqual(manifest['dependencies']['pi-mcp-adapter'], '2.32.1')
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertNotIn('SUCCESS:', result.stdout)
+                self.assertIn('EALLOWREMOTE', result.stdout)
+                self.assertEqual([json.loads(line) for line in calls.read_text().splitlines()], [['install', ADAPTER]])
+                self.assertEqual(installed.read_bytes(), before)
+                self.assertEqual((self.home / '.npmrc').read_bytes(), policy)
+                self.assertEqual((store / 'package-lock.json').read_bytes(), lock)
+                settings['packages'][0]['source'] = ADAPTER
+                self.assertEqual(json.loads((self.agent / 'settings.json').read_text()), settings)
+                self.assertEqual(json.loads((store / 'package.json').read_text())['dependencies']['pi-mcp-adapter'], 'latest')
+
+    def test_native_npm_save_policy_is_preserved(self):
+        for setting in ('true', 'false'):
+            self.env['npm_config_save_exact'] = setting
+            for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+                with self.subTest(script=script, setting=setting):
+                    result = self.run_helper(script, 'adapter')
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    dependency = json.loads((self.agent / 'npm/package.json').read_text())['dependencies']['pi-mcp-adapter']
+                    self.assertEqual(dependency, LATEST_VERSION if setting == 'true' else '^' + LATEST_VERSION)
 
     def test_other_managed_failures_are_not_hidden_by_stale_registrations(self):
         for script in (*BASH, *(['win.ps1'] if PWSH else [])):
