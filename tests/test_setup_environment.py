@@ -1,8 +1,11 @@
+from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 BASH = ('mac.sh', 'ubuntu.sh', 'pi.sh', 'bazzite.sh', 'wsl.sh')
@@ -14,6 +17,44 @@ ZAI_API_KEY="credential # spaced"  # another comment
 OPENCODE_GO_API_KEY=credential#unquoted
 WORK_MACHINE=1#not-a-comment
 '''
+
+
+@dataclass(frozen=True)
+class EnvironmentCase:
+    data: str
+    expected: Optional[str]
+    inherited: Optional[str] = None
+
+
+INPUT_CASES = (
+    EnvironmentCase('', None),
+    EnvironmentCase('# {key}=1\n', None),
+    EnvironmentCase('{key}=1 # intentional exclusion\n', '1'),
+    EnvironmentCase('export {key}="0"\r\n', '0'),
+    EnvironmentCase('{key}=\n', ''),
+    EnvironmentCase('{key}=true\n', 'true'),
+    EnvironmentCase('{key}=false\n', 'false'),
+    EnvironmentCase('{key}=01\n', '01'),
+    EnvironmentCase("{key}=' 1 '\n", ' 1 '),
+    EnvironmentCase('{key}=1#literal\n', '1#literal'),
+    EnvironmentCase("{key}='{command}'\n", '{command}'),
+    EnvironmentCase('', '1', '1'),
+    EnvironmentCase('# {key}=1\n', '0', '0'),
+    EnvironmentCase('{key}=1\n', '1', '0'),
+    EnvironmentCase('{key}=0\n', '0', '1'),
+)
+
+
+def input_cases(key, command='$(touch escaped)'):
+    return tuple(EnvironmentCase(case.data.format(key=key, command=command),
+                                 case.expected.format(command=command) if case.expected is not None else None,
+                                 case.inherited) for case in INPUT_CASES)
+
+
+def powershell_cases(key):
+    cases = [{'Data': case.data, 'Expected': case.expected or '', 'Before': case.inherited}
+             for case in input_cases(key, '$(New-Item escaped)')]
+    return "$cases = ConvertFrom-Json @'\n" + json.dumps(cases) + "\n'@\n"
 
 
 class Environment(unittest.TestCase):
@@ -57,31 +98,19 @@ class Environment(unittest.TestCase):
 [[ "${BAN_MATT_POCOCK_SKILLS-}" == "$EXPECTED_LEGACY" && "${BAN_MATT_POCKOCK_SKILLS-}" == "$EXPECTED_TYPO" ]]
 '''
         policy = CONTENTS + 'BAN_IMPECCABLE=1\nBAN_PI_MCP_ADAPTER=0\nBAN_PI_GOAL_AUTORESEARCH=1\n'
-        cases = (('', None), ('# BAN_SCOWALT_ENGINEERING_SKILLS=1\n', None),
-                 ('BAN_SCOWALT_ENGINEERING_SKILLS=1 # intentional exclusion\n', '1'),
-                 ('export BAN_SCOWALT_ENGINEERING_SKILLS="0"\r\n', '0'),
-                 ('BAN_SCOWALT_ENGINEERING_SKILLS=\n', ''),
-                 ('BAN_SCOWALT_ENGINEERING_SKILLS=true\n', 'true'),
-                 ('BAN_SCOWALT_ENGINEERING_SKILLS=false\n', 'false'),
-                 ('BAN_SCOWALT_ENGINEERING_SKILLS=01\n', '01'),
-                 ("BAN_SCOWALT_ENGINEERING_SKILLS=' 1 '\n", ' 1 '),
-                 ('BAN_SCOWALT_ENGINEERING_SKILLS=1#literal\n', '1#literal'),
-                 ("BAN_SCOWALT_ENGINEERING_SKILLS='$(touch escaped)'\n", '$(touch escaped)'))
-        for saved, expected in cases:
-            with self.subTest(saved=saved):
-                result = self.bash(code, policy + 'BAN_MATT_POCOCK_SKILLS=0\nBAN_MATT_POCKOCK_SKILLS=1\n' + saved,
-                                   {'EXPECTED': expected or '', 'EXPECT_PRESENT': 'x' if expected is not None else '',
-                                    'EXPECTED_LEGACY': '0', 'EXPECTED_TYPO': '1'})
+        for case in input_cases(keys[0]):
+            with self.subTest(case=case):
+                environment = {'EXPECTED': case.expected or '',
+                               'EXPECT_PRESENT': 'x' if case.expected is not None else '',
+                               'EXPECTED_LEGACY': '0', 'EXPECTED_TYPO': '1'}
+                aliases = 'BAN_MATT_POCOCK_SKILLS=0\nBAN_MATT_POCKOCK_SKILLS=1\n'
+                if case.inherited is not None:
+                    environment.update({keys[0]: case.inherited, keys[1]: '1', keys[2]: '0',
+                                        'EXPECTED_LEGACY': '1', 'EXPECTED_TYPO': '0'})
+                    aliases = ''
+                result = self.bash(code, policy + aliases + case.data, environment)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertNotIn('credential', result.stdout + result.stderr)
-        for saved, inherited, expected in (('', '1', '1'), ('# BAN_SCOWALT_ENGINEERING_SKILLS=1\n', '0', '0'),
-                                            ('BAN_SCOWALT_ENGINEERING_SKILLS=1\n', '0', '1'),
-                                            ('BAN_SCOWALT_ENGINEERING_SKILLS=0\n', '1', '0')):
-            with self.subTest(saved=saved, inherited=inherited):
-                result = self.bash(code, policy + saved,
-                                   {keys[0]: inherited, keys[1]: '1', keys[2]: '0', 'EXPECTED': expected,
-                                    'EXPECT_PRESENT': 'x', 'EXPECTED_LEGACY': '1', 'EXPECTED_TYPO': '0'})
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         for canonical, legacy, typo in (('1', '0', '0'), ('0', '1', '0'), ('0', '0', '1')):
             with self.subTest(conflict=(canonical, legacy, typo)):
                 saved = ''.join(f'{key}={value}\n' for key, value in zip(keys, (canonical, legacy, typo)))
@@ -105,25 +134,14 @@ else
     [[ -z "${BAN_IMPECCABLE+x}" ]]
 fi
 '''
-        cases = (('', None), ('# BAN_IMPECCABLE=1\n', None),
-                 ('BAN_IMPECCABLE=1 # intentional exclusion\n', '1'),
-                 ('export BAN_IMPECCABLE="0"\n', '0'), ('BAN_IMPECCABLE=\n', ''),
-                 ('BAN_IMPECCABLE=true\n', 'true'), ('BAN_IMPECCABLE=false\n', 'false'),
-                 ('BAN_IMPECCABLE=01\n', '01'), ("BAN_IMPECCABLE=' 1 '\n", ' 1 '),
-                 ('BAN_IMPECCABLE=1#literal\n', '1#literal'),
-                 ("BAN_IMPECCABLE='$(touch escaped)'\n", '$(touch escaped)'))
-        for saved, expected in cases:
-            with self.subTest(saved=saved):
-                result = self.bash(code, policy + saved,
-                                   {'EXPECTED': expected or '', 'EXPECT_PRESENT': str(int(expected is not None))})
+        for case in input_cases('BAN_IMPECCABLE'):
+            with self.subTest(case=case):
+                environment = {'EXPECTED': case.expected or '', 'EXPECT_PRESENT': str(int(case.expected is not None))}
+                if case.inherited is not None:
+                    environment['BAN_IMPECCABLE'] = case.inherited
+                result = self.bash(code, policy + case.data, environment)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertNotIn('credential', result.stdout + result.stderr)
-        for saved, inherited, expected in (('', '1', '1'), ('# BAN_IMPECCABLE=1\n', '0', '0'),
-                                            ('BAN_IMPECCABLE=1\n', '0', '1'), ('BAN_IMPECCABLE=0\n', '1', '0')):
-            with self.subTest(saved=saved, inherited=inherited):
-                result = self.bash(code, policy + saved,
-                                   {'BAN_IMPECCABLE': inherited, 'EXPECTED': expected, 'EXPECT_PRESENT': '1'})
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         result = self.bash('setup_load_environment', 'BAN_IMPECCABLE=two words\n')
         self.assertEqual(result.returncode, 1)
         self.assertIn('Failed:', result.stdout)
@@ -157,23 +175,7 @@ fi
             script.write_text("$ErrorActionPreference='Stop'\n" + (ROOT / 'lib/setup-policy.ps1').read_text() + """
 $file = Join-Path $env:USERPROFILE '.env.local'
 $policy = "GH_TOKEN='credential#literal'`r`nBAN_IMPECCABLE=1`r`nBAN_PI_MCP_ADAPTER=0`r`nBAN_PI_GOAL_AUTORESEARCH=1`r`n"
-$cases = @(
-    @{ Data = ''; Expected = '' },
-    @{ Data = '# BAN_SCOWALT_ENGINEERING_SKILLS=1'; Expected = '' },
-    @{ Data = 'BAN_SCOWALT_ENGINEERING_SKILLS=1 # intentional exclusion'; Expected = '1' },
-    @{ Data = 'export BAN_SCOWALT_ENGINEERING_SKILLS="0"'; Expected = '0' },
-    @{ Data = 'BAN_SCOWALT_ENGINEERING_SKILLS='; Expected = '' },
-    @{ Data = 'BAN_SCOWALT_ENGINEERING_SKILLS=true'; Expected = 'true' },
-    @{ Data = 'BAN_SCOWALT_ENGINEERING_SKILLS=false'; Expected = 'false' },
-    @{ Data = 'BAN_SCOWALT_ENGINEERING_SKILLS=01'; Expected = '01' },
-    @{ Data = "BAN_SCOWALT_ENGINEERING_SKILLS=' 1 '"; Expected = ' 1 ' },
-    @{ Data = 'BAN_SCOWALT_ENGINEERING_SKILLS=1#literal'; Expected = '1#literal' },
-    @{ Data = 'BAN_SCOWALT_ENGINEERING_SKILLS=''$(New-Item escaped)'''; Expected = '$(New-Item escaped)' },
-    @{ Data = ''; Before = '1'; Expected = '1' },
-    @{ Data = '# BAN_SCOWALT_ENGINEERING_SKILLS=1'; Before = '0'; Expected = '0' },
-    @{ Data = 'BAN_SCOWALT_ENGINEERING_SKILLS=1'; Before = '0'; Expected = '1' },
-    @{ Data = 'BAN_SCOWALT_ENGINEERING_SKILLS=0'; Before = '1'; Expected = '0' }
-)
+""" + powershell_cases('BAN_SCOWALT_ENGINEERING_SKILLS') + """
 foreach ($case in $cases) {
     [Environment]::SetEnvironmentVariable('BAN_SCOWALT_ENGINEERING_SKILLS', $case.Before, 'Process')
     $env:BAN_MATT_POCOCK_SKILLS='1'; $env:BAN_MATT_POCKOCK_SKILLS='0'
@@ -222,23 +224,7 @@ Write-Output 'PASS: data-only engineering-skill inputs'
             script.write_text("$ErrorActionPreference='Stop'\n" + (ROOT / 'lib/setup-policy.ps1').read_text() + """
 $file = Join-Path $env:USERPROFILE '.env.local'
 $policy = "BAN_MATT_POCOCK_SKILLS=1`nBAN_MATT_POCKOCK_SKILLS=0`nBAN_PI_MCP_ADAPTER=0`nBAN_PI_GOAL_AUTORESEARCH=1`n"
-$cases = @(
-    @{ Data = ''; Expected = '' },
-    @{ Data = '# BAN_IMPECCABLE=1'; Expected = '' },
-    @{ Data = 'BAN_IMPECCABLE=1 # intentional exclusion'; Expected = '1' },
-    @{ Data = 'export BAN_IMPECCABLE="0"'; Expected = '0' },
-    @{ Data = 'BAN_IMPECCABLE='; Expected = '' },
-    @{ Data = 'BAN_IMPECCABLE=true'; Expected = 'true' },
-    @{ Data = 'BAN_IMPECCABLE=false'; Expected = 'false' },
-    @{ Data = 'BAN_IMPECCABLE=01'; Expected = '01' },
-    @{ Data = "BAN_IMPECCABLE=' 1 '"; Expected = ' 1 ' },
-    @{ Data = 'BAN_IMPECCABLE=1#literal'; Expected = '1#literal' },
-    @{ Data = 'BAN_IMPECCABLE=''$(New-Item escaped)'''; Expected = '$(New-Item escaped)' },
-    @{ Data = ''; Before = '1'; Expected = '1' },
-    @{ Data = '# BAN_IMPECCABLE=1'; Before = '0'; Expected = '0' },
-    @{ Data = 'BAN_IMPECCABLE=1'; Before = '0'; Expected = '1' },
-    @{ Data = 'BAN_IMPECCABLE=0'; Before = '1'; Expected = '0' }
-)
+""" + powershell_cases('BAN_IMPECCABLE') + """
 foreach ($case in $cases) {
     [Environment]::SetEnvironmentVariable('BAN_IMPECCABLE', $case.Before, 'Process')
     [IO.File]::WriteAllText($file, $policy + $case.Data + "`n")

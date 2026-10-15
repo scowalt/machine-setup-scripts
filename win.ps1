@@ -7990,7 +7990,7 @@ function Setup-PiGoalAutoresearch {
 
 
 function Test-MattPocockSkillsDisabled {
-    return ((Test-EnvLocalFlag "BAN_SCOWALT_ENGINEERING_SKILLS") -or (Test-EnvLocalFlag "BAN_MATT_POCOCK_SKILLS") -or (Test-EnvLocalFlag "BAN_MATT_POCKOCK_SKILLS"))
+    return (($env:BAN_SCOWALT_ENGINEERING_SKILLS -ceq '1') -or ($env:BAN_MATT_POCOCK_SKILLS -ceq '1') -or ($env:BAN_MATT_POCKOCK_SKILLS -ceq '1'))
 }
 
 function Invoke-MattPocockSkillPolicy {
@@ -9135,7 +9135,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 195 | Last changed: Use Scowalt engineering skills with compatible opt-outs"
+    Write-Host "Version 196 | Last changed: Honor literal engineering skill exclusions"
 
     Assert-HeadlessUnsupported
 
