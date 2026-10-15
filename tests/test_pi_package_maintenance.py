@@ -19,6 +19,7 @@ FUNCTIONS = {
     'adapter': ('setup_pi_mcp_adapter', 'Setup-PiMcpAdapter'),
     'bridge': ('setup_pi_claude_bridge', 'Setup-PiClaudeBridge'),
     'companions': ('setup_pi_companion_packages', 'Setup-PiCompanionPackages'),
+    'visual': ('setup_pi_visual_explainer', 'Setup-PiVisualExplainer'),
     'goal': ('setup_pi_goal_autoresearch', 'Setup-PiGoalAutoresearch'),
     'subagents': ('remove_pi_subagents', 'Remove-PiSubagents'),
     'rpiv': ('remove_pi_rpiv_packages', 'Remove-PiRpivPackages'),
@@ -131,7 +132,7 @@ print_error() { printf 'ERROR: %s\\n' "$*"; }
 
     def test_setup_final_status_and_log_finalization(self):
         for script in (*BASH, *(['win.ps1'] if PWSH else [])):
-            for failure in ('adapter', 'bridge', 'companions', 'goal', 'subagents', 'rpiv', 'refresh', 'prose', 'prepare', 'permissions', 'askclaude-policy', 'workspace-trust', 'none'):
+            for failure in ('adapter', 'bridge', 'companions', 'visual', 'goal', 'subagents', 'rpiv', 'refresh', 'prose', 'prepare', 'permissions', 'askclaude-policy', 'workspace-trust', 'none'):
                 with self.subTest(script=script, failure=failure):
                     text = (ROOT / script).read_text()
                     windows = script.endswith('.ps1')

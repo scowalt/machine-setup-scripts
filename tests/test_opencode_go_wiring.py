@@ -26,7 +26,7 @@ class WiringTests(unittest.TestCase):
             "remove_rtk_resources", "remove_attention_span_resources", "setup_matt_pocock_skills",
             "configure_pi_defaults", "remove_pi_synthetic_models", "seed_pi_zai_models",
             "setup_pi_mcp_adapter", "remove_pi_subagents", "remove_pi_rpiv_packages",
-            "setup_pi_claude_bridge", "setup_pi_companion_packages", "setup_pi_goal_autoresearch",
+            "setup_pi_claude_bridge", "setup_pi_companion_packages", "setup_pi_visual_explainer", "setup_pi_goal_autoresearch",
             "refresh_pi_packages",
         )
         code = "set -eu\n_setup_had_errors=0\n_pi_go_ready=0\nPI_RUNTIME_PREFLIGHT_PASSED=0\n"
@@ -74,6 +74,8 @@ configure_pi_opencode_go() { record go; [[ "${SCENARIO}" != go-failure ]]; }
                 self.assertLess(calls.index("pi-install"), calls.index("go"))
                 self.assertLess(calls.index("go"), calls.index("packages"))
                 self.assertLess(calls.index("packages"), calls.index("setup_pi_mcp_adapter"))
+                self.assertLess(calls.index("packages"), calls.index("setup_pi_visual_explainer"))
+                self.assertLess(calls.index("setup_pi_visual_explainer"), calls.index("setup_pi_goal_autoresearch"))
                 self.assertLess(calls.index("setup_pi_goal_autoresearch"), calls.index("refresh_pi_packages"))
 
     def test_failures_are_aggregated_and_block_package_operations(self):
@@ -85,6 +87,7 @@ configure_pi_opencode_go() { record go; [[ "${SCENARIO}" != go-failure ]]; }
                     ready = 0 if scenario in ("permissions-failure", "askclaude-failure", "retirement-failure", "trust-failure", "pi-failure", "go-failure") else 1
                     self.assertEqual(calls[-1], f"result:1:{ready}")
                     self.assertNotIn("setup_pi_mcp_adapter", calls)
+                    self.assertNotIn("setup_pi_visual_explainer", calls)
                     self.assertNotIn("refresh_pi_packages", calls)
                     if scenario in ("permissions-failure", "askclaude-failure", "retirement-failure", "trust-failure", "pi-failure"):
                         self.assertNotIn("go", calls)
@@ -119,7 +122,7 @@ configure_pi_opencode_go() { record go; [[ "${SCENARIO}" != go-failure ]]; }
         inert = ("Remove-RtkResources", "Remove-AttentionSpanResources", "Setup-MattPocockSkills",
                  "Set-PiDefaults", "Remove-PiSyntheticModels", "Seed-PiZaiModels",
                  "Setup-PiMcpAdapter", "Remove-PiSubagents", "Remove-PiRpivPackages",
-                 "Setup-PiClaudeBridge", "Setup-PiCompanionPackages", "Setup-PiGoalAutoresearch", "Update-PiPackages")
+                 "Setup-PiClaudeBridge", "Setup-PiCompanionPackages", "Setup-PiVisualExplainer", "Setup-PiGoalAutoresearch", "Update-PiPackages")
         code = "$ErrorActionPreference = 'Stop'\n$script:calls = @()\n"
         code += "$piSetupFailed = $false\n$piOpenCodeGoReady = $false\n$script:PiRuntimePreflightPassed = $false\n"
         code += "function Write-Warning { param($Message) }\nfunction Test-EnvLocalFlag { $false }\n"
@@ -164,6 +167,7 @@ function Set-PiOpenCodeGoProvider { $script:calls += 'go'; $env:SCENARIO -ne 'go
                     self.assertEqual('Update-PiPackages' in state['calls'], success)
                     if not success:
                         self.assertNotIn('Setup-PiMcpAdapter', state['calls'])
+                        self.assertNotIn('Setup-PiVisualExplainer', state['calls'])
                         self.assertNotIn('Update-PiPackages', state['calls'])
                     self.assertEqual("packages" in state["calls"], ready)
                     if scenario in ("permissions-failure", "askclaude-failure"):
@@ -178,6 +182,8 @@ function Set-PiOpenCodeGoProvider { $script:calls += 'go'; $env:SCENARIO -ne 'go
                         self.assertLess(state["calls"].index("pi-install"), state["calls"].index("go"))
                         self.assertLess(state["calls"].index("go"), state["calls"].index("packages"))
                         self.assertLess(state["calls"].index("packages"), state["calls"].index("Setup-PiMcpAdapter"))
+                        self.assertLess(state["calls"].index("packages"), state["calls"].index("Setup-PiVisualExplainer"))
+                        self.assertLess(state["calls"].index("Setup-PiVisualExplainer"), state["calls"].index("Setup-PiGoalAutoresearch"))
 
 
 if __name__ == "__main__":
