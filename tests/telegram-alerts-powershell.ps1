@@ -25,19 +25,34 @@ try {
             throw "Missing or duplicate placeholder: $key"
         }
     }
+    if ([regex]::Matches($initial, '(?m)^# BAN_SCOWALT_ENGINEERING_SKILLS=1\r?$').Count -ne 1) {
+        throw 'Missing or duplicate commented engineering-skill exclusion'
+    }
+    if ($initial -match '(?m)^\s*BAN_(SCOWALT_ENGINEERING|MATT_POCOCK|MATT_POCKOCK)_SKILLS=') {
+        throw 'Active engineering-skill exclusion in template'
+    }
     if ([regex]::Matches($initial, '(?m)^# BAN_IMPECCABLE=1\r?$').Count -ne 1) {
         throw 'Missing or duplicate commented Impeccable exclusion'
     }
     if ($initial -match '(?m)^\s*BAN_IMPECCABLE=') { throw 'Active Impeccable exclusion in template' }
+    $initialBytes = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($path))
     New-TokenPlaceholders
-    if ((Get-Content -Raw $path) -cne $initial) { throw 'Rerun changed the generated file.' }
+    if ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($path)) -cne $initialBytes) {
+        throw 'Rerun changed the generated file.'
+    }
 
     foreach ($content in @(
+        '',
         'EXISTING=preserve-me',
+        "GH_TOKEN=credential#literal`r`nBAN_SCOWALT_ENGINEERING_SKILLS=1",
+        "GH_TOKEN=credential#literal`r`nBAN_SCOWALT_ENGINEERING_SKILLS=0",
+        "GH_TOKEN=credential#literal`r`nBAN_MATT_POCOCK_SKILLS=1",
+        "GH_TOKEN=credential#literal`r`nBAN_MATT_POCKOCK_SKILLS=1",
+        "GH_TOKEN=credential#literal`r`nBAN_SCOWALT_ENGINEERING_SKILLS=0`r`nBAN_MATT_POCOCK_SKILLS=0`r`nBAN_MATT_POCKOCK_SKILLS=1",
         "EXISTING=preserve-me`nBAN_IMPECCABLE=0",
         "EXISTING=preserve-me`nBAN_IMPECCABLE=1`nTELEGRAM_ALERTS_BOT_TOKEN=local-test-value`nTELEGRAM_ALERTS_CHAT_ID=123"
     )) {
-        Set-Content -Path $path -Value $content
+        [System.IO.File]::WriteAllText($path, $content)
         $before = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($path))
         New-TokenPlaceholders
         $after = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($path))
