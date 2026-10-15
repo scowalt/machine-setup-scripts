@@ -53,6 +53,11 @@ for file in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh; do
         unset BB_THREAD_ID BB_ENVIRONMENT_ID BB_TERMINAL_ID
         create_env_local
         assert_placeholders "${HOME}/.env.local"
+        count=$(grep -c '^# BAN_SCOWALT_ENGINEERING_SKILLS=1$' "${HOME}/.env.local" || true)
+        [[ ${count} == 1 ]] || fail "${file}: missing or duplicate commented engineering-skill exclusion"
+        if grep -Eq '^[[:space:]]*BAN_(SCOWALT_ENGINEERING|MATT_POCOCK|MATT_POCKOCK)_SKILLS=' "${HOME}/.env.local"; then
+            fail "${file}: active engineering-skill exclusion in template"
+        fi
         count=$(grep -c '^# BAN_IMPECCABLE=1$' "${HOME}/.env.local" || true)
         [[ ${count} == 1 ]] || fail "${file}: missing or duplicate commented Impeccable exclusion"
         if grep -Eq '^[[:space:]]*BAN_IMPECCABLE=' "${HOME}/.env.local"; then
@@ -78,6 +83,23 @@ for file in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh; do
         cp "${HOME}/.env.local" "${home}/before"
         create_env_local
         cmp -s "${HOME}/.env.local" "${home}/before" || fail "${file}: modified existing Impeccable preference"
+
+        for preference in 'BAN_SCOWALT_ENGINEERING_SKILLS=1' 'BAN_SCOWALT_ENGINEERING_SKILLS=0' \
+                          'BAN_MATT_POCOCK_SKILLS=1' 'BAN_MATT_POCKOCK_SKILLS=1'; do
+            printf '%s\r\n' 'GH_TOKEN=credential#literal' "${preference}" 'BAN_IMPECCABLE=0' > "${HOME}/.env.local"
+            cp "${HOME}/.env.local" "${home}/before"
+            create_env_local
+            cmp -s "${HOME}/.env.local" "${home}/before" || fail "${file}: modified existing engineering-skill preference"
+        done
+        printf '%s\r\n' 'BAN_SCOWALT_ENGINEERING_SKILLS=0' 'BAN_MATT_POCOCK_SKILLS=0' \
+                           'BAN_MATT_POCKOCK_SKILLS=1' 'GH_TOKEN=credential#literal' > "${HOME}/.env.local"
+        cp "${HOME}/.env.local" "${home}/before"
+        create_env_local
+        cmp -s "${HOME}/.env.local" "${home}/before" || fail "${file}: modified conflicting engineering-skill aliases"
+
+        : > "${HOME}/.env.local"
+        create_env_local
+        [[ ! -s "${HOME}/.env.local" ]] || fail "${file}: modified empty existing environment file"
     )
     printf 'PASS: %s environment creation and preservation\n' "${file}"
 done
