@@ -8032,7 +8032,7 @@ matt_pocock_skill_policy() {
             return {file, data};
         });
         const tracked = locks.flatMap(({data}) => Object.entries(data?.skills || {})
-            .filter(([, entry]) => entry.source === 'mattpocock/skills').map(([name]) => name));
+            .filter(([, entry]) => ['mattpocock/skills', 'scowalt/engineering-skills'].includes(entry.source)).map(([name]) => name));
         if (!tracked.every(nameOK)) fail('invalid-inventory');
         const inventory = unique([...known, ...historical, ...(manifest?.skills || []), ...tracked]);
         const checkDirs = dirs => dirs.forEach(dir => { directory(dir); owned(dir); });
@@ -8099,7 +8099,7 @@ matt_pocock_skill_policy() {
             if (!Array.isArray(report) || report.length === 0) fail('invalid-install-report');
             const names = [];
             for (const entry of report) {
-                if (!object(entry) || !nameOK(entry.name) || entry.status !== 'installed' || entry.source !== 'mattpocock/skills' ||
+                if (!object(entry) || !nameOK(entry.name) || entry.status !== 'installed' || entry.source !== 'scowalt/engineering-skills' ||
                     entry.scope !== 'global' || entry.mode !== 'copy' || !Array.isArray(entry.agents) ||
                     entry.agents.length !== 3 || !['Claude Code', 'Codex', 'Gemini CLI'].every(agent => entry.agents.includes(agent))) fail('invalid-install-report');
                 if (names.includes(entry.name)) fail('invalid-install-report');
@@ -8123,8 +8123,8 @@ matt_pocock_skill_policy() {
             if (!stageLock || stageLock.version !== 3 || !object(stageLock.skills) ||
                 Object.keys(stageLock.skills).length !== names.length || !names.every(name => {
                     const entry = stageLock.skills[name];
-                    return object(entry) && entry.source === 'mattpocock/skills' && entry.sourceType === 'github' &&
-                        entry.sourceUrl === 'https://github.com/mattpocock/skills.git';
+                    return object(entry) && entry.source === 'scowalt/engineering-skills' && entry.sourceType === 'github' &&
+                        entry.sourceUrl === 'https://github.com/scowalt/engineering-skills.git';
                 })) fail('invalid-skill-lock');
             // All report, snapshot, metadata, and selected destinations must pass
             // before touching either real copy. Unrelated entries are never traversed.
@@ -8200,7 +8200,7 @@ matt_pocock_all_managed_skills() {
 }
 
 matt_pocock_skills_disabled() {
-    [[ "${BAN_MATT_POCOCK_SKILLS:-}" == "1" || "${BAN_MATT_POCKOCK_SKILLS:-}" == "1" ]]
+    [[ "${BAN_SCOWALT_ENGINEERING_SKILLS:-}" == "1" || "${BAN_MATT_POCOCK_SKILLS:-}" == "1" || "${BAN_MATT_POCKOCK_SKILLS:-}" == "1" ]]
 }
 
 remove_matt_pocock_skills() {
@@ -8219,11 +8219,11 @@ setup_matt_pocock_skills() {
         return
     fi
     if ! ensure_skills_cli_node_runtime; then
-        print_warning "Cannot install Matt Pocock skills because the skills CLI runtime is not ready."
+        print_warning "Cannot install Scowalt engineering skills because the skills CLI runtime is not ready."
         return 1
     fi
     if ! command -v npx &> /dev/null; then
-        print_warning "npx is not available; cannot install Matt Pocock skills."
+        print_warning "npx is not available; cannot install Scowalt engineering skills."
         return 1
     fi
     matt_pocock_skill_policy preflight || return 1
@@ -8233,17 +8233,17 @@ setup_matt_pocock_skills() {
         return 1
     fi
     _stage=$(matt_pocock_skill_policy stage) || return 1
-    print_message "Installing/updating the full Matt Pocock skill suite for Claude Code, Codex, Gemini CLI, and Pi..."
+    print_message "Installing/updating the full Scowalt engineering skill suite for Claude Code, Codex, Gemini CLI, and Pi..."
     if ! HOME="${_stage}" USERPROFILE="${_stage}" \
         CLAUDE_CONFIG_DIR="${_stage}/.claude" CODEX_HOME="${_stage}/.codex" PI_CODING_AGENT_DIR="${_stage}/.pi/agent" \
         XDG_STATE_HOME="${_stage}/.state" XDG_CONFIG_HOME="${_stage}/.config" \
         XDG_CACHE_HOME="${_stage}/.cache" XDG_DATA_HOME="${_stage}/.local/share" \
         npm_config_userconfig="${_npm_userconfig}" NPM_CONFIG_USERCONFIG="${_npm_userconfig}" \
         npm_config_globalconfig="${_npm_globalconfig}" NPM_CONFIG_GLOBALCONFIG="${_npm_globalconfig}" \
-        npx --yes skills@latest add mattpocock/skills --global \
+        npx --yes skills@latest add scowalt/engineering-skills --global \
         --agent claude-code --agent codex --agent gemini-cli \
         --skill '*' --full-depth --copy --yes --json < /dev/null > "${_stage}/report.json" 2>/dev/null; then
-        print_warning "Failed to install the full Matt Pocock skill suite."
+        print_warning "Failed to install the full Scowalt engineering skill suite."
         _matt_failed=1
     elif ! matt_pocock_skill_policy promote "${_stage}"; then
         _matt_failed=1
@@ -8252,7 +8252,7 @@ setup_matt_pocock_skills() {
     fi
     matt_pocock_skill_policy dispose "${_stage}" || _matt_failed=1
     if [[ "${_matt_failed}" -eq 0 ]]; then
-        print_success "Full Matt Pocock skill suite installed/updated through copied global skills."
+        print_success "Full Scowalt engineering skill suite installed/updated through copied global skills."
     fi
     return "${_matt_failed}"
 }

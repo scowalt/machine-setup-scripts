@@ -7990,7 +7990,7 @@ function Setup-PiGoalAutoresearch {
 
 
 function Test-MattPocockSkillsDisabled {
-    return ((Test-EnvLocalFlag "BAN_MATT_POCOCK_SKILLS") -or (Test-EnvLocalFlag "BAN_MATT_POCKOCK_SKILLS"))
+    return ((Test-EnvLocalFlag "BAN_SCOWALT_ENGINEERING_SKILLS") -or (Test-EnvLocalFlag "BAN_MATT_POCOCK_SKILLS") -or (Test-EnvLocalFlag "BAN_MATT_POCKOCK_SKILLS"))
 }
 
 function Invoke-MattPocockSkillPolicy {
@@ -8160,7 +8160,7 @@ function Invoke-MattPocockSkillPolicy {
             return {file, data};
         });
         const tracked = locks.flatMap(({data}) => Object.entries(data?.skills || {})
-            .filter(([, entry]) => entry.source === 'mattpocock/skills').map(([name]) => name));
+            .filter(([, entry]) => ['mattpocock/skills', 'scowalt/engineering-skills'].includes(entry.source)).map(([name]) => name));
         if (!tracked.every(nameOK)) fail('invalid-inventory');
         const inventory = unique([...known, ...historical, ...(manifest?.skills || []), ...tracked]);
         const checkDirs = dirs => dirs.forEach(dir => { directory(dir); owned(dir); });
@@ -8227,7 +8227,7 @@ function Invoke-MattPocockSkillPolicy {
             if (!Array.isArray(report) || report.length === 0) fail('invalid-install-report');
             const names = [];
             for (const entry of report) {
-                if (!object(entry) || !nameOK(entry.name) || entry.status !== 'installed' || entry.source !== 'mattpocock/skills' ||
+                if (!object(entry) || !nameOK(entry.name) || entry.status !== 'installed' || entry.source !== 'scowalt/engineering-skills' ||
                     entry.scope !== 'global' || entry.mode !== 'copy' || !Array.isArray(entry.agents) ||
                     entry.agents.length !== 3 || !['Claude Code', 'Codex', 'Gemini CLI'].every(agent => entry.agents.includes(agent))) fail('invalid-install-report');
                 if (names.includes(entry.name)) fail('invalid-install-report');
@@ -8251,8 +8251,8 @@ function Invoke-MattPocockSkillPolicy {
             if (!stageLock || stageLock.version !== 3 || !object(stageLock.skills) ||
                 Object.keys(stageLock.skills).length !== names.length || !names.every(name => {
                     const entry = stageLock.skills[name];
-                    return object(entry) && entry.source === 'mattpocock/skills' && entry.sourceType === 'github' &&
-                        entry.sourceUrl === 'https://github.com/mattpocock/skills.git';
+                    return object(entry) && entry.source === 'scowalt/engineering-skills' && entry.sourceType === 'github' &&
+                        entry.sourceUrl === 'https://github.com/scowalt/engineering-skills.git';
                 })) fail('invalid-skill-lock');
             // All report, snapshot, metadata, and selected destinations must pass
             // before touching either real copy. Unrelated entries are never traversed.
@@ -8345,11 +8345,11 @@ function Remove-MattPocockSkills {
 function Setup-MattPocockSkills {
     if (Test-MattPocockSkillsDisabled) { return (Remove-MattPocockSkills) }
     if (-not (Enable-SkillsCliNodeRuntime)) {
-        Write-Warning "Cannot install Matt Pocock skills because the skills CLI runtime is not ready."
+        Write-Warning "Cannot install Scowalt engineering skills because the skills CLI runtime is not ready."
         return $false
     }
     if (-not (Get-Command npx -ErrorAction SilentlyContinue)) {
-        Write-Warning "npx is not available; cannot install Matt Pocock skills."
+        Write-Warning "npx is not available; cannot install Scowalt engineering skills."
         return $false
     }
     if (-not (Invoke-MattPocockSkillPolicy -Mode preflight)) { return $false }
@@ -8382,9 +8382,9 @@ function Setup-MattPocockSkills {
             $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key)
             [Environment]::SetEnvironmentVariable($key, $isolatedEnvironment[$key])
         }
-        Write-Message "Installing/updating the full Matt Pocock skill suite for Claude Code, Codex, Gemini CLI, and Pi..."
+        Write-Message "Installing/updating the full Scowalt engineering skill suite for Claude Code, Codex, Gemini CLI, and Pi..."
         $npxArgs = @(
-            "--yes", "skills@latest", "add", "mattpocock/skills", "--global",
+            "--yes", "skills@latest", "add", "scowalt/engineering-skills", "--global",
             "--agent", "claude-code", "--agent", "codex", "--agent", "gemini-cli",
             "--skill", "*", "--full-depth", "--copy", "--yes", "--json"
         )
@@ -8397,7 +8397,7 @@ function Setup-MattPocockSkills {
         }
         $savedEnvironment.Clear()
         if ($installExitCode -ne 0) {
-            Write-Warning "Failed to install the full Matt Pocock skill suite."
+            Write-Warning "Failed to install the full Scowalt engineering skill suite."
             return $false
         }
         [System.IO.File]::WriteAllText((Join-Path $stage 'report.json'), ($output -join "`n"))
@@ -8406,7 +8406,7 @@ function Setup-MattPocockSkills {
         $success = $true
     }
     catch {
-        Write-Warning "Full Matt Pocock skill setup failed."
+        Write-Warning "Full Scowalt engineering skill setup failed."
         return $false
     }
     finally {
@@ -8416,7 +8416,7 @@ function Setup-MattPocockSkills {
         }
         if ($stage -and -not (Invoke-MattPocockSkillPolicy -Mode dispose -ReportFile $stage)) { $success = $false }
     }
-    if ($success) { Write-Success "Full Matt Pocock skill suite installed/updated through copied global skills." }
+    if ($success) { Write-Success "Full Scowalt engineering skill suite installed/updated through copied global skills." }
     return $success
 }
 
@@ -9273,7 +9273,7 @@ function Invoke-WindowsSetupTasks {
         throw "Required Pi coding agent setup failed."
     }
     if ($mattPocockSetupFailed) {
-        throw "Required Matt Pocock skill setup failed."
+        throw "Required Scowalt engineering skill setup failed."
     }
     if ($impeccableSetupFailed) {
         throw 'Required Impeccable skill convergence failed.'
