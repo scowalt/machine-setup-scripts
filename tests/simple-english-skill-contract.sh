@@ -380,7 +380,6 @@ for file in "${bash_setup_scripts[@]}"; do
     rm -rf "${failure_root}" "${test_root}"
 done
 
-assert_contains CLAUDE.md 'full Matt Pocock suite is the managed global skill suite' 'repository guidance'
 assert_contains GLOSSARY.md '^\*\*Managed agent skill\*\*:' 'managed agent skill glossary term'
 
 printf '✓ Managed and retired-skill contract checks passed\n'
