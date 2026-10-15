@@ -112,6 +112,10 @@ _Avoid_: Muse 1.3 paid, Muse Zen
 A registered bundle of Pi extensions, skills, prompts, or themes. Packages may be setup-managed or user-added.
 _Avoid_: Extension file, Pi installation
 
+**Visual Explainer Pi package**:
+The upstream Visual Explainer integration combining its visual-explanation skill, prompt commands and native Pi tool. It is distinct from legacy skill-and-prompt-only copies.
+_Avoid_: Visual Explainer MCP server, skill-only installation
+
 **Active global Pi profile**:
 The single user-level Pi configuration selected for a setup run. It is distinct from project-scoped configuration and other global profiles.
 _Avoid_: All Pi profiles, project profile
