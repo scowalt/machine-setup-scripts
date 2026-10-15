@@ -76,7 +76,7 @@ limit), without new capacity, spend, credentials or trust.
 3. Deliver ONE ordinary reviewed PR. Record its exact head SHA/tree and actual
    native PR clone/job logs: both original commands, 13 tests, policy file count
    with zero violations and ARM64 agent identity. Require matching successful
-   exact-SHA GitHub feedback and original Actions success. Configured tag/fork
+   exact-SHA GitHub feedback. Configured tag/fork
    eligibility is not evidence of executing those events. MC PR29/#26 already
    supplied controlled RED-to-GREEN and same-PR post-disable proof once; do not
    repeat failures, marker commits, artificial PRs or tag/fork events here.
@@ -84,7 +84,7 @@ limit), without new capacity, spend, credentials or trust.
    repository's normal merge method. Record the ACTUAL resulting default-main
    SHA, tree and ordered parents, confirm the reviewed content/original workflow,
    and require native **push** clone/job success plus matching exact-SHA GitHub
-   success and original Actions success for that resulting main revision.
+   success for that resulting main revision.
 5. Only after both PR and resulting-main proof, replace corresponding Actions
    requirements with the observed native context, preserving unrelated checks,
    protections and rules. Empty requirements/protections/rules mean a replacement
