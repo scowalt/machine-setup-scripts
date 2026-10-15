@@ -1,0 +1,12 @@
+when:
+  - event: [push, tag, pull_request]
+
+labels:
+  platform: linux/arm64
+
+steps:
+  - name: no-comments
+    image: ghcr.io/astral-sh/uv:0.11.32-python3.14-trixie@sha256:adafbab0c780d8bd995039e9dfd800f95a057867d283deee7d5eb1b3126551b2
+    commands:
+      - uv run --no-project --python 3.14 --with-requirements .comment-policy/requirements.txt python .comment-policy/check.py
+      - uv run --no-project --python 3.14 --with-requirements .comment-policy/requirements.txt python -m unittest discover -s .comment-policy -p 'test_*.py'
