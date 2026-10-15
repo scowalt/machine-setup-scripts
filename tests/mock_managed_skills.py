@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 EXPECTED = [
-    '--yes', 'skills@latest', 'add', 'mattpocock/skills', '--global',
+    '--yes', 'skills@latest', 'add', 'scowalt/engineering-skills', '--global',
     '--agent', 'claude-code', '--agent', 'codex', '--agent', 'gemini-cli',
     '--skill', '*', '--full-depth', '--copy', '--yes', '--json',
 ]
@@ -50,8 +50,8 @@ for skill in skills:
         (dest / 'SKILL.md').write_text(f'---\nname: {skill}\ndescription: Inert test skill.\n---\nFixture only.\n')
         (dest / 'references').mkdir(exist_ok=True)
         (dest / 'references/guide.md').write_text('Upstream fixture: do not execute.\n')
-    lock['skills'][skill] = {'source': 'mattpocock/skills', 'sourceType': 'github', 'sourceUrl': 'https://github.com/mattpocock/skills.git'}
-    report.append({'name': skill, 'status': 'installed', 'source': 'mattpocock/skills', 'scope': 'global', 'mode': 'copy', 'agents': ['Claude Code', 'Codex', 'Gemini CLI']})
+    lock['skills'][skill] = {'source': 'scowalt/engineering-skills', 'sourceType': 'github', 'sourceUrl': 'https://github.com/scowalt/engineering-skills.git'}
+    report.append({'name': skill, 'status': 'installed', 'source': 'scowalt/engineering-skills', 'scope': 'global', 'mode': 'copy', 'agents': ['Claude Code', 'Codex', 'Gemini CLI']})
 lock_file.parent.mkdir(parents=True, exist_ok=True)
 lock_file.write_text(json.dumps(lock))
 if mode in ('missing-file', 'empty-file', 'linked-file', 'linked-references', 'directory-file'):
@@ -83,8 +83,17 @@ if mode == 'missing-lock':
 if mode == 'wrong-lock-source':
     lock['skills']['new-upstream-skill']['source'] = 'another/repo'
     lock_file.write_text(json.dumps(lock))
+if mode in ('original-lock-source', 'original-lock-url', 'wrong-lock-type'):
+    entry = lock['skills']['new-upstream-skill']
+    if mode == 'original-lock-source':
+        entry['source'] = 'mattpocock/skills'
+    elif mode == 'original-lock-url':
+        entry['sourceUrl'] = 'https://github.com/mattpocock/skills.git'
+    else:
+        entry['sourceType'] = 'local'
+    lock_file.write_text(json.dumps(lock))
 if mode == 'extra-lock-entry':
-    lock['skills']['unselected-name'] = {'source': 'mattpocock/skills'}
+    lock['skills']['unselected-name'] = {'source': 'scowalt/engineering-skills'}
     lock_file.write_text(json.dumps(lock))
 if mode == 'failed-result':
     report[0]['status'] = 'failed'
@@ -94,6 +103,8 @@ if mode == 'missing-agent':
     report[0]['agents'].remove('Claude Code')
 if mode == 'wrong-source':
     report[0]['source'] = 'another/repo'
+if mode == 'original-report-source':
+    report[0]['source'] = 'mattpocock/skills'
 if mode == 'duplicate-name':
     report.append(report[0])
 if mode == 'unsafe-name':
