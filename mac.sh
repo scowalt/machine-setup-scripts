@@ -6827,9 +6827,11 @@ bb_pi_trust_policy() {
         print_warning "BB/Pi trust: shared Node runtime unavailable."
         return 1
     fi
-    _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${_mode}" \
-        "${HOME}" "${BB_DATA_DIR:-${HOME}/.bb}" "${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}" "$@" \
-        2>/dev/null <<'BB_PI_TRUST_JS'
+    {
+        _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${_mode}" \
+            "${HOME}" "${BB_DATA_DIR:-${HOME}/.bb}" "${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}" "$@" \
+            2>/dev/null) || _status=$?
+    } <<'BB_PI_TRUST_JS'
 'use strict';
 
 const fs = require('node:fs');
@@ -7101,7 +7103,6 @@ function main(args) {
 if (require.main === module || process.argv[1] === '-') process.exitCode = main(process.argv.slice(2));
 module.exports = { mergeTrust, checkDoctorReport, main };
 BB_PI_TRUST_JS
-    ) || _status=$?
     if [[ "${_status}" -eq 0 && "${_result}" == ok ]]; then
         return 0
     fi
@@ -7341,8 +7342,10 @@ setup_pi_claude_bridge() {
 pi_visual_explainer_policy() {
     local _mode="${1:?missing mode}" _result='' _status=0
     shift
-    _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${_mode}" \
-        "${HOME}" "${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}" "$@" 2>/dev/null <<'PI_VISUAL_EXPLAINER_JS'
+    {
+        _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${_mode}" \
+            "${HOME}" "${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}" "$@" 2>/dev/null) || _status=$?
+    } <<'PI_VISUAL_EXPLAINER_JS'
 'use strict';
 
 const fs = require('node:fs');
@@ -7662,7 +7665,6 @@ function main(args) {
 if (require.main === module || process.argv[1] === '-') process.exitCode = main(process.argv.slice(2));
 module.exports = { main, matchesBlob };
 PI_VISUAL_EXPLAINER_JS
-    ) || _status=$?
     if [[ "${_status}" -eq 0 ]]; then
         if [[ "${_mode}" == plan && "${_result}" == source:* ]]; then
             printf '%s\n' "${_result#source:}"
@@ -10970,7 +10972,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 304 | Last changed: Accept account-owned group-writable Pi trust files${NC}"
+    echo -e "${GRAY}Version 305 | Last changed: Keep embedded helpers compatible with macOS Bash 3.2${NC}"
 
     if ! acquire_setup_lock; then
         return 1

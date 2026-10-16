@@ -12,11 +12,14 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ('mac.sh', 'ubuntu.sh', 'wsl.sh', 'pi.sh', 'bazzite.sh')
 BASH32 = shutil.which('bash3.2') or ('/bin/bash' if sys.platform == 'darwin' else None)
 HELPERS = (
-    ('install_opencode_cli', 'OPENCODE_CLI_JS', 'opencode-cli:installed'),
-    ('configure_pi_opencode_go', 'PI_OPENCODE_GO_JS', 'unchanged'),
-    ('retire_global_backlog_mcp', 'BACKLOG_MCP_RETIREMENT_JS', 'absent'),
-    ('prepare_pi_profile_permissions', 'PI_PROFILE_PERMISSIONS_JS', 'prepared'),
-    ('remove_pi_prose', 'PI_PROSE_RETIREMENT_JS', 'absent'),
+    ('install_opencode_cli', 'OPENCODE_CLI_JS', '', 'opencode-cli:installed'),
+    ('configure_pi_opencode_go', 'PI_OPENCODE_GO_JS', '', 'unchanged'),
+    ('retire_global_backlog_mcp', 'BACKLOG_MCP_RETIREMENT_JS', '', 'absent'),
+    ('prepare_pi_profile_permissions', 'PI_PROFILE_PERMISSIONS_JS', '', 'prepared'),
+    ('remove_pi_prose', 'PI_PROSE_RETIREMENT_JS', '', 'absent'),
+    ('bb_pi_trust_policy', 'BB_PI_TRUST_JS', 'merge', 'ok'),
+    ('pi_visual_explainer_policy', 'PI_VISUAL_EXPLAINER_JS', 'plan', 'source:fixture-source'),
+    ('pi_visual_explainer_policy', 'PI_VISUAL_EXPLAINER_JS', 'finish', 'ok'),
 )
 
 
@@ -54,17 +57,26 @@ class Compatibility(unittest.TestCase):
         self.assertRegex(version.stdout, r'GNU bash, version 3\.2\.')
         self.check_syntax(BASH32)
 
+    def test_literal_payloads_redirect_group_stdin_outside_command_substitution(self):
+        for name in SCRIPTS:
+            source = (ROOT / name).read_text()
+            for function, delimiter, _, _ in HELPERS:
+                with self.subTest(script=name, helper=function):
+                    block, _ = helper(source, function, delimiter)
+                    opening = next(line for line in block.splitlines() if "<<'" + delimiter + "'" in line)
+                    self.assertEqual(opening.strip(), "} <<'" + delimiter + "'")
+
     def test_literal_stdin_status_capture_and_caller_stdin_restoration(self):
         for shell in dict.fromkeys(['/bin/bash', *([BASH32] if BASH32 else [])]):
             for name in SCRIPTS:
                 source = (ROOT / name).read_text()
-                for function, delimiter, success in HELPERS:
+                for function, delimiter, arguments, success in HELPERS:
                     block, payload = helper(source, function, delimiter)
                     for reply, status, expected in ((success, 0, 0), (success, 17, 1), ('invalid-result', 0, 1)):
-                        with self.subTest(shell=shell, script=name, helper=function, status=status, reply=reply):
-                            self.check_wrapper(shell, block, payload, function, reply, status, expected)
+                        with self.subTest(shell=shell, script=name, helper=function, arguments=arguments, status=status, reply=reply):
+                            self.check_wrapper(shell, block, payload, function, arguments, reply, status, expected)
 
-    def check_wrapper(self, shell, block, payload, function, reply, status, expected):
+    def check_wrapper(self, shell, block, payload, function, arguments, reply, status, expected):
         with tempfile.TemporaryDirectory(prefix='bash-compatibility-') as temp:
             home = Path(temp)
             (home / '.pi/agent').mkdir(parents=True)
@@ -91,7 +103,7 @@ uname() { printf 'x86_64\n'; }
 '''
             call = f'''
 status=0
-{function} || status=$?
+{function} {arguments} || status=$?
 IFS= read -r remaining || exit 91
 [[ "${{remaining}}" == caller-input ]] || exit 92
 exit "${{status}}"

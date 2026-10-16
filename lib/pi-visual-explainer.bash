@@ -1,11 +1,12 @@
 pi_visual_explainer_policy() {
     local _mode="${1:?missing mode}" _result='' _status=0
     shift
-    _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${_mode}" \
-        "${HOME}" "${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}" "$@" 2>/dev/null <<'PI_VISUAL_EXPLAINER_JS'
+    {
+        _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${_mode}" \
+            "${HOME}" "${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}" "$@" 2>/dev/null) || _status=$?
+    } <<'PI_VISUAL_EXPLAINER_JS'
 @PI_VISUAL_EXPLAINER_CORE@
 PI_VISUAL_EXPLAINER_JS
-    ) || _status=$?
     if [[ "${_status}" -eq 0 ]]; then
         if [[ "${_mode}" == plan && "${_result}" == source:* ]]; then
             printf '%s\n' "${_result#source:}"

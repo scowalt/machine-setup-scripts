@@ -5,12 +5,13 @@ bb_pi_trust_policy() {
         print_warning "BB/Pi trust: shared Node runtime unavailable."
         return 1
     fi
-    _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${_mode}" \
-        "${HOME}" "${BB_DATA_DIR:-${HOME}/.bb}" "${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}" "$@" \
-        2>/dev/null <<'BB_PI_TRUST_JS'
+    {
+        _result=$(env -u NODE_OPTIONS -u NODE_PATH node --input-type=commonjs - "${_mode}" \
+            "${HOME}" "${BB_DATA_DIR:-${HOME}/.bb}" "${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}" "$@" \
+            2>/dev/null) || _status=$?
+    } <<'BB_PI_TRUST_JS'
 @BB_PI_TRUST_CORE@
 BB_PI_TRUST_JS
-    ) || _status=$?
     if [[ "${_status}" -eq 0 && "${_result}" == ok ]]; then
         return 0
     fi
