@@ -135,21 +135,66 @@ class BbPiTrustTests(unittest.TestCase):
                 self.assertEqual(list(self.agent.glob('trust.json.*')), [])
 
     @unittest.skipIf(os.name == 'nt', 'POSIX filesystem safeguards')
-    def test_file_link_hardlink_and_writable_metadata_are_refused(self):
+    def test_file_link_hardlink_and_world_writable_metadata_are_refused(self):
         target = self.root / 'outside.json'
         target.write_text('SECRET-SENTINEL')
-        for kind in ('symlink', 'hardlink', 'group-write', 'world-write', 'directory'):
+        for kind in ('symlink', 'hardlink', 'world-write', 'group-and-world-write', 'directory'):
             with self.subTest(kind=kind):
                 if kind == 'symlink': self.trust.symlink_to(target)
                 elif kind == 'hardlink': os.link(target, self.trust)
                 elif kind == 'directory': self.trust.mkdir()
                 else:
                     self.seed({})
-                    self.trust.chmod(0o620 if kind == 'group-write' else 0o602)
+                    self.trust.chmod(0o666 if kind == 'group-and-world-write' else 0o602)
                 result = self.policy()
                 self.assertEqual((result.returncode, result.stdout), (1, 'failed:unsafe-metadata\n'))
                 self.assertEqual(target.read_text(), 'SECRET-SENTINEL')
                 self.trust.rmdir() if kind == 'directory' else self.trust.unlink()
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX trust-file modes')
+    def test_account_owned_group_writable_trust_preserves_decisions_and_repeat_identity(self):
+        prior = {str(self.worktrees / 'denied'): False, str(self.home / 'old'): True,
+                 str(self.home / 'unrelated'): None}
+        for mode in (0o600, 0o644, 0o620, 0o660, 0o664):
+            with self.subTest(mode=oct(mode)):
+                self.seed(prior)
+                self.trust.chmod(mode)
+                self.expect_ok(self.policy(prelude='process.umask(0o002);'))
+                self.assertEqual(json.loads(self.trust.read_text()),
+                                 {**prior, **{str(root): True for root in self.roots()}})
+                self.assertEqual(self.trust.stat().st_mode & 0o777, mode)
+                before = (self.trust.read_bytes(), identity(self.trust))
+                self.expect_ok(self.policy())
+                self.assertEqual((self.trust.read_bytes(), identity(self.trust)), before)
+                self.assertEqual(list(self.agent.glob('trust.json.*')), [])
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX trust-file ownership and snapshots')
+    def test_group_writable_trust_still_rejects_foreign_owner_and_metadata_races(self):
+        self.seed({str(self.home / 'old'): True})
+        self.trust.chmod(0o664)
+        before = (self.trust.read_bytes(), identity(self.trust))
+        name = json.dumps(str(self.trust))
+        prelude = '''const fs = require('node:fs'), original = fs.lstatSync;
+fs.lstatSync = (file, ...args) => {
+    const info = original(file, ...args);
+    if (file === ''' + name + ''') info.uid += 1;
+    return info;
+};'''
+        result = self.policy(prelude=prelude)
+        self.assertEqual((result.returncode, result.stdout), (1, 'failed:unsafe-metadata\n'))
+        self.assertEqual((self.trust.read_bytes(), identity(self.trust)), before)
+        for field, mutation in (('mode', 'info.mode ^= 0o020;'), ('uid', 'info.uid += 1;'), ('gid', 'info.gid += 1;')):
+            with self.subTest(field=field):
+                prelude = '''const fs = require('node:fs'), original = fs.fstatSync;
+fs.fstatSync = (...args) => {
+    const info = original(...args);
+    ''' + mutation + '''
+    return info;
+};'''
+                result = self.policy(prelude=prelude)
+                self.assertEqual((result.returncode, result.stdout), (1, 'failed:changed-input\n'))
+                self.assertEqual((self.trust.read_bytes(), identity(self.trust)), before)
+                self.assertEqual(list(self.agent.glob('trust.json.*')), [])
 
     @unittest.skipIf(os.name == 'nt', 'POSIX directory mode and link policy')
     def test_ordinary_group_access_is_preserved_but_links_and_private_profile_fail(self):
@@ -220,6 +265,25 @@ fs.writeFileSync = (file, ...args) => {
         self.assertIn('failed:changed-input', result.stdout)
         self.assertEqual(json.loads(self.trust.read_text()), {'/concurrent': False})
         self.assertTrue((self.agent / 'trust.json.lock').exists(), 'Retain uncertain recovery state')
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX trust-file accepted-mode race')
+    def test_trust_mode_changes_between_accepted_states_still_abort_promotion(self):
+        for before_mode, after_mode in ((0o664, 0o644), (0o644, 0o664)):
+            with self.subTest(before=oct(before_mode), after=oct(after_mode)):
+                self.seed({str(self.home / 'old'): True})
+                self.trust.chmod(before_mode)
+                before = self.trust.read_bytes()
+                prelude = '''const fs = require('node:fs'), original = fs.writeFileSync;
+fs.writeFileSync = (file, ...args) => {
+    const result = original(file, ...args);
+    if (String(file).includes('.setup-')) fs.chmodSync(''' + json.dumps(str(self.trust)) + ', ' + str(after_mode) + ''');
+    return result;
+};'''
+                result = self.policy(prelude=prelude)
+                self.assertEqual((result.returncode, result.stdout), (1, 'failed:changed-input\n'))
+                self.assertEqual(self.trust.read_bytes(), before)
+                self.assertEqual(self.trust.stat().st_mode & 0o777, after_mode)
+                self.assertEqual(list(self.agent.glob('trust.json.*')), [])
 
     @unittest.skipIf(os.name == 'nt', 'POSIX accepted-mode race')
     def test_repeated_ancestor_inspection_cannot_replace_an_earlier_snapshot(self):
@@ -328,6 +392,15 @@ process.exitCode = ''' + str(status) + ';\n')
             self.assertIn('failed:doctor-blocked', result.stdout)
             self.assertNotIn('SECRET-SENTINEL', result.stdout + result.stderr)
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX CLI file-mode safeguards')
+    def test_group_writable_adapter_cli_is_not_covered_by_trust_file_exception(self):
+        target = self.fake_doctor([{'name': 'reviewed', 'state': 'ok', 'tools': 1}])
+        cli = self.agent / 'npm/node_modules/pi-mcp-adapter/cli.js'
+        cli.chmod(0o664)
+        result = self.policy('health', target, 'reviewed')
+        self.assertEqual((result.returncode, result.stdout), (1, 'failed:unsafe-cli\n'))
+        self.assertFalse(Path(self.env['FIXTURE_DOCTOR_CALL']).exists())
+
     @unittest.skipUnless(PWSH, 'Set PWSH_BIN to parse the native ACL payload')
     def test_windows_acl_payload_parses_without_executing_native_operations(self):
         source = CORE.read_text()
@@ -426,6 +499,38 @@ else {
 }
 ''')
         return harness
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX native trust-writer umask')
+    def test_native_group_writable_trust_converges_through_six_embedded_wrappers(self):
+        harness = self.materialize_native_admission().parent / 'writer.mjs'
+        harness.write_text('''import { ProjectTrustStore } from './pi-trust-manager.mjs';
+process.umask(0o002);
+const store = new ProjectTrustStore(process.env.PI_CODING_AGENT_DIR);
+store.setMany([{path:process.env.HOME+'/old',decision:true},
+               {path:process.env.BB_DATA_DIR+'/plugins/environment-git-worktree/host-data/worktrees/denied',decision:false}]);
+''')
+        approvals = self.agent / 'mcp-project-approvals.json'
+        approvals.write_text('SECRET-SENTINEL: unrelated native MCP approvals')
+        untouched = (approvals.read_bytes(), identity(approvals), identity(self.agent))
+        for script in SCRIPTS:
+            if script.endswith('.ps1') and not PWSH:
+                continue
+            with self.subTest(script=script):
+                if self.trust.exists(): self.trust.unlink()
+                writer = subprocess.run([NODE, str(harness)], env=self.env, cwd=self.root,
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual((writer.returncode, writer.stdout, writer.stderr), (0, '', ''))
+                self.assertEqual(self.trust.stat().st_mode & 0o777, 0o664)
+                prior = json.loads(self.trust.read_text())
+                result = self.wrapper(script)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(json.loads(self.trust.read_text()),
+                                 {**prior, **{str(root): True for root in self.roots()}})
+                self.assertEqual((approvals.read_bytes(), identity(approvals), identity(self.agent)), untouched)
+                before = (self.trust.read_bytes(), identity(self.trust))
+                self.assertEqual(self.wrapper(script).returncode, 0)
+                self.assertEqual((self.trust.read_bytes(), identity(self.trust)), before)
+                self.assertEqual(list(self.agent.glob('trust.json.*')), [])
 
     def test_fresh_headless_native_admission_and_repository_worktree_approval_inheritance(self):
         harness = self.materialize_native_admission()

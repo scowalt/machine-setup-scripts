@@ -6711,7 +6711,7 @@ function readTrust(file) {
     const info = stat(file);
     if (!info) return { info: null, text: null, data: {} };
     if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > MAX_BYTES ||
-        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o022))) fail('unsafe-metadata');
+        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o002))) fail('unsafe-metadata');
     const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
     let text;
     try {
@@ -10446,7 +10446,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 180 | Last changed: Use Scowalt engineering skills with compatible opt-outs"
+    echo -e "${GRAY}Version 181 | Last changed: Accept account-owned group-writable Pi trust files"
 
     if ! acquire_setup_lock; then
         return 1

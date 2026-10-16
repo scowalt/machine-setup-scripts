@@ -6988,7 +6988,7 @@ function readTrust(file) {
     const info = stat(file);
     if (!info) return { info: null, text: null, data: {} };
     if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > MAX_BYTES ||
-        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o022))) fail('unsafe-metadata');
+        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o002))) fail('unsafe-metadata');
     const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
     let text;
     try {
@@ -9135,7 +9135,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 196 | Last changed: Honor literal engineering skill exclusions"
+    Write-Host "Version 197 | Last changed: Accept account-owned group-writable Pi trust files"
 
     Assert-HeadlessUnsupported
 
