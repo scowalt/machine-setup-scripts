@@ -4532,7 +4532,8 @@ function installedPackages(home) {
     const typed = model !== responses?.[id];
     if (matches.length !== 1 || matches[0] !== model ||
         ((typed || Object.hasOwn(model, 'type')) && model.type !== 'chat') || model.provider !== 'opencode-go' ||
-        model.api !== 'openai-responses' || model.baseUrl !== 'https://opencode.ai/zen/go/v1' ||
+        model.api !== 'openai-responses' ||
+        !['https://opencode.ai/zen/go/v1', 'https://opencode.ai/inference/go/v1'].includes(model.baseUrl) ||
         model.reasoning !== true || model.thinkingLevelMap?.xhigh !== 'xhigh') fail('catalog-incompatible');
     return {request, dependency, prefix};
 }
@@ -10448,7 +10449,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 182 | Last changed: Keep embedded helpers compatible with macOS Bash 3.2"
+    echo -e "${GRAY}Version 183 | Last changed: Support Pi Go inference catalog endpoint"
 
     if ! acquire_setup_lock; then
         return 1

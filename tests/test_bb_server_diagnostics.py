@@ -432,6 +432,40 @@ curl() {
                     self.assertEqual(sorted(p.name for p in reference.parent.iterdir()),
                                      (['10-tmpdir.conf'] if combined else []) + [name])
 
+    def test_active_tmpdir_child_creation_survives_logged_ordinary_maintenance(self):
+        reference = self.inherited_environment()
+        target = self.home / '.cache/bb/tmp'
+        target.mkdir(parents=True, mode=0o700)
+        self.seed('.cache/bb/tmp/keep', 'existing temporary data\n')
+        self.seed(str(reference.parent.relative_to(self.home)) + '/10-tmpdir.conf',
+                  '[Service]\nEnvironment=TMPDIR=' + str(target) + '\n')
+        self.env['REVIEWED_DROPINS'] = ' '.join(str(p) for p in sorted(reference.parent.iterdir()))
+        extra = r'''
+loginctl() {
+    [[ "$#" == 4 && "$1" == show-user && "$3" == --property=Linger && "$4" == --value ]] || return 97
+    mkdir -- "$HOME/.cache/bb/tmp/active-child" || return 97
+    printf 'yes\n'
+}
+'''
+        for attempt in range(2):
+            with self.subTest(attempt=attempt):
+                if (target / 'active-child').exists():
+                    (target / 'active-child').rmdir()
+                before = self.preserved_inputs(reference)
+                result, uploaded, events = self.logged_maintenance(extra=extra)
+                self.assertEqual(result.returncode, 0, result)
+                self.assertIn('PLUGIN_REFRESH:ready', uploaded)
+                self.assertNotIn('Setup completed with errors', uploaded)
+                self.assertNotIn('[preflight.app-unit]', uploaded)
+                order = [events.index(e) for e in ('stop-ingress', 'stop-app', 'install', 'start-app')]
+                self.assertEqual(order, sorted(order))
+                self.assertTrue((target / 'active-child').is_dir())
+                value = list(before[target])
+                value[5] = target.stat().st_nlink
+                before[target] = tuple(value)
+                self.assertEqual(self.preserved_inputs(reference), before)
+                (target / 'active-child').rmdir()
+
     def test_ordinary_maintenance_does_not_seed_environment_inheritance(self):
         reference = self.inherited_environment()
         reference.unlink()

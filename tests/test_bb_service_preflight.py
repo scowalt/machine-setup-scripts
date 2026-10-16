@@ -43,7 +43,7 @@ def checked(name, parent=None):
 
 def metadata(value, path):
     selected = home + '/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf'
-    if inspection == 'tmpdir-foreign-target':
+    if inspection == 'tmpdir-foreign-target' or inspection.startswith('tmpdir-target-'):
         selected = home + '/.cache/bb/tmp'
     elif inspection == 'tmpdir-foreign-ancestor' or inspection.startswith('tmpdir-directory-'):
         selected = home + '/.cache'
@@ -74,6 +74,17 @@ def metadata(value, path):
                 fields['st_mode'] ^= 0o020
             elif field == 'type':
                 fields['st_mode'] = 0o100775
+            else:
+                fields['st_' + field] += 1
+    if inspection.startswith('tmpdir-target-'):
+        call = stats.get(path, 0)
+        stats[path] = call + 1
+        if (os.environ.get('FIXTURE_PHASE') == 'late' if '-late-' in inspection else call > 0):
+            field = inspection.removeprefix('tmpdir-target-').removeprefix('late-').removesuffix('-race')
+            if field == 'mode':
+                fields['st_mode'] ^= 0o2000
+            elif field == 'type':
+                fields['st_mode'] = 0o100700
             else:
                 fields['st_' + field] += 1
     if inspection.startswith('env-'):
@@ -887,6 +898,38 @@ class BbServicePreflightTests(unittest.TestCase):
                            'tmpdir-directory-ino-race'):
             with self.subTest(inspection=inspection):
                 self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed', inspection=inspection))
+
+    def test_active_tmpdir_child_churn_does_not_invalidate_pre_mutation_snapshot(self):
+        dropins, _, _ = self.reviewed()
+        for reference in (False, True):
+            selection = ('10-tmpdir.conf',)
+            if reference:
+                override = dropins / '20-env-local.conf'
+                override.write_bytes(b'[Service]\nEnvironmentFile=%h/.env.local\n')
+                override.chmod(0o664)
+                selection += (override.name,)
+            for boundary in ('', 'late-'):
+                for field in ('nlink', 'size', 'mtime_ns', 'ctime_ns'):
+                    with self.subTest(reference=reference, boundary=boundary, field=field):
+                        result = self.run_preflight(mode='checkpoint', systemd='reviewed',
+                                                    selection=selection,
+                                                    inspection='tmpdir-target-' + boundary + field + '-race')
+                        self.assertIn('NEXT_INERT_GATE', result.stderr)
+                        self.assertIn('[update.directories]', result.stderr)
+                        self.assertNotIn('[preflight.app-unit]', result.stderr)
+                        self.assertNotIn('[preflight.unit-snapshot]', result.stderr)
+
+    def test_active_tmpdir_identity_privacy_and_mode_changes_still_block(self):
+        self.reviewed()
+        for boundary in ('', 'late-'):
+            for field in ('dev', 'ino', 'uid', 'gid', 'mode', 'type'):
+                with self.subTest(boundary=boundary, field=field):
+                    result = self.run_preflight(mode='checkpoint', systemd='reviewed',
+                                                inspection='tmpdir-target-' + boundary + field + '-race')
+                    self.assert_caller_refusal(result)
+                    if boundary:
+                        self.assertIn('[preflight.unit-snapshot]', result.stderr)
+                        self.assertIn('snapshot', result.stderr)
 
     def test_reviewed_tmpdir_shell_inspection_failures_keep_ordinary_caller_incomplete(self):
         self.reviewed()

@@ -104,7 +104,7 @@ configure_pi_opencode_go() { record go; [[ "${SCENARIO}" != go-failure ]]; }
         for name in BASH:
             for compatible in (True, False):
                 with self.subTest(script=name, compatible=compatible):
-                    fixture.put(fixture.catalog, go.TYPED_CATALOG if compatible else {'openai-responses': {}})
+                    fixture.put(fixture.catalog, go.CURRENT_CATALOG if compatible else {'openai-responses': {}})
                     calls = self.run_bash(name, 'success', fixture)
                     self.assertEqual(calls[-1], 'result:0:1' if compatible else 'result:1:0')
                     self.assertEqual('refresh_pi_packages' in calls, compatible)
@@ -151,7 +151,7 @@ function Set-PiOpenCodeGoProvider { $script:calls += 'go'; $env:SCENARIO -ne 'go
                 with self.subTest(scenario=scenario):
                     real_catalog = scenario.endswith('-catalog')
                     fixture.write_text(real_code if real_catalog else code)
-                    catalog_fixture.put(catalog_fixture.catalog, go.TYPED_CATALOG if scenario == 'typed-catalog' else {})
+                    catalog_fixture.put(catalog_fixture.catalog, go.CURRENT_CATALOG if scenario == 'typed-catalog' else {})
                     result = subprocess.run(
                         [PWSH, "-NoProfile", "-NonInteractive", "-File", str(fixture)], cwd=tmp,
                         env={**(catalog_fixture.env if real_catalog else {"PATH": os.environ["PATH"], "HOME": tmp}),

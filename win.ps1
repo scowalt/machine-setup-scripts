@@ -4474,7 +4474,8 @@ function installedPackages(home) {
     const typed = model !== responses?.[id];
     if (matches.length !== 1 || matches[0] !== model ||
         ((typed || Object.hasOwn(model, 'type')) && model.type !== 'chat') || model.provider !== 'opencode-go' ||
-        model.api !== 'openai-responses' || model.baseUrl !== 'https://opencode.ai/zen/go/v1' ||
+        model.api !== 'openai-responses' ||
+        !['https://opencode.ai/zen/go/v1', 'https://opencode.ai/inference/go/v1'].includes(model.baseUrl) ||
         model.reasoning !== true || model.thinkingLevelMap?.xhigh !== 'xhigh') fail('catalog-incompatible');
     return {request, dependency, prefix};
 }
@@ -9135,7 +9136,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 197 | Last changed: Accept account-owned group-writable Pi trust files"
+    Write-Host "Version 198 | Last changed: Support Pi Go inference catalog endpoint"
 
     Assert-HeadlessUnsupported
 

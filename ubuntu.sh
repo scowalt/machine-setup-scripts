@@ -4608,7 +4608,8 @@ function installedPackages(home) {
     const typed = model !== responses?.[id];
     if (matches.length !== 1 || matches[0] !== model ||
         ((typed || Object.hasOwn(model, 'type')) && model.type !== 'chat') || model.provider !== 'opencode-go' ||
-        model.api !== 'openai-responses' || model.baseUrl !== 'https://opencode.ai/zen/go/v1' ||
+        model.api !== 'openai-responses' ||
+        !['https://opencode.ai/zen/go/v1', 'https://opencode.ai/inference/go/v1'].includes(model.baseUrl) ||
         model.reasoning !== true || model.thinkingLevelMap?.xhigh !== 'xhigh') fail('catalog-incompatible');
     return {request, dependency, prefix};
 }
@@ -10375,9 +10376,10 @@ bb_server_failure() {
         preflight.migration-state) _reason='existing server move or import marker blocks setup' ;;
         preflight.app-unit-file|preflight.ingress-unit-file|preflight.guard-file|preflight.endpoint-file|preflight.config-file|preflight.env-file|npm.owner-file|npm.pending-file) _reason='ownership, type, permissions or managed identity is unsafe or unverified' ;;
         preflight.unit-dropins) _reason='service drop-in selection is unsupported or unverified' ;;
+        preflight.unit-snapshot) _reason='service trust snapshot changed or could not be revalidated' ;;
         preflight.endpoint-read) _reason='saved endpoint could not be read' ;;
         preflight.endpoint-port|preflight.endpoint-origin) _reason='saved endpoint value is invalid or inconsistent' ;;
-        preflight.app-unit|preflight.ingress-unit) _reason='service fragment or drop-in ownership is unverified' ;;
+        preflight.app-unit|preflight.ingress-unit) _reason='service fragment, loaded drop-ins or trust snapshot is unverified' ;;
         preflight.active-app-state|preflight.active-ingress-state) _reason='active service lacks verified managed files or endpoint state' ;;
         preflight.ingress-route) _reason='active ingress route ownership is unverified' ;;
         preflight.local-ports|update.local-ports) _reason='local listener ports are occupied or could not be verified free' ;;
@@ -10688,9 +10690,11 @@ home, scope = sys.argv[1:]
 handles = []
 records = []
 
-def identity(value):
-    return tuple(getattr(value, 'st_' + key) for key in
-                 ('dev', 'ino', 'uid', 'gid', 'mode', 'nlink', 'size', 'mtime_ns', 'ctime_ns'))
+def identity(value, active_tmpdir=False):
+    keys = ('dev', 'ino', 'uid', 'gid', 'mode')
+    if not active_tmpdir:
+        keys += ('nlink', 'size', 'mtime_ns', 'ctime_ns')
+    return tuple(getattr(value, 'st_' + key) for key in keys)
 
 def verified(parent, name, directory=True, private=False, reference=False, metadata_only=False, fragment=False):
     before = os.stat(name, dir_fd=parent, follow_symlinks=False)
@@ -10719,9 +10723,10 @@ def verified(parent, name, directory=True, private=False, reference=False, metad
         flags |= os.O_DIRECTORY
     fd = os.open(name, flags, dir_fd=parent)
     handles.append(fd)
-    if identity(before) != identity(os.fstat(fd)):
+    active_tmpdir = directory and private
+    if identity(before, active_tmpdir) != identity(os.fstat(fd), active_tmpdir):
         raise ValueError()
-    records.append((parent, name, fd, identity(before)))
+    records.append((parent, name, fd, identity(before, active_tmpdir), active_tmpdir))
     return fd
 
 def managed_fragment(content):
@@ -10804,8 +10809,9 @@ try:
         os.lseek(file, 0, os.SEEK_SET)
         if os.read(file, limit) != content:
             raise ValueError()
-    for parent, name, fd, before in records:
-        if before != identity(os.fstat(fd)) or before != identity(os.stat(name, dir_fd=parent, follow_symlinks=False)):
+    for parent, name, fd, before, active_tmpdir in records:
+        if (before != identity(os.fstat(fd), active_tmpdir) or
+                before != identity(os.stat(name, dir_fd=parent, follow_symlinks=False), active_tmpdir)):
             raise ValueError()
     digest = hashlib.sha256(repr((entries, [record[3] for record in records])).encode('ascii') +
                             b''.join(content for _, content, _ in contents)).hexdigest()
@@ -10881,8 +10887,8 @@ bb_unit_preflight() {
     fi
     [[ -z "${_fragment}" || "${_fragment}" == "${_file}" ]] || return 1
     if [[ -n "${_expected}" ]]; then
-        _snapshot=$(bb_unit_dropins_snapshot "${_name}") || return 1
-        [[ "${_snapshot}" == "${_expected}" ]] || return 1
+        _snapshot=$(bb_unit_dropins_snapshot "${_name}") || { bb_server_failure preflight.unit-snapshot; return 1; }
+        [[ "${_snapshot}" == "${_expected}" ]] || { bb_server_failure preflight.unit-snapshot; return 1; }
     fi
 }
 
@@ -12129,7 +12135,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 337 | Last changed: Keep embedded helpers compatible with macOS Bash 3.2"
+    echo -e "${GRAY}Version 338 | Last changed: Fix live BB TMPDIR snapshots and Pi Go catalog compatibility"
 
     if ! acquire_setup_lock; then
         return 1
