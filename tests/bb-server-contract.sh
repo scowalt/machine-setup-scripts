@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+export HEADLESS=1
 tmp=$(mktemp -d)
 trap 'rm -rf -- "${tmp}"' EXIT
 python_bin=$(python3 -c 'import sys; print(sys.executable)')

@@ -1634,7 +1634,7 @@ class WiringTests(unittest.TestCase):
             self.assertEqual(wrapper(name), wrapper('mac'))
             source = (ROOT / (name + '.sh')).read_text()
             entry = 'macos' if name == 'mac' else name
-            self.assertIn('install_bb_desktop ' + entry + ' || _setup_had_errors=1', source)
+            self.assertNotIn('install_bb_desktop ' + entry + ' || _setup_had_errors=1', source)
             self.assertIn('return "${_setup_had_errors}"', source)
             self.assertIn('finish_setup_log "${setup_status}"', source)
         windows = (ROOT / 'win.ps1').read_text()
@@ -1699,7 +1699,8 @@ exit "$_setup_had_errors"
 check_dotfiles_access() { return 1; }
 setup_dotfiles_deploy_key() { return 1; }
 is_main_user() { return 0; }
-install_bb_desktop() { printf 'desktop-called\\n'; return 1; }
+install_bb_desktop() { printf 'desktop-called\\n'; return 97; }
+install_opencode_cli() { return 1; }
 check_pending_reboot() { printf 'unrelated-work-finished\\n'; }
 finish_setup_log() { printf 'log-result=%s\\n' "$1"; }
 '''
@@ -1709,7 +1710,7 @@ finish_setup_log() { printf 'log-result=%s\\n' "$1"; }
                     'BB_SERVER': '0', 'HEADLESS': '0'}, text=True, capture_output=True)
                 with self.subTest(script=name):
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertIn('desktop-called', result.stdout)
+                    self.assertNotIn('desktop-called', result.stdout)
                     self.assertIn('unrelated-work-finished', result.stdout)
                     self.assertIn('log-result=1', result.stdout)
 

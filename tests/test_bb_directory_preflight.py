@@ -12,7 +12,7 @@ DIRECTORIES = ("", ".config", ".config/systemd", ".config/systemd/user",
                ".config/setup-bb-server", ".bb")
 RUN_PREFLIGHT = r'''
 source "$1"
-export HOME="$2"
+export HOME="$2" HEADLESS=1
 stat_case="$3" stat_target="$4"
 print_error() { printf 'ERROR: %s\n' "$1"; }
 print_message() { printf 'INFO: %s\n' "$1"; }

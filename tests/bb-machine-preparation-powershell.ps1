@@ -23,7 +23,7 @@ function Test-EnvLocalFlag { param($Name) return [Environment]::GetEnvironmentVa
 $script:Messages = @()
 $env:HEADLESS = '0'
 $null = Invoke-WindowsSetupTasks
-if (-not ($script:Messages -match 'BB does not support native Windows.*WSL2.*manually enroll')) { throw 'Missing manual WSL2 guidance' }
+if (-not ($script:Messages -match 'BB installation is managed manually on non-headless machines.*does not install BB or provision WSL')) { throw 'Missing manual BB guidance' }
 $env:HEADLESS = '1'
 $script:Messages = @()
 $blocked = $false

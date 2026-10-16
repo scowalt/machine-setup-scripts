@@ -427,7 +427,7 @@ ensure_shared_node_runtime() { echo FORBIDDEN; return 97; }
 setup_bb_machine "$2"
 ''', '_', str(self.helpers), platform], env=self.env, capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result)
-                self.assertIn('readiness was not checked', result.stdout)
+                self.assertIn('managed only with HEADLESS=1', result.stdout)
                 self.assertNotIn('FORBIDDEN', result.stdout)
         self.protected.remove(role)
         role.unlink()

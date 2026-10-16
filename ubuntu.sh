@@ -10300,6 +10300,10 @@ setup_bb_machine() {
     local _platform="$1" _prefix="${HOME}/.local/share/setup-bb-machine/npm" _bin _found _version _policy
     local _npm_userconfig _npm_globalconfig
     local -a _npm_context
+    if [[ "${HEADLESS:-}" != "1" ]]; then
+        print_message 'Skipping BB preparation: managed only with HEADLESS=1; existing BB installation left untouched.'
+        return 0
+    fi
     if bb_machine_existing_role; then
         print_message 'BB preparation deferred: existing BB state, service or data/prefix override preserved. Manage that installation manually; readiness was not checked.'
         return 0
@@ -11225,6 +11229,10 @@ setup_bb_server() {
     local _dir="${HOME}/.config/setup-bb-server" _units="${HOME}/.config/systemd/user"
     local _state="${HOME}/.config/setup-bb-server/endpoint" _app _serve _guard _dns='' _port='' _origin='' _current_dns _i _root _mode _user _linger _tailscale_bin _app_active=0 _ingress_active=0 _app_enabled=0 _new_state=0 _old_app='' _old_serve='' _old_guard='' _app_unit _serve_unit _ready_check
     local BB_SERVER_READY_CHECK=readiness.native
+    if [[ "${HEADLESS:-}" != "1" ]]; then
+        print_message 'Skipping BB server setup: managed only with HEADLESS=1; existing BB installation left untouched.'
+        return 0
+    fi
     if [[ ! "${HOME}" =~ ^/[a-zA-Z0-9_./-]+$ ]]; then
         print_error "BB directory preflight: \$HOME must be an absolute supported path."
         return 1
@@ -12135,7 +12143,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 338 | Last changed: Fix live BB TMPDIR snapshots and Pi Go catalog compatibility"
+    echo -e "${GRAY}Version 339 | Last changed: Preserve manually managed BB on non-headless machines"
 
     if ! acquire_setup_lock; then
         return 1
@@ -12164,9 +12172,6 @@ run_setup_tasks() {
     update_dependencies || _setup_had_errors=1
     update_and_install_core
     install_nerd_font
-
-    print_section "bb Desktop"
-    install_bb_desktop ubuntu || _setup_had_errors=1
 
     print_section "SSH Configuration"
     setup_ssh_server

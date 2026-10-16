@@ -9671,6 +9671,10 @@ setup_bb_machine() {
     local _platform="$1" _prefix="${HOME}/.local/share/setup-bb-machine/npm" _bin _found _version _policy
     local _npm_userconfig _npm_globalconfig
     local -a _npm_context
+    if [[ "${HEADLESS:-}" != "1" ]]; then
+        print_message 'Skipping BB preparation: managed only with HEADLESS=1; existing BB installation left untouched.'
+        return 0
+    fi
     if bb_machine_existing_role; then
         print_message 'BB preparation deferred: existing BB state, service or data/prefix override preserved. Manage that installation manually; readiness was not checked.'
         return 0
@@ -9792,7 +9796,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 262 | Last changed: Support Pi Go inference catalog endpoint${NC}"
+    echo -e "${GRAY}Version 263 | Last changed: Preserve manually managed BB on non-headless machines${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9882,7 +9886,6 @@ run_setup_tasks() {
     install_portless_cli
     install_ntn_cli
     setup_bb_machine wsl || { print_error 'BB machine preparation incomplete; existing BB state was preserved.'; _setup_had_errors=1; }
-    install_bb_desktop wsl || _setup_had_errors=1
     refresh_bb_plugins ready || _setup_had_errors=1
     if ! prepare_pi_profile_permissions; then
         PI_PROFILE_MUTATIONS_BLOCKED=1

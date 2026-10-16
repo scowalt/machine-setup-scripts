@@ -88,7 +88,7 @@ is_main_user() { return 0; }
 check_dotfiles_access() { return 1; }
 setup_dotfiles_deploy_key() { return 1; }
 bb_server_selection() { return 1; }
-install_bb_desktop() { [[ "${BACKLOG_TEST_EARLIER:-0}" != 1 ]]; }
+install_opencode_cli() { [[ "${BACKLOG_TEST_EARLIER:-0}" != 1 ]]; }
 remove_compound_engineering_resources() { record independent; }
 check_pending_reboot() { record reboot; }
 start_setup_log() { record log-start; }

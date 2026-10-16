@@ -13,6 +13,7 @@ class PreparationPermissions(unittest.TestCase):
     def fixture(self, platform):
         case = preparation.Preparation()
         case.setUp()
+        case.env['HEADLESS'] = '0' if platform == 'wsl' else '1'
         self.addCleanup(case.doCleanups)
         source = SOURCES[platform]
         helpers = [preparation.BLOCK, function(SOURCES['ubuntu'], 'bb_server_selection')]
@@ -96,7 +97,7 @@ umask "$1"
                     self.assertEqual(out.returncode, 1, out)
 
     def test_native_managed_arcane_modes_converge_then_preparation_succeeds_twice(self):
-        for platform in SCRIPTS:
+        for platform in ('mac', 'ubuntu', 'pi', 'bazzite'):
             with self.subTest(platform=platform):
                 case, apply = self.fixture(platform)
                 for name in ['.config', '.config/systemd', '.config/systemd/user', 'Library', 'Library/LaunchAgents']:

@@ -77,7 +77,7 @@ class Preparation(unittest.TestCase):
         self.globalconfig.write_text('')
         self.userconfig = self.home / '.npmrc'
         self.userconfig.write_text('')
-        self.env = {"HOME": str(self.home), "PATH": f"{self.tools}:/usr/bin:/bin", "EVENTS": str(self.events), "FIXTURE_ROOT": str(self.root), "FIXTURE_NODE": NODE, "FIXTURE_NPM": NPM, "LANG": "C.UTF-8", "npm_config_prefix": str(self.original_prefix), "npm_config_cache": str(self.root / 'cache'), "npm_config_offline": "true"}
+        self.env = {"HOME": str(self.home), "HEADLESS": "1", "PATH": f"{self.tools}:/usr/bin:/bin", "EVENTS": str(self.events), "FIXTURE_ROOT": str(self.root), "FIXTURE_NODE": NODE, "FIXTURE_NPM": NPM, "LANG": "C.UTF-8", "npm_config_prefix": str(self.original_prefix), "npm_config_cache": str(self.root / 'cache'), "npm_config_offline": "true"}
         (self.root / 'native-config.cjs').write_text(r'''
 const path = require('node:path');
 const npmPath = path.dirname(path.dirname(process.env.FIXTURE_NPM));
@@ -195,7 +195,7 @@ ensure_shared_node_runtime() { echo runtime >> "$EVENTS"; return "${RUNTIME_FAIL
 check_dotfiles_access() { return 1; }
 setup_dotfiles_deploy_key() { return 1; }
 prepare_pi_profile_permissions() { return "${PI_FAIL:-0}"; }
-install_bb_desktop() { return "${EARLIER_FAIL:-0}"; }
+install_opencode_cli() { return "${EARLIER_FAIL:-0}"; }
 env_local_flag_is_one() { [[ "${!1:-0}" == 1 ]]; }
 remove_compound_engineering_resources() { echo independent >> "$EVENTS"; }
 check_pending_reboot() { echo reboot >> "$EVENTS"; }
@@ -228,7 +228,7 @@ brew() { :; }
         sentinel = self.home / 'unrelated-project'
         sentinel.mkdir(mode=0o775)
         (sentinel / 'keep').write_text('unchanged')
-        for platform in SCRIPTS:
+        for platform in ('mac', 'ubuntu', 'pi', 'bazzite'):
             for version in ['0.44.0', '0.44.0', '0.45.0']:
                 with self.subTest(platform=platform, version=version):
                     directories = [self.home, *[p for p in self.home.rglob('*') if p.is_dir()]]
@@ -237,7 +237,7 @@ brew() { :; }
                     metadata = {p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in directories}
                     self.package(version)
                     self.events.write_text('')
-                    out = self.run_caller(platform, WORK_MACHINE='1', HEADLESS='0', FIXTURE_PACKAGE_MODE='664')
+                    out = self.run_caller(platform, WORK_MACHINE='1', HEADLESS='1', FIXTURE_PACKAGE_MODE='664')
                     self.assertIn('not enrolled and no BB service created', out)
                     self.assertEqual(json.loads((self.pkg / 'package.json').read_text())['version'], version)
                     self.assertTrue(all(p.stat().st_mode & 0o020 for p in self.pkg.rglob('*') if p.is_file()))
@@ -250,7 +250,7 @@ brew() { :; }
     def test_real_callers_retain_preparation_and_independent_errors_through_finalization(self):
         for directory in [self.home / '.local', self.home / '.local/share']:
             directory.mkdir(exist_ok=True); directory.chmod(0o775)
-        for platform in SCRIPTS:
+        for platform in ('mac', 'ubuntu', 'pi', 'bazzite'):
             for flags in [{'EARLIER_FAIL': '1'}, {'PI_FAIL': '1'}, {'FAIL_INSTALL': '1'}, {'FAIL_REBUILD': '1'}]:
                 with self.subTest(platform=platform, flags=flags):
                     self.events.write_text('')
@@ -494,7 +494,7 @@ process.exit(fakeProcess.exitCode);
         before = {name: (self.home / name).read_bytes() for name in [".env.local", ".npmrc", ".bashrc", "project/file", ".pi/agent/auth.json", ".local/lib/node_modules/other/data"]}
         for version in ["0.44.0", "0.44.0", "0.45.0"]:
             self.package(version)
-            out = self.run_helper(WORK_MACHINE="1", HEADLESS="0")
+            out = self.run_helper(WORK_MACHINE="1", HEADLESS="1")
             self.assertIn("not enrolled", out)
             self.assertIn("ONE chosen BB server", out)
             self.assertEqual(json.loads((self.pkg / "package.json").read_text())["version"], version)
@@ -641,9 +641,13 @@ process.exit(fakeProcess.exitCode);
         self.run_helper()
 
     def test_wsl_exact_headless_semantics(self):
+        self.env.pop('HEADLESS')
         for flags in [{}, {'HEADLESS': ''}, {'HEADLESS': '0'}, {'HEADLESS': 'true'}, {'HEADLESS': 'false'}]:
             with self.subTest(flags=flags):
-                self.run_helper('wsl', **flags)
+                out = self.run_helper('wsl', **flags)
+                self.assertIn('managed only with HEADLESS=1', out)
+                self.assertFalse(self.prefix.exists())
+                self.assertEqual(self.log(), '')
         self.run_helper('wsl', expected=1, HEADLESS='1')
 
     def test_native_original_prefix_policy_and_precedence(self):
@@ -868,10 +872,18 @@ process.exit(fakeProcess.exitCode);
                 backup.rename(directory)
 
     def test_work_headless_platform_and_wsl2(self):
-        for platform, kernel, headless in [("mac", "Darwin", "0"), ("mac", "Darwin", "1"), ("ubuntu", "Linux", "0"), ("pi", "Linux", "1"), ("bazzite", "Linux", "0"), ("wsl", "Linux", "0")]:
-            with self.subTest(platform=platform, headless=headless):
-                self.run_helper(platform, KERNEL=kernel, HEADLESS=headless, WORK_MACHINE="1")
-        self.run_helper("wsl", expected=1, RELEASE="4.4.0-Microsoft")
+        for platform, kernel in [("mac", "Darwin"), ("ubuntu", "Linux"), ("pi", "Linux"), ("bazzite", "Linux")]:
+            with self.subTest(platform=platform):
+                self.events.write_text('')
+                self.run_helper(platform, KERNEL=kernel, HEADLESS="1", WORK_MACHINE="1")
+                self.assertIn('npm ["install"', self.log())
+        for flag in ('', '0', 'true', 'false'):
+            for release in ('6.6.0-microsoft-standard-WSL2', '4.4.0-Microsoft'):
+                self.events.write_text('')
+                before = snapshot(self.home)
+                self.run_helper("wsl", HEADLESS=flag, RELEASE=release)
+                self.assertEqual(self.log(), '')
+                self.assertEqual(snapshot(self.home), before)
         self.run_helper("wsl", expected=1, HEADLESS="1")
         self.run_helper(expected=1, KERNEL="MINGW64_NT")
 
@@ -933,7 +945,7 @@ command() {
                     cases.append(({"MACOS_DEVELOPER_TOOLS_STATE": "unverified"}, 0, True))
                 for flags, expected, prep in cases:
                     self.events.write_text("")
-                    out = subprocess.run(["/bin/bash", "-c", setup], env=self.env | {"WORK_MACHINE": "1"} | flags, cwd=self.home, capture_output=True, text=True, timeout=15)
+                    out = subprocess.run(["/bin/bash", "-c", setup], env=self.env | {"WORK_MACHINE": "1", "HEADLESS": "0" if platform == 'wsl' else "1"} | flags, cwd=self.home, capture_output=True, text=True, timeout=15)
                     self.assertEqual(out.returncode, expected, out.stdout + out.stderr)
                     self.assertEqual("prep\n" in self.log(), prep)
                     self.assertIn("unrelated\n", self.log())
