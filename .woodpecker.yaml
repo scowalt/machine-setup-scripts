@@ -2,7 +2,7 @@ when:
   - event: [push, tag, pull_request]
 
 labels:
-  platform: linux/arm64
+  ci_os: linux
 
 steps:
   - name: no-comments
