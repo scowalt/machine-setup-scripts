@@ -1,5 +1,17 @@
 # CI
 
+## Native Linux routing
+
+The workflow selects `ci_os: linux`, matching the supported Woodpecker 3.19
+agent setting `WOODPECKER_AGENT_LABELS=ci_os=linux`. Before merging this change,
+the parent must configure and read back that label and actual Linux ARM64
+platform on the current agent, then verify the label and Linux AMD64 platform
+on its replacement. Include no other OS or unsupported CPU; retain native platform
+reporting. This routing label is not a security boundary or hardware attestation.
+The original image index supports both targets, without a matrix or emulation.
+ARM64 rollout guidance below is historical, not native AMD64 proof. Commands,
+pins and status layout stay unchanged; actual AMD64 acceptance is separate.
+
 ## Authored contract
 
 [.woodpecker.yaml](.woodpecker.yaml) ports the sole authored GitHub Actions job,
@@ -20,7 +32,7 @@ hosting described in README is not a new CI deployment authorization.
 
 The image pins uv 0.11.32 and Python 3.14 on Debian trixie by digest
 `sha256:adafbab0c780d8bd995039e9dfd800f95a057867d283deee7d5eb1b3126551b2`.
-The `linux/arm64` label selects the existing ARM64 Docker agent, not emulation.
+The `ci_os: linux` label selects the native Linux ARM64/AMD64 pool, not emulation.
 [Requirements](.comment-policy/requirements.txt) remain tree-sitter 0.25.2,
 tree-sitter-language-pack 0.13.0, tree-sitter-c-sharp 0.23.5,
 tree-sitter-embedded-template 0.25.0 and tree-sitter-yaml 0.7.2.
