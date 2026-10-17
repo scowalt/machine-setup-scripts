@@ -9112,19 +9112,8 @@ function Complete-SetupLog {
     if ($script:SetupLogClosed) { Upload-Log }
 }
 
-function Install-BbDesktop {
-    if (Test-EnvLocalFlag "HEADLESS") {
-        Write-Debug "Skipping bb desktop: HEADLESS=1; existing applications untouched."
-    }
-    else {
-        Write-Debug "Skipping bb desktop: Windows has no supported native desktop artifact."
-    }
-    return $true
-}
-
 function Invoke-WindowsSetupTasks {
     $piSetupFailed = $false
-    $bbDesktopSetupFailed = $false
     $openCodeSetupFailed = $false
     $script:OpenCodeWingetConflict = $false
     $piOpenCodeGoReady = $false
@@ -9136,14 +9125,14 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 198 | Last changed: Support Pi Go inference catalog endpoint"
+    Write-Host "Version 199 | Last changed: Leave owner-managed bb desktop applications untouched"
 
     Assert-HeadlessUnsupported
 
     New-TokenPlaceholders
     Read-SetupEnvironment
 
-    if (-not (Install-BbDesktop)) { $bbDesktopSetupFailed = $true }
+    Write-Debug "bb desktop is owner-managed; existing applications and forks are untouched."
 
     Write-Section "Package Installation"
     Install-WingetPackages
@@ -9287,9 +9276,6 @@ function Invoke-WindowsSetupTasks {
     }
     if ($prLensSetupFailed) {
         throw "Required PR Lens skill removal failed."
-    }
-    if ($bbDesktopSetupFailed) {
-        throw "bb desktop setup was incomplete."
     }
 
     Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen

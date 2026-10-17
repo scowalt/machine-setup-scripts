@@ -4,6 +4,8 @@ All eight slices were integrated before this work: integration tip `0cb8771d6030
 
 The later [BB file-trust decision, ADR 0014](../adr/0014-accept-account-owned-bb-package-file-group-write.md), supersedes this integration's preserved group-write file rule only for BB package artifacts, its verified account-owned Node executable and the stopped-server runtime marker. The table and validation counts below retain their original integration scope; [the Beelink investigation](2026-10-14-beelink-bb-package-file-modes.md) records the later evidence.
 
+The later [desktop owner-management decision, ADR 0017](../adr/0017-leave-bb-desktop-owner-managed.md), removes the desktop installer family altogether. Its two inventory rows and validation counts below are historical, not active directory gates; no replacement desktop inspection or permission repair is introduced.
+
 ## Active-gate inventory
 
 **C** = changed ordinary-directory behavior; **P** = preserved file/system/private/identity rule; **A** = already compatible (not newly hardened). **B5** = macOS/Ubuntu/WSL/Pi/Bazzite Bash entries; **All6** adds Windows; **D3** = macOS/Ubuntu/Bazzite desktop payloads. Shared JavaScript Unix branches embedded in Windows do not change Windows ACLs. Each linked slice table names the individual gate, caller, preservation/race controls and red/green evidence; the rows here map their complete scope to the integrated distribution rather than duplicate those tables.

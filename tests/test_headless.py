@@ -93,7 +93,7 @@ systemctl() {
             self.assertIn('"1"', function(mac, name))
         for name in BASH:
             text = (ROOT / name).read_text()
-            self.assertIn('[[ "${HEADLESS:-}" == "1" ]]', function(text, 'install_bb_desktop'))
+            self.assertNotIn('install_bb_desktop', text)
             self.assertIn('[[ "${HEADLESS:-}" != 1 ]]', function(text, 'bb_machine_platform_ready'))
             self.assertIn('bb_machine_platform_ready "${_platform}" || return 1', function(text, 'setup_bb_machine'))
 

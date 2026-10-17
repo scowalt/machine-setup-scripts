@@ -195,7 +195,7 @@ ensure_shared_node_runtime() { echo runtime >> "$EVENTS"; return "${RUNTIME_FAIL
 check_dotfiles_access() { return 1; }
 setup_dotfiles_deploy_key() { return 1; }
 prepare_pi_profile_permissions() { return "${PI_FAIL:-0}"; }
-install_bb_desktop() { return "${EARLIER_FAIL:-0}"; }
+install_opencode_cli() { return "${EARLIER_FAIL:-0}"; }
 env_local_flag_is_one() { [[ "${!1:-0}" == 1 ]]; }
 remove_compound_engineering_resources() { echo independent >> "$EVENTS"; }
 check_pending_reboot() { echo reboot >> "$EVENTS"; }
