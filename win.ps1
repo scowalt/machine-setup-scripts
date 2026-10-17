@@ -9125,7 +9125,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 199 | Last changed: Leave owner-managed bb desktop applications untouched"
+    Write-Host "Version 200 | Last changed: Retire installer code for owner-managed bb desktop applications"
 
     Assert-HeadlessUnsupported
 
@@ -9166,7 +9166,7 @@ function Invoke-WindowsSetupTasks {
     Install-GeminiCli
     Install-CodexCli
     Install-PortlessCli
-    Write-Message 'BB does not support native Windows. Run wsl.sh inside an existing WSL2 distro to prepare its CLI/daemon software, then manually enroll with one chosen BB server over private Tailscale. This script does not install BB or provision WSL.'
+    Write-Message 'BB installation is managed manually on non-headless machines. This script does not install BB or provision WSL; existing BB installations are left untouched.'
     if (-not (Prepare-PiProfilePermissions)) {
         $script:PiProfileMutationsBlocked = $true
         $piSetupFailed = $true

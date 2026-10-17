@@ -409,7 +409,7 @@ class BbServicePreflightTests(unittest.TestCase):
         before = snapshot(self.root)
         result = subprocess.run(
             ['/bin/bash', '--noprofile', '--norc', '-c', HARNESS, '_', str(self.helpers)],
-            env={'PATH': str(self.empty_path), 'HOME': str(self.home), 'LANG': 'C',
+            env={'PATH': str(self.empty_path), 'HOME': str(self.home), 'LANG': 'C', 'HEADLESS': '1',
                  'FIXTURE_UID': str(os.getuid()), 'FIXTURE_UNIT': unit,
                  'FIXTURE_MODE': mode, 'FIXTURE_SYSTEMD': systemd, 'FIXTURE_INSPECTION': inspection,
                  'FIXTURE_PYTHON_ADAPTER': str(self.python_adapter),

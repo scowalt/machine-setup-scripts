@@ -2130,7 +2130,7 @@ print_error() { printf '%s\n' "$*"; }
 print_warning() { printf '%s\n' "$*"; }
 print_message() { printf '%s\n' "$*"; }
 print_debug() { printf '%s\n' "$*"; }
-install_xcode_cli_tools() { echo toolchain-operation; [[ "$FAIL_TASK" != toolchain ]]; }
+install_xcode_cli_tools() { echo clt-operation; [[ "$FAIL_TASK" != clt ]]; }
 install_opencode_cli() { echo opencode-operation; [[ "$FAIL_TASK" != opencode ]]; }
 install_gitea_client() { echo independent-success; return 0; }
 bb_plugin_refresh_payload() { printf '%s\n' "$FIXTURE_OUTPUT"; return "$REFRESH_STATUS"; }
@@ -2152,7 +2152,7 @@ upload_log() { cp -- "$SETUP_LOG_FILE" "$HOME/completed-upload.log"; }
             'No verified local BB main server requires plugin refresh.',
             'BB plugin refresh failed: discovery / writable-local-state.',
             'BB plugin refresh failed: update / operation-timeout.'))]
-        for failed in ('toolchain', 'opencode', 'none'):
+        for failed in ('clt', 'opencode', 'none'):
             for status, text, diagnostic in results:
                 expected = int(failed != 'none' or status != 0)
                 with self.subTest(failed=failed, outcome=text), tempfile.TemporaryDirectory(prefix='bb-refresh-final-log-') as home:
@@ -2166,7 +2166,7 @@ upload_log() { cp -- "$SETUP_LOG_FILE" "$HOME/completed-upload.log"; }
                     log = logs[0].read_text()
                     self.assertEqual((Path(home) / 'completed-upload.log').read_text(), log)
                     summary = 'Setup completed with errors' if expected else '✨ Setup complete!'
-                    milestones = ['toolchain-operation', 'opencode-operation', 'independent-success', diagnostic,
+                    milestones = ['clt-operation', 'opencode-operation', 'independent-success', diagnostic,
                                   'later-pi-success', 'reboot-reported', summary, 'Run log saved to:']
                     positions = [log.index(marker) for marker in milestones]
                     self.assertEqual(positions, sorted(positions), log)

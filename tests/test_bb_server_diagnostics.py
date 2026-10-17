@@ -179,7 +179,7 @@ class BbServerDiagnostics(unittest.TestCase):
         self.events = self.root / 'events'
         self.events.touch()
         self.env = dict(os.environ, HOME=str(self.home), EVENTS=str(self.events),
-                        HELPERS=str(self.helpers))
+                        HELPERS=str(self.helpers), HEADLESS='1')
         for path in self.home.rglob('*'):
             if path.is_dir():
                 path.chmod(0o700)

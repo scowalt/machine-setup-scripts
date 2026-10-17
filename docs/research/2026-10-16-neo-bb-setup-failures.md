@@ -99,6 +99,10 @@ The replacement contract went red before production edits: inert traps caught de
 
 Optional installed-code/external-dotfiles probes, native Bash 3.2 and native Windows ACL/handle coverage retain their explicit skips/omissions. Linux PowerShell fixtures are not native Windows/macOS rollout. No live setup, app/plugin execution, permission changes or machine remediation occurred; this change neither diagnoses nor fixes the independent `writable-local-state` failure.
 
+## Remote-main integration
+
+Publication encountered upstream `211010b`, which independently removed ordinary desktop calls and added exact-`HEADLESS=1` preparation/server gates. Integration preserves those gates and Windows guidance, retires the now-unused desktop payload/wrappers, and retains both upstream's real environment/installer-boundary caller tests and this investigation's desktop-state/Windows preservation matrix. The latter moves to `tests/test_bb_desktop_preservation.py`; the desktop contract runs both sets. Final banners increment upstream to macOS 308, Ubuntu 340, Bazzite 185, Pi 281, WSL 264 and Windows 200. Earlier 48-entry evidence above remains pre-integration. The integrated extraction/containment, setup-default and combined desktop contract pass at `/tmp/setup-fixture-matrix-ilxs53u_`; complete pre-push validation remains an additional ordinary hooked publication gate, rather than substituting the earlier aggregate for the merged source.
+
 ## Next steps
 
 1. Obtain the Mac's SSH host key through a trusted channel, or have the owner provide a metadata-only capture. Do not accept an unauthenticated key just to continue.

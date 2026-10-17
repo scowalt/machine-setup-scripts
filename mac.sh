@@ -10218,6 +10218,10 @@ setup_bb_machine() {
     local _platform="$1" _prefix="${HOME}/.local/share/setup-bb-machine/npm" _bin _found _version _policy
     local _npm_userconfig _npm_globalconfig
     local -a _npm_context
+    if [[ "${HEADLESS:-}" != "1" ]]; then
+        print_message 'Skipping BB preparation: managed only with HEADLESS=1; existing BB installation left untouched.'
+        return 0
+    fi
     if bb_machine_existing_role; then
         print_message 'BB preparation deferred: existing BB state, service or data/prefix override preserved. Manage that installation manually; readiness was not checked.'
         return 0
@@ -10277,7 +10281,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 307 | Last changed: Leave owner-managed bb desktop applications untouched${NC}"
+    echo -e "${GRAY}Version 308 | Last changed: Retire installer code for owner-managed bb desktop applications${NC}"
 
     if ! acquire_setup_lock; then
         return 1
