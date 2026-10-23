@@ -14,14 +14,14 @@ dependencies: []
 references:
   - ubuntu.sh
   - tests/test_paseo_plain_setup.py
-  - 'https://logs.scowalt.com/logs/arcane/2026-09-11-18-54-46-585.log'
+  - 'https://logs.example.invalid/logs/linux-desktop/2026-09-11-18-54-46-585.log'
 priority: medium
 ---
 
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Arcane reports that Paseo Plain setup could not finish, but the embedded installer discards the failed operation and reason. Improve diagnostics rather than guessing or resetting live plugin state.
+Linux desktop reports that Paseo Plain setup could not finish, but the embedded installer discards the failed operation and reason. Improve diagnostics rather than guessing or resetting live plugin state.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -35,7 +35,7 @@ Arcane reports that Paseo Plain setup could not finish, but the embedded install
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Review the existing embedded installer failure paths and tests; do not assume the cause of Arcane's failure.
+1. Review the existing embedded installer failure paths and tests; do not assume the cause of Linux desktop's failure.
 2. Add isolated command, timeout, validation, and migration failure fixtures with sensitive-output sentinels.
 3. Emit bounded operation labels and allowlisted reason/exit codes while preserving recovery behavior and excluding raw command output or secret-bearing values. Keep all six embedded installers identical.
 4. Run Paseo Plain and fixture-isolation suites, plus available Windows wrapper tests; update versions/docs and self-review.
@@ -55,7 +55,7 @@ Final validation: 35 embedded-installer tests plus native source/config manager 
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Expose safe Paseo Plain failure diagnostics without resetting plugin state or guessing the cause of Arcane failures.
+Expose safe Paseo Plain failure diagnostics without resetting plugin state or guessing the cause of Linux desktop failures.
 
 - Identify controlled operation labels with exit codes, timeouts, invalid JSON, migration validation reasons, and bounded filesystem codes.
 - Suppress arbitrary exception text, raw command output, preferences, and credentials.

@@ -50,7 +50,7 @@ The v256 Muse helper rejects the setup-managed daemon PID file at mode 0664 and 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Read-only diagnosis on scott-beelink-ubuntu confirmed correct uid 1000 on all relevant paths, PID mode 0664, three systemd ancestor directories at 0775, and an owning paseo.service process with umask 0002. Installed Paseo 0.8 uses open(pidPath, "wx") without an explicit mode. Isolated fixtures fail until the PID and all three directory write bits are corrected, then perform only a mocked stop/merge/start successfully. Awaiting implementation-plan approval.
+Read-only diagnosis on linux-workstation confirmed correct uid 1000 on all relevant paths, PID mode 0664, three systemd ancestor directories at 0775, and an owning paseo.service process with umask 0002. Installed Paseo 0.8 uses open(pidPath, "wx") without an explicit mode. Isolated fixtures fail until the PID and all three directory write bits are corrected, then perform only a mocked stop/merge/start successfully. Awaiting implementation-plan approval.
 
 User approved the recorded implementation plan, including bounded permission recovery. Beginning regression-first implementation; no live host or daemon changes.
 

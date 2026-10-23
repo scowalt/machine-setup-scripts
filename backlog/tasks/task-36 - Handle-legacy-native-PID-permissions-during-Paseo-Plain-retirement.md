@@ -11,16 +11,16 @@ dependencies: []
 references:
   - ubuntu.sh
   - tests/test_paseo_plain_setup.py
-  - 'https://logs.scowalt.com/logs/devinabox/2026-09-16-13-10-00-625.log'
+  - 'https://logs.example.invalid/logs/development-server/2026-09-16-13-10-00-625.log'
   - >-
-    https://logs.scowalt.com/logs/scott-beelink-ubuntu/2026-09-16-13-09-37-164.log
+    https://logs.example.invalid/logs/linux-workstation/2026-09-16-13-09-37-164.log
 priority: high
 ---
 
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Post-rollout diagnosis: devinabox and scott-beelink-ubuntu September 16 setup uploads both ran Ubuntu version 258 and reported "Paseo Plain removal failure: preflight: unsafe-path." On devinabox, read-only probes identify the account-owned regular ~/.paseo/paseo.pid (0664 inside a 0700 Paseo home) as the exact rejected path; verified Paseo 0.8 CLI/daemon are reachable and paseo-plain remains enabled/running. A minimal temporary fixture reproduces retained registration with PID mode 0664 and succeeds when only the fixture PID changes to 0600. Existing fixtures use umask 077 and missed this integration state.
+Post-rollout diagnosis: development-server and linux-workstation September 16 setup uploads both ran Ubuntu version 258 and reported "Paseo Plain removal failure: preflight: unsafe-path." On development-server, read-only probes identify the account-owned regular ~/.paseo/paseo.pid (0664 inside a 0700 Paseo home) as the exact rejected path; verified Paseo 0.8 CLI/daemon are reachable and paseo-plain remains enabled/running. A minimal temporary fixture reproduces retained registration with PID mode 0664 and succeeds when only the fixture PID changes to 0600. Existing fixtures use umask 077 and missed this integration state.
 
 The earlier Muse ownership/permission-recovery step reports process-inventory-unverified: a read-only local probe finds EACCES reading several same-UID /proc/PID/environ files. This service also has a drop-in, and its legacy wrapper lacks umask 077; existing safety rules intentionally block automatic service/permission takeover. No live files, permissions, plugin state, or daemon lifecycle were changed during diagnosis.
 <!-- SECTION:DESCRIPTION:END -->

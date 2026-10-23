@@ -2,7 +2,7 @@
 
 ## Native evidence and scope
 
-The `scott-macbook-m3` macOS setup v273 log reported `discovery / process-proof-unavailable` at lines 123–124 ([collector upload](https://logs.scowalt.com/logs/scott-macbook-m3/2026-10-05-13-21-05-553.log); authenticated access required).
+The `macos-laptop-a` macOS setup v273 log reported `discovery / process-proof-unavailable` at lines 123–124 ([collector upload](https://logs.example.invalid/logs/macos-laptop-a/2026-10-05-13-21-05-553.log); authenticated access required).
 
 User-run read-only probes established current-state evidence without running setup, BB or plugin operations:
 
@@ -43,7 +43,7 @@ Targeted red/green command:
 
 ```bash
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tests/run-fixture-matrix.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh \
   --tool-path /usr/bin:/bin --timeout 180 tests/test_bb_plugin_refresh.py
 ```
@@ -52,7 +52,7 @@ Final matrix command:
 
 ```bash
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tests/run-fixture-matrix.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh \
   --tool-path /tmp/opencode-item1-tools-8V2YfE:/usr/bin:/bin --timeout 300 \
   tests/test_fixture_containment.py tests/setup-default-contract.sh \

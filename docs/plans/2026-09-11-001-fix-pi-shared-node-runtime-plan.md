@@ -23,7 +23,7 @@ Pi uses the same runtime as the shell and project tools. If a project explicitly
 - The inspected fish dotfiles template already activates mise. The inspected dotfiles source has no PowerShell mise activation template.
 - The skills runtime helper runs before Pi and requires Node >=22.20. Its Node selection must agree with the shared-runtime policy.
 
-Arcane was not contacted. Its exact global configuration, HOME overrides, and shell activation remain unverified.
+Linux desktop was not contacted. Its exact global configuration, HOME overrides, and shell activation remain unverified.
 
 ## Agreed scope and behavior
 
@@ -45,7 +45,7 @@ The failure guarantee covers runtime preparation and validation. It does not inc
 
 Preserve system Node, project runtime pins, unrelated mise configuration, Pi preferences and credentials, existing `npmCommand` choices, and environment files. Do not change models, skills policy, Paseo release channels, or plugin migration behavior.
 
-Changes apply on future setup runs. Do not run setup on arcane, perform a fleet rollout, apply live dotfiles, or restart a daemon during development.
+Changes apply on future setup runs. Do not run setup on linux-desktop, perform a fleet rollout, apply live dotfiles, or restart a daemon during development.
 
 ## Implementation sequence
 
@@ -86,7 +86,7 @@ If a required test cannot run, report the missing prerequisite and the checks th
 
 The existing `tests/setup-reliability-powershell.ps1` fails on Linux at its PR Lens path assertion on line 453. The same failure occurs against unmodified HEAD. This change leaves that unrelated test unchanged. The other existing PowerShell suites passed.
 
-Dotfiles changes are in the sibling `tender-dolphin-dotfiles` worktree on branch `fix/pi-shared-node-runtime`. Deploy both repositories before expecting Windows activation. No setup ran on arcane, and no live dotfiles or daemon configuration changed.
+Dotfiles changes are in the sibling `tender-dolphin-dotfiles` worktree on branch `fix/pi-shared-node-runtime`. Deploy both repositories before expecting Windows activation. No setup ran on linux-desktop, and no live dotfiles or daemon configuration changed.
 
 ## References
 

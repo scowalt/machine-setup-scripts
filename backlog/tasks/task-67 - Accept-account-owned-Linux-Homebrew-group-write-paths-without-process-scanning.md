@@ -33,7 +33,7 @@ documentation:
 <!-- SECTION:DESCRIPTION:BEGIN -->
 ## Problem Statement
 
-OpenCode CLI setup can fail on an otherwise ordinary, busy single-user Linux machine with `operation=homebrew-preflight, reason=brew-process-churn`. The latest examined devinabox upload contains this failure from Ubuntu setup version 290. The diagnostic directs the operator to README preflight guidance that no longer exists.
+OpenCode CLI setup can fail on an otherwise ordinary, busy single-user Linux machine with `operation=homebrew-preflight, reason=brew-process-churn`. The latest examined development-server upload contains this failure from Ubuntu setup version 290. The diagnostic directs the operator to README preflight guidance that no longer exists.
 
 The installer currently treats group-writable Linux Homebrew paths as untrusted unless it can prove that the writable group is effectively exclusive to the setup account. The proof enumerates account databases and effective group memberships, examines ACLs, and compares complete system-wide process/thread membership snapshots. Processes starting or exiting can invalidate those snapshots even when they are unrelated to Homebrew. Three retries do not reliably solve that problem.
 
@@ -120,10 +120,10 @@ The policy applies consistently to supported Linux setup entry points using this
 The history is defensive hardening, not a recorded response to a demonstrated compromise:
 
 - September 28, 2026, commit 2502c3f introduced the OpenCode v2 installer with group-writable-path rejection.
-- September 29, 2026, commit e169f8d (TASK-56) added the native private-group proof after normal Homebrew permissions blocked migration on scott-beelink-ubuntu.
+- September 29, 2026, commit e169f8d (TASK-56) added the native private-group proof after normal Homebrew permissions blocked migration on linux-workstation.
 - September 30, 2026, commit 4bb7feb (TASK-59) added bounded procfs retries. The present report exhausts them.
 
-The original failure was matched in the latest examined devinabox upload and reproduced as an intentional refusal in isolated fixtures. Which native process activity caused that particular run remains unknown and is not required to implement this deliberate policy change. No claim is made that the machine's permissions are unsafe or that it is compromised.
+The original failure was matched in the latest examined development-server upload and reproduced as an intentional refusal in isolated fixtures. Which native process activity caused that particular run remains unknown and is not required to implement this deliberate policy change. No claim is made that the machine's permissions are unsafe or that it is compromised.
 
 A service account is still a security boundary. If a compromised service can write the accepted Homebrew paths, it could tamper with the installation; official-byte checks at a point in time do not eliminate every concurrent-write race. This scope accepts that residual risk instead of attempting to prove group privacy during setup. It does not grant service accounts new write access.
 

@@ -1,10 +1,12 @@
-# Beelink BB maintenance failure: group-writable package files
+# Linux workstation BB maintenance failure: group-writable package files
+
+Machine identifiers and evidence locations in this public copy are [sanitized](../agents/public-evidence.md); technical findings and limitations are unchanged.
 
 ## Disposition
 
 **Confirmed v331 failure mechanism; no live repair performed.** Ubuntu setup v331 refused the existing managed `bb-app@0.46.0` package because its regular files are group-writable. Both reported BB errors reproduce from the captured metadata through the real checks. The historical operation that established those permissions is not identified. The owner subsequently chose the [scoped BB group-write allowance in ADR 0014](../adr/0014-accept-account-owned-bb-package-file-group-write.md), superseding the initial permission-repair recommendation.
 
-Source: [exact authenticated collector log](https://logs.scowalt.com/logs/scott-beelink-ubuntu/2026-10-14-15-39-08-814.log), retrieved with HTTP 200. Its local run filename is `2026-10-14-113728.log`. Watcher event: `setup-log-watch:09cfd6ca7b997bca082a8f0984ad80982a85a4e55a4a41a7a3107553666ff979`.
+Source: [exact authenticated collector log](https://logs.example.invalid/logs/linux-workstation/2026-10-14-15-39-08-814.log), retrieved with HTTP 200. Its local run filename is `2026-10-14-113728.log`. Watcher event: `setup-log-watch:09cfd6ca7b997bca082a8f0984ad80982a85a4e55a4a41a7a3107553666ff979`.
 
 ## Evidence and causal chain
 
@@ -19,7 +21,7 @@ Source: [exact authenticated collector log](https://logs.scowalt.com/logs/scott-
 The recorded owner is:
 
 ```text
-/home/scowalt/.local/share/mise/installs/node/24.18.0/lib/node_modules/bb-app
+/home/operator/.local/share/mise/installs/node/24.18.0/lib/node_modules/bb-app
 ```
 
 Read-only Tailscale SSH capture found:
@@ -64,16 +66,16 @@ Counterfactual tests against the full capture established:
 - Removing only group/world-write bits from the 230 fixture package files clears the real package preflight, without changing any directory mode.
 - The same package-file-only change clears plugin discovery's failure under the original `block-default` policy, yielding readiness deferral. This does not establish live plugin readiness or prove subsequent maintenance will succeed.
 
-The diagnosis-only harness was temporarily materialized as `tests/test_beelink_failure_diagnosis.py`, then archived outside the checkout under `/tmp/setup-failure-09cfd6ca.WJ1gOP/debug/`. Its final seven tests assert the original refusal plus the minimized/counterfactual behavior; their passing result is **not a live fix**. Initial red artifacts remain at `/tmp/setup-fixture-matrix-avl5vcze` and `/tmp/setup-fixture-matrix-1qvsvhia`.
+The diagnosis-only harness was temporarily materialized as `tests/test_linux-workstation_failure_diagnosis.py`, then archived outside the checkout under `/tmp/setup-failure-09cfd6ca.WJ1gOP/debug/`. Its final seven tests assert the original refusal plus the minimized/counterfactual behavior; their passing result is **not a live fix**. Initial red artifacts remain at `/tmp/setup-fixture-matrix-avl5vcze` and `/tmp/setup-fixture-matrix-1qvsvhia`.
 
 Executed final sequential command while that temporary test existed:
 
 ```bash
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tests/run-fixture-matrix.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /opt/microsoft/powershell/7/pwsh --tool-path /usr/bin:/bin \
   tests/test_fixture_containment.py tests/setup-default-contract.sh \
-  tests/test_beelink_failure_diagnosis.py tests/bb-server-contract.sh \
+  tests/test_linux-workstation_failure_diagnosis.py tests/bb-server-contract.sh \
   tests/bb-plugin-refresh-contract.sh
 ```
 

@@ -15,7 +15,7 @@ references:
   - ubuntu.sh
   - bazzite.sh
   - win.ps1
-  - 'https://logs.scowalt.com/logs/bazzite/2026-09-11-22-13-19-559.log'
+  - 'https://logs.example.invalid/logs/gaming-workstation/2026-09-11-22-13-19-559.log'
   - 'https://registry.npmjs.org/pi-mcp-adapter'
 priority: high
 ---

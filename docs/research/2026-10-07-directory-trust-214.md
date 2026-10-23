@@ -38,7 +38,7 @@ Exact command prefix for every run:
 ```sh
 flock /tmp/setup-208-coordination/fixtures.lock env -i PATH=/usr/bin:/bin \
   /usr/bin/python3 -I tests/run-fixture-matrix.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /opt/microsoft/powershell/7/pwsh \
   --tool-path /usr/bin:/bin:/tmp/setup-208-coordination/tools
 ```

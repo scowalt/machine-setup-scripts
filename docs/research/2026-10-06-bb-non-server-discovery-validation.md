@@ -27,15 +27,15 @@ Exact initial-source commands:
 
 ```bash
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tests/run-fixture-matrix.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /opt/microsoft/powershell/7/pwsh --tool-path /usr/bin:/bin \
   --artifact-parent /tmp/issue-192-integration/implementer tests/test_bb_plugin_refresh.py
 
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tools/run-pre-push-contracts.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /opt/microsoft/powershell/7/pwsh \
-  --mise /home/scowalt/.local/bin/mise --chezmoi /home/scowalt/.local/bin/chezmoi \
-  --bun /home/scowalt/.bun/bin/bun
+  --mise /home/operator/.local/bin/mise --chezmoi /home/operator/.local/bin/chezmoi \
+  --bun /home/operator/.bun/bin/bun
 ```
 
 The private handoff retains exact per-suite results/skips, raw red/green logs, static commands/results and source hashes. Optional installed skills/Pi/extension/Go-lock/OpenCode-shim and cross-repository dotfiles integrations remain disabled. Bash 3.2 and native Windows handle/ACL fixtures are explicit skips. Linux PowerShell coverage does not establish Windows or PowerShell 5.1 behavior; native macOS/WSL/ARM/Bazzite and BB/plugin continuity remain unverified. The earlier [fixture incident's uncertainty](2026-09-29-fixture-containment-incident.md) is unchanged.
@@ -67,7 +67,7 @@ Commands use the exact prefixes above with the targeted runner's artifact parent
 
 The implementation and correction were fast-forwarded into `integration/192-bb-non-server-discovery` at `18291867125b1af1d44fe97983eeff58f5c4977d`. All 262 committed file hashes matched the worker's final manifest. Independent final Standards and Spec reviews resolved the volatility finding and reported zero remaining concrete implementation findings, while explicitly retaining the aggregate-validation gap. Reports: `/tmp/issue-192-integration/review-standards-final.md` and `review-spec-final.md`.
 
-A parent experiment changed only the runner's artifact-parent location to a newly created private directory under the account HOME, retaining the audited runner, native tools, kernel filter/self-test, credential-free environment and sequential execution. It ran the same 42-entry inventory plus the targeted refresh suite. Artifacts: `/home/scowalt/setup-fixture-192-x4u7q3ge/setup-fixture-matrix-m052kvj2`; exact command and source-hash confirmation: `/tmp/issue-192-integration/private-root-command.json` and `private-root-result.json`.
+A parent experiment changed only the runner's artifact-parent location to a newly created private directory under the account HOME, retaining the audited runner, native tools, kernel filter/self-test, credential-free environment and sequential execution. It ran the same 42-entry inventory plus the targeted refresh suite. Artifacts: `/home/operator/setup-fixture-192-x4u7q3ge/setup-fixture-matrix-m052kvj2`; exact command and source-hash confirmation: `/tmp/issue-192-integration/private-root-command.json` and `private-root-result.json`.
 
 Result: **41/43 entries pass**, including Backlog and all 69 targeted BB methods. This is not a successful replacement aggregate. The Pi-profile trusted-HOME-alias fixture failed with `missing-ancestor`. The shared-runtime activation fixture failed because native mise discovered the real account's ancestor configuration and refused it as untrusted. No configuration content is reproduced here; no trust command or configuration edit was issued. This observation confirms that relocating private fixture roots beneath a real HOME is not an adequate isolation strategy for native ancestor discovery. It does not establish the cause of the earlier Backlog failures. The runner completed before these failures were inspected; no further behavioral execution followed. Network containment remained active, but no syscall-wide filesystem-effects audit was performed.
 

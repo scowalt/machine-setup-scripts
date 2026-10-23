@@ -29,7 +29,7 @@ priority: medium
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Install and maintain independent stable bb agentic IDE servers through opt-in Ubuntu setup runs. BB_SERVER=1 enables management; unset/0 skips without stopping or deleting existing deployments; other nonempty values fail. A nonempty process value overrides ~/.env.local. Intended initial opt-ins are devinabox and scott-beelink-ubuntu, but hostnames never determine eligibility. No live fleet changes during development.
+Install and maintain independent stable bb agentic IDE servers through opt-in Ubuntu setup runs. BB_SERVER=1 enables management; unset/0 skips without stopping or deleting existing deployments; other nonempty values fail. A nonempty process value overrides ~/.env.local. Intended initial opt-ins are development-server and linux-workstation, but hostnames never determine eligibility. No live fleet changes during development.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -61,7 +61,7 @@ Implementation and parent verification complete. No production install/service/S
 
 <!-- SECTION:NOTES:BEGIN -->
 - User approved two independent stable servers, browser-only elsewhere, existing per-machine credentials, whole-tailnet access/no additional authentication, setup interruptions, unattended startup and failure reporting. Persistent production Tailscale Serve was approved after rejecting Portless URL churn.
-- Read-only research identifies devinabox as this Ubuntu x86-64 host. Tailnet/repository history identifies the Beelink as scott-beelink-ubuntu; its current OS details/account still require runtime validation.
+- Read-only research identifies development-server as this Ubuntu x86-64 host. Tailnet/repository history identifies the Linux workstation as linux-workstation; its current OS details/account still require runtime validation.
 - Official bb-app start runs main server plus local execution daemon; ordinary installation does not install a boot service. Persistent Serve survives reboot but not the application itself. Portless development routes/shared proxy stay untouched.
 - Tools available: backlog, shellcheck, Python and shared Node. Reviewed Ubuntu main flow, existing Tailscale installer and extracted-helper contract style. Current changes are only GLOSSARY.md glossary and this task metadata; no live services changed.
 

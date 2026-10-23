@@ -15,7 +15,7 @@ documentation:
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Arcane launches Pi with /usr/bin/node v18.19.1 and fails because node:fs lacks globSync. Current Pi 0.85.1 requires Node >=22.19.0, but setup accepts >=20.6 and verifies only its current process. Ensure the normal user shell uses a supported shared mise-managed Node after setup. Scott explicitly dropped runtime isolation and support for launching Pi while a project selects an unsupported Node version. Preserve project pins and chezmoi ownership of shell configuration.
+Linux desktop launches Pi with /usr/bin/node v18.19.1 and fails because node:fs lacks globSync. Current Pi 0.85.1 requires Node >=22.19.0, but setup accepts >=20.6 and verifies only its current process. Ensure the normal user shell uses a supported shared mise-managed Node after setup. Scott explicitly dropped runtime isolation and support for launching Pi while a project selects an unsupported Node version. Preserve project pins and chezmoi ownership of shell configuration.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -82,7 +82,7 @@ Final design: docs/plans/2026-09-11-001-fix-pi-shared-node-runtime-plan.md. Deci
 - Requested read-only investigation of the smaller shared-runtime fix and current chezmoi activation templates. Runtime update cadence Q5 was not answered; do not treat it as accepted. Prior failed-setup retention requirement is retained pending an explicit scope clarification, not silently discarded.
 
 - Shared-runtime investigation confirms the standard fish chezmoi template already activates mise after adding its standard paths. No fish-template change is currently justified. Successful mise use -g is durable; the defect is skipping global selection on inherited Node and validating an explicit forced runtime rather than normal HOME resolution.
-- Possible arcane mechanisms remain unverified: inherited modern Node (for example Paseo service PATH) hides absent/old global selection; a higher-priority HOME mise configuration overrides the global selection; or activation/dotfiles were unavailable. Do not present one as arcane-specific fact without evidence.
+- Possible linux-desktop mechanisms remain unverified: inherited modern Node (for example Paseo service PATH) hides absent/old global selection; a higher-priority HOME mise configuration overrides the global selection; or activation/dotfiles were unavailable. Do not present one as linux-desktop-specific fact without evidence.
 - Small repair: discover mise; verify compatible durable global selection regardless of inherited PATH; require >=22.19+callable fs.globSync and npm; verify ordinary HOME resolution without explicit runtime override; leave project and conflicting HOME pins untouched and report conflicts; retain canonical npm Pi layout.
 - Windows gap: inspected chezmoi source has no PowerShell mise activation. All-six-platform durability needs approved chezmoi-owned activation or shared mise-shims PATH integration. Do not write shell profiles from setup.
 - ARMv7 Node22 fallback must also account for earlier skills runtime helper (minimum22.20 and same early return/current node24 fallback). Avoid incidental source compilation.
@@ -105,7 +105,7 @@ Implemented the shared-runtime helpers in all five Bash scripts, synchronized co
 - Completed chezmoi-owned PowerShell activation in sibling tender-dolphin-dotfiles worktree (branch fix/pi-shared-node-runtime). The managed block preserves unrelated profile bytes, encoding and line endings; unsafe linked/malformed/signed paths fail conservatively. No live apply occurred.
 - Final verification: all 23 Bash contract scripts pass with PWSH_BIN set; 16 new Python runtime tests pass, including real mise/fish and an explicitly supplied real Pi --version smoke in an isolated HOME; 959 PowerShell assertions pass; 30 Paseo Plain tests and the explicitly supplied native Git-isolation fixture pass; ShellCheck, Markdownlint and whitespace checks pass. Dotfiles: 14 profile fixtures and 2 existing model tests pass, 2 Windows-only profile tests skipped.
 - Existing tests/setup-reliability-powershell.ps1 fails on Linux at line453 (PR Lens path assertion). Reproduced identical failure using unmodified HEAD:win.ps1 in a temporary baseline tree. No change to that unrelated suite. Other existing PowerShell suites pass.
-- Native Windows/5.1, macOS, and ARM machine execution remains unverified. No arcane connection, live setup/dotfiles apply, fleet rollout, daemon restart, or model request. Changes remain local and uncommitted in both worktrees.
+- Native Windows/5.1, macOS, and ARM machine execution remains unverified. No linux-desktop connection, live setup/dotfiles apply, fleet rollout, daemon restart, or model request. Changes remain local and uncommitted in both worktrees.
 
 - Scott requested merge into remote main. Revalidated ShellCheck, the 16 shared-runtime Python cases, 959 PowerShell assertions and real-mise fixtures, dotfiles profile/model fixtures, Markdownlint, and whitespace checks before publication.
 - Dotfiles dependency merged by fast-forward to scowalt/dotfiles main at fdccbd475af4df1b3a51cdae9813e1afca2417bd; verified with git ls-remote. Publishing the setup changes next. No forced push or live machine setup.

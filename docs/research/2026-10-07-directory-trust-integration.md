@@ -2,7 +2,7 @@
 
 All eight slices were integrated before this work: integration tip `0cb8771d60305530ef53bc5cf8f7aac1f12f460c`. This clean, separate worktree starts there. [ADR 0012](../adr/0012-accept-account-owned-ordinary-directories.md) is the current cross-component decision; this record accounts for active gates, closure and verification, not native rollout.
 
-The later [BB file-trust decision, ADR 0014](../adr/0014-accept-account-owned-bb-package-file-group-write.md), supersedes this integration's preserved group-write file rule only for BB package artifacts, its verified account-owned Node executable and the stopped-server runtime marker. The table and validation counts below retain their original integration scope; [the Beelink investigation](2026-10-14-beelink-bb-package-file-modes.md) records the later evidence.
+The later [BB file-trust decision, ADR 0014](../adr/0014-accept-account-owned-bb-package-file-group-write.md), supersedes this integration's preserved group-write file rule only for BB package artifacts, its verified account-owned Node executable and the stopped-server runtime marker. The table and validation counts below retain their original integration scope; [the Linux workstation investigation](2026-10-14-linux-workstation-bb-package-file-modes.md) records the later evidence.
 
 The later [desktop owner-management decision, ADR 0017](../adr/0017-leave-bb-desktop-owner-managed.md), removes the desktop installer family altogether. Its two inventory rows and validation counts below are historical, not active directory gates; no replacement desktop inspection or permission repair is introduced.
 
@@ -56,7 +56,7 @@ Every behavior command uses the shared lock and this sanitized prefix:
 ```sh
 flock /tmp/setup-208-coordination/fixtures.lock env -i PATH=/usr/bin:/bin \
  /usr/bin/python3 -I tests/run-fixture-matrix.py \
- --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+ --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
  --pwsh /opt/microsoft/powershell/7/pwsh \
  --tool-path /usr/bin:/bin:/tmp/setup-208-coordination/tools
 ```
@@ -79,11 +79,11 @@ Exact complete-dispatch command (all native prerequisites already existed):
 ```sh
 flock /tmp/setup-208-coordination/fixtures.lock env -i PATH=/usr/bin:/bin \
  /usr/bin/python3 -I tools/run-pre-push-contracts.py \
- --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+ --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
  --pwsh /opt/microsoft/powershell/7/pwsh \
- --mise /home/scowalt/.local/bin/mise \
- --chezmoi /home/scowalt/.local/bin/chezmoi \
- --bun /home/scowalt/.bun/bin/bun
+ --mise /home/operator/.local/bin/mise \
+ --chezmoi /home/operator/.local/bin/chezmoi \
+ --bun /home/operator/.bun/bin/bun
 ```
 
 ### Exact source and aggregate coverage

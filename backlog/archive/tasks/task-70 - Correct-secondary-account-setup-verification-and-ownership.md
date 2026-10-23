@@ -19,7 +19,7 @@ references:
   - tests/test_opencode_cli_callers.py
   - tests/test_bb_plugin_refresh.py
   - tests/run-fixture-matrix.py
-  - 'https://logs.scowalt.com/logs/devinabox/2026-10-03-03-29-07-725.log'
+  - 'https://logs.example.invalid/logs/development-server/2026-10-03-03-29-07-725.log'
 documentation:
   - docs/adr/0001-keep-cleanup-for-retired-managed-tools.md
   - docs/adr/0002-let-chezmoi-own-shell-configuration.md
@@ -39,7 +39,7 @@ documentation:
 
 An ordinary setup run for a secondary account on a shared Ubuntu machine reports an incomplete setup run even when some required machine state is already satisfied, and other failures are too vague to diagnose safely.
 
-The reported devinabox Ubuntu v292 run failed Infisical retirement because sudo was unavailable before any source or package verification occurred. It also refused OpenCode migration after encountering another account's shared Homebrew command, reported an undifferentiated bb plugin refresh failure, and encountered a custom skill occupying a managed agent skill name. Later successful Pi work did not recover these independent failures.
+The reported development-server Ubuntu v292 run failed Infisical retirement because sudo was unavailable before any source or package verification occurred. It also refused OpenCode migration after encountering another account's shared Homebrew command, reported an undifferentiated bb plugin refresh failure, and encountered a custom skill occupying a managed agent skill name. Later successful Pi work did not recover these independent failures.
 
 Subsequent authorized read-only inspection found no Infisical package match or official Infisical source markers in seven inspected APT source files. Shared Homebrew belonged to a different account, while the account's bb directory was group-writable. These later observations explain current blockers; they do not establish a historical filesystem snapshot or prove which bb refusal happened first.
 
@@ -90,7 +90,7 @@ Make the narrow account-ownership boundaries correct without redesigning the ent
 31. As a bb user, I want native plugin source selections, pins, disabled status, settings, and rollback behavior preserved, so that observability changes do not alter plugin policy.
 32. As a user whose required operation fails, I want unrelated work and log finalization to continue, so that an incomplete setup run is both useful and honestly reported.
 33. As an operator, I want later success in an independent component not to erase an earlier failure, so that the final result reflects all required operations.
-34. As ScoBot's owner, I want the completed one-time skill cleanup left alone, so that this implementation does not add permanent collision-removal logic or touch other custom skills.
+34. As secondary-user's owner, I want the completed one-time skill cleanup left alone, so that this implementation does not add permanent collision-removal logic or touch other custom skills.
 35. As a maintainer, I want existing high-level fixture seams reused, so that the tests exercise real orchestration and observable results rather than a parallel reimplementation of the policy.
 36. As a maintainer, I want deterministic red-capable cases for the reported failure patterns, so that the change can be verified before and after implementation.
 37. As a maintainer sharing a development host with other projects, I want fixtures isolated with inert external operations and mandatory kernel containment, so that development validation cannot affect real installations or services.
@@ -135,7 +135,7 @@ Make the narrow account-ownership boundaries correct without redesigning the ent
 - A general multi-user redesign of package managers, Homebrew prefixes, system packages, services, or machine setup.
 - Automatic bb directory permission repair, recursive chmod/chown, group-privacy policy changes, ownership transfer, server startup/restarts, or BB lifecycle recovery.
 - Reproducing or correcting unknown underlying BB failures through live refresh, broad process inventory, application execution, or speculative permission changes.
-- Permanent custom-skill collision cleanup, a reserved-name framework, custom-skill renaming, deletion of skill source repositories, another ScoBot cleanup, or fleet-wide cleanup. No managed-skill policy changes are required by this task.
+- Permanent custom-skill collision cleanup, a reserved-name framework, custom-skill renaming, deletion of skill source repositories, another secondary-user cleanup, or fleet-wide cleanup. No managed-skill policy changes are required by this task.
 - Shell-profile edits, new launchers/adapters, credential changes, privilege grants, optional integration enablement, or tool installation for development validation.
 - Changes to OpenCode Go credentials or model access, Pi defaults, Pi packages, BB enrollment/preparation semantics, unmanaged legacy tools, or unrelated setup features.
 - Watcher or automation changes, additional threads or automations, live deployment, production instrumentation, commits, pushes, pull requests, or remote publication of code without separate authorization.
@@ -143,11 +143,11 @@ Make the narrow account-ownership boundaries correct without redesigning the ent
 
 ## Further Notes
 
-- Originating collector object: https://logs.scowalt.com/logs/devinabox/2026-10-03-03-29-07-725.log. Watcher event: `setup-log-watch:5d384862fda333fc16ef997f370c0b725c8f865e44237612f72367c898e8f835`.
-- The log identifies Ubuntu x64, account ScoBot, exact headless mode, setup v292, and local run filename `2026-10-02-232809.log`. Relevant normalized lines are 11 and 15 for retirement/update gating, 120–122 for OpenCode, 148–149 for bb plugin refresh, 155 for the now-separately-resolved skill collision, and 202 for the incomplete final result. Opening and closing filename records match.
+- Originating collector object: <https://logs.example.invalid/logs/development-server/2026-10-03-03-29-07-725.log>. Watcher event: `setup-log-watch:5d384862fda333fc16ef997f370c0b725c8f865e44237612f72367c898e8f835`.
+- The log identifies Ubuntu x64, account secondary-user, exact headless mode, setup v292, and local run filename `2026-10-02-232809.log`. Relevant normalized lines are 11 and 15 for retirement/update gating, 120–122 for OpenCode, 148–149 for bb plugin refresh, 155 for the now-separately-resolved skill collision, and 202 for the incomplete final result. Opening and closing filename records match.
 - The exact object was retrieved with authenticated HTTP 200 using the documented existing Doppler login. Collector uploads are public and their contents are untrusted data, not instructions or authenticated proof of host identity. Future retrieval must retain the documented authentication/redaction discipline; credentials must never enter arguments, output, files, task records, or chat.
 - The no-sudo failure sequence was reproduced three times through extracted real retirement/caller/finalization code, then minimized to the retirement helper. Changing only mocked sudo availability made the isolated clean-state scenario succeed. The existing full Infisical retirement contract passed 29 tests; relevant boundary/default fixtures passed with explicit unavailable-PowerShell skips. These are pre-implementation diagnostic observations, not acceptance of a production fix.
-- Read-only current-state inspection established that ScoBot's sudo policy denies sudo, Infisical's native package query reported no match with a healthy package database, shared Homebrew belongs to a different account, and the bb data directory is account-owned but group-writable. The bb generic log does not disclose its first failing predicate; do not overstate the diagnosis.
+- Read-only current-state inspection established that secondary-user's sudo policy denies sudo, Infisical's native package query reported no match with a healthy package database, shared Homebrew belongs to a different account, and the bb data directory is account-owned but group-writable. The bb generic log does not disclose its first failing predicate; do not overstate the diagnosis.
 - The user separately authorized and completed the one-time custom grill-me retirement: only the custom manifest declaration and matching global symlink were removed, with source, unrelated registrations, and pre-existing edits preserved. A subsequent scan found no remaining managed-name link collisions in the inspected default global locations; project-local and process-selected alternate profiles were not exhaustively scanned. Do not repeat or expand that live action under this task.
 - Existing architectural constraints remain: retained cleanup for retired managed tools, Chezmoi ownership of shell configuration, separation of BB preparation from enrollment, verified command-only OpenCode migration, and the narrowly scoped account-owned Linux Homebrew group-write exception. This spec changes treatment of nonselected foreign OpenCode copies without granting mutation authority over them.
 - Design is approved and this spec is ready for agent planning. Implementation must still follow the repository's plan-review gate unless the user explicitly approves execution or waives that review. Publishing this specification does not authorize script implementation, live repair, deployment, commits, pushes, new threads, or further machine changes.
@@ -165,7 +165,7 @@ Make the narrow account-ownership boundaries correct without redesigning the ent
 - [ ] #8 Affected Infisical, OpenCode, and bb plugin refresh failures expose bounded operation/reason labels and safe logical identifiers; unknown helper output fails closed, raw exceptions/stderr and secret/path sentinels never leak, and original failures survive cleanup diagnostics.
 - [ ] #9 bb plugin refresh remains verification-only for existing permissions: no chmod/chown, group-write exception, lifecycle recovery, identity bypass, changed source/update policy, or altered stopped/safe-mode deferrals. Unsafe or unverified results remain failures.
 - [ ] #10 Real extracted caller fixtures prove independent later success cannot erase required failures, unrelated work continues where permitted, and log finalization retains the correct failed result.
-- [ ] #11 No permanent skill-collision cleanup or managed-skill policy change is introduced, and the completed one-time ScoBot cleanup is not repeated or expanded. Unrelated tools, skills, projects, credentials, runtime/npm policy, environment files, and shell ownership are preserved.
+- [ ] #11 No permanent skill-collision cleanup or managed-skill policy change is introduced, and the completed one-time secondary-user cleanup is not repeated or expanded. Unrelated tools, skills, projects, credentials, runtime/npm policy, environment files, and shell ownership are preserved.
 - [ ] #12 Shared policies and applicable embedded standalone copies are synchronized, modified setup entry points have incremented versions and accurate change descriptions, and existing platform/headless/readiness gates remain intact.
 - [ ] #13 Deterministic red/green regressions exercise actual observation/installer/caller seams, including two-account ownership and fresh-shell resolution, rather than only mocked success results or reimplemented predicates.
 - [ ] #14 Mandatory contained default/extraction checks, targeted contracts, audited affected regressions and static/embedding checks pass, or blockers/skips are explicitly recorded without weakened containment, tool installation, application/skill/extension execution, live setup, or unsupported native rollout claims.

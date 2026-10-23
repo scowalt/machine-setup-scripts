@@ -12,8 +12,8 @@ references:
   - mac.sh
   - tests/test_homebrew_results.py
   - tests/setup-reliability-contract.sh
-  - 'https://logs.scowalt.com/logs/scott-macbook-m3/2026-09-18-17-22-26-584.log'
-  - 'https://logs.scowalt.com/logs/scott-macbook-m3/2026-09-18-20-12-11-356.log'
+  - 'https://logs.example.invalid/logs/macos-laptop-a/2026-09-18-17-22-26-584.log'
+  - 'https://logs.example.invalid/logs/macos-laptop-a/2026-09-18-20-12-11-356.log'
   - 'https://github.com/Homebrew/brew/blob/main/Library/Homebrew/cmd/doctor.rb'
   - >-
     https://github.com/Homebrew/brew/blob/main/Library/Homebrew/extend/os/mac/diagnostic.rb
@@ -25,7 +25,7 @@ priority: high
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-The September 26 centralized log audit found both September 18 scott-macbook-m3 runs reporting Command Line Tools as up to date before Homebrew rejected them for macOS 27. Extracted inert fixtures against current main also confirmed that failed softwareupdate queries and failed CLT installations are reported as success. Correct CLT readiness and final-result reporting without deleting installed toolchains or changing unrelated Paseo checks.
+The September 26 centralized log audit found both September 18 macos-laptop-a runs reporting Command Line Tools as up to date before Homebrew rejected them for macOS 27. Extracted inert fixtures against current main also confirmed that failed softwareupdate queries and failed CLT installations are reported as success. Correct CLT readiness and final-result reporting without deleting installed toolchains or changing unrelated Paseo checks.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

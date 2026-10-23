@@ -17,7 +17,7 @@ Read full #208/#214, ADRs, OpenCode sources/fixtures, fixture audit/incident and
 ```sh
 flock /tmp/setup-208-coordination/fixtures.lock env -i PATH=/usr/bin:/bin \
  /usr/bin/python3 -I tests/run-fixture-matrix.py \
- --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+ --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
  --pwsh /opt/microsoft/powershell/7/pwsh \
  --tool-path /usr/bin:/bin:/tmp/setup-208-coordination/tools \
  --timeout 900 tests/opencode-cli-contract.sh
@@ -33,11 +33,11 @@ flock /tmp/setup-208-coordination/fixtures.lock env -i PATH=/usr/bin:/bin \
 ```sh
 flock /tmp/setup-208-coordination/fixtures.lock env -i PATH=/usr/bin:/bin \
  /usr/bin/python3 -I tools/run-pre-push-contracts.py \
- --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+ --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
  --pwsh /opt/microsoft/powershell/7/pwsh \
- --mise /home/scowalt/.local/bin/mise \
- --chezmoi /home/scowalt/.local/bin/chezmoi \
- --bun /home/scowalt/.bun/bin/bun
+ --mise /home/operator/.local/bin/mise \
+ --chezmoi /home/operator/.local/bin/chezmoi \
+ --bun /home/operator/.bun/bin/bun
 ```
 
 Integration merge returned `Already up to date` before and after the aggregate; ancestry of `cae1920` is verified. Aggregate implementation tree: `0a2b4eaade42af331e8d9ba58a8d2deda44bf43f`. All **134** executable/fixture/tool/lint-control source hashes were captured before execution and compared afterward without drift. Subsequent changes only add this evidence and its [source/result manifest](2026-10-08-directory-trust-review-repair-source.json), which includes every suite status/duration and log digest. The manifest also exists in the aggregate artifact root.
