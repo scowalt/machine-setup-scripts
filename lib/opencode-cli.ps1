@@ -172,7 +172,7 @@ function Install-OpenCodeCli {
             if ($output.Count -eq 1 -and $output[0] -cin @('opencode-cli:recovery-required', 'opencode-cli:recovery-required:failed')) {
                 $recovery = $true
             } elseif ($run.Status -ne 0 -and $output.Count -eq 1 -and
-                $output[0] -cmatch '\Aopencode-cli:(?:recovery-required:)?download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)\z') {
+                $output[0] -cmatch '\Aopencode-cli:(?:recovery-required:)?download-failed:(latest-release|package-index|package-version|artifact-download|download|bottle-auth|bottle-index|bottle-manifest|bottle-download):http-([1-5][0-9][0-9]|unknown)\z') {
                 $recovery = $output[0].StartsWith('opencode-cli:recovery-required:')
                 Write-Warning "OpenCode CLI download failed (operation=$($Matches[1]), HTTP=$($Matches[2]))."
             } elseif ($run.Status -ne 0 -and $output.Count -eq 1 -and

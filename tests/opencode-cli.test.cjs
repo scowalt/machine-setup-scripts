@@ -694,6 +694,104 @@ test('real HTTP helper requires verified TLS, rejects redirects/foreign URLs and
     status = 302; await assert.rejects(api.fetchBytes('https://registry.npmjs.org/fixture'), /download/);
     status = 200; await assert.rejects(api.fetchBytes('https://registry.npmjs.org/fixture', 1), /download/);
 });
+function bottleTransport(t) {
+    const f = fixture(t), requests = [], replies = new Map(), {EventEmitter} = require('node:events');
+    const root = 'https://ghcr.io/v2/homebrew/core/opencode';
+    const tokenUrl = 'https://ghcr.io/token?service=ghcr.io&scope=repository:homebrew/core/opencode:pull';
+    const endpoints = [[tokenUrl, 'bottle-auth', undefined, 'application/json'],
+        [root + '/manifests/1.18.30_2', 'bottle-index', 'BOTTLE_TOKEN_SECRET', 'application/vnd.oci.image.index.v1+json'],
+        [root + '/manifests/sha256:' + 'a'.repeat(64), 'bottle-manifest', 'BOTTLE_TOKEN_SECRET', 'application/vnd.oci.image.manifest.v1+json'],
+        [root + '/blobs/sha256:' + 'b'.repeat(64), 'bottle-download', 'BOTTLE_TOKEN_SECRET', 'application/octet-stream']];
+    const https = {get: (url, options, callback) => {
+        requests.push({url, options});
+        assert.equal(options.rejectUnauthorized, true);
+        const request = new EventEmitter(); request.setTimeout = () => {};
+        request.destroy = error => { request.emit('error', error); request.emit('close'); };
+        queueMicrotask(() => {
+            const reply = replies.get(url) || {};
+            if (reply.networkError) { request.destroy(new Error('SECRET transport error')); return; }
+            const response = new EventEmitter(); response.resume = () => {};
+            response.statusCode = reply.status ?? 200; response.headers = reply.headers || {};
+            callback(response);
+            response.emit('data', reply.body || Buffer.from('fixture'));
+            if (reply.streamError) response.emit('error', new Error('SECRET response error'));
+            else response.emit('end');
+            request.emit('close');
+        });
+        return request;
+    }};
+    return {...virtualPolicy(f, {env: {NODE_TLS_REJECT_UNAUTHORIZED: '0', GH_TOKEN: 'OWNER_SECRET'}}, {'node:https': https}), requests, replies, endpoints};
+}
+test('bottle transport pins anonymous auth scope, repository, negotiation and TLS without owner credentials', async t => {
+    const h = bottleTransport(t);
+    for (const [url, , token, accept] of h.endpoints) {
+        assert.equal((await h.api.fetchBytes(url, 1024, token)).toString(), 'fixture');
+        const {options} = h.requests.at(-1);
+        assert.equal(options.headers.Accept, accept);
+        assert.equal(options.headers.Authorization, token ? 'Bearer ' + token : undefined);
+        assert.equal(options.headers.Cookie, undefined);
+        assert.ok(!JSON.stringify(options).includes('OWNER_SECRET'));
+    }
+    const before = h.requests.length;
+    for (const url of ['https://ghcr.io/v2/other/opencode/manifests/1.18.30_2',
+        'https://ghcr.io/v2/homebrew/core/other/manifests/1.18.30_2',
+        'https://ghcr.io/v2/homebrew/core/opencode/manifests/latest',
+        h.endpoints[1][0] + '?SECRET', h.endpoints[1][0] + '#SECRET',
+        h.endpoints[0][0].replace(':pull', ':push'),
+        'https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:' + 'b'.repeat(64)]) {
+        assert.throws(() => h.api.fetchBytes(url, 1024, 'BOTTLE_TOKEN_SECRET'), /url/);
+    }
+    for (const token of [undefined, '', 'Bearer SECRET', 'SECRET\r\nInjected: value', 'x'.repeat(16385)]) {
+        assert.throws(() => h.api.fetchBytes(h.endpoints[1][0], 1024, token), /url/);
+    }
+    assert.throws(() => h.api.fetchBytes('https://registry.npmjs.org/opencode-ai', 1024, 'BOTTLE_TOKEN_SECRET'), /url/);
+    assert.equal(h.requests.length, before);
+});
+test('bottle blob follows only one digest-specific public CDN redirect and strips Authorization', async t => {
+    const h = bottleTransport(t), [url, , token] = h.endpoints[3];
+    const location = 'https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:' + 'b'.repeat(64) + '?sig=SIGNED_URL_SECRET';
+    h.replies.set(url, {status: 307, headers: {location}});
+    assert.equal((await h.api.fetchBytes(url, 1024, token)).toString(), 'fixture');
+    assert.equal(h.requests.length, 2);
+    assert.equal(h.requests[0].options.headers.Authorization, 'Bearer BOTTLE_TOKEN_SECRET');
+    assert.equal(h.requests[1].options.headers.Authorization, undefined);
+    assert.equal(h.requests[1].options.headers.Cookie, undefined);
+    h.replies.set(location, {status: 302, headers: {location}});
+    await assert.rejects(h.api.fetchBytes(url, 1024, token), error => {
+        assert.equal(h.api.failureResult(error), 'opencode-cli:download-failed:bottle-download:http-302'); return true;
+    });
+    assert.equal(h.requests.length, 4, 'CDN must not redirect again');
+});
+for (const destination of ['http://pkg-containers.githubusercontent.com/ghcr1/blobs/',
+    'https://attacker.invalid/ghcr1/blobs/', 'https://ghcr.io/ghcr1/blobs/',
+    'https://user:SECRET@pkg-containers.githubusercontent.com/ghcr1/blobs/',
+    'https://pkg-containers.githubusercontent.com:444/ghcr1/blobs/',
+    'https://pkg-containers.githubusercontent.com/other/']) {
+    test(`bottle blob rejects redirect boundary ${destination.split('/')[2]}`, async t => {
+        const h = bottleTransport(t), [url, , token] = h.endpoints[3];
+        h.replies.set(url, {status: 302, headers: {location: destination + 'sha256:' + 'b'.repeat(64)}});
+        await assert.rejects(h.api.fetchBytes(url, 1024, token), error => {
+            assert.equal(h.api.failureResult(error), 'opencode-cli:download-failed:bottle-download:http-302'); return true;
+        });
+        assert.equal(h.requests.length, 1);
+    });
+}
+for (const operation of ['bottle-auth', 'bottle-index', 'bottle-manifest', 'bottle-download']) {
+    test(`bottle transport preserves controlled ${operation} failures and size bounds`, async t => {
+        const h = bottleTransport(t), [url, , token] = h.endpoints.find(e => e[1] === operation);
+        for (const reply of [{status: 403}, {status: 403, streamError: true}, {status: 503}, {status: 302}, {networkError: true}, {streamError: true}]) {
+            h.replies.set(url, {...reply, body: Buffer.from('SECRET response body')});
+            await assert.rejects(h.api.fetchBytes(url, 1024, token), error => {
+                assert.equal(h.api.failureResult(error), `opencode-cli:download-failed:${operation}:http-${reply.status || (reply.streamError ? 200 : 'unknown')}`);
+                return true;
+            });
+        }
+        h.replies.clear();
+        await assert.rejects(h.api.fetchBytes(url, 1, token), error => {
+            assert.equal(h.api.failureResult(error), `opencode-cli:download-failed:${operation}:http-200`); return true;
+        });
+    });
+}
 function httpPolicy(f, replies = new Map(), overrides = {}, log) {
     const {EventEmitter} = require('node:events'), requests = [];
     const expected = new Map([
@@ -1216,6 +1314,174 @@ function darwinHomebrewFixture(t, release = '1.18.33', revision = '', prefix = '
     f.publish('@opencode/cli-' + f.options.target, '2.0.18');
     return f;
 }
+function sourceBottleFixture(t, changes = {}) {
+    const release = changes.release || '1.18.30', revision = changes.revision ?? '_2';
+    const platform = changes.platform || 'darwin';
+    const prefix = changes.prefix || (platform === 'darwin' ? '/opt/homebrew' : '/home/linuxbrew/.linuxbrew');
+    const f = platform === 'darwin' ? darwinHomebrewFixture(t, release, revision, prefix)
+        : homebrewFixture(t, platform, prefix, release, revision);
+    if (changes.target) f.options.target = changes.target;
+    const keg = release + revision;
+    const architecture = platform === 'darwin' ? (prefix === '/usr/local' ? 'amd64' : 'arm64')
+        : f.options.target.includes('arm64') ? 'arm64' : 'amd64';
+    f.publish('opencode-' + f.options.target, release);
+    f.publish('@opencode/cli-' + f.options.target, '2.0.18');
+    const bytes = Buffer.from('INERT Homebrew source build ' + release);
+    fs.chmodSync(f.mapped(f.cellar + '/bin/opencode'), 0o755);
+    f.put(f.cellar + '/bin/opencode', bytes, 0o555);
+    f.put(f.cellar + '/INSTALL_RECEIPT.json', '{"source":{"tap":"homebrew/core"}}');
+    const tag = keg + '.' + (platform === 'darwin' ? (architecture === 'amd64' ? 'sequoia' : 'arm64_golden_gate')
+        : architecture === 'amd64' ? 'x86_64_linux' : 'arm64_linux');
+    const root = 'https://ghcr.io/v2/homebrew/core/opencode';
+    const tokenUrl = 'https://ghcr.io/token?service=ghcr.io&scope=repository:homebrew/core/opencode:pull';
+    const sha256 = data => 'sha256:' + crypto.createHash('sha256').update(data).digest('hex');
+    const archive = changes.archive || tar(changes.entries || [[`opencode/${keg}/`, '', '5'],
+        [`opencode/${keg}/bin/`, '', '5'], [`opencode/${keg}/bin/opencode`, changes.bottleBytes || bytes]]);
+    const layer = {mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip', digest: sha256(archive), size: archive.length};
+    const annotations = {'com.github.package.type': 'homebrew_bottle', 'org.opencontainers.image.vendor': 'homebrew',
+        'org.opencontainers.image.version': keg, 'org.opencontainers.image.ref.name': tag};
+    const manifest = {schemaVersion: 2, layers: [layer], annotations};
+    changes.manifest?.(manifest);
+    const manifestBytes = Buffer.from(JSON.stringify(manifest));
+    const descriptor = {mediaType: 'application/vnd.oci.image.manifest.v1+json', digest: sha256(manifestBytes),
+        size: manifestBytes.length, platform: {os: platform, architecture},
+        annotations: {'org.opencontainers.image.ref.name': tag}};
+    const index = {schemaVersion: 2, manifests: [descriptor], annotations: {...annotations, 'org.opencontainers.image.ref.name': keg}};
+    changes.index?.(index);
+    const indexUrl = root + '/manifests/' + keg, manifestUrl = root + '/manifests/' + descriptor.digest;
+    const blobUrl = root + '/blobs/' + layer.digest;
+    f.responses.set(tokenUrl, Buffer.from('{"token":"BOTTLE_TOKEN_SECRET"}'));
+    f.responses.set(indexUrl, Buffer.from(JSON.stringify(index)));
+    f.responses.set(manifestUrl, manifestBytes); f.responses.set(blobUrl, archive);
+    const originalGet = f.options.get, requests = [];
+    f.options.get = async (url, limit, token) => {
+        requests.push({url, token});
+        if (url.startsWith(root)) assert.equal(token, 'BOTTLE_TOKEN_SECRET');
+        else assert.equal(token, undefined, 'anonymous bottle token never goes to npm or auth endpoint');
+        if (changes.duringFetch) changes.duringFetch(f, url);
+        return originalGet(url, limit);
+    };
+    return Object.assign(f, {bottle: {bytes, archive, index, descriptor, manifest, layer, tokenUrl, indexUrl, manifestUrl, blobUrl, requests}});
+}
+for (const route of [{prefix: '/opt/homebrew'}, {prefix: '/usr/local'}, {revision: ''}, {revision: '_12'},
+    {platform: 'linux', target: 'linux-x64-baseline'}, {platform: 'linux', target: 'linux-arm64'}])
+    test(`source-built core bottle ${JSON.stringify(route)} migrates without npm-byte identity and repeats`, async t => {
+    const f = sourceBottleFixture(t, route);
+    assert.notDeepEqual(f.bottle.bytes, f.publish('opencode-' + f.options.target, '1.18.30'));
+    const native = f.mapped(f.cellar + '/bin/opencode'), receipt = f.mapped(f.cellar + '/INSTALL_RECEIPT.json');
+    const before = [fs.readFileSync(native), fs.readFileSync(receipt), fs.lstatSync(native).mode];
+    assert.equal(await f.api.install(f.options), 'migrated');
+    assert.deepEqual([fs.readFileSync(native), fs.readFileSync(receipt), fs.lstatSync(native).mode], before);
+    assert.deepEqual(fs.readFileSync(f.dest), f.binary);
+    assert.ok(f.bottle.requests.some(r => r.url === f.bottle.blobUrl));
+    assert.equal(f.probes.length, 2);
+    f.options.commands = [f.dest];
+    assert.equal(await f.api.install(f.options), 'current');
+});
+test('source-built newer core bottle is preserved without execution', async t => {
+    const f = sourceBottleFixture(t, {release: '3.0.0'});
+    f.options.path = f.prefix + '/bin'; f.shellSelection = f.command;
+    assert.equal(await f.api.install(f.options), 'newer');
+    assert.equal(f.calls.length, 0);
+    assert.equal(fs.existsSync(f.dest), false);
+});
+for (const phase of ['staged', 'promoted']) test(`source-built core bottle restores the command after ${phase} probe failure`, async t => {
+    const f = sourceBottleFixture(t), before = fs.readlinkSync(f.mapped(f.command));
+    f.duringProbe = count => { if (count === (phase === 'staged' ? 1 : 2)) throw new Error('INERT failed probe'); };
+    await assert.rejects(f.api.install(f.options), /version-probe/);
+    assert.equal(fs.readlinkSync(f.mapped(f.command)), before);
+    assert.deepEqual(fs.readFileSync(f.mapped(f.cellar + '/bin/opencode')), f.bottle.bytes);
+    assert.equal(fs.existsSync(f.dest), false);
+});
+for (const [name, changes] of [
+    ['wrong native payload', {bottleBytes: 'INERT different official binary'}],
+    ['wrong platform', {index: d => { d.manifests[0].platform.os = 'linux'; }}],
+    ['wrong architecture', {index: d => { d.manifests[0].platform.architecture = 'amd64'; }}],
+    ['wrong revision', {index: d => { d.annotations['org.opencontainers.image.version'] = '1.18.30_1'; }}],
+    ['wrong tag', {index: d => { d.manifests[0].annotations['org.opencontainers.image.ref.name'] = '1.18.30_1.arm64_golden_gate'; }}],
+    ['duplicate platform', {index: d => { d.manifests.push(d.manifests[0]); }}],
+    ['too many platforms', {index: d => { d.manifests = Array(65).fill(d.manifests[0]); }}],
+    ['foreign manifest digest', {index: d => { d.manifests[0].digest = 'https://attacker.invalid/SECRET'; }}],
+    ['wrong manifest version', {manifest: d => { d.annotations['org.opencontainers.image.version'] = '1.18.30_1'; }}],
+    ['foreign layer digest', {manifest: d => { d.layers[0].digest = 'https://attacker.invalid/SECRET'; }}],
+    ['oversized layer', {manifest: d => { d.layers[0].size = 256 * 1024 * 1024 + 1; }}],
+    ['multiple layers', {manifest: d => { d.layers.push(d.layers[0]); }}],
+    ['wrong layer type', {manifest: d => { d.layers[0].mediaType = 'application/vnd.oci.image.layer.v1.tar'; }}],
+    ['unsafe archive path', {entries: [['opencode/1.18.30_2/../bin/opencode', 'INERT']]}],
+    ['duplicate native member', {entries: [['opencode/1.18.30_2/bin/opencode', 'INERT'], ['opencode/1.18.30_2/bin/opencode', 'INERT']]}],
+    ['linked native member', {entries: [['opencode/1.18.30_2/bin/opencode', '', '2']]}],
+    ['wrong archive revision', {entries: [['opencode/1.18.30_1/bin/opencode', 'INERT']]}],
+    ['missing native member', {entries: [['opencode/1.18.30_2/LICENSE', 'INERT']]}],
+]) test(`source-built core bottle rejects ${name} without touching the command`, async t => {
+    const f = sourceBottleFixture(t, changes), before = fs.readlinkSync(f.mapped(f.command));
+    await assert.rejects(f.api.install(f.options));
+    assert.equal(fs.readlinkSync(f.mapped(f.command)), before);
+    assert.deepEqual(fs.readFileSync(f.mapped(f.cellar + '/bin/opencode')), f.bottle.bytes);
+    assert.equal(fs.existsSync(f.dest), false); assert.equal(f.calls.length, 0);
+    assert.ok(f.bottle.requests.every(r => !r.url.includes('attacker.invalid')));
+});
+for (const part of ['manifest', 'blob']) test(`source-built core bottle rejects tampered ${part} digest`, async t => {
+    const f = sourceBottleFixture(t);
+    f.responses.set(f.bottle[part + 'Url'], Buffer.from('SECRET tampered payload'));
+    await assert.rejects(f.api.install(f.options), /integrity/);
+    assert.ok(fs.lstatSync(f.mapped(f.command)).isSymbolicLink());
+    assert.equal(f.calls.length, 0);
+});
+test('source-built core bottle cannot authorize an anomalyco receipt or a standalone copy', async t => {
+    const f = sourceBottleFixture(t);
+    f.put(f.cellar + '/INSTALL_RECEIPT.json', '{"source":{"tap":"anomalyco/tap"}}');
+    await assert.rejects(f.api.install(f.options), /unverified-copy/);
+    assert.equal(f.bottle.requests.some(r => r.url.startsWith('https://ghcr.io/')), false);
+    const command = f.legacy('.opencode/bin', 'INERT --user-agent=opencode/1.18.30\0');
+    f.options.commands = [command]; f.bottle.requests.length = 0;
+    await assert.rejects(f.api.install(f.options), /unverified-copy/);
+    assert.equal(f.bottle.requests.some(r => r.url.startsWith('https://ghcr.io/')), false);
+});
+for (const change of ['directory-mode', 'receipt', 'pin', 'native-bytes', 'command-link'])
+    test(`source-built core bottle revalidates ${change} after download`, async t => {
+    const f = sourceBottleFixture(t, {duringFetch: (f, url) => {
+        if (url !== f.bottle.blobUrl) return;
+        if (change === 'directory-mode') fs.chmodSync(f.mapped(f.prefix + '/Cellar'), 0o755);
+        if (change === 'receipt') f.put(f.cellar + '/INSTALL_RECEIPT.json', '{"source":{"tap":"custom/tap"}}');
+        if (change === 'pin') f.put(f.prefix + '/var/homebrew/pinned/opencode', 'INERT independently pinned');
+        if (change === 'native-bytes') {
+            fs.chmodSync(f.mapped(f.cellar + '/bin/opencode'), 0o755);
+            f.put(f.cellar + '/bin/opencode', 'INERT independently changed', 0o555);
+        }
+        if (change === 'command-link') {
+            fs.unlinkSync(f.mapped(f.command)); fs.symlinkSync('../independent', f.mapped(f.command));
+        }
+    }});
+    await assert.rejects(f.api.install(f.options), /brew-snapshot-changed/);
+    assert.equal(f.calls.length, 0);
+    assert.ok(fs.lstatSync(f.mapped(f.command)).isSymbolicLink());
+    if (change === 'directory-mode') assert.equal(fs.statSync(f.mapped(f.prefix + '/Cellar')).mode & 0o777, 0o755);
+});
+test('source-built core bottle tries a second eligible OS bottle without choosing by current SDK', async t => {
+    const f = sourceBottleFixture(t), root = 'https://ghcr.io/v2/homebrew/core/opencode';
+    const sha256 = data => 'sha256:' + crypto.createHash('sha256').update(data).digest('hex');
+    const archive = tar([['opencode/1.18.30_2/bin/opencode', 'INERT another official OS bottle']]);
+    const manifest = {...f.bottle.manifest, annotations: {...f.bottle.manifest.annotations,
+        'org.opencontainers.image.ref.name': '1.18.30_2.arm64_sequoia'},
+    layers: [{mediaType: f.bottle.layer.mediaType, digest: sha256(archive), size: archive.length}]};
+    const contents = Buffer.from(JSON.stringify(manifest));
+    const descriptor = {...f.bottle.descriptor, digest: sha256(contents), size: contents.length,
+        annotations: {'org.opencontainers.image.ref.name': '1.18.30_2.arm64_sequoia'}};
+    f.bottle.index.manifests.unshift(descriptor);
+    f.responses.set(f.bottle.indexUrl, Buffer.from(JSON.stringify(f.bottle.index)));
+    f.responses.set(root + '/manifests/' + descriptor.digest, contents);
+    f.responses.set(root + '/blobs/' + manifest.layers[0].digest, archive);
+    assert.equal(await f.api.install(f.options), 'migrated');
+    assert.equal(f.bottle.requests.filter(r => r.url.includes('/blobs/')).length, 2);
+});
+for (const part of ['token', 'index']) test(`source-built core bottle rejects malformed ${part} without secret diagnostics`, async t => {
+    const f = sourceBottleFixture(t);
+    f.responses.set(f.bottle[part === 'token' ? 'tokenUrl' : 'indexUrl'], Buffer.from(part === 'token' ? '{"token":"SECRET\\r\\nheader"}' : '{"schemaVersion":2,"schemaVersion":1}'));
+    await assert.rejects(f.api.install(f.options), error => {
+        assert.ok(!f.api.failureResult(error).includes('SECRET')); return true;
+    });
+    assert.equal(f.calls.length, 0); assert.equal(fs.existsSync(f.dest), false);
+});
 for (const tap of ['anomalyco/tap', 'homebrew/core']) test(`${tap} Homebrew 1.18.30_2 Mac capture migrates command-only and repeats`, async t => {
     const f = darwinHomebrewFixture(t, '1.18.30', '_2');
     f.put(f.cellar + '/INSTALL_RECEIPT.json', JSON.stringify({source: {tap}}));

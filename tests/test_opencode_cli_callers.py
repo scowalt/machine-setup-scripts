@@ -15,7 +15,8 @@ PWSH = os.environ.get('PWSH_BIN') or shutil.which('pwsh')
 
 DIAGNOSTICS = [(f'opencode-cli:download-failed:{operation}:http-{status}', 1,
                 f'OpenCode CLI download failed (operation={operation}, HTTP={status}).')
-               for operation in ('latest-release', 'package-index', 'package-version', 'artifact-download', 'download')
+               for operation in ('latest-release', 'package-index', 'package-version', 'artifact-download', 'download',
+                                 'bottle-auth', 'bottle-index', 'bottle-manifest', 'bottle-download')
                for status in ('406', 'unknown')]
 DIAGNOSTICS += [(result, status, None) for result, status in [
     ('opencode-cli:download-failed:package-version:http-406', 0),
