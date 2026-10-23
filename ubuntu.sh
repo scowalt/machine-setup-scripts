@@ -11028,7 +11028,7 @@ bb_native_app_ready() {
 }
 
 bb_write_bb_guard() {
-    local _target="$1" _temporary
+    local _target="$1" _temporary _target_metadata _uid
     _temporary=$(mktemp "${_target}.XXXXXX" 2>/dev/null) || return 1
     if ! cat 2>/dev/null > "${_temporary}" <<'BB_GUARD'
 #!/usr/bin/env bash
@@ -11075,11 +11075,59 @@ for table in (os.path.join(root, "tcp"), os.path.join(root, "tcp6")):
 PY
 }
 bb_check_app() {
-    local health status
+    local timeout="${1:-1}" health='' status='' health_available=0 status_available=0
     bb_check_managed_process || return 1
-    health=$(curl --noproxy '*' --fail --silent --max-time 1 http://127.0.0.1:38886/health 2>/dev/null) || return 1
-    status=$(curl --noproxy '*' --fail --silent --max-time 1 http://127.0.0.1:38887/status 2>/dev/null) || return 1
-    node -e 'const fs=require("node:fs"),home=process.argv[3];let expected="";for(const p of [home+"/.bb/host-id",home+"/.bb/auth.json",home+"/.bb/env.json"]){try{const s=fs.lstatSync(p);if(!s.isFile()||s.isSymbolicLink()||s.nlink!==1||s.uid!==process.getuid()||(s.mode&0o077)!==0)process.exit(1);const v=fs.readFileSync(p,"utf8");if(p.endsWith("host-id"))expected=v.trim();else{const j=JSON.parse(v);expected ||= j.hostId||j.env?.BB_HOST_ID||""}}catch(e){if(e.code!=="ENOENT")process.exit(1)}}const h=JSON.parse(process.argv[1]),d=JSON.parse(process.argv[2]),norm=x=>{try{const u=new URL(x);if(u.hostname==="localhost")u.hostname="127.0.0.1";return u.href.replace(/\/$/,"")}catch{return ""}};process.exit(h?.ok===true&&typeof h.launchId==="string"&&h.launchId.length>0&&typeof expected==="string"&&expected.length>0&&d?.connected===true&&d.hostId===expected&&norm(d.serverUrl)==="http://127.0.0.1:38886"?0:1)' "${health}" "${status}" "${HOME}" >/dev/null 2>&1
+    if health=$(curl --noproxy '*' --fail --silent --max-time "${timeout}" http://127.0.0.1:38886/health 2>/dev/null); then health_available=1; fi
+    if status=$(curl --noproxy '*' --fail --silent --max-time "${timeout}" http://127.0.0.1:38887/status 2>/dev/null); then status_available=1; fi
+    node - "${health}" "${status}" "${HOME}" "${health_available}" "${status_available}" >/dev/null 2>&1 <<'BB_APP_CHECK'
+const fs = require("node:fs");
+const home = process.argv[4], healthAvailable = process.argv[5] === "1", statusAvailable = process.argv[6] === "1";
+function plainObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
+function normalize(value) {
+  try {
+    const url = new URL(value);
+    if (url.hostname === "localhost") url.hostname = "127.0.0.1";
+    return url.href.replace(/\/$/, "");
+  } catch { return ""; }
+}
+try {
+  const ids = [];
+  function addId(value) {
+    if (typeof value !== "string" || !/^[^\u0000-\u0020\u007f]{1,256}$/.test(value)) process.exit(1);
+    ids.push(value);
+  }
+  for (const [file, kind] of [["host-id", "id"], ["auth.json", "auth"], ["env.json", "env"]]) {
+    const target = home + "/.bb/" + file;
+    let stat;
+    try { stat = fs.lstatSync(target); }
+    catch (error) { if (error.code === "ENOENT") continue; throw error; }
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) process.exit(1);
+    const content = fs.readFileSync(target, "utf8");
+    if (kind === "id") addId(content.trim());
+    else {
+      const data = JSON.parse(content);
+      if (!plainObject(data)) process.exit(1);
+      if (kind === "auth" && data.hostId !== undefined) addId(data.hostId);
+      if (kind === "env" && data.env !== undefined) {
+        if (!plainObject(data.env)) process.exit(1);
+        if (data.env.BB_HOST_ID !== undefined) addId(data.env.BB_HOST_ID);
+      }
+    }
+  }
+  if (new Set(ids).size !== 1) process.exit(1);
+  if (healthAvailable) {
+    const health = JSON.parse(process.argv[2]);
+    if (!plainObject(health) || health.ok !== true || typeof health.launchId !== "string" || health.launchId.length === 0) process.exit(1);
+  }
+  let disconnected = false;
+  if (statusAvailable) {
+    const daemon = JSON.parse(process.argv[3]);
+    if (!plainObject(daemon) || typeof daemon.connected !== "boolean" || daemon.hostId !== ids[0] || normalize(daemon.serverUrl) !== "http://127.0.0.1:38886") process.exit(1);
+    disconnected = !daemon.connected;
+  }
+  process.exit(!healthAvailable || !statusAvailable || disconnected ? 2 : 0);
+} catch { process.exit(1); }
+BB_APP_CHECK
 }
 bb_wait_app() {
     local i attempts="${BB_READY_ATTEMPTS:-30}" interval="${BB_READY_INTERVAL:-2}"
@@ -11100,23 +11148,55 @@ case "${mode}" in
         systemctl --user start --no-block setup-bb-ingress.service
         ;;
     ingress-start)
-        bb_check_tailnet || exit 1
-        systemctl --user is-active --quiet setup-bb-app.service || exit 1
-        bb_check_app || exit 1
+        if ! bb_check_tailnet; then
+            printf 'bb ingress: startup tailnet validation failed\n' >&2
+            exit 1
+        fi
+        if ! systemctl --user is-active --quiet setup-bb-app.service; then
+            printf 'bb ingress: startup app service inactive\n' >&2
+            exit 1
+        fi
+        if bb_check_app; then :; else
+            printf 'bb ingress: startup app validation/readiness failed\n' >&2
+            exit 1
+        fi
         "${tailscale_bin}" serve --https="${port}" "http://127.0.0.1:38886" &
         serve_pid=$!
-        trap 'kill -TERM "${serve_pid}" 2>/dev/null || true; wait "${serve_pid}" 2>/dev/null || true; exit 0' TERM INT
+        trap 'printf "bb ingress: shutdown requested; stopping ingress\n" >&2; kill -TERM "${serve_pid}" 2>/dev/null || true; wait "${serve_pid}" 2>/dev/null || true; exit 0' TERM INT
+        health_failures=0
         while kill -0 "${serve_pid}" 2>/dev/null; do
             sleep 5
-            if ! bb_check_tailnet || ! systemctl --user is-active --quiet setup-bb-app.service || ! bb_check_app; then
-                kill -TERM "${serve_pid}" 2>/dev/null || true
-                wait "${serve_pid}" 2>/dev/null || true
-                exit 1
+            app_status=1
+            if ! bb_check_tailnet; then
+                printf 'bb ingress: tailnet validation failed; stopping ingress\n' >&2
+            elif ! systemctl --user is-active --quiet setup-bb-app.service; then
+                printf 'bb ingress: app service inactive; stopping ingress\n' >&2
+            elif bb_check_app 5; then
+                if (( health_failures > 0 )); then
+                    printf 'bb ingress: health recovered after %s transient failure(s)\n' "${health_failures}" >&2
+                fi
+                health_failures=0
+                continue
+            else
+                app_status=$?
+                if [[ "${app_status}" != 2 ]]; then
+                    printf 'bb ingress: app process/identity/security validation failed; stopping ingress\n' >&2
+                fi
             fi
+            if [[ "${app_status}" == 2 ]]; then
+                health_failures=$((health_failures + 1))
+                printf 'bb ingress: transient health failure (%s/3)\n' "${health_failures}" >&2
+                if (( health_failures < 3 )); then continue; fi
+                printf 'bb ingress: three consecutive transient HTTP/daemon failures; stopping ingress\n' >&2
+            fi
+            kill -TERM "${serve_pid}" 2>/dev/null || true
+            wait "${serve_pid}" 2>/dev/null || true
+            exit 1
         done
         set +e
         wait "${serve_pid}"
         result=$?
+        printf 'bb ingress: Serve child exited (status %s)\n' "${result}" >&2
         exit "${result}"
         ;;
     *) exit 2 ;;
@@ -11125,6 +11205,13 @@ BB_GUARD
     then
         rm -f -- "${_temporary}" 2>/dev/null
         return 1
+    fi
+    if [[ -f "${_target}" && ! -L "${_target}" ]] &&
+        _target_metadata=$(stat -c '%u %h %a' -- "${_target}" 2>/dev/null) &&
+        _uid=$(id -u 2>/dev/null) && [[ "${_target_metadata}" == "${_uid} 1 700" ]] &&
+        cmp -s -- "${_temporary}" "${_target}"; then
+        rm -f -- "${_temporary}" 2>/dev/null || return 1
+        return 0
     fi
     if ! chmod 700 "${_temporary}" 2>/dev/null || ! mv -f -- "${_temporary}" "${_target}" 2>/dev/null; then
         rm -f -- "${_temporary}" 2>/dev/null
@@ -11447,7 +11534,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 340 | Last changed: Retire installer code for owner-managed bb desktop applications"
+    echo -e "${GRAY}Version 341 | Last changed: Persist transient-failure tolerance in the bb ingress watchdog"
 
     if ! acquire_setup_lock; then
         return 1

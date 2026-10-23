@@ -17,6 +17,7 @@ pathlib.Path(sys.argv[1], 'helpers.sh').write_text(definitions(source))
 PY
 
 python3 tests/test_bb_server_diagnostics.py
+python3 tests/test_bb_ingress_watchdog.py
 python3 tests/test_bb_directory_preflight.py
 python3 tests/test_bb_service_preflight.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/test_bb_dotfiles_umask.py
