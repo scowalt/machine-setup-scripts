@@ -40,4 +40,6 @@ env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tools/run-pre-push-contracts.py \
   --bun /home/scowalt/.bun/bin/bun
 ```
 
+Before publication, remote main advanced to `83345e6` with the generated bb ingress watchdog. Integration preserves its strict startup, identity checks, transient-failure tolerance and no-op regeneration while applying the file policy to the new identity-file check and unchanged `0720` guards. Ubuntu advances to version 342. The contained default, extraction/containment and expanded 29-method watchdog suites passed at `/tmp/setup-fixture-matrix-qb5s8rv2`; the earlier pre-push attempt was cancelled before publishing so that the integrated source could be validated instead.
+
 Reruns used `tests/run-fixture-matrix.py` with the same Node/PowerShell, explicit native tool selectors, a 900-second per-suite deadline and fresh private roots; suites never ran concurrently. The new Visual Explainer regression passed all 16 methods, including six-wrapper native-mode installation/repeat/refresh. OpenCode passed 430/431 cases with one optional installed-shim skip. ShellCheck on every modified Bash file, Bash/Python/Node syntax, all six embedding checks and whitespace checks pass. Original-red evidence is at `/tmp/setup-fixture-matrix-p7tf9929`; command/result records and source hashes are retained privately at `/tmp/setup-file-group-write.ji8KDc`.
