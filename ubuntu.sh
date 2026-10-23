@@ -1510,9 +1510,9 @@ function safePath(file, home, leafLink = false, directories) {
         let st;
         try { st = fs.lstatSync(item); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
         if ((st.isSymbolicLink() && !(leafLink && item === file)) ||
-            (!st.isSymbolicLink() && !st.isDirectory() && !st.isFile()) ||
+            (!st.isSymbolicLink() && !st.isDirectory() && !(item === file && st.isFile())) ||
             (process.platform !== 'win32' && (st.uid !== process.getuid() ||
-                (!st.isSymbolicLink() && (st.mode & (st.isDirectory() && st.uid !== 0 ? 0o002 : 0o022)))))) fail('unsafe-path');
+                (!st.isSymbolicLink() && (st.mode & (st.isFile() || st.isDirectory() && st.uid !== 0 ? 0o002 : 0o022)))))) fail('unsafe-path');
         if (directories && st.isDirectory()) {
             if (directories.has(item) && !sameBrew(directories.get(item), st)) fail('changed-copy');
             directories.set(item, st);
@@ -1645,7 +1645,7 @@ const brewFingerprint = s => s && (s.isDirectory() ? ['dev', 'ino', 'uid', 'gid'
 const sameBrew = (a, b) => JSON.stringify(brewFingerprint(a)) === JSON.stringify(brewFingerprint(b));
 function brewPermissions(file, info) {
     if (![0, process.getuid()].includes(info.uid) || (!info.isSymbolicLink() && (info.mode & 0o002))) fail('brew-path');
-    if (!info.isSymbolicLink() && (info.mode & 0o020)) {
+    if (info.isDirectory() && (info.mode & 0o020)) {
         const linuxBrew = process.platform === 'linux' &&
             (file === '/home/linuxbrew/.linuxbrew' || file.startsWith('/home/linuxbrew/.linuxbrew/'));
         const accountDirectory = ['linux', 'darwin'].includes(process.platform) && info.isDirectory();
@@ -3508,7 +3508,7 @@ function directory(file) {
 function owned(file, privateDirectory = false) {
     const st = stat(file);
     if (st) windowsRecord(file, true, st.isSymbolicLink() && ['remove', 'dispose'].includes(mode));
-    const writeMask = st?.isDirectory() && st.uid !== 0 && !privateDirectory ? 0o002 : 0o022;
+    const writeMask = st?.isFile() || st?.isDirectory() && st.uid !== 0 && !privateDirectory ? 0o002 : 0o022;
     if (st && process.platform !== 'win32' && (st.uid !== process.getuid() || !st.isSymbolicLink() && (st.mode & writeMask))) fail('unsafe-owner-or-mode');
 }
 function jsonFile(file) {
@@ -4533,7 +4533,7 @@ function regular(file, privateFile = false, installed = false) {
     const stat = info(file);
     if (!stat) return null;
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) fail('linked-or-nonregular-file');
-    if (!windows && (stat.uid !== uid && stat.uid !== 0 || stat.mode & (privateFile ? 0o077 : installed ? 0o002 : 0o022))) fail('unsafe-file-permissions');
+    if (!windows && (stat.uid !== uid && stat.uid !== 0 || stat.mode & (privateFile ? 0o057 : 0o002))) fail('unsafe-file-permissions');
     if (privateFile && !windows && stat.uid !== uid) fail('unowned-auth-file');
     if (stat.size > 2 * 1024 * 1024) fail('oversized-metadata');
     return stat;
@@ -5609,7 +5609,7 @@ function pythonForToml() {
         if (!info(candidate)) continue;
         safeBoundary(path.dirname(candidate), true);
         const resolved = fs.realpathSync(candidate), target = info(resolved);
-        if (!target?.isFile() || ![0, process.getuid()].includes(target.uid) || target.mode & 0o022) fail('toml-parser-unavailable');
+        if (!target?.isFile() || ![0, process.getuid()].includes(target.uid) || target.mode & 0o002) fail('toml-parser-unavailable');
         safeBoundary(path.dirname(resolved), true);
         // Non-root executables must stay within an expected managed prefix.
         const allowed = ['/opt/homebrew/', '/usr/local/', path.join(home, '.pyenv/versions') + '/', path.join(home, '.local/share/mise/installs/python') + '/'];
@@ -5721,7 +5721,7 @@ try {
             if (!same(record.stat, current) || !same(record.stat, info(record.file)) || !rawRead(record.fd, current).equals(record.raw) || !same(record.stat, fs.fstatSync(record.fd))) fail('metadata-changed');
         }
         for (const record of writes) {
-            if (record.stat.uid !== process.getuid() || record.stat.mode & 0o022) fail('unsafe-metadata');
+            if (record.stat.uid !== process.getuid() || record.stat.mode & 0o002) fail('unsafe-metadata');
             safeBoundary(path.dirname(record.file), true);
         }
     }
@@ -6924,7 +6924,7 @@ function checkHealth(home, data, agent, cwd, required) {
     directoryChain(path.dirname(cli), ctx.snapshots);
     const info = stat(cli);
     if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size === 0 ||
-        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o022))) fail('unsafe-cli');
+        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o002))) fail('unsafe-cli');
     windowsAcl([cli], [cli]);
     recheck(ctx.snapshots);
     const env = { ...process.env, HOME: fs.realpathSync(home), PI_CODING_AGENT_DIR: ctx.agent };
@@ -7271,7 +7271,7 @@ function regular(ctx, file, optional = false) {
     remember(ctx, file, info);
     if (!info && optional) return null;
     if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > MAX_BYTES ||
-        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o022))) fail('unsafe-file');
+        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o002))) fail('unsafe-file');
     const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
     try {
         if (!same(info, fs.fstatSync(fd))) fail('changed-input');
@@ -9292,7 +9292,7 @@ class LocalFiles:
         except ValueError:
             return path
 
-    def inspect(self, path, directory=False, optional=False, volatile=False, account_group_write=False):
+    def inspect(self, path, directory=False, optional=False, volatile=False):
         path = self.normalize(path)
         need(path.is_absolute() and '..' not in path.parts, 'unverified-local-state')
         chain = list(reversed(path.parents)) + [path]
@@ -9309,8 +9309,7 @@ class LocalFiles:
                  'unverified-local-state')
             need(info.st_uid in (0, self.uid), 'foreign-local-state')
             sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-            mask = (0o002 if info.st_uid == self.uid and info.st_uid != 0
-                    and (is_dir or account_group_write) else 0o022)
+            mask = 0o002 if not is_dir or info.st_uid == self.uid and info.st_uid != 0 else 0o022
             need(not info.st_mode & mask or sticky_tmp, 'writable-local-state')
             if not is_dir:
                 need(info.st_nlink == 1, 'unverified-local-state')
@@ -9390,9 +9389,9 @@ class LocalFiles:
             if completed and close_failed:
                 raise Refusal('unverified-local-state')
 
-    def read(self, path, optional=False, header=False, account_group_write=False):
+    def read(self, path, optional=False, header=False):
         path = self.normalize(path)
-        info = self.inspect(path, optional=optional, volatile=header, account_group_write=account_group_write)
+        info = self.inspect(path, optional=optional, volatile=header)
         if info is None:
             return None
         def stable(observed):
@@ -9419,8 +9418,8 @@ class LocalFiles:
                 except Exception:
                     pass   
 
-    def json(self, path, optional=False, account_group_write=False):
-        raw = self.read(path, optional, account_group_write=account_group_write)
+    def json(self, path, optional=False):
+        raw = self.read(path, optional)
         return None if raw is None else object_json(raw)
 
 
@@ -9587,7 +9586,7 @@ def main_entry(argv):
 def verify_package(files, entry):
     root = entry.parents[2]
     try:
-        metadata = files.json(root / 'package.json', optional=True, account_group_write=True)
+        metadata = files.json(root / 'package.json', optional=True)
     except (Refusal, OSError):
         if root.name != 'bb-app':
             return False   
@@ -9598,8 +9597,8 @@ def verify_package(files, entry):
         need(not isinstance(workspace, dict) or workspace.get('name') != '@bb/server', 'unsupported-native-contract')
         return False
     need(metadata.get('bin', {}).get('bb-server') == 'dist/bb-server.js', 'unverified-main-server')
-    files.inspect(entry, account_group_write=True)
-    files.inspect(root / 'server/dist/start-server.js', account_group_write=True)
+    files.inspect(entry)
+    files.inspect(root / 'server/dist/start-server.js')
     return True
 
 
@@ -9664,7 +9663,7 @@ def discover(files, processes, configured_data=None, block_default=False):
                  and isinstance(moved.get('oldCopyEntries'), list), 'unverified-local-state')
             continue   
         need(files.read(data / 'server-import.json', optional=True) is None, 'server-move-in-progress')
-        runtime = files.json(data / 'bb-app-runtime.json', optional=True, account_group_write=True)
+        runtime = files.json(data / 'bb-app-runtime.json', optional=True)
         if runtime is not None:
             need(isinstance(runtime, dict) and type(runtime.get('pid')) is int, 'unverified-local-state')
             need(processes.read(runtime['pid']) is None, 'unverified-main-server')
@@ -9731,8 +9730,8 @@ class NativeApi:
         server = self.server
         node = Path(server['record'][0][0])
         cli = server['entry'].parents[2] / 'host-daemon/dist/bb'
-        self.files.inspect(node, account_group_write=True)
-        need(self.files.inspect(cli, account_group_write=True).st_size > 0, 'unverified-main-server')
+        self.files.inspect(node)
+        need(self.files.inspect(cli).st_size > 0, 'unverified-main-server')
         self.files.inspect(cli.parent / 'bb-chunks', directory=True)
         need(self.processes.read(server['pid']) == server['record'], 'changed-process')
         need(verify_package(self.files, server['entry']), 'unverified-main-server')
@@ -9742,7 +9741,7 @@ class NativeApi:
         env = {'HOME': str(self.files.home), 'PATH': str(node.parent) + ':/usr/bin:/bin',
                'BB_DATA_DIR': str(server['data']), 'BB_SERVER_URL': f"http://127.0.0.1:{server['port']}",
                'BB_CLI_REEXEC': '1', 'ELECTRON_RUN_AS_NODE': '1', 'NO_COLOR': '1', 'NODE_ENV': 'production',
-               'BB_APP_VERSION': self.files.json(server['entry'].parents[2] / 'package.json', account_group_write=True)['version']}
+               'BB_APP_VERSION': self.files.json(server['entry'].parents[2] / 'package.json')['version']}
         result = subprocess.run([str(node), str(cli), 'plugin', 'update', '--all', '--yes'],
                                 cwd=server['data'], env=env, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -9862,16 +9861,6 @@ function rememberService(file, s) {
 }
 function servicePermissions(file, s, privateParent) {
   check(!(s.mode & 0o002), 'writable-boundary');
-  if (!(s.mode & 0o020)) return;
-  // Only regular read-only service files retain the Linux privacy exception.
-  // Ordinary directories never require this proof or its native dependencies.
-  check(process.platform === 'linux', 'writable-boundary');
-  check(!s.isFile() || s.nlink === 1, 'unsafe-file');
-  if (!privateParent && !serviceGroupCandidates.has(file)) {
-    // Cache only successful file proofs; recheck before package work.
-    verifyServiceGroups([[file, s]]);
-    serviceGroupCandidates.set(file, s);
-  }
 }
 function chain(dir, serviceInspection = false) {
   const privateParent = dir !== path.dirname(dir) ? chain(path.dirname(dir), serviceInspection) : false;
@@ -9897,7 +9886,7 @@ function regular(f, packageArtifact = false) {
   const s = fs.lstatSync(f); observed = s;
   check(!s.isSymbolicLink(), 'linked-path');
   check(s.uid === uid, 'unsafe-ownership');
-  check(!(s.mode & (packageArtifact && uid !== 0 ? 0o002 : 0o022)), 'writable-boundary');
+  check(!(s.mode & 0o002), 'writable-boundary');
   check(s.isFile() && s.nlink === 1 && s.size > 0, 'unsafe-file');
   return s;
 }
@@ -9919,7 +9908,7 @@ def read_file(file, limit, root=False):
     try:
         before = os.fstat(fd)
         need(stat.S_ISREG(before.st_mode))
-        if root: need(before.st_uid == 0 and not before.st_mode & 0o022 and before.st_nlink == 1)
+        if root: need(before.st_uid == 0 and not before.st_mode & 0o002 and before.st_nlink == 1)
         data = bytearray()
         while len(data) <= limit:
             part = os.read(fd, min(65536, limit + 1 - len(data)))
@@ -10031,7 +10020,6 @@ function verifyServiceGroups(candidates = [...serviceGroupCandidates]) {
   }
 }
 function verifyServiceInspection() {
-  verifyServiceGroups();
   for (const [file, before] of serviceSnapshots) {
     context(before.isDirectory() ? 'directory' : 'service', file, before);
     check(sameService(before, stat(file)));
@@ -10089,7 +10077,7 @@ function serviceUnreferenced(file) {
     check(s.isCharacterDevice() && s.uid === 0); return; // Native systemd mask; no read.
   }
   check(s.uid === uid || s.uid === 0, 'unsafe-ownership');
-  check(s.isFile() && !s.isSymbolicLink() && s.size < 1048576, 'unsafe-file');
+  check(s.isFile() && !s.isSymbolicLink() && s.nlink === 1 && s.size < 1048576, 'unsafe-file');
   servicePermissions(target, s, privateParent);
   // Bound non-followed reads and revalidate snapshots before package work.
   const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -10122,7 +10110,7 @@ function tree(dir) {
       const t = stat(target); check(!t || (t.isFile() && !t.isSymbolicLink()), 'linked-path');
     } else if (s.isDirectory()) tree(f);
     else {
-      check(!(s.mode & (uid !== 0 ? 0o002 : 0o022)), 'writable-boundary');
+      check(!(s.mode & 0o002), 'writable-boundary');
       check(s.isFile() && s.nlink === 1, 'unsafe-file');
     }
   }
@@ -10160,7 +10148,7 @@ try {
     chain(root);
     if (!stat(root)) return;
     check(JSON.stringify(json(marker)) === JSON.stringify(owner));
-    check(!(fs.lstatSync(marker).mode & 0o077));
+    check(!(fs.lstatSync(marker).mode & 0o057));
     context('artifact', root); observed = fs.lstatSync(root);
     check(fs.readdirSync(root).every(n => ['owner.json', 'npm'].includes(n)));
     if (stat(prefix)) {
@@ -10481,9 +10469,9 @@ bb_owned_metadata_file() {
     _uid=$(id -u 2>/dev/null) || return 1
     [[ "${_owner}" == "${_uid}" && "${_links}" == 1 && "${_mode}" =~ ^[0-7]{3,4}$ ]] || return 1
     if [[ "${_private}" == 1 ]]; then
-        (( (8#${_mode} & 8#077) == 0 ))
+        (( (8#${_mode} & 8#057) == 0 ))
     else
-        (( (8#${_mode} & 8#022) == 0 ))
+        (( (8#${_mode} & 8#002) == 0 ))
     fi
 }
 
@@ -10516,7 +10504,7 @@ function safeFile(file, symlinkTarget) {
     if (symlinkTarget === undefined || stat.uid !== uid || path.resolve(path.dirname(file), fs.readlinkSync(file)) !== symlinkTarget) throw new Error("unsafe link");
     return;
   }
-  if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== uid || (stat.mode & (uid !== 0 ? 0o002 : 0o022)) !== 0) throw new Error("unsafe file");
+  if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== uid || (stat.mode & 0o002) !== 0) throw new Error("unsafe file");
 }
 function scanNativeTree(directory) {
   const stat = optionalStat(directory);
@@ -10524,7 +10512,7 @@ function scanNativeTree(directory) {
   if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid || (stat.mode & 0o002) !== 0) throw new Error("unsafe native package");
   for (const name of fs.readdirSync(directory)) {
     const file = path.join(directory, name), child = fs.lstatSync(file);
-    if (child.isSymbolicLink() || child.uid !== uid || (child.mode & (child.isDirectory() || uid !== 0 ? 0o002 : 0o022)) !== 0) throw new Error("unsafe native artifact");
+    if (child.isSymbolicLink() || child.uid !== uid || (child.mode & (child.isFile() || child.isDirectory() || uid !== 0 ? 0o002 : 0o022)) !== 0) throw new Error("unsafe native artifact");
     if (child.isDirectory()) scanNativeTree(file);
     else if (!child.isFile() || child.nlink !== 1) throw new Error("unsafe native artifact");
   }
@@ -10608,7 +10596,7 @@ bb_package_artifacts_ready() {
     local _prefix="$1" _package="$2"
     [[ -f "${_package}/package.json" && ! -L "${_package}" && ! -L "${_package}/package.json" ]] || return 1
     [[ -f "${_prefix}/bin/bb-app" || -L "${_prefix}/bin/bb-app" ]] || return 1
-    node -e 'const p=process.argv[1],bin=process.argv[2],fs=require("node:fs"),path=require("node:path"),{createRequire}=require("node:module");const j=JSON.parse(fs.readFileSync(path.join(p,"package.json"),"utf8"));if(j.name!=="bb-app"||!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(j.version))process.exit(1);const safeFile=f=>{const s=fs.lstatSync(f);if(!s.isFile()||s.isSymbolicLink()||s.size===0||s.nlink!==1||s.uid!==process.getuid()||(s.mode&(process.getuid()!==0?0o002:0o022))!==0)process.exit(1);return s},safeDir=d=>{const s=fs.lstatSync(d);if(!s.isDirectory()||s.isSymbolicLink()||s.uid!==process.getuid()||(s.mode&0o002)!==0)process.exit(1);return s};const prefix=path.dirname(path.dirname(path.dirname(p)));safeDir(prefix);safeDir(path.join(prefix,"bin"));safeDir(path.dirname(path.dirname(p)));safeDir(path.dirname(p));safeDir(p);safeDir(path.join(p,"node_modules"));safeDir(path.join(p,"dist"));safeDir(path.join(p,"app/dist"));safeDir(path.join(p,"server/dist"));safeDir(path.join(p,"host-daemon/dist"));safeFile(path.join(p,"package.json"));const r=createRequire(path.join(p,"package.json"));safeFile(r.resolve("fs-native-extensions"));const locks=r("fs-native-extensions");if(typeof locks.tryLock!=="function"||typeof locks.unlock!=="function")process.exit(1);for(const name of ["better-sqlite3","node-pty","@parcel/watcher"]){const f=r.resolve(name);safeFile(f);const loaded=r(name);if(name==="better-sqlite3"){const db=new loaded(":memory:");db.close()}}const files=["dist/bb-app.js","dist/bb-server.js","dist/bb-host-daemon.js","server/dist/index.js","app/dist/index.html","host-daemon/dist/daemon-bundle.mjs","host-daemon/dist/bb","host-daemon/dist/bb-provider-bridge-worker.mjs","host-daemon/dist/bb-parcel-watcher-child.mjs","host-daemon/dist/bb-plugin-host-worker.mjs"];for(const file of files){const f=path.join(p,file);safeFile(f)}const dir=path.join(p,"host-daemon/dist/bb-chunks");safeDir(dir);if(!fs.readdirSync(dir).some(n=>{const f=path.join(dir,n);try{safeFile(f);return n.endsWith(".js")}catch{return false}}))process.exit(1);const link=fs.lstatSync(bin);if(!link.isSymbolicLink()||link.uid!==process.getuid()||fs.realpathSync(bin)!==fs.realpathSync(path.join(p,"dist/bb-app.js")))process.exit(1)' "${_package}" "${_prefix}/bin/bb-app" >/dev/null 2>&1 || return 1
+    node -e 'const p=process.argv[1],bin=process.argv[2],fs=require("node:fs"),path=require("node:path"),{createRequire}=require("node:module");const j=JSON.parse(fs.readFileSync(path.join(p,"package.json"),"utf8"));if(j.name!=="bb-app"||!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(j.version))process.exit(1);const safeFile=f=>{const s=fs.lstatSync(f);if(!s.isFile()||s.isSymbolicLink()||s.size===0||s.nlink!==1||s.uid!==process.getuid()||(s.mode&0o002)!==0)process.exit(1);return s},safeDir=d=>{const s=fs.lstatSync(d);if(!s.isDirectory()||s.isSymbolicLink()||s.uid!==process.getuid()||(s.mode&0o002)!==0)process.exit(1);return s};const prefix=path.dirname(path.dirname(path.dirname(p)));safeDir(prefix);safeDir(path.join(prefix,"bin"));safeDir(path.dirname(path.dirname(p)));safeDir(path.dirname(p));safeDir(p);safeDir(path.join(p,"node_modules"));safeDir(path.join(p,"dist"));safeDir(path.join(p,"app/dist"));safeDir(path.join(p,"server/dist"));safeDir(path.join(p,"host-daemon/dist"));safeFile(path.join(p,"package.json"));const r=createRequire(path.join(p,"package.json"));safeFile(r.resolve("fs-native-extensions"));const locks=r("fs-native-extensions");if(typeof locks.tryLock!=="function"||typeof locks.unlock!=="function")process.exit(1);for(const name of ["better-sqlite3","node-pty","@parcel/watcher"]){const f=r.resolve(name);safeFile(f);const loaded=r(name);if(name==="better-sqlite3"){const db=new loaded(":memory:");db.close()}}const files=["dist/bb-app.js","dist/bb-server.js","dist/bb-host-daemon.js","server/dist/index.js","app/dist/index.html","host-daemon/dist/daemon-bundle.mjs","host-daemon/dist/bb","host-daemon/dist/bb-provider-bridge-worker.mjs","host-daemon/dist/bb-parcel-watcher-child.mjs","host-daemon/dist/bb-plugin-host-worker.mjs"];for(const file of files){const f=path.join(p,file);safeFile(f)}const dir=path.join(p,"host-daemon/dist/bb-chunks");safeDir(dir);if(!fs.readdirSync(dir).some(n=>{const f=path.join(dir,n);try{safeFile(f);return n.endsWith(".js")}catch{return false}}))process.exit(1);const link=fs.lstatSync(bin);if(!link.isSymbolicLink()||link.uid!==process.getuid()||fs.realpathSync(bin)!==fs.realpathSync(path.join(p,"dist/bb-app.js")))process.exit(1)' "${_package}" "${_prefix}/bin/bb-app" >/dev/null 2>&1 || return 1
 }
 
 bb_install_package() {
@@ -10714,13 +10702,12 @@ def verified(parent, name, directory=True, private=False, reference=False, metad
         if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
             raise ValueError()
         if reference:
-            # Only the recognized non-secret reference may retain group write.
             if mode & 0o7113 or not mode & 0o400:
                 raise ValueError()
         elif fragment:
-            if mode & 0o022:
+            if mode & 0o002:
                 raise ValueError()
-        elif mode not in ((0o400, 0o600) if metadata_only else (0o600,)):
+        elif (mode & ~0o020) not in ((0o400, 0o600) if metadata_only else (0o600,)):
             raise ValueError()
     flags = (os.O_PATH if metadata_only else os.O_RDONLY) | os.O_NOFOLLOW | os.O_NONBLOCK
     if directory:
@@ -10975,7 +10962,7 @@ for (const [file, kind] of [[home + "/.bb/host-id", "id"], [home + "/.bb/auth.js
   let stat;
   try { stat = fs.lstatSync(file); }
   catch (error) { if (error.code === "ENOENT") continue; process.exit(1); }
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) process.exit(1);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== process.getuid() || (stat.mode & 0o057) !== 0) process.exit(1);
   try {
     const value = fs.readFileSync(file, "utf8");
     if (kind === "id") addId(value.trim());
@@ -11024,7 +11011,7 @@ bb_native_app_ready() {
     BB_SERVER_READY_CHECK=readiness.host-status
     _status=$(curl --noproxy '*' --fail --silent --show-error --max-time 2 http://127.0.0.1:38887/status 2>/dev/null) || return 1
     BB_SERVER_READY_CHECK=readiness.native
-    node -e 'const fs=require("node:fs"),home=process.argv[3];let expected="";for(const p of [home+"/.bb/host-id",home+"/.bb/auth.json",home+"/.bb/env.json"]){try{const s=fs.lstatSync(p);if(!s.isFile()||s.isSymbolicLink()||s.nlink!==1||s.uid!==process.getuid()||(s.mode&0o077)!==0)process.exit(1);const v=fs.readFileSync(p,"utf8");if(p.endsWith("host-id"))expected=v.trim();else{const j=JSON.parse(v);expected ||= j.hostId||j.env?.BB_HOST_ID||""}}catch(e){if(e.code!=="ENOENT")process.exit(1)}}const h=JSON.parse(process.argv[1]),d=JSON.parse(process.argv[2]),norm=x=>{try{const u=new URL(x);if(u.hostname==="localhost")u.hostname="127.0.0.1";return u.href.replace(/\/$/,"")}catch{return ""}};process.exit(h?.ok===true&&typeof h.launchId==="string"&&h.launchId.length>0&&typeof expected==="string"&&expected.length>0&&d?.connected===true&&d.hostId===expected&&norm(d.serverUrl)==="http://127.0.0.1:38886"?0:1)' "${_health}" "${_status}" "${HOME}" >/dev/null 2>&1
+    node -e 'const fs=require("node:fs"),home=process.argv[3];let expected="";for(const p of [home+"/.bb/host-id",home+"/.bb/auth.json",home+"/.bb/env.json"]){try{const s=fs.lstatSync(p);if(!s.isFile()||s.isSymbolicLink()||s.nlink!==1||s.uid!==process.getuid()||(s.mode&0o057)!==0)process.exit(1);const v=fs.readFileSync(p,"utf8");if(p.endsWith("host-id"))expected=v.trim();else{const j=JSON.parse(v);expected ||= j.hostId||j.env?.BB_HOST_ID||""}}catch(e){if(e.code!=="ENOENT")process.exit(1)}}const h=JSON.parse(process.argv[1]),d=JSON.parse(process.argv[2]),norm=x=>{try{const u=new URL(x);if(u.hostname==="localhost")u.hostname="127.0.0.1";return u.href.replace(/\/$/,"")}catch{return ""}};process.exit(h?.ok===true&&typeof h.launchId==="string"&&h.launchId.length>0&&typeof expected==="string"&&expected.length>0&&d?.connected===true&&d.hostId===expected&&norm(d.serverUrl)==="http://127.0.0.1:38886"?0:1)' "${_health}" "${_status}" "${HOME}" >/dev/null 2>&1
 }
 
 bb_write_bb_guard() {
@@ -11039,7 +11026,7 @@ state="${HOME}/.config/setup-bb-server/endpoint"
 [[ -f "${state}" && ! -L "${state}" ]] || exit 1
 state_meta=$(stat -c '%u %h %a' -- "${state}") || exit 1
 read -r state_uid state_links state_mode <<< "${state_meta}"
-[[ "${state_uid}" == "$(id -u)" && "${state_links}" == 1 && "${state_mode}" == 600 ]] || exit 1
+[[ "${state_uid}" == "$(id -u)" && "${state_links}" == 1 && ( "${state_mode}" == 600 || "${state_mode}" == 620 ) ]] || exit 1
 read -r dns port origin extra < "${state}"
 [[ -z "${extra:-}" && "${dns}" =~ ^[a-z0-9-]+(\.[a-z0-9-]+)+$ && "${port}" =~ ^[0-9]+$ ]] || exit 1
 (( 10#${port} >= 1 && 10#${port} <= 65535 )) || exit 1
@@ -11079,7 +11066,7 @@ bb_check_app() {
     bb_check_managed_process || return 1
     health=$(curl --noproxy '*' --fail --silent --max-time 1 http://127.0.0.1:38886/health 2>/dev/null) || return 1
     status=$(curl --noproxy '*' --fail --silent --max-time 1 http://127.0.0.1:38887/status 2>/dev/null) || return 1
-    node -e 'const fs=require("node:fs"),home=process.argv[3];let expected="";for(const p of [home+"/.bb/host-id",home+"/.bb/auth.json",home+"/.bb/env.json"]){try{const s=fs.lstatSync(p);if(!s.isFile()||s.isSymbolicLink()||s.nlink!==1||s.uid!==process.getuid()||(s.mode&0o077)!==0)process.exit(1);const v=fs.readFileSync(p,"utf8");if(p.endsWith("host-id"))expected=v.trim();else{const j=JSON.parse(v);expected ||= j.hostId||j.env?.BB_HOST_ID||""}}catch(e){if(e.code!=="ENOENT")process.exit(1)}}const h=JSON.parse(process.argv[1]),d=JSON.parse(process.argv[2]),norm=x=>{try{const u=new URL(x);if(u.hostname==="localhost")u.hostname="127.0.0.1";return u.href.replace(/\/$/,"")}catch{return ""}};process.exit(h?.ok===true&&typeof h.launchId==="string"&&h.launchId.length>0&&typeof expected==="string"&&expected.length>0&&d?.connected===true&&d.hostId===expected&&norm(d.serverUrl)==="http://127.0.0.1:38886"?0:1)' "${health}" "${status}" "${HOME}" >/dev/null 2>&1
+    node -e 'const fs=require("node:fs"),home=process.argv[3];let expected="";for(const p of [home+"/.bb/host-id",home+"/.bb/auth.json",home+"/.bb/env.json"]){try{const s=fs.lstatSync(p);if(!s.isFile()||s.isSymbolicLink()||s.nlink!==1||s.uid!==process.getuid()||(s.mode&0o057)!==0)process.exit(1);const v=fs.readFileSync(p,"utf8");if(p.endsWith("host-id"))expected=v.trim();else{const j=JSON.parse(v);expected ||= j.hostId||j.env?.BB_HOST_ID||""}}catch(e){if(e.code!=="ENOENT")process.exit(1)}}const h=JSON.parse(process.argv[1]),d=JSON.parse(process.argv[2]),norm=x=>{try{const u=new URL(x);if(u.hostname==="localhost")u.hostname="127.0.0.1";return u.href.replace(/\/$/,"")}catch{return ""}};process.exit(h?.ok===true&&typeof h.launchId==="string"&&h.launchId.length>0&&typeof expected==="string"&&expected.length>0&&d?.connected===true&&d.hostId===expected&&norm(d.serverUrl)==="http://127.0.0.1:38886"?0:1)' "${health}" "${status}" "${HOME}" >/dev/null 2>&1
 }
 bb_wait_app() {
     local i attempts="${BB_READY_ATTEMPTS:-30}" interval="${BB_READY_INTERVAL:-2}"
@@ -11149,7 +11136,7 @@ function plainObject(value) { return value !== null && typeof value === "object"
 async function statManaged(file) {
   try {
     const value = await fs.promises.lstat(file);
-    if (!value.isFile() || value.isSymbolicLink() || value.nlink !== 1 || value.uid !== process.getuid() || (value.mode & 0o022) !== 0) throw new Error("unsafe metadata");
+    if (!value.isFile() || value.isSymbolicLink() || value.nlink !== 1 || value.uid !== process.getuid() || (value.mode & 0o002) !== 0) throw new Error("unsafe metadata");
     return value;
   } catch (error) { if (error.code === "ENOENT") return null; throw error; }
 }
@@ -11166,7 +11153,7 @@ async function lockFile(target) {
   let acquired = false;
   try {
     const now = await handle.stat();
-    if (!now.isFile() || now.nlink !== 1 || now.uid !== process.getuid() || (now.mode & 0o022) !== 0 || (before && (before.dev !== now.dev || before.ino !== now.ino))) throw new Error("unsafe lock");
+    if (!now.isFile() || now.nlink !== 1 || now.uid !== process.getuid() || (now.mode & 0o002) !== 0 || (before && (before.dev !== now.dev || before.ino !== now.ino))) throw new Error("unsafe lock");
     const deadline = Date.now() + 5000;
     do {
       if (native.tryLock(handle.fd)) { acquired = true; return { handle, target, lock, release: async () => { if (acquired) native.unlock(handle.fd); await handle.close(); } }; }
@@ -11447,7 +11434,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 340 | Last changed: Retire installer code for owner-managed bb desktop applications"
+    echo -e "${GRAY}Version 341 | Last changed: Accept existing group write during file verification"
 
     if ! acquire_setup_lock; then
         return 1

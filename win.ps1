@@ -1430,9 +1430,9 @@ function safePath(file, home, leafLink = false, directories) {
         let st;
         try { st = fs.lstatSync(item); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
         if ((st.isSymbolicLink() && !(leafLink && item === file)) ||
-            (!st.isSymbolicLink() && !st.isDirectory() && !st.isFile()) ||
+            (!st.isSymbolicLink() && !st.isDirectory() && !(item === file && st.isFile())) ||
             (process.platform !== 'win32' && (st.uid !== process.getuid() ||
-                (!st.isSymbolicLink() && (st.mode & (st.isDirectory() && st.uid !== 0 ? 0o002 : 0o022)))))) fail('unsafe-path');
+                (!st.isSymbolicLink() && (st.mode & (st.isFile() || st.isDirectory() && st.uid !== 0 ? 0o002 : 0o022)))))) fail('unsafe-path');
         if (directories && st.isDirectory()) {
             if (directories.has(item) && !sameBrew(directories.get(item), st)) fail('changed-copy');
             directories.set(item, st);
@@ -1565,7 +1565,7 @@ const brewFingerprint = s => s && (s.isDirectory() ? ['dev', 'ino', 'uid', 'gid'
 const sameBrew = (a, b) => JSON.stringify(brewFingerprint(a)) === JSON.stringify(brewFingerprint(b));
 function brewPermissions(file, info) {
     if (![0, process.getuid()].includes(info.uid) || (!info.isSymbolicLink() && (info.mode & 0o002))) fail('brew-path');
-    if (!info.isSymbolicLink() && (info.mode & 0o020)) {
+    if (info.isDirectory() && (info.mode & 0o020)) {
         const linuxBrew = process.platform === 'linux' &&
             (file === '/home/linuxbrew/.linuxbrew' || file.startsWith('/home/linuxbrew/.linuxbrew/'));
         const accountDirectory = ['linux', 'darwin'].includes(process.platform) && info.isDirectory();
@@ -3255,7 +3255,7 @@ function directory(file) {
 function owned(file, privateDirectory = false) {
     const st = stat(file);
     if (st) windowsRecord(file, true, st.isSymbolicLink() && ['remove', 'dispose'].includes(mode));
-    const writeMask = st?.isDirectory() && st.uid !== 0 && !privateDirectory ? 0o002 : 0o022;
+    const writeMask = st?.isFile() || st?.isDirectory() && st.uid !== 0 && !privateDirectory ? 0o002 : 0o022;
     if (st && process.platform !== 'win32' && (st.uid !== process.getuid() || !st.isSymbolicLink() && (st.mode & writeMask))) fail('unsafe-owner-or-mode');
 }
 function jsonFile(file) {
@@ -4399,7 +4399,7 @@ function regular(file, privateFile = false, installed = false) {
     const stat = info(file);
     if (!stat) return null;
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) fail('linked-or-nonregular-file');
-    if (!windows && (stat.uid !== uid && stat.uid !== 0 || stat.mode & (privateFile ? 0o077 : installed ? 0o002 : 0o022))) fail('unsafe-file-permissions');
+    if (!windows && (stat.uid !== uid && stat.uid !== 0 || stat.mode & (privateFile ? 0o057 : 0o002))) fail('unsafe-file-permissions');
     if (privateFile && !windows && stat.uid !== uid) fail('unowned-auth-file');
     if (stat.size > 2 * 1024 * 1024) fail('oversized-metadata');
     return stat;
@@ -5709,7 +5709,7 @@ function pythonForToml() {
         if (!info(candidate)) continue;
         safeBoundary(path.dirname(candidate), true);
         const resolved = fs.realpathSync(candidate), target = info(resolved);
-        if (!target?.isFile() || ![0, process.getuid()].includes(target.uid) || target.mode & 0o022) fail('toml-parser-unavailable');
+        if (!target?.isFile() || ![0, process.getuid()].includes(target.uid) || target.mode & 0o002) fail('toml-parser-unavailable');
         safeBoundary(path.dirname(resolved), true);
         // Non-root executables must stay within an expected managed prefix.
         const allowed = ['/opt/homebrew/', '/usr/local/', path.join(home, '.pyenv/versions') + '/', path.join(home, '.local/share/mise/installs/python') + '/'];
@@ -5821,7 +5821,7 @@ try {
             if (!same(record.stat, current) || !same(record.stat, info(record.file)) || !rawRead(record.fd, current).equals(record.raw) || !same(record.stat, fs.fstatSync(record.fd))) fail('metadata-changed');
         }
         for (const record of writes) {
-            if (record.stat.uid !== process.getuid() || record.stat.mode & 0o022) fail('unsafe-metadata');
+            if (record.stat.uid !== process.getuid() || record.stat.mode & 0o002) fail('unsafe-metadata');
             safeBoundary(path.dirname(record.file), true);
         }
     }
@@ -7099,7 +7099,7 @@ function checkHealth(home, data, agent, cwd, required) {
     directoryChain(path.dirname(cli), ctx.snapshots);
     const info = stat(cli);
     if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size === 0 ||
-        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o022))) fail('unsafe-cli');
+        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o002))) fail('unsafe-cli');
     windowsAcl([cli], [cli]);
     recheck(ctx.snapshots);
     const env = { ...process.env, HOME: fs.realpathSync(home), PI_CODING_AGENT_DIR: ctx.agent };
@@ -7480,7 +7480,7 @@ function regular(ctx, file, optional = false) {
     remember(ctx, file, info);
     if (!info && optional) return null;
     if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > MAX_BYTES ||
-        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o022))) fail('unsafe-file');
+        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o002))) fail('unsafe-file');
     const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
     try {
         if (!same(info, fs.fstatSync(fd))) fail('changed-input');
@@ -9125,7 +9125,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 200 | Last changed: Retire installer code for owner-managed bb desktop applications"
+    Write-Host "Version 201 | Last changed: Accept existing group write during file verification"
 
     Assert-HeadlessUnsupported
 

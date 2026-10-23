@@ -579,7 +579,7 @@ test('official bytes at custom or project paths are preserved, not migrated', as
         assert.ok(fs.lstatSync(f.options.commands[0])); assert.equal(f.probes.length, 0);
     }
 });
-test('linked ancestors, linked metadata, group-writable copies and pins fail closed', async t => {
+test('linked ancestors, linked metadata, world-writable copies and pins fail closed', async t => {
     for (const unsafe of ['ancestor', 'metadata', 'writable', 'pin']) {
         const f = fixture(t);
         if (unsafe === 'ancestor') { fs.renameSync(path.join(f.home, '.local'), path.join(f.home, 'elsewhere')); fs.symlinkSync('elsewhere', path.join(f.home, '.local')); }
@@ -590,7 +590,7 @@ test('linked ancestors, linked metadata, group-writable copies and pins fail clo
     }
 });
 for (const cause of ['world-directory', 'foreign-directory', 'root-directory', 'root-account', 'file-ancestor', 'link-ancestor',
-    'linked-command', 'group-command', 'group-receipt', 'inspection']) test(`ordinary directory policy retains ${cause} refusal`, async t => {
+    'linked-command', 'world-command', 'world-receipt', 'inspection']) test(`ordinary directory policy retains ${cause} refusal`, async t => {
     const f = fixture(t), directory = path.dirname(f.dest);
     f.receipt('2.0.18', f.binary);
     fs.chmodSync(f.home, 0o775); fs.chmodSync(path.join(f.home, '.local'), 0o2775); fs.chmodSync(directory, 0o775);
@@ -601,8 +601,8 @@ for (const cause of ['world-directory', 'foreign-directory', 'root-directory', '
     if (cause === 'file-ancestor') overrides.mode = 0o100775;
     if (cause === 'link-ancestor') overrides.mode = 0o120775;
     if (cause === 'linked-command') { fs.renameSync(f.dest, f.dest + '-saved'); fs.symlinkSync('opencode-saved', f.dest); }
-    if (cause === 'group-command') fs.chmodSync(f.dest, 0o775);
-    if (cause === 'group-receipt') fs.chmodSync(receipt, 0o664);
+    if (cause === 'world-command') fs.chmodSync(f.dest, 0o777);
+    if (cause === 'world-receipt') fs.chmodSync(receipt, 0o666);
     const {api} = virtualPolicy(f, cause === 'root-account' ? {getuid: () => 0} : {}, {'node:fs': new Proxy(fs, {get(object, key) {
         if (key === 'lstatSync') return file => {
             if (file === directory && cause === 'inspection') throw Object.assign(new Error('SECRET failed stat'), {code: 'EACCES'});
@@ -621,6 +621,15 @@ for (const cause of ['world-directory', 'foreign-directory', 'root-directory', '
     assert.equal(f.probes.length, 0);
     assert.deepEqual(fs.readFileSync(receipt), contents);
     assert.deepEqual(fs.readFileSync(f.dest), f.binary);
+});
+test('group-writable current command and receipt are verified without chmod', async t => {
+    const f = fixture(t);
+    f.receipt('2.0.18', f.binary);
+    const receipt = path.join(path.dirname(f.dest), '.setup-opencode-cli.json');
+    fs.chmodSync(f.dest, 0o775); fs.chmodSync(receipt, 0o664);
+    assert.equal(await policy.install(f.options), 'current');
+    assert.equal(fs.lstatSync(f.dest).mode & 0o777, 0o775);
+    assert.equal(fs.lstatSync(receipt).mode & 0o777, 0o664);
 });
 test('official embedded version hint avoids an unbounded standalone version search', async t => {
     const f = fixture(t);
@@ -1187,8 +1196,10 @@ for (const cause of ['world-write', 'root-group-write', 'foreign-owner', 'linked
         assert.equal(f.observed.some(([, file]) => file.startsWith(boundary + '/')), false, 'do not inspect descendants of an untrusted boundary');
     });
 }
-test('ordinary directory acceptance leaves macOS Homebrew regular files strict', t => {
+test('macOS Homebrew regular files accept group write but reject world write', t => {
     const mac = homebrewFixture(t, 'darwin');
+    assert.equal(mac.api.brewCopy(mac.command).release, '1.18.33');
+    fs.chmodSync(mac.mapped(mac.cellar + '/bin/opencode'), 0o777);
     assert.throws(() => mac.api.brewCopy(mac.command), /brew-path/); assert.equal(mac.calls.length, 0);
 });
 function darwinBrewDirectories(f) {
@@ -1324,16 +1335,12 @@ for (const prefix of ['/opt/homebrew', '/usr/local']) {
 }
 for (const relative of ['/Cellar/opencode/1.18.33_2/bin/opencode',
     '/Cellar/opencode/1.18.33_2/INSTALL_RECEIPT.json']) {
-    test(`Darwin directory allowance does not extend to group-writable files: ${relative}`, async t => {
+    test(`Darwin group-writable package file permits verified migration: ${relative}`, async t => {
         const f = darwinHomebrewFixture(t, '1.18.33', '_2'), boundary = f.prefix + relative;
         fs.chmodSync(f.mapped(boundary), fs.lstatSync(f.mapped(boundary)).mode | 0o020);
-        await assert.rejects(f.api.install(f.options), error => {
-            assert.equal(f.api.failureResult(error), 'opencode-cli:policy-failed:homebrew-preflight:brew-path'); return true;
-        });
-        assert.equal(f.observed.some(([operation, file]) => file.startsWith(boundary + '/') &&
-            !(operation === 'lstatSync' && (file === f.command || f.command.startsWith(file + '/')))), false,
-            'ownership-only command-route stats must not inspect a refused keg or receipt');
-        assert.equal(f.calls.length, 0);
+        const mode = fs.lstatSync(f.mapped(boundary)).mode;
+        assert.equal(await f.api.install(f.options), 'migrated');
+        assert.equal(fs.lstatSync(f.mapped(boundary)).mode, mode);
     });
 }
 test('Darwin directory allowance does not recognize lexical near matches or nested commands', t => {
@@ -1435,7 +1442,7 @@ for (const phase of ['staged', 'promoted']) test(`Darwin directory exception pre
 });
 for (const [change, reason] of [['identity', 'unverified-copy'], ['pin', 'pinned'], ['receipt-link', 'brew-path'],
     ['malformed-receipt', 'metadata'], ['missing-receipt', 'native-ENOENT'], ['custom-tap', 'brew-origin'], ['custom-link', 'brew-command'],
-    ['receipt-world-write', 'brew-path'], ['receipt-foreign-owner', 'brew-path'], ['receipt-root-group-write', 'brew-path'],
+    ['receipt-world-write', 'brew-path'], ['receipt-foreign-owner', 'brew-path'], ['receipt-root-world-write', 'brew-path'],
     ['receipt-hardlink', 'brew-path'], ['outside-prefix-root-group-write', 'brew-path']]) {
     test(`Homebrew preserves ${change} without executing any command`, async t => {
         const f = homebrewFixture(t, 'linux', '/home/linuxbrew/.linuxbrew', '1.18.33', '_2'), native = f.cellar + '/bin/opencode', receipt = f.cellar + '/INSTALL_RECEIPT.json';
@@ -1453,7 +1460,9 @@ for (const [change, reason] of [['identity', 'unverified-copy'], ['pin', 'pinned
         }
         if (change === 'receipt-world-write') fs.chmodSync(f.mapped(receipt), 0o666);
         if (change === 'receipt-foreign-owner') f.statOverrides.set(receipt, {uid: process.getuid()+1});
-        if (change === 'receipt-root-group-write') f.statOverrides.set(receipt, {uid: 0});
+        if (change === 'receipt-root-world-write') {
+            fs.chmodSync(f.mapped(receipt), 0o666); f.statOverrides.set(receipt, {uid: 0});
+        }
         if (change === 'receipt-hardlink') fs.linkSync(f.mapped(receipt), f.mapped(receipt + '.linked'));
         if (change === 'outside-prefix-root-group-write') {
             fs.chmodSync(f.mapped('/home/linuxbrew'), 0o775); f.statOverrides.set('/home/linuxbrew', {uid: 0});
@@ -1466,6 +1475,16 @@ for (const [change, reason] of [['identity', 'unverified-copy'], ['pin', 'pinned
         assert.deepEqual(fs.readFileSync(f.mapped(native)), contents);
         assert.deepEqual(fs.readdirSync(path.dirname(f.dest)), []);
         assert.equal(f.calls.length, 0);
+    });
+}
+for (const [platform, prefix] of [['linux', '/home/linuxbrew/.linuxbrew'], ['darwin', '/opt/homebrew']]) {
+    test(`${platform} accepts root-owned group-writable Homebrew receipt without chmod`, async t => {
+        const f = homebrewFixture(t, platform, prefix, '1.18.33', '_2');
+        const receipt = f.cellar + '/INSTALL_RECEIPT.json';
+        fs.chmodSync(f.mapped(receipt), 0o664);
+        f.statOverrides.set(receipt, {uid: 0});
+        assert.equal(await f.api.install(f.options), 'migrated');
+        assert.equal(fs.lstatSync(f.mapped(receipt)).mode & 0o777, 0o664);
     });
 }
 for (const phase of ['before-quarantine', 'before-publication', 'recovery']) {

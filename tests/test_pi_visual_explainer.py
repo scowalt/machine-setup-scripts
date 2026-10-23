@@ -362,6 +362,38 @@ print_warning() { printf 'WARNING: %s\n' "$*"; }
                     self.assertEqual(self.wrapper(script, overrides=overrides).returncode, 1)
                     self.assertFalse(self.calls.exists())
 
+    def test_group_writable_native_install_and_existing_checkout_converge_without_mode_repair(self):
+        fake = self.bin / 'pi'
+        installer = FAKE_PI.replace('import json, os, pathlib, shutil, sys',
+                                   'import json, os, pathlib, shutil, subprocess, sys\nos.umask(0o002)')
+        installer = installer.replace("if not checkout.exists(): shutil.copytree(root/'template',checkout)",
+            "if not checkout.exists():\n    subprocess.run(['git','clone','--quiet','--no-hardlinks','--local',str(root/'template'),str(checkout)],check=True)\n    subprocess.run(['git','-C',str(checkout),'remote','set-url','origin','https://github.com/nicobailon/visual-explainer.git'],check=True)")
+        fake.write_text(installer)
+        for script in SCRIPTS:
+            with self.subTest(script=script):
+                if self.checkout.exists(): shutil.rmtree(self.agent / 'git')
+                self.settings.write_text('{}')
+                self.assert_ok(self.wrapper(script))
+                self.assertEqual((self.checkout / '.git/config').stat().st_mode & 0o777, 0o664)
+                self.assertEqual((self.checkout / 'package.json').stat().st_mode & 0o777, 0o664)
+                self.settings.chmod(0o664)
+                self.assert_ok(self.wrapper(script))
+                self.assert_ok(self.wrapper(script, refresh=True))
+                self.assertEqual(self.settings.stat().st_mode & 0o777, 0o664)
+                self.assertEqual((self.checkout / PAYLOAD / 'SKILL.md').stat().st_mode & 0o777, 0o664)
+
+    def test_group_write_does_not_bypass_other_file_guards_or_snapshot_changes(self):
+        self.installed()
+        file = self.checkout / '.git/config'
+        for mode in (0o660, 0o664, 0o770, 0o775):
+            file.chmod(mode)
+            self.assert_ok(self.policy())
+        file.chmod(0o666)
+        self.assertEqual(self.policy().stdout, 'failed:unsafe-file\n')
+        file.chmod(0o664)
+        prelude = 'const fs=require("node:fs"),original=fs.lstatSync; let count=0; fs.lstatSync=(...args)=>{const s=original(...args); if(String(args[0]).endsWith("/.git/config") && ++count>1) s.mode^=0o020; return s;};'
+        self.assertEqual(self.policy(prelude=prelude).stdout, 'failed:changed-input\n')
+
     def test_ordinary_group_access_is_not_normalized_and_changed_snapshots_stop_migration(self):
         self.installed()
         ordinary = (self.home, self.agent.parent, self.checkout, self.checkout.parent)

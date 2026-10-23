@@ -159,7 +159,7 @@ testFs.readSync=(...args)=>{{
             self.assertEqual(getattr(metadata_after, field), getattr(metadata_before, field))
         self.assertEqual(self.helper().stdout.strip(), 'absent')
 
-    def test_managed_toml_parser_prefixes_accept_directories_but_not_group_writable_executables(self):
+    def test_managed_toml_parser_accepts_group_write_but_rejects_world_write(self):
         for prefix in ('.pyenv/versions/3.12.77', '.local/share/mise/installs/python/3.12.77'):
             with self.subTest(prefix=prefix):
                 runtime = self.home / prefix / 'bin/python3'
@@ -179,6 +179,11 @@ testCp.spawnSync=(command,args,options)=>{{if(command!=={json.dumps(str(runtime)
                 self.assert_directories(before)
                 runtime.chmod(0o775)
                 self.codex.write_text('[mcp_servers.backlog]\ncommand="backlog"\n')
+                self.helper(prelude=prelude)
+                self.assertNotIn('[mcp_servers.backlog]', self.codex.read_text())
+                self.assertEqual(runtime.stat().st_mode & 0o777, 0o775)
+                runtime.chmod(0o777)
+                self.codex.write_text('[mcp_servers.backlog]\ncommand="backlog"\n')
                 self.assertEqual(self.helper(False, prelude).stdout.strip(), 'toml-parser-unavailable')
                 self.assertIn('[mcp_servers.backlog]', self.codex.read_text())
                 runtime.unlink()
@@ -189,7 +194,7 @@ testCp.spawnSync=(command,args,options)=>{{if(command!=={json.dumps(str(runtime)
         self.caller('mac.sh', success=False, earlier=True)
         self.assert_removed()
         self.files[0].write_text(self.text)
-        self.files[0].chmod(0o660)
+        self.files[0].chmod(0o666)
         self.caller('ubuntu.sh', success=False)
         self.assertEqual(self.files[0].read_text(), self.text)
 

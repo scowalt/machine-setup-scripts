@@ -98,7 +98,7 @@ class LocalFiles:
         except ValueError:
             return path
 
-    def inspect(self, path, directory=False, optional=False, volatile=False, account_group_write=False):
+    def inspect(self, path, directory=False, optional=False, volatile=False):
         path = self.normalize(path)
         need(path.is_absolute() and '..' not in path.parts, 'unverified-local-state')
         chain = list(reversed(path.parents)) + [path]
@@ -115,8 +115,7 @@ class LocalFiles:
                  'unverified-local-state')
             need(info.st_uid in (0, self.uid), 'foreign-local-state')
             sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-            mask = (0o002 if info.st_uid == self.uid and info.st_uid != 0
-                    and (is_dir or account_group_write) else 0o022)
+            mask = 0o002 if not is_dir or info.st_uid == self.uid and info.st_uid != 0 else 0o022
             need(not info.st_mode & mask or sticky_tmp, 'writable-local-state')
             if not is_dir:
                 need(info.st_nlink == 1, 'unverified-local-state')
@@ -196,9 +195,9 @@ class LocalFiles:
             if completed and close_failed:
                 raise Refusal('unverified-local-state')
 
-    def read(self, path, optional=False, header=False, account_group_write=False):
+    def read(self, path, optional=False, header=False):
         path = self.normalize(path)
-        info = self.inspect(path, optional=optional, volatile=header, account_group_write=account_group_write)
+        info = self.inspect(path, optional=optional, volatile=header)
         if info is None:
             return None
         def stable(observed):
@@ -225,8 +224,8 @@ class LocalFiles:
                 except Exception:
                     pass   
 
-    def json(self, path, optional=False, account_group_write=False):
-        raw = self.read(path, optional, account_group_write=account_group_write)
+    def json(self, path, optional=False):
+        raw = self.read(path, optional)
         return None if raw is None else object_json(raw)
 
 
@@ -393,7 +392,7 @@ def main_entry(argv):
 def verify_package(files, entry):
     root = entry.parents[2]
     try:
-        metadata = files.json(root / 'package.json', optional=True, account_group_write=True)
+        metadata = files.json(root / 'package.json', optional=True)
     except (Refusal, OSError):
         if root.name != 'bb-app':
             return False   
@@ -404,8 +403,8 @@ def verify_package(files, entry):
         need(not isinstance(workspace, dict) or workspace.get('name') != '@bb/server', 'unsupported-native-contract')
         return False
     need(metadata.get('bin', {}).get('bb-server') == 'dist/bb-server.js', 'unverified-main-server')
-    files.inspect(entry, account_group_write=True)
-    files.inspect(root / 'server/dist/start-server.js', account_group_write=True)
+    files.inspect(entry)
+    files.inspect(root / 'server/dist/start-server.js')
     return True
 
 
@@ -470,7 +469,7 @@ def discover(files, processes, configured_data=None, block_default=False):
                  and isinstance(moved.get('oldCopyEntries'), list), 'unverified-local-state')
             continue   
         need(files.read(data / 'server-import.json', optional=True) is None, 'server-move-in-progress')
-        runtime = files.json(data / 'bb-app-runtime.json', optional=True, account_group_write=True)
+        runtime = files.json(data / 'bb-app-runtime.json', optional=True)
         if runtime is not None:
             need(isinstance(runtime, dict) and type(runtime.get('pid')) is int, 'unverified-local-state')
             need(processes.read(runtime['pid']) is None, 'unverified-main-server')
@@ -537,8 +536,8 @@ class NativeApi:
         server = self.server
         node = Path(server['record'][0][0])
         cli = server['entry'].parents[2] / 'host-daemon/dist/bb'
-        self.files.inspect(node, account_group_write=True)
-        need(self.files.inspect(cli, account_group_write=True).st_size > 0, 'unverified-main-server')
+        self.files.inspect(node)
+        need(self.files.inspect(cli).st_size > 0, 'unverified-main-server')
         self.files.inspect(cli.parent / 'bb-chunks', directory=True)
         need(self.processes.read(server['pid']) == server['record'], 'changed-process')
         need(verify_package(self.files, server['entry']), 'unverified-main-server')
@@ -548,7 +547,7 @@ class NativeApi:
         env = {'HOME': str(self.files.home), 'PATH': str(node.parent) + ':/usr/bin:/bin',
                'BB_DATA_DIR': str(server['data']), 'BB_SERVER_URL': f"http://127.0.0.1:{server['port']}",
                'BB_CLI_REEXEC': '1', 'ELECTRON_RUN_AS_NODE': '1', 'NO_COLOR': '1', 'NODE_ENV': 'production',
-               'BB_APP_VERSION': self.files.json(server['entry'].parents[2] / 'package.json', account_group_write=True)['version']}
+               'BB_APP_VERSION': self.files.json(server['entry'].parents[2] / 'package.json')['version']}
         result = subprocess.run([str(node), str(cli), 'plugin', 'update', '--all', '--yes'],
                                 cwd=server['data'], env=env, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

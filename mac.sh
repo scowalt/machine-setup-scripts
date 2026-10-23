@@ -697,7 +697,7 @@ fix_zsh_compaudit() {
         mode=${BASH_REMATCH[2]}
         mask=0022
         permissions=go-w
-        if [[ -d "${entry}" && "${owner}" == "${current_uid}" && "${current_uid}" != 0 ]]; then
+        if [[ -f "${entry}" || ( -d "${entry}" && "${owner}" == "${current_uid}" && "${current_uid}" != 0 ) ]]; then
             mask=0002
             permissions=o-w
         fi
@@ -718,7 +718,7 @@ fix_zsh_compaudit() {
         print_warning "Could not verify or protect zsh completion permissions."
         return 1
     fi
-    print_debug "Zsh completion permission checks finished; account-owned directory group access preserved."
+    print_debug "Zsh completion permission checks finished; file and account-owned directory group access preserved."
 }
 
 ensure_brew_item_trusted() {
@@ -1727,9 +1727,9 @@ function safePath(file, home, leafLink = false, directories) {
         let st;
         try { st = fs.lstatSync(item); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
         if ((st.isSymbolicLink() && !(leafLink && item === file)) ||
-            (!st.isSymbolicLink() && !st.isDirectory() && !st.isFile()) ||
+            (!st.isSymbolicLink() && !st.isDirectory() && !(item === file && st.isFile())) ||
             (process.platform !== 'win32' && (st.uid !== process.getuid() ||
-                (!st.isSymbolicLink() && (st.mode & (st.isDirectory() && st.uid !== 0 ? 0o002 : 0o022)))))) fail('unsafe-path');
+                (!st.isSymbolicLink() && (st.mode & (st.isFile() || st.isDirectory() && st.uid !== 0 ? 0o002 : 0o022)))))) fail('unsafe-path');
         if (directories && st.isDirectory()) {
             if (directories.has(item) && !sameBrew(directories.get(item), st)) fail('changed-copy');
             directories.set(item, st);
@@ -1862,7 +1862,7 @@ const brewFingerprint = s => s && (s.isDirectory() ? ['dev', 'ino', 'uid', 'gid'
 const sameBrew = (a, b) => JSON.stringify(brewFingerprint(a)) === JSON.stringify(brewFingerprint(b));
 function brewPermissions(file, info) {
     if (![0, process.getuid()].includes(info.uid) || (!info.isSymbolicLink() && (info.mode & 0o002))) fail('brew-path');
-    if (!info.isSymbolicLink() && (info.mode & 0o020)) {
+    if (info.isDirectory() && (info.mode & 0o020)) {
         const linuxBrew = process.platform === 'linux' &&
             (file === '/home/linuxbrew/.linuxbrew' || file.startsWith('/home/linuxbrew/.linuxbrew/'));
         const accountDirectory = ['linux', 'darwin'].includes(process.platform) && info.isDirectory();
@@ -3710,7 +3710,7 @@ function directory(file) {
 function owned(file, privateDirectory = false) {
     const st = stat(file);
     if (st) windowsRecord(file, true, st.isSymbolicLink() && ['remove', 'dispose'].includes(mode));
-    const writeMask = st?.isDirectory() && st.uid !== 0 && !privateDirectory ? 0o002 : 0o022;
+    const writeMask = st?.isFile() || st?.isDirectory() && st.uid !== 0 && !privateDirectory ? 0o002 : 0o022;
     if (st && process.platform !== 'win32' && (st.uid !== process.getuid() || !st.isSymbolicLink() && (st.mode & writeMask))) fail('unsafe-owner-or-mode');
 }
 function jsonFile(file) {
@@ -4735,7 +4735,7 @@ function regular(file, privateFile = false, installed = false) {
     const stat = info(file);
     if (!stat) return null;
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) fail('linked-or-nonregular-file');
-    if (!windows && (stat.uid !== uid && stat.uid !== 0 || stat.mode & (privateFile ? 0o077 : installed ? 0o002 : 0o022))) fail('unsafe-file-permissions');
+    if (!windows && (stat.uid !== uid && stat.uid !== 0 || stat.mode & (privateFile ? 0o057 : 0o002))) fail('unsafe-file-permissions');
     if (privateFile && !windows && stat.uid !== uid) fail('unowned-auth-file');
     if (stat.size > 2 * 1024 * 1024) fail('oversized-metadata');
     return stat;
@@ -5760,7 +5760,7 @@ function pythonForToml() {
         if (!info(candidate)) continue;
         safeBoundary(path.dirname(candidate), true);
         const resolved = fs.realpathSync(candidate), target = info(resolved);
-        if (!target?.isFile() || ![0, process.getuid()].includes(target.uid) || target.mode & 0o022) fail('toml-parser-unavailable');
+        if (!target?.isFile() || ![0, process.getuid()].includes(target.uid) || target.mode & 0o002) fail('toml-parser-unavailable');
         safeBoundary(path.dirname(resolved), true);
         // Non-root executables must stay within an expected managed prefix.
         const allowed = ['/opt/homebrew/', '/usr/local/', path.join(home, '.pyenv/versions') + '/', path.join(home, '.local/share/mise/installs/python') + '/'];
@@ -5872,7 +5872,7 @@ try {
             if (!same(record.stat, current) || !same(record.stat, info(record.file)) || !rawRead(record.fd, current).equals(record.raw) || !same(record.stat, fs.fstatSync(record.fd))) fail('metadata-changed');
         }
         for (const record of writes) {
-            if (record.stat.uid !== process.getuid() || record.stat.mode & 0o022) fail('unsafe-metadata');
+            if (record.stat.uid !== process.getuid() || record.stat.mode & 0o002) fail('unsafe-metadata');
             safeBoundary(path.dirname(record.file), true);
         }
     }
@@ -7075,7 +7075,7 @@ function checkHealth(home, data, agent, cwd, required) {
     directoryChain(path.dirname(cli), ctx.snapshots);
     const info = stat(cli);
     if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size === 0 ||
-        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o022))) fail('unsafe-cli');
+        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o002))) fail('unsafe-cli');
     windowsAcl([cli], [cli]);
     recheck(ctx.snapshots);
     const env = { ...process.env, HOME: fs.realpathSync(home), PI_CODING_AGENT_DIR: ctx.agent };
@@ -7422,7 +7422,7 @@ function regular(ctx, file, optional = false) {
     remember(ctx, file, info);
     if (!info && optional) return null;
     if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > MAX_BYTES ||
-        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o022))) fail('unsafe-file');
+        process.platform !== 'win32' && (info.uid !== process.getuid() || (info.mode & 0o002))) fail('unsafe-file');
     const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
     try {
         if (!same(info, fs.fstatSync(fd))) fail('changed-input');
@@ -9210,7 +9210,7 @@ class LocalFiles:
         except ValueError:
             return path
 
-    def inspect(self, path, directory=False, optional=False, volatile=False, account_group_write=False):
+    def inspect(self, path, directory=False, optional=False, volatile=False):
         path = self.normalize(path)
         need(path.is_absolute() and '..' not in path.parts, 'unverified-local-state')
         chain = list(reversed(path.parents)) + [path]
@@ -9227,8 +9227,7 @@ class LocalFiles:
                  'unverified-local-state')
             need(info.st_uid in (0, self.uid), 'foreign-local-state')
             sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-            mask = (0o002 if info.st_uid == self.uid and info.st_uid != 0
-                    and (is_dir or account_group_write) else 0o022)
+            mask = 0o002 if not is_dir or info.st_uid == self.uid and info.st_uid != 0 else 0o022
             need(not info.st_mode & mask or sticky_tmp, 'writable-local-state')
             if not is_dir:
                 need(info.st_nlink == 1, 'unverified-local-state')
@@ -9308,9 +9307,9 @@ class LocalFiles:
             if completed and close_failed:
                 raise Refusal('unverified-local-state')
 
-    def read(self, path, optional=False, header=False, account_group_write=False):
+    def read(self, path, optional=False, header=False):
         path = self.normalize(path)
-        info = self.inspect(path, optional=optional, volatile=header, account_group_write=account_group_write)
+        info = self.inspect(path, optional=optional, volatile=header)
         if info is None:
             return None
         def stable(observed):
@@ -9337,8 +9336,8 @@ class LocalFiles:
                 except Exception:
                     pass   
 
-    def json(self, path, optional=False, account_group_write=False):
-        raw = self.read(path, optional, account_group_write=account_group_write)
+    def json(self, path, optional=False):
+        raw = self.read(path, optional)
         return None if raw is None else object_json(raw)
 
 
@@ -9505,7 +9504,7 @@ def main_entry(argv):
 def verify_package(files, entry):
     root = entry.parents[2]
     try:
-        metadata = files.json(root / 'package.json', optional=True, account_group_write=True)
+        metadata = files.json(root / 'package.json', optional=True)
     except (Refusal, OSError):
         if root.name != 'bb-app':
             return False   
@@ -9516,8 +9515,8 @@ def verify_package(files, entry):
         need(not isinstance(workspace, dict) or workspace.get('name') != '@bb/server', 'unsupported-native-contract')
         return False
     need(metadata.get('bin', {}).get('bb-server') == 'dist/bb-server.js', 'unverified-main-server')
-    files.inspect(entry, account_group_write=True)
-    files.inspect(root / 'server/dist/start-server.js', account_group_write=True)
+    files.inspect(entry)
+    files.inspect(root / 'server/dist/start-server.js')
     return True
 
 
@@ -9582,7 +9581,7 @@ def discover(files, processes, configured_data=None, block_default=False):
                  and isinstance(moved.get('oldCopyEntries'), list), 'unverified-local-state')
             continue   
         need(files.read(data / 'server-import.json', optional=True) is None, 'server-move-in-progress')
-        runtime = files.json(data / 'bb-app-runtime.json', optional=True, account_group_write=True)
+        runtime = files.json(data / 'bb-app-runtime.json', optional=True)
         if runtime is not None:
             need(isinstance(runtime, dict) and type(runtime.get('pid')) is int, 'unverified-local-state')
             need(processes.read(runtime['pid']) is None, 'unverified-main-server')
@@ -9649,8 +9648,8 @@ class NativeApi:
         server = self.server
         node = Path(server['record'][0][0])
         cli = server['entry'].parents[2] / 'host-daemon/dist/bb'
-        self.files.inspect(node, account_group_write=True)
-        need(self.files.inspect(cli, account_group_write=True).st_size > 0, 'unverified-main-server')
+        self.files.inspect(node)
+        need(self.files.inspect(cli).st_size > 0, 'unverified-main-server')
         self.files.inspect(cli.parent / 'bb-chunks', directory=True)
         need(self.processes.read(server['pid']) == server['record'], 'changed-process')
         need(verify_package(self.files, server['entry']), 'unverified-main-server')
@@ -9660,7 +9659,7 @@ class NativeApi:
         env = {'HOME': str(self.files.home), 'PATH': str(node.parent) + ':/usr/bin:/bin',
                'BB_DATA_DIR': str(server['data']), 'BB_SERVER_URL': f"http://127.0.0.1:{server['port']}",
                'BB_CLI_REEXEC': '1', 'ELECTRON_RUN_AS_NODE': '1', 'NO_COLOR': '1', 'NODE_ENV': 'production',
-               'BB_APP_VERSION': self.files.json(server['entry'].parents[2] / 'package.json', account_group_write=True)['version']}
+               'BB_APP_VERSION': self.files.json(server['entry'].parents[2] / 'package.json')['version']}
         result = subprocess.run([str(node), str(cli), 'plugin', 'update', '--all', '--yes'],
                                 cwd=server['data'], env=env, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -9780,16 +9779,6 @@ function rememberService(file, s) {
 }
 function servicePermissions(file, s, privateParent) {
   check(!(s.mode & 0o002), 'writable-boundary');
-  if (!(s.mode & 0o020)) return;
-  // Only regular read-only service files retain the Linux privacy exception.
-  // Ordinary directories never require this proof or its native dependencies.
-  check(process.platform === 'linux', 'writable-boundary');
-  check(!s.isFile() || s.nlink === 1, 'unsafe-file');
-  if (!privateParent && !serviceGroupCandidates.has(file)) {
-    // Cache only successful file proofs; recheck before package work.
-    verifyServiceGroups([[file, s]]);
-    serviceGroupCandidates.set(file, s);
-  }
 }
 function chain(dir, serviceInspection = false) {
   const privateParent = dir !== path.dirname(dir) ? chain(path.dirname(dir), serviceInspection) : false;
@@ -9815,7 +9804,7 @@ function regular(f, packageArtifact = false) {
   const s = fs.lstatSync(f); observed = s;
   check(!s.isSymbolicLink(), 'linked-path');
   check(s.uid === uid, 'unsafe-ownership');
-  check(!(s.mode & (packageArtifact && uid !== 0 ? 0o002 : 0o022)), 'writable-boundary');
+  check(!(s.mode & 0o002), 'writable-boundary');
   check(s.isFile() && s.nlink === 1 && s.size > 0, 'unsafe-file');
   return s;
 }
@@ -9837,7 +9826,7 @@ def read_file(file, limit, root=False):
     try:
         before = os.fstat(fd)
         need(stat.S_ISREG(before.st_mode))
-        if root: need(before.st_uid == 0 and not before.st_mode & 0o022 and before.st_nlink == 1)
+        if root: need(before.st_uid == 0 and not before.st_mode & 0o002 and before.st_nlink == 1)
         data = bytearray()
         while len(data) <= limit:
             part = os.read(fd, min(65536, limit + 1 - len(data)))
@@ -9949,7 +9938,6 @@ function verifyServiceGroups(candidates = [...serviceGroupCandidates]) {
   }
 }
 function verifyServiceInspection() {
-  verifyServiceGroups();
   for (const [file, before] of serviceSnapshots) {
     context(before.isDirectory() ? 'directory' : 'service', file, before);
     check(sameService(before, stat(file)));
@@ -10007,7 +9995,7 @@ function serviceUnreferenced(file) {
     check(s.isCharacterDevice() && s.uid === 0); return; // Native systemd mask; no read.
   }
   check(s.uid === uid || s.uid === 0, 'unsafe-ownership');
-  check(s.isFile() && !s.isSymbolicLink() && s.size < 1048576, 'unsafe-file');
+  check(s.isFile() && !s.isSymbolicLink() && s.nlink === 1 && s.size < 1048576, 'unsafe-file');
   servicePermissions(target, s, privateParent);
   // Bound non-followed reads and revalidate snapshots before package work.
   const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -10040,7 +10028,7 @@ function tree(dir) {
       const t = stat(target); check(!t || (t.isFile() && !t.isSymbolicLink()), 'linked-path');
     } else if (s.isDirectory()) tree(f);
     else {
-      check(!(s.mode & (uid !== 0 ? 0o002 : 0o022)), 'writable-boundary');
+      check(!(s.mode & 0o002), 'writable-boundary');
       check(s.isFile() && s.nlink === 1, 'unsafe-file');
     }
   }
@@ -10078,7 +10066,7 @@ try {
     chain(root);
     if (!stat(root)) return;
     check(JSON.stringify(json(marker)) === JSON.stringify(owner));
-    check(!(fs.lstatSync(marker).mode & 0o077));
+    check(!(fs.lstatSync(marker).mode & 0o057));
     context('artifact', root); observed = fs.lstatSync(root);
     check(fs.readdirSync(root).every(n => ['owner.json', 'npm'].includes(n)));
     if (stat(prefix)) {
@@ -10281,7 +10269,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 308 | Last changed: Retire installer code for owner-managed bb desktop applications${NC}"
+    echo -e "${GRAY}Version 309 | Last changed: Accept existing group write during file verification${NC}"
 
     if ! acquire_setup_lock; then
         return 1

@@ -836,7 +836,7 @@ find() {
         self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
         self.assertEqual({p: (p.stat().st_mode, p.read_bytes()) for p in protected}, before)
 
-    def test_root_owned_package_files_keep_strict_write_mask(self):
+    def test_root_owned_package_files_accept_group_write_but_not_world_write(self):
         self.package.mkdir(parents=True, exist_ok=True)
         manifest = self.package / 'package.json'
         manifest.write_text('{"name":"bb-app","version":"0.46.0"}')
@@ -847,7 +847,7 @@ find() {
         patch.write_text('const fs=require("node:fs"),original=fs.lstatSync; process.getuid=()=>0;'
                          'fs.lstatSync=(...args)=>{const s=original(...args);s.uid=0;return s;};')
         for target in (manifest, native):
-            for mode in (0o644, 0o664):
+            for mode in (0o644, 0o664, 0o666):
                 for file in (manifest, native):
                     file.chmod(0o644)
                 target.chmod(mode)
@@ -857,7 +857,7 @@ find() {
                                            extra='node() { builtin command node --require "$FIXTURE_ROOT_METADATA" "$@"; }',
                                            env={'FIXTURE_PREFIX': str(self.prefix), 'FIXTURE_PACKAGE': str(self.package),
                                                 'FIXTURE_ROOT_METADATA': str(patch)})
-                    self.assertEqual(result.returncode, int(mode == 0o664), result)
+                    self.assertEqual(result.returncode, int(mode == 0o666), result)
                     self.assertEqual(self.snapshot(), before)
 
     def test_group_writable_existing_package_preflight_preserves_files(self):
@@ -912,6 +912,15 @@ chown() { event forbidden-ownership-repair; return 97; }
         config = self.seed('.bb/config.json', '{"config":{"BB_APP_URL":"https://old.invalid"},"providers":{"keep":"native"}}')
         env = self.seed('.bb/env.json', '{"env":{"BB_APP_URL":"https://old.invalid","KEY":"' + SECRET + '"}}')
         auth = self.seed('.bb/auth.json', '{"private":"' + SECRET + '"}')
+        config.chmod(0o664)
+        env.chmod(0o620)
+        auth.chmod(0o620)
+        for name in ('.bb/.config.json.lock', '.bb/.env.json.lock'):
+            self.seed(name, '').chmod(0o620)
+        for name in ('.config/setup-bb-server/endpoint', '.config/setup-bb-server/package-owner'):
+            (self.home / name).chmod(0o620)
+        for unit in ('app', 'ingress'):
+            (self.home / ('.config/systemd/user/setup-bb-' + unit + '.service')).chmod(0o664)
         for unit in ('app', 'ingress'):
             (self.home / ('.config/systemd/user/setup-bb-' + unit + '.service.d')).mkdir()
         directories = [self.home] + [p for p in self.home.rglob('*') if p.is_dir()]
@@ -955,14 +964,15 @@ check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
                 self.assertEqual({p: p.read_bytes() for p in protected}, protected)
                 self.assertEqual({p: (p.stat().st_mode, p.read_bytes()) for p in package_before}, package_before)
                 for name in ('config.json', 'env.json', '.config.json.lock', '.env.json.lock'):
-                    self.assertEqual((self.home / '.bb' / name).stat().st_mode & 0o7777, 0o600)
+                    self.assertEqual((self.home / '.bb' / name).stat().st_mode & 0o7777,
+                                     0o620 if name.startswith('.') else 0o600)
 
         for relative, mode, label in (
             ('.bb/auth.json', 0o640, 'preflight.host-identity'),
-            ('.bb/config.json', 0o620, 'preflight.config-file'),
-            ('.bb/.config.json.lock', 0o620, 'config.locks'),
+            ('.bb/config.json', 0o622, 'preflight.config-file'),
+            ('.bb/.config.json.lock', 0o622, 'config.locks'),
             ('.config/setup-bb-server/endpoint', 0o640, 'preflight.endpoint-file'),
-            ('.config/systemd/user/setup-bb-app.service', 0o664, 'preflight.app-unit-file'),
+            ('.config/systemd/user/setup-bb-app.service', 0o666, 'preflight.app-unit-file'),
             (str(self.package.relative_to(self.home)) + '/package.json', 0o666, 'npm.previous-target'),
             (str(self.package.relative_to(self.home)) + '/node_modules/fs-native-extensions/prebuilds/linux-x64/nested/fixture.node',
              0o666, 'npm.previous-target'),
@@ -1087,7 +1097,7 @@ check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
         self.failure('preflight.metadata-link', unchanged=True)
 
     def test_metadata_permissions_are_reported_at_the_actual_boundary(self):
-        self.seed('.bb/config.json', '{"private":"' + SECRET + '"}').chmod(0o620)
+        self.seed('.bb/config.json', '{"private":"' + SECRET + '"}').chmod(0o622)
         self.failure('preflight.config-file', unchanged=True)
 
     def test_native_npm_preflight_reports_each_query_and_policy_failure(self):

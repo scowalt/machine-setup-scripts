@@ -434,6 +434,8 @@ touch "$BB_TEST_ROOT/route-occupied"
 ! grep -q '^install$' "$BB_TEST_EVENTS"
 rm "$BB_TEST_ROOT/route-occupied"
 chmod 620 "$HOME/.bb/config.json"
+bb_owned_metadata_file "$HOME/.bb/config.json"
+chmod 622 "$HOME/.bb/config.json"
 : > "$BB_TEST_EVENTS"
 ! setup_bb_server
 ! grep -q '^install$' "$BB_TEST_EVENTS"

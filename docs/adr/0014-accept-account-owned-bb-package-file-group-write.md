@@ -1,5 +1,7 @@
 # Accept account-owned BB package files with group write
 
+[ADR 0018](0018-accept-existing-file-group-write.md) extends group-write acceptance across setup file verification, superseding the component limits below while preserving other safeguards.
+
 The [Beelink failure](../research/2026-10-14-beelink-bb-package-file-modes.md) exposed recurring group-writable BB package files that stopped maintenance and plugin discovery despite permitted directory access. Accept existing group write on otherwise-verified, non-root account-owned npm `bb-app` package payloads, including bundled native dependencies and the Node executable identified as running that local server. Apply this in Ubuntu server preflight, artifact verification/restoration, the separate setup-owned preparation package and Unix plugin discovery/CLI handoff, without chmod, group-privacy proofs or changes to shared Node installation policy. The owner accepts modification by existing group members instead of recurring permission repair; this is not isolation or new installation/lifecycle authority.
 
 The dedicated preparation prefix's BB payload and npm package-lock metadata follow the package-file rule; its private `owner.json` does not. This neither updates an enrolled role nor authorizes enrollment.

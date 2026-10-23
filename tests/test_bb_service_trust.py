@@ -175,7 +175,7 @@ class ServiceGroupProof(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == 'linux', 'Linux read-only group/ACL proof')
 class PreparationReferenceIntegration(unittest.TestCase):
-    def test_ordinary_service_directories_need_no_privacy_proof_on_either_unix_platform(self):
+    def test_group_writable_service_files_and_directories_need_no_privacy_proof_on_either_unix_platform(self):
         for platform in ['linux', 'darwin']:
             for mode in [0o750, 0o755, 0o770, 0o775, 0o2775]:
                 with self.subTest(platform=platform, mode=oct(mode)):
@@ -192,11 +192,12 @@ class PreparationReferenceIntegration(unittest.TestCase):
                     opt = case.home / 'brew/opt/example'
                     for directory in [units, agents, target.parent, cellar, opt.parent]:
                         directory.mkdir(parents=True, exist_ok=True)
-                    target.write_text('[Service]\nExecStart=/usr/bin/true\n'); target.chmod(0o644)
+                    target.write_text('[Service]\nExecStart=/usr/bin/true\n'); target.chmod(0o664)
                     (units / 'unrelated.service').symlink_to(target)
                     (units / 'masked.service').symlink_to('/dev/null')
                     (units / 'empty.service').write_text('')
                     (cellar / 'example.plist').write_text('<plist/>')
+                    (cellar / 'example.plist').chmod(0o664)
                     opt.symlink_to('../Cellar/example/1.0')
                     (agents / 'example.plist').symlink_to(opt / 'example.plist')
                     for directory in [case.home, *[p for p in case.home.rglob('*') if p.is_dir() and not p.is_symlink()]]:
@@ -245,10 +246,9 @@ cp.execFileSync=function(command,args,...rest) {
                         target.chmod(0o664)
                         case.events.write_text('')
                         before = snapshot(case.home)
-                        out = case.run_helper(expected=1, TEST_PLATFORM=platform)
-                        self.assertIn('operation=service', out)
-                        self.assertIn('mode=0664 reason=writable-boundary', out)
-                        self.assertNotIn('npm ', case.log())
+                        out = case.run_helper(TEST_PLATFORM=platform)
+                        self.assertIn('not enrolled', out)
+                        self.assertEqual(target.stat().st_mode & 0o777, 0o664)
                         self.assertEqual(before, snapshot(case.home))
 
     def test_changed_service_link_listing_and_fifo_fail_before_package_work(self):
@@ -404,21 +404,17 @@ cp.spawnSync=function(command,args,options) {
             self.assertEqual(before, (snapshot(case.home / 'Code'), snapshot(case.home / '.config')))
         (case.root / 'system/etc/group').write_text(f'account:x:{os.getgid()}:other\n')
         case.events.unlink()
-        output = case.run_helper(expected=1)
-        self.assertIn('operation=service', output)
-        self.assertNotIn('operation=directory', output)
-        self.assertIn('reason=writable-boundary', output)
-        self.assertNotIn('npm ', case.log())
+        output = case.run_helper()
+        self.assertIn('not enrolled', output)
         self.assertEqual(before, (snapshot(case.home / 'Code'), snapshot(case.home / '.config')))
         account_fixture(case.root)
         for status, output in [(1, 'trusted\n'), (0, 'trusted\nfixture-secret\n'), (0, 'fixture-secret'), (0, '')]:
             with self.subTest(status=status, output=output):
                 (case.root / 'group-response.json').write_text(json.dumps({'status': status, 'stdout': output, 'stderr': 'fixture-secret'}))
                 case.events.unlink()
-                out = case.run_helper(expected=1)
-                self.assertIn('reason=unverified', out)
+                out = case.run_helper()
+                self.assertIn('not enrolled', out)
                 self.assertNotIn('fixture-secret', out)
-                self.assertNotIn('npm ', case.log())
                 self.assertEqual(before, (snapshot(case.home / 'Code'), snapshot(case.home / '.config')))
 
 

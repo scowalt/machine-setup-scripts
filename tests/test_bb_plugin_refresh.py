@@ -474,7 +474,7 @@ class Discovery(unittest.TestCase):
         self.records[12345] = (['inert-launcher'], {}, b'1')
         self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery unverified-main-server\n'))
 
-    def test_group_write_exception_keeps_root_foreign_and_link_guards(self):
+    def test_group_write_keeps_foreign_world_write_and_link_guards(self):
         data = self.server()
         runtime = data / 'bb-app-runtime.json'
         runtime.write_text('{"pid":12345}')
@@ -486,8 +486,7 @@ class Discovery(unittest.TestCase):
         for target in targets:
             target.chmod(0o664)
             original = target.stat()
-            for fault, value, reason in (('st_uid', 0, 'writable-local-state'),
-                                         ('st_uid', os.getuid() + 1, 'foreign-local-state'),
+            for fault, value, reason in (('st_uid', os.getuid() + 1, 'foreign-local-state'),
                                          ('st_mode', P.stat.S_IFREG | 0o666, 'writable-local-state'),
                                          ('st_nlink', 2, 'unverified-local-state'),
                                          ('st_mode', P.stat.S_IFLNK | 0o664, 'unverified-local-state')):
@@ -516,7 +515,7 @@ class Discovery(unittest.TestCase):
                 self.assertEqual(result, (1, 'BB_PLUGIN_REFRESH failed discovery ' + reason + '\n'))
             target.chmod(0o600)
 
-    def test_group_write_does_not_extend_to_database_settings_or_credentials(self):
+    def test_group_writable_database_settings_and_metadata_preserve_modes(self):
         data = self.data()
         for name in ('bb.db', 'server-moved.json', 'server-import.json', 'config.json',
                      'env.json', 'auth.json', 'host-id', '.config.json.lock'):
@@ -524,8 +523,13 @@ class Discovery(unittest.TestCase):
             if not file.exists():
                 file.write_text('inert protected metadata')
             file.chmod(0o664)
-            with self.subTest(name=name), self.assertRaisesRegex(P.Refusal, 'writable-local-state'):
-                self.files().read(file)
+            with self.subTest(name=name):
+                before = file.read_bytes()
+                self.assertEqual(self.files().read(file), before)
+                self.assertEqual(file.stat().st_mode & 0o777, 0o664)
+                file.chmod(0o666)
+                with self.assertRaisesRegex(P.Refusal, 'writable-local-state'):
+                    self.files().read(file)
             file.chmod(0o600)
 
     def test_refresh_revalidates_accepted_group_writable_package_mode(self):
@@ -1066,6 +1070,8 @@ class Discovery(unittest.TestCase):
         (data / 'bb.db').write_bytes(b'SQLite format 3\0')
         self.assertEqual(self.run_policy(), (0, 'BB_PLUGIN_REFRESH stopped\n'))
         (data / 'bb.db').chmod(0o660)
+        self.assertEqual(self.run_policy(), (0, 'BB_PLUGIN_REFRESH stopped\n'))
+        (data / 'bb.db').chmod(0o666)
         self.assertEqual(self.run_policy(), (1, 'BB_PLUGIN_REFRESH failed discovery writable-local-state\n'))
         self.home = canonical
 
@@ -1144,10 +1150,10 @@ class Discovery(unittest.TestCase):
             if database:
                 (data / 'bb.db').unlink()
 
-    def test_writable_file_reports_controlled_refusal_without_permission_repair(self):
+    def test_world_writable_file_reports_controlled_refusal_without_permission_repair(self):
         data = self.data()
         data.chmod(0o775)
-        (data / 'bb.db').chmod(0o660)
+        (data / 'bb.db').chmod(0o666)
         before = data.stat(), (data / 'bb.db').read_bytes()
         status, output = self.run_policy()
         self.assertEqual(status, 1)
@@ -1848,7 +1854,7 @@ class Callers(unittest.TestCase):
         data = fixture.captured_non_server()
         absent = fixture.run_policy()
         (data / 'bb.db').write_bytes(b'SQLite format 3\0')
-        (data / 'bb.db').chmod(0o660)
+        (data / 'bb.db').chmod(0o666)
         refusal = fixture.run_policy()
         (data / 'bb.db').unlink()
         fixture.server(data=fixture.home / 'manual')
@@ -1941,7 +1947,7 @@ DOTFILES_ACCESS_METHOD=none
                         else:
                             fixture.server(data=data)
                         if case == 'file-failed':
-                            (data / 'bb.db').chmod(0o660)
+                            (data / 'bb.db').chmod(0o666)
                         code_files = [fixture.package / 'package.json', fixture.entry,
                                       fixture.entry.parent / 'start-server.js', fixture.root / 'node',
                                       fixture.package / 'host-daemon/dist/bb']

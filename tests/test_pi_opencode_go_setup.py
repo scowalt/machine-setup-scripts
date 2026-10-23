@@ -384,6 +384,25 @@ class GoSetupTests(unittest.TestCase):
         self.catalog.chmod(0o666)
         self.assertEqual(self.run_helper().returncode, 1)
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX file mode policy')
+    def test_group_write_alone_does_not_block_credential_files(self):
+        self.put(self.auth, {'keep': {'type': 'api_key', 'key': 'unrelated'}})
+        for script in SCRIPTS:
+            if script == 'win.ps1' and not PWSH:
+                continue
+            with self.subTest(script=script):
+                self.put(self.auth, {'keep': {'type': 'api_key', 'key': 'unrelated'}})
+                self.auth.chmod(0o620)
+                self.envfile.chmod(0o620)
+                result = self.run_helper(script, use_wrapper=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(self.envfile.stat().st_mode & 0o777, 0o620)
+                self.assertEqual(self.auth.stat().st_mode & 0o777, 0o600)
+                self.auth.chmod(0o620)
+                result = self.run_helper(script, use_wrapper=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(self.auth.stat().st_mode & 0o777, 0o620)
+
     @unittest.skipIf(os.name == 'nt', 'POSIX ordinary ancestors, not Windows ACL policy')
     def test_group_writable_home_and_selected_ancestors_preserve_private_auth(self):
         custom = self.home / 'profiles/team/active'
@@ -427,8 +446,8 @@ class GoSetupTests(unittest.TestCase):
         before = (custom / 'auth.json').read_bytes()
         for target, change in ((self.home, 'world'), (custom.parent, 'world'),
                                (custom.parent, 'root'), (custom.parent, 'foreign'),
-                               (custom, 'group'), (custom / 'auth.json', 'group'),
-                               (self.envfile, 'group')):
+                               (custom, 'group'), (custom / 'auth.json', 'world'),
+                               (self.envfile, 'world')):
             with self.subTest(target=target.name, change=change):
                 prelude = 'const target = ' + json.dumps(str(target)) + ';\n'
                 prelude += 'const change = ' + json.dumps(change) + ';\n'

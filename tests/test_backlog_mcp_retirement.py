@@ -156,6 +156,10 @@ with tempfile.TemporaryDirectory() as raw:
     file = directory / "mcp.json"; file.write_text('{"mcpServers":{"keep":{}}}\n'); file.chmod(0o664)
     assert run(home, prepare=False).stdout.strip() == "absent"
     text = '{"mcpServers":{"backlog":{},"keep":{}}}\n'; file.write_text(text); file.chmod(0o664)
+    assert run(home, prepare=False).stdout.strip() == 'removed'
+    assert json.loads(file.read_text()) == {'mcpServers': {'keep': {}}}
+    assert file.stat().st_mode & 0o777 == 0o664
+    file.write_text(text); file.chmod(0o666)
     run(home, ok=False, prepare=False); assert file.read_text() == text
 
 with tempfile.TemporaryDirectory() as raw:

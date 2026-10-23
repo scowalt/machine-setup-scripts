@@ -431,12 +431,27 @@ if (-not $result) { exit 1 }
     def test_inherited_002_mask_still_refuses_unsafe_existing_files_without_repair(self):
         self.captured_directories()
         settings = self.put(self.home / '.pi/agent/settings.json', '{}')
-        settings.chmod(0o664)
+        settings.chmod(0o666)
         before = self.snapshot()
         result = self.adapter(creation_mask=0o002, success=False)
         self.assertIn('phase=preflight reason=unsafe-owner-or-mode exit=1', result.stderr)
         self.assertEqual(self.snapshot(), before)
         self.assertFalse((self.root / 'calls').exists())
+
+    def test_group_writable_managed_files_converge_repeat_and_remove(self):
+        self.captured_directories()
+        self.adapter()
+        files = [self.home / '.pi/agent/settings.json', self.home / '.agents/.setup-impeccable.json',
+                 self.home / '.pi/agent/skills/impeccable/SKILL.md']
+        for _ in range(2):
+            for file in files:
+                file.chmod(0o664)
+            self.adapter()
+        for file in files:
+            file.chmod(0o664)
+        self.env['BAN_IMPECCABLE'] = '1'
+        self.adapter()
+        self.assertFalse(files[-1].exists())
 
     def test_fresh_convergence_installs_complete_pi_payload_without_hooks_or_user_state_changes(self):
         settings = self.put(self.home / '.pi/agent/settings.json', '{"theme":"keep","packages":["npm:keep"],"skills":["custom"]}')
@@ -985,8 +1000,8 @@ if (-not $result) { exit 1 }
         self.captured_directories()
         self.adapter()
         for relative, permissions in (('.agents', 0o777), ('.pi/agent/skills/impeccable/reference', 0o777),
-                                      ('.pi/agent/settings.json', 0o660), ('.agents/.setup-impeccable.json', 0o660),
-                                      ('.pi/agent/skills/impeccable/SKILL.md', 0o660)):
+                                      ('.pi/agent/settings.json', 0o666), ('.agents/.setup-impeccable.json', 0o666),
+                                      ('.pi/agent/skills/impeccable/SKILL.md', 0o666)):
             file = self.home / relative
             original = file.stat().st_mode & 0o7777
             file.chmod(permissions)
@@ -1390,10 +1405,10 @@ def installer_fixture():
         (home / '.cursor/agents/impeccable-documenter.md').unlink()
     if mode == 'failed-after-write':
         raise SystemExit(1)
-    if mode == 'unsafe-bundled-engine':
-        (home / '.claude/skills/impeccable/scripts/bin/linux-x64/impeccable').chmod(0o775)
-    if mode == 'unsafe-npm-cache':
-        (home / '.npm/_cacache/content/blob').chmod(0o664)
+    if mode in ('unsafe-bundled-engine', 'group-bundled-engine'):
+        (home / '.claude/skills/impeccable/scripts/bin/linux-x64/impeccable').chmod(0o777 if mode == 'unsafe-bundled-engine' else 0o775)
+    if mode in ('unsafe-npm-cache', 'group-npm-cache'):
+        (home / '.npm/_cacache/content/blob').chmod(0o666 if mode == 'unsafe-npm-cache' else 0o664)
     if native_modes:
         paths = ['.claude/skills/impeccable/scripts/bin/linux-x64/impeccable',
                  '.claude/agents/impeccable-documenter.md', '.npm/_cacache/content/blob']
