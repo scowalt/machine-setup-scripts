@@ -22,7 +22,7 @@ references:
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Ubuntu v282 still fails OpenCode migration on scott-beelink-ubuntu. Read-only execution of the actual Homebrew preflight rejects account-owned 0775 Cellar directories as brew-path, and the wrapper suppresses the reason. Support only positively verified private Linux group-writable Homebrew layouts without changing their permissions, while preserving fail-closed behavior and making controlled preflight diagnostics actionable.
+Ubuntu v282 still fails OpenCode migration on linux-workstation. Read-only execution of the actual Homebrew preflight rejects account-owned 0775 Cellar directories as brew-path, and the wrapper suppresses the reason. Support only positively verified private Linux group-writable Homebrew layouts without changing their permissions, while preserving fail-closed behavior and making controlled preflight diagnostics actionable.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

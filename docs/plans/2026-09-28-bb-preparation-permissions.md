@@ -4,7 +4,7 @@ Status: implemented and independently reviewed under TASK-51. Isolated regressio
 
 ## Problem and evidence
 
-The reported Ubuntu v276 run on `devinabox` used the ScoBot account. Its local log was `2026-09-28-131312.log`; the authenticated collector upload is [2026-09-28-17-14-14-644.log](https://logs.scowalt.com/logs/devinabox/2026-09-28-17-14-14-644.log).
+The reported Ubuntu v276 run on `development-server` used the secondary-user account. Its local log was `2026-09-28-131312.log`; the authenticated collector upload is [2026-09-28-17-14-14-644.log](https://logs.example.invalid/logs/development-server/2026-09-28-17-14-14-644.log).
 
 Read-only metadata inspection found group-writable service directories (`0775`) and service files (`0664`). Temporary fixtures using the real extracted BB preparation helper reproduce the exact generic preflight failure independently for a writable ancestor and for a writable unrelated service file. Equivalent fixtures with `0755` directories and `0644` files pass. These results establish permission blockers, not the absence of other blockers on the real account.
 

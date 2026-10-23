@@ -20,7 +20,7 @@ priority: high
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Read-only native diagnostics on scott-beelink-ubuntu reproduced brew-proof-unverified when a process disappeared between /proc enumeration and task listing (FileNotFoundError/ENOENT), plus process-membership snapshot changes. Homebrew boundaries also passed unchanged. Avoid intermittent setup failures without changing permissions or weakening the required complete trust proof.
+Read-only native diagnostics on linux-workstation reproduced brew-proof-unverified when a process disappeared between /proc enumeration and task listing (FileNotFoundError/ENOENT), plus process-membership snapshot changes. Homebrew boundaries also passed unchanged. Avoid intermittent setup failures without changing permissions or weakening the required complete trust proof.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -35,6 +35,7 @@ Read-only native diagnostics on scott-beelink-ubuntu reproduced brew-proof-unver
 
 <!-- SECTION:PLAN:BEGIN -->
 User approved implementation after read-only diagnosis and the bounded-retry/regression plan.
+
 1. Add deterministic native-proof fixtures for procfs disappearance/snapshot churn, bounded exhaustion and nonretryable unsafe evidence; demonstrate the new expectations fail under the sanitized sequential kernel-contained runner.
 2. Retry only verified transient procfs races with a fixed total attempt/time budget and fresh complete proofs, retaining fail-closed behavior for unsafe evidence and all migration/rollback checks; add an allowlisted actionable exhaustion diagnostic through both wrappers.
 3. Regenerate all six entry points, increment affected script versions and document behavior without suggesting chmod, bypasses or live setup.
@@ -44,7 +45,7 @@ User approved implementation after read-only diagnosis and the bounded-retry/reg
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Native read-only evidence from the prior approved diagnostic: one 12-attempt instrumented sample returned 7 trusted, 3 process snapshot mismatches, and 2 ENOENT failures at /proc/<pid>/task listing. No configuration changes were made. This implementation uses synthetic fixtures only.
+Native read-only evidence from the prior approved diagnostic: one 12-attempt instrumented sample returned 7 trusted, 3 process snapshot mismatches, and 2 ENOENT failures at `/proc/<pid>/task` listing. No configuration changes were made. This implementation uses synthetic fixtures only.
 
 - Red native reproduction: /tmp/setup-fixture-matrix-lf4la5h2, original helper failed the new deterministic process-exit migration test with brew-proof-unverified; setup-default and extraction/containment passed (initial run omitted PowerShell).
 - Implemented three complete native proof attempts separated by 50 ms, within the unchanged five-second parent timeout. Only verified absent process/task owners or changed process-set topology may retry. Configuration/mount/account/path/task baselines survive retries; foreign membership is rejected immediately in either snapshot.
@@ -67,15 +68,17 @@ Native read-only evidence from the prior approved diagnostic: one 12-attempt ins
 Fix intermittent OpenCode Homebrew preflight failures caused by processes exiting during procfs enumeration.
 
 Changes:
+
 - Retry only confirmed process/thread disappearance or process-set churn, with at most three fresh proof attempts and the existing five-second native timeout. Every successful result still requires a complete stable trust proof.
 - Retain identity/configuration/mount/path/task baselines across retries; refuse observed foreign access, changed credentials/PID identities, unsafe ACLs and unreadable or malformed evidence without bypass or repair.
 - Expose controlled brew-process-churn exhaustion guidance through Bash and PowerShell; regenerate/version all six setup entry points and document safe retry limits.
 - Add deterministic procfs race, safety, retry-exhaustion and migration/recovery fixtures.
 
 Validation:
+
 - Red reproduction of the exact brew-proof-unverified failure before the fix; red diagnostic propagation in all six wrappers before their update.
 - Final OpenCode suite: 122 Node tests pass, one optional installed shim skip; all seven caller methods pass with Linux PowerShell. All 15 selected contained validation entries pass, including default/extraction, runtime, reliability, weekly and CLT/Homebrew regressions.
 - ShellCheck, Bash/Node/Python syntax, embedding, unrelated-source preservation and whitespace checks pass. Optional integrations and native platforms remain explicitly unverified; Markdownlint unavailable.
 
-No live setup, app execution, remote rollout or permission changes during implementation. The earlier read-only Beelink diagnostic established the race but does not validate deployment of this fix. Remote-main publication is user-authorized; native machine rollout remains separate.
+No live setup, app execution, remote rollout or permission changes during implementation. The earlier read-only Linux workstation diagnostic established the race but does not validate deployment of this fix. Remote-main publication is user-authorized; native machine rollout remains separate.
 <!-- SECTION:FINAL_SUMMARY:END -->

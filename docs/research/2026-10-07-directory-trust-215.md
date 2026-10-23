@@ -11,7 +11,7 @@ Names below identify the shared embedded code in all six entry points; Bash/Powe
 | `PI_PROFILE_PERMISSIONS.unixPrepare.inspect`: HOME and ordinary selected-profile ancestors | **Changed**: real directories owned by the non-root target account allow group write, reject world write; do not chmod them | `test_group_writable_ordinary_ancestors_are_preserved_during_private_preparation`: 0750, 0755, 0775, 2775, six embeddings, repeated preparation; full metadata preservation |
 | Same inspector: root/system/sticky temporary ancestors, target UID, no-follow/type checks | **Unchanged**: root remains strict with the existing sticky-root exception; foreign owners and links remain refused | `test_ordinary_group_write_requires_the_target_account_not_root_or_foreign`, existing foreign/world/link cases |
 | `systemHomeAlias` in profile and Go helpers | **Unchanged**: only reviewed Linux `/home` alias with strict root-owned system parents | `test_only_the_trusted_system_home_alias_is_accepted` now prepares a real private leaf under 2775 HOME without changing HOME; Go alias controls retained |
-| Profile managed set: `.pi`, `.pi/agent`, selected leaf | **Unchanged private contract**: preflight all profiles, prepare only these account-owned inodes to 0700, never recurse or repair ordinary ancestors | Arcane, selected creation, metadata preservation, two-profile preflight and unavailable-creation tests |
+| Profile managed set: `.pi`, `.pi/agent`, selected leaf | **Unchanged private contract**: preflight all profiles, prepare only these account-owned inodes to 0700, never recurse or repair ordinary ancestors | Linux desktop, selected creation, metadata preservation, two-profile preflight and unavailable-creation tests |
 | Profile `unchanged`, parent pin and pre-chmod pin | **Retained/strengthened snapshots**: compare device, inode, full mode, UID and GID, including accepted-to-accepted changes | `test_accepted_ancestor_metadata_changes_fail_before_private_mutations`; mode, GID, UID, inode, type; existing parent replacement/disappearance cases |
 | Profile `mkdirAt` capability/create/result | **Unchanged private contract**: isolated OS Python, descriptor-relative creation, owner/identity/result verification; unavailable capability fails closed | Existing creation-word, capability and parent-swap tests; no replacement privacy-proof interpreter |
 | Profile `windowsPrepare` native owner/DACL/reparse/volume/file identity and pinned handles | **Unchanged** | Portable PowerShell wrapper, parser and C# compilation coverage; two native Windows tests skipped |
@@ -41,7 +41,7 @@ All behavioral commands used this serialized, sanitized prefix:
 ```sh
 flock /tmp/setup-208-coordination/fixtures.lock env -i PATH=/usr/bin:/bin \
   /usr/bin/python3 -I tests/run-fixture-matrix.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /opt/microsoft/powershell/7/pwsh \
   --tool-path /usr/bin:/bin:/tmp/setup-208-coordination/tools
 ```

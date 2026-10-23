@@ -10,7 +10,7 @@ This uses the existing **retired managed tool**, **managed footprint**, and **in
 
 ## Why
 
-The uploaded `scott-beelink-ubuntu/2026-09-23-13-06-19-721.log` identifies its local run as `2026-09-23-090536.log`, using Ubuntu setup version 264. Its initial `apt-get update` fails because the configured Infisical Cloudsmith source returns HTTP 404. System upgrades are skipped, and the run correctly finishes as incomplete.
+The uploaded `linux-workstation/2026-09-23-13-06-19-721.log` identifies its local run as `2026-09-23-090536.log`, using Ubuntu setup version 264. Its initial `apt-get update` fails because the configured Infisical Cloudsmith source returns HTTP 404. System upgrades are skipped, and the run correctly finishes as incomplete.
 
 [Infisical's migration notice](https://infisical.com/docs/cli/cloudsmith-migration) says Cloudsmith stopped serving the CLI repository on September 16, 2026. The user no longer needs Infisical on any machine, so migrating to the replacement repository is not the desired outcome.
 

@@ -19,7 +19,7 @@ references:
   - wsl.sh
   - tests/test_bb_dotfiles_umask.py
   - tests/test_bb_machine_preparation.py
-  - 'https://logs.scowalt.com/logs/devinabox/2026-09-28-17-14-14-644.log'
+  - 'https://logs.example.invalid/logs/development-server/2026-09-28-17-14-14-644.log'
 documentation:
   - docs/plans/2026-09-28-bb-preparation-permissions.md
 priority: high
@@ -32,7 +32,7 @@ Repository implementation complete and independently reviewed. See docs/plans/20
 
 All five Bash setup scripts now provide Chezmoi-only permission convergence and bounded secret-safe BB preflight diagnostics. Existing Ubuntu server protection is retained. The new command-scoped restriction applies only to eligible, non-deferred machine preparation; existing BB roles that defer preparation receive no additional preparation-driven restriction. Standalone/automatic Chezmoi operations and persistent dotfile policy remain outside scope. Explicit overrides and unmanaged unsafe paths remain preserved and blocked.
 
-Confirmed reported run: devinabox, ScoBot, local log 2026-09-28-131312.log (Ubuntu v276). Read-only metadata found 0775 service directories and 0664 service files. Extracted inert fixtures reproduce the exact original generic preflight error independently for a writable ancestor and for a writable unrelated unit; equivalent safe-mode fixtures pass. These are established blockers, not proof that the real account has no others. The prior TASK-47 protection covered Ubuntu BB_SERVER=1 only.
+Confirmed reported run: development-server, secondary-user, local log 2026-09-28-131312.log (Ubuntu v276). Read-only metadata found 0775 service directories and 0664 service files. Extracted inert fixtures reproduce the exact original generic preflight error independently for a writable ancestor and for a writable unrelated unit; equivalent safe-mode fixtures pass. These are established blockers, not proof that the real account has no others. The prior TASK-47 protection covered Ubuntu BB_SERVER=1 only.
 
 No live repair, setup, live package changes, service lifecycle, enrollment or rollout was performed or authorized.
 <!-- SECTION:DESCRIPTION:END -->

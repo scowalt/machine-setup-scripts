@@ -72,7 +72,7 @@ The launcher does not rely on a newly created network namespace. Tests do not cl
 The exact parent-approved command was run once:
 
 ```bash
-env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tests/run-fixture-matrix.py --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node --pwsh /tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh --tool-path /usr/bin:/bin tests/test_fixture_containment.py
+env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tests/run-fixture-matrix.py --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node --pwsh /tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh --tool-path /usr/bin:/bin tests/test_fixture_containment.py
 ```
 
 **Result:** outer command exit 1 (`CalledProcessError`); C compilation completed, but `<artifact-root>/fixture-no-network --self-test` returned 125. Execution stopped before creating a suite HOME, suite log or results JSON. No fallback, retry or other suite was run.

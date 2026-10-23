@@ -27,7 +27,7 @@ Each row ran this exact command against the then-current source:
 
 ```bash
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tests/run-fixture-matrix.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh \
   --tool-path /usr/bin:/bin tests/test_infisical_non_management.py
 ```
@@ -51,11 +51,11 @@ The complete existing dispatcher ran sequentially:
 
 ```bash
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tools/run-pre-push-contracts.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh \
-  --mise /home/scowalt/.local/bin/mise \
-  --chezmoi /home/scowalt/.local/bin/chezmoi \
-  --bun /home/scowalt/.bun/bin/bun
+  --mise /home/operator/.local/bin/mise \
+  --chezmoi /home/operator/.local/bin/chezmoi \
+  --bun /home/operator/.bun/bin/bun
 ```
 
 **Exit 0, 42/42 entries**, zero failures/timeouts, artifacts `/tmp/setup-fixture-matrix-mbwoo4od`. `results.json` enumerates all exact suite paths/results. Includes setup-default, extraction/containment, hook dispatch, CLT, Homebrew, reliability, reboot, headless, BB desktop/preparation/server, Pi/runtime/OpenCode/skills and weekly contracts. Reported unittest executions: **493 methods including 16 skips** (not unique test passes); OpenCode Node: **116 cases, 115 passed, one skipped**. TASK-69: **9/9 methods, no skips**. Actual Windows syntax/AST selection: **132 function definitions**, without top-level execution.
@@ -81,7 +81,7 @@ Python `ast.parse` passed for the three changed/new Python test files. Exact sta
 
 The aggregate's 16 unittest skips are: Bash 3.2 (1), AskClaude external dotfiles (1), managed-skill native CLI discovery/snapshot and external dotfiles (3), Go installed catalog/native lock (2), native Windows profile ACL/races (2), Pi package external dotfiles/installed registry probe (2), runtime external-dotfiles convergence (1), Paseo external dotfiles (1), and repeated optional managed-skill cases in weekly regressions (3). OpenCode's installed `cmd-shim` comparison adds one Node skip. Native Windows Backlog handle/ACL operations have a separate diagnostic omission; AST/C# compilation is not native execution proof.
 
-No trusted installed Markdownlint was found. Shared mutable `bunx` caches were neither executed nor repaired; no download was attempted. Markdown changes received manual formatting/local-link review, not a claimed lint pass. The commit uses the existing native Lefthook/Gitleaks path with `LEFTHOOK_EXCLUDE=shellcheck,markdownlint` to avoid `bunx`; standalone ShellCheck supplies the skipped shell lint check. This is an explicit Markdownlint omission, not a full hook pass. Native `/home/scowalt/.local/share/mise/installs/gitleaks/8.30.1/gitleaks protect --staged --no-banner --redact` also passed (exit 0); output is `task69-gitleaks.log` beside the aggregate.
+No trusted installed Markdownlint was found. Shared mutable `bunx` caches were neither executed nor repaired; no download was attempted. Markdown changes received manual formatting/local-link review, not a claimed lint pass. The commit uses the existing native Lefthook/Gitleaks path with `LEFTHOOK_EXCLUDE=shellcheck,markdownlint` to avoid `bunx`; standalone ShellCheck supplies the skipped shell lint check. This is an explicit Markdownlint omission, not a full hook pass. Native `/home/operator/.local/share/mise/installs/gitleaks/8.30.1/gitleaks protect --staged --no-banner --redact` also passed (exit 0); output is `task69-gitleaks.log` beside the aggregate.
 
 Linux PowerShell is not native Windows/PowerShell 5.1, registry, WinGet or Windows-update evidence. Native macOS/Apple/BSD, WSL/Bazzite/ARM, real package-manager behavior and BB/session continuity remain unverified. Ordinary setup is still potentially disruptive. No live setup, app/skill/service, package operation, upload, credential/account action or fleet change occurred during validation. No containment refusal or unexpected real effect was observed; this is not a syscall-wide effects audit. Original incident receipt/retention/telemetry uncertainty remains unchanged. Offline passing evidence does not authorize rollout.
 

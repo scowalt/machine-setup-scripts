@@ -1,14 +1,16 @@
-# Beelink setup: BB snapshot refusal and Pi Go catalog incompatibility
+# Linux workstation setup: BB snapshot refusal and Pi Go catalog incompatibility
+
+Machine identifiers and evidence locations in this public copy are [sanitized](../agents/public-evidence.md); technical findings and limitations are unchanged.
 
 ## Scope and provenance
 
 The initial investigation below changed no production code, remote files, packages, services, credentials or permissions. The subsequent local fixes and validation are recorded at the end. No live setup, BB application, Pi extension or model request was executed for validation.
 
 - Watcher event: `setup-log-watch:2da1cb600696e9dabd476bad951914eb1df870272241b83b117976ff026c9428`.
-- Exact [collector log](https://logs.scowalt.com/logs/scott-beelink-ubuntu/2026-10-16-03-25-00-834.log), retrieved with Doppler-backed bearer authentication: HTTP 200.
-- Local run: `/home/scowalt/.local/log/machine-setup/2026-10-15-232426.log`, Ubuntu setup version 336. Checkout: `e913da1`, also version 336; matching version text alone does not prove deployed script-byte identity.
+- Exact [collector log](https://logs.example.invalid/logs/linux-workstation/2026-10-16-03-25-00-834.log), retrieved with Doppler-backed bearer authentication: HTTP 200.
+- Local run: `/home/operator/.local/log/machine-setup/2026-10-15-232426.log`, Ubuntu setup version 336. Checkout: `e913da1`, also version 336; matching version text alone does not prove deployed script-byte identity.
 - Collector bytes and the independently read remote local log have the same SHA-256: `7d9450b5ec4f9519b9125a468117a72c894ce1442f1732048d9a0cb62f6eb6fa`.
-- Trusted local Tailscale inventory identified online Linux node `scott-beelink-ubuntu`, node ID `nPLCnQkBsB21CNTRL`, address `100.73.203.69`. Read-only SSH used the repository's known account `scowalt`; the remote account, UID 1000 and hostname matched.
+- Trusted local Tailscale and account metadata matched the intended Linux workstation. Exact hostname, node ID, tailnet address and SSH account are omitted from this public record; the original identity checks remain in private evidence.
 - Log and remote output were treated as data. Credential values were not requested; `.env.local` was inspected only for metadata. Raw log evidence remains private outside the repository. Quoted diagnostics below contain no credentials.
 
 ## Findings
@@ -70,7 +72,7 @@ Already-run red command:
 
 ```bash
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tests/run-fixture-matrix.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24/bin/node \
   --pwsh /usr/bin/pwsh --tool-path /usr/bin:/bin \
   tests/test_watch_2da1cb6_diagnosis.py
 ```
@@ -123,7 +125,7 @@ Final sequential contained matrix: `/tmp/setup-fixture-matrix-wj80onhp`, **21/21
 
 There were **11 reported skips**: optional installed Go catalog/native-lock, external-dotfiles/skills/registry integrations and native Windows profile ACL/handle cases. Linux PowerShell wrappers ran. Native platform behavior, live Go access and BB readiness/continuity remain unverified; offline success is not rollout evidence. The original log still cannot identify the exact historical snapshot field.
 
-ShellCheck and Bash syntax passed for all five changed Bash entries; Python syntax, official fixture identity, Markdownlint, the repository no-comments policy and whitespace checks passed. Embedded Go equality is covered by its passing contract. A fixture-only portability correction avoids assuming that all Linux filesystems increment directory link count on child creation; the final focused replay includes that assertion. Source checksums and the removed temporary runner are retained under `/tmp/setup-beelink-fix.ify1g0`; permanent coverage remains in the existing four test modules and the new public fixture. No temporary test runner or debug instrumentation remains in the checkout.
+ShellCheck and Bash syntax passed for all five changed Bash entries; Python syntax, official fixture identity, Markdownlint, the repository no-comments policy and whitespace checks passed. Embedded Go equality is covered by its passing contract. A fixture-only portability correction avoids assuming that all Linux filesystems increment directory link count on child creation; the final focused replay includes that assertion. Source checksums and the removed temporary runner are retained under `/tmp/setup-linux-workstation-fix.ify1g0`; permanent coverage remains in the existing four test modules and the new public fixture. No temporary test runner or debug instrumentation remains in the checkout.
 
 No remote changes, setup rerun, service action, model request or native rollout was authorized or performed by these repository fixes.
 

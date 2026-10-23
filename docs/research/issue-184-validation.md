@@ -54,7 +54,7 @@ Exact command, from the final source checkout (C-locale glob expansion sorts all
 export LC_ALL=C
 flock /tmp/issue-184-coordination/fixtures.lock env -i PATH=/usr/bin:/bin \
   /usr/bin/python3 -I tests/run-fixture-matrix.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh \
   --tool-path /tmp/issue-184-coordination/native-tools:/usr/bin:/bin --timeout 600 \
   tests/test_fixture_containment.py tests/test_pre_push_contracts.py \

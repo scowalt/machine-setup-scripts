@@ -55,7 +55,7 @@ Parent approved exactly the following command once, for synthetic extraction/sig
 
 ```bash
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tests/run-fixture-matrix.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh \
   --tool-path /usr/bin:/bin \
   tests/test_fixture_containment.py

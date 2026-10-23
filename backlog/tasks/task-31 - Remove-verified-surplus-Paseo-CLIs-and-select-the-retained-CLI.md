@@ -16,14 +16,14 @@ references:
   - tests/test_paseo_plain_setup.py
   - tests/headless-paseo-daemon-contract.sh
   - GLOSSARY.md
-  - 'https://logs.scowalt.com/logs/arcane/2026-09-14-23-12-59-427.log'
+  - 'https://logs.example.invalid/logs/linux-desktop/2026-09-14-23-12-59-427.log'
 priority: high
 ---
 
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Arcane selects npm/mise Paseo CLI 0.4.0 on PATH while its setup-managed Bun daemon runs 0.8.0. Plain fails before its compatibility check because the old CLI rejects plugin settings. The user approved cleaning verified redundant global installations only after validating the retained CLI, plus explicit validated CLI selection so cleanup or unrelated setup failures cannot leave Plain using a shadowing executable.
+Linux desktop selects npm/mise Paseo CLI 0.4.0 on PATH while its setup-managed Bun daemon runs 0.8.0. Plain fails before its compatibility check because the old CLI rejects plugin settings. The user approved cleaning verified redundant global installations only after validating the retained CLI, plus explicit validated CLI selection so cleanup or unrelated setup failures cannot leave Plain using a shadowing executable.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -32,7 +32,7 @@ Arcane selects npm/mise Paseo CLI 0.4.0 on PATH while its setup-managed Bun daem
 - [x] #2 Remove only verified surplus copies and their verified package-manager command entries during eligible future setup runs. Preserve existing native Linux headless gates, macOS canary, Windows/WSL headless rejection, beta/stable selection, and custom-home ownership constraints. Uncertain or unsafe candidates remain unchanged with controlled diagnostics.
 - [x] #3 Plain explicitly uses a validated retained CLI rather than blindly trusting PATH, including when Go failure skips managed-daemon installation. Verify compatibility before configuration-sensitive status calls, preserve correct local-home and endpoint selection, and never start another daemon or change plugin source/preferences as selection recovery.
 - [x] #4 Before removal, account for running processes and running or stopped service references. Coordinate restart only for a proven setup-managed local service, verify a stopped interval before removing code in use, and restore its owner after failure. Defer Desktop, custom/unknown owners, and setup inside the affected daemon. Never remove an installation still referenced by a preserved service.
-- [x] #5 Offline temporary fixtures prove Arcane-style CLI shadowing, idempotent cleanup, retained CLI failure, metadata/link attacks, source/data preservation, process/service reference protection, restart failure recovery, channel/platform gates, and Plain selection when Go fails. No live setup, daemon changes, model requests, SSH rollout, or fleet cleanup during development.
+- [x] #5 Offline temporary fixtures prove Linux desktop-style CLI shadowing, idempotent cleanup, retained CLI failure, metadata/link attacks, source/data preservation, process/service reference protection, restart failure recovery, channel/platform gates, and Plain selection when Go fails. No live setup, daemon changes, model requests, SSH rollout, or fleet cleanup during development.
 - [x] #6 Keep shared helpers identical across applicable scripts, increment affected setup versions, document cleanup boundaries and diagnostics, and pass affected Plain/native fixture isolation, headless, Muse, release-channel, Go/wiring, and runtime contracts and lint with available PowerShell coverage.
 <!-- AC:END -->
 

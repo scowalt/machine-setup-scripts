@@ -15,14 +15,14 @@ references:
   - ubuntu.sh
   - win.ps1
   - tests/test_pi_opencode_go_setup.py
-  - 'https://logs.scowalt.com/logs/arcane/2026-09-14-23-12-59-427.log'
+  - 'https://logs.example.invalid/logs/linux-desktop/2026-09-14-23-12-59-427.log'
 priority: high
 ---
 
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Arcane Ubuntu v252 rejected its account-owned ~/.pi/agent directory at mode 0775 with active-profile: untrusted-directory. Setup creates profile directories with ordinary mkdir but later requires non-writable credential boundaries. The user approved repairing verified profile directory permissions on future setup runs, without weakening credential checks or changing live machines during development.
+Linux desktop Ubuntu v252 rejected its account-owned ~/.pi/agent directory at mode 0775 with active-profile: untrusted-directory. Setup creates profile directories with ordinary mkdir but later requires non-writable credential boundaries. The user approved repairing verified profile directory permissions on future setup runs, without weakening credential checks or changing live machines during development.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -30,7 +30,7 @@ Arcane Ubuntu v252 rejected its account-owned ~/.pi/agent directory at mode 0775
 - [x] #1 All six scripts secure the default ~/.pi and ~/.pi/agent directories and any explicitly selected active profile inside account HOME before managed Pi profile mutations after dotfiles. Unix profile directories become 0700 and Windows uses equivalent private native ACLs. Missing required directories are created safely and reruns are idempotent.
 - [x] #2 Preflight all affected boundaries before changes. Reject linked, foreign-owned, malformed, or outside-HOME targets without following links, changing HOME or arbitrary ancestors, recursively changing profile contents, rewriting credentials, or weakening existing JSON and credential validation. Preserve the trusted Linux system HOME alias.
 - [x] #3 Permission failure blocks unsafe later Pi profile/package and dependent Muse/daemon operations while unrelated setup work continues and final setup status reports failure with controlled secret-free diagnostics.
-- [x] #4 Offline fixtures reproduce the Arcane 0775 failure and prove successful repair, creation, reruns, default/custom profile scope, safety rejection, content preservation, and downstream failure handling. Extract functions only and cover available PowerShell wrappers without live setup or real credential access.
+- [x] #4 Offline fixtures reproduce the Linux desktop 0775 failure and prove successful repair, creation, reruns, default/custom profile scope, safety rejection, content preservation, and downstream failure handling. Extract functions only and cover available PowerShell wrappers without live setup or real credential access.
 - [x] #5 Update affected setup versions, documentation, and shared helper copies. Relevant permissions, Go, prose, package maintenance, shared runtime, model, AI-agent, and wiring contracts and lint pass, with platform limitations stated.
 <!-- AC:END -->
 

@@ -17,7 +17,7 @@ references:
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-After plugins were enabled on scott-beelink-ubuntu, Ubuntu setup version 243 still failed to install Paseo Plain. The installer passes --home as a global Paseo CLI flag; Paseo 0.8.0-beta.1 rejects it before running daemon status. Pass the resolved PASEO_HOME through the child environment instead, without changing plugin trust, source ownership, or daemon state.
+After plugins were enabled on linux-workstation, Ubuntu setup version 243 still failed to install Paseo Plain. The installer passes --home as a global Paseo CLI flag; Paseo 0.8.0-beta.1 rejects it before running daemon status. Pass the resolved PASEO_HOME through the child environment instead, without changing plugin trust, source ownership, or daemon state.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -40,7 +40,7 @@ After plugins were enabled on scott-beelink-ubuntu, Ubuntu setup version 243 sti
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-The second Beelink log confirms Ubuntu version 243 and installed @getpaseo/cli@0.8.0-beta.1. It passed the trust gate but emitted the generic failure at line 518. On the same CLI release, the installer command paseo --home /home/scowalt/.paseo daemon status --json exits 1 with error: unknown option --home. Supplying PASEO_HOME via the child environment instead makes both daemon status and explicitly targeted plugin ls return valid JSON with exit 0. These checks were read-only against the local reference daemon, not the affected host. No machine settings changed.
+The second Linux workstation log confirms Ubuntu version 243 and installed @getpaseo/cli@0.8.0-beta.1. It passed the trust gate but emitted the generic failure at line 518. On the same CLI release, the installer command paseo --home /home/scowalt/.paseo daemon status --json exits 1 with error: unknown option --home. Supplying PASEO_HOME via the child environment instead makes both daemon status and explicitly targeted plugin ls return valid JSON with exit 0. These checks were read-only against the local reference daemon, not the affected host. No machine settings changed.
 Waiting for approval before source edits. Backlog allocated active ID 15 despite an archived historical task with that number; the excluded fleet-rollout task remains unchanged in backlog/archive/tasks.
 
 Scott approved the source fix, regression coverage, and publication to main. Testing stays at the existing isolated setup/CLI boundary, plus read-only compatibility checks against the local reference CLI. The affected host will not be changed.

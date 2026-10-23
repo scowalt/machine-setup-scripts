@@ -8,7 +8,7 @@ Status: Q1–Q6 agreed. [GitHub issue #197](https://github.com/scowalt/machine-s
 
 ## Evidence
 
-The [2026-10-06 Beelink Ubuntu setup log](https://logs.scowalt.com/logs/scott-beelink-ubuntu/2026-10-06-18-16-57-571.log) records an incomplete setup run at `preflight.unit-dropins` (lines 371–373), consequential BB plugin-refresh deferral (377), and final failure reporting (432). The ordinary Ubuntu version-309 caller preserves the error through unrelated work and logging.
+The [2026-10-06 Linux workstation Ubuntu setup log](https://logs.example.invalid/logs/linux-workstation/2026-10-06-18-16-57-571.log) records an incomplete setup run at `preflight.unit-dropins` (lines 371–373), consequential BB plugin-refresh deferral (377), and final failure reporting (432). The ordinary Ubuntu version-309 caller preserves the error through unrelated work and logging.
 
 User-authorized read-only Tailscale SSH inspection at 18:45–18:47 UTC confirmed a real, account-owned mode-0700 `~/.config/systemd/user/setup-bb-app.service.d` containing two regular files, both predating the run:
 
@@ -37,7 +37,7 @@ Use BB's existing native configuration for explicitly scoped BB/provider setting
 
 ### Q4: The temporary directory remains optional
 
-Retain an explicitly selected, reviewed private BB temporary directory on Beelink rather than imposing a new default on every setup-managed Ubuntu server. Machines without this customization retain their existing behavior. The observed incident proves a preflight conflict, not a fleet-wide need for a different temporary directory.
+Retain an explicitly selected, reviewed private BB temporary directory on Linux workstation rather than imposing a new default on every setup-managed Ubuntu server. Machines without this customization retain their existing behavior. The observed incident proves a preflight conflict, not a fleet-wide need for a different temporary directory.
 
 ### Q5: The broad environment override needs an explicit migration
 
@@ -58,7 +58,7 @@ The consequential maintenance and credential boundary is recorded in [ADR 0011](
 5. Bump the modified Ubuntu script version. Run Bash syntax and ShellCheck, embedding consistency where applicable, and the mandatory contained extraction/default, BB server, relevant plugin-refresh/preparation, reliability, headless and shared-runtime contracts. Broaden the affected matrix if shared helpers or callers change. Record skips and distinguish offline results from native rollout.
 6. Present the repository changes and the separate one-time migration procedure for review. At design approval, no commit/push, live migration, permission repair, service restart, provider-auth/model request or setup rerun was implied. The subsequent implementation authorization permits local commits as recorded above; live operations still need separate authorization.
 
-Success for development means the safe TMPDIR-only fixture passes, unknown/broad overrides still fail without mutation, and required contained regressions pass. It does not mean Beelink's next unchanged setup run succeeds: the agreed one-time environment-override migration remains a prerequisite.
+Success for development means the safe TMPDIR-only fixture passes, unknown/broad overrides still fail without mutation, and required contained regressions pass. It does not mean Linux workstation's next unchanged setup run succeeds: the agreed one-time environment-override migration remains a prerequisite.
 
 ## Existing constraints
 

@@ -27,7 +27,7 @@ priority: medium
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Ubuntu setup v287 on scott-beelink-ubuntu reported only the aggregate BB server failure at collector log line 307. The failed predicate is not yet known. Add precise, secret-safe operation/check diagnostics across the existing BB server failure paths without speculative repairs or operational policy changes. Remote diagnostics are owned by a separate agent; this task is repository-only logging and regression coverage.
+Ubuntu setup v287 on linux-workstation reported only the aggregate BB server failure at collector log line 307. The failed predicate is not yet known. Add precise, secret-safe operation/check diagnostics across the existing BB server failure paths without speculative repairs or operational policy changes. Remote diagnostics are owned by a separate agent; this task is repository-only logging and regression coverage.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -77,7 +77,7 @@ Five optional skipped executions: shared-runtime external-dotfiles convergence (
 
 Self-review: the generated BB_GUARD heredoc is byte-identical to HEAD; app/ingress unit-render expressions are unchanged. Static normalization of the BB helper block, version banner and aggregate diagnostic proves all other Ubuntu production code unchanged. Reviewed unchanged predicates, command arguments, short-circuit order, stopped-update/restore order, safe primary-plus-restore diagnostics and failure aggregation. Tests verify actual stderr capture into the real finalized log via inert upload-copy, native config partial-write honesty, first failure preservation across unlock errors and original nonzero helper exit status (17).
 
-Only ubuntu.sh, tests/test_bb_server_diagnostics.py, tests/bb-server-contract.sh, tests/test_bb_directory_preflight.py and this CLI-managed task changed. No README/agent-guide/other-platform/kernel-runner changes. Original Beelink failure predicate and current service health remain unknown; native reboot, logout, tailnet UI/WebSocket and session continuity need separate authorized rollout. No remote checks, live setup, real BB/Tailscale lifecycle, commit/push/PR or rollout.
+Only ubuntu.sh, tests/test_bb_server_diagnostics.py, tests/bb-server-contract.sh, tests/test_bb_directory_preflight.py and this CLI-managed task changed. No README/agent-guide/other-platform/kernel-runner changes. Original Linux workstation failure predicate and current service health remain unknown; native reboot, logout, tailnet UI/WebSocket and session continuity need separate authorized rollout. No remote checks, live setup, real BB/Tailscale lifecycle, commit/push/PR or rollout.
 
 Publication authorized by user: get these changes onto remote main. Remote main advanced to d078a4c (BB plugin refresh and Bash 3.2 helper transport fixes). Preserved those commits and their caller wiring. CLI demote/promote renumbered this branch-local TASK-65 to TASK-66 without altering upstream unrelated TASK-65. Resolved the sole version-banner conflict as Ubuntu 290; the earlier v288 test evidence remains pre-integration evidence. Rerunning affected contained validation before committing/pushing; legacy uncontained hooks will be disabled per-command in favor of explicit contained tests and lint/security checks.
 

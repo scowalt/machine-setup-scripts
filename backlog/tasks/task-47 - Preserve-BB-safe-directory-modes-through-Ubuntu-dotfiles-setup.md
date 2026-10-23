@@ -15,14 +15,14 @@ references:
   - ubuntu.sh
   - tests/test_bb_directory_preflight.py
   - tests/bb-server-contract.sh
-  - 'https://logs.scowalt.com/logs/devinabox/2026-09-28-02-22-02-421.log'
+  - 'https://logs.example.invalid/logs/development-server/2026-09-28-02-22-02-421.log'
 priority: high
 ---
 
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Confirmed on devinabox: manual removal of group-write permission is undone earlier in the next setup run. Ubuntu calls chezmoi update --force (which applies by default) and chezmoi apply --force before BB. With inherited umask 0002 and no configured Chezmoi umask, native Chezmoi v2.70.0 changes existing 0755 .config/systemd directories back to 0775. Reproduced twice using an inert temporary source/HOME and the real extracted BB preflight. Source directory mode is not the cause. Fix the setup/Chezmoi interaction, not the BB safety gate or a repeated manual chmod.
+Confirmed on development-server: manual removal of group-write permission is undone earlier in the next setup run. Ubuntu calls chezmoi update --force (which applies by default) and chezmoi apply --force before BB. With inherited umask 0002 and no configured Chezmoi umask, native Chezmoi v2.70.0 changes existing 0755 .config/systemd directories back to 0775. Reproduced twice using an inert temporary source/HOME and the real extracted BB preflight. Source directory mode is not the cause. Fix the setup/Chezmoi interaction, not the BB safety gate or a repeated manual chmod.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -47,7 +47,7 @@ Approved by the user: implement TASK-47 using the established native-apply and s
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-- Authenticated collector logs match devinabox local runs 2026-09-27-221332.log and 2026-09-27-222114.log, both Ubuntu version 271. Both show the Chezmoi update before the mode-775 BB error. Live read-only metadata showed all three directory ctimes at 22:21:26 during the latter run (started 22:21:14). Current process umask is 0002; the native account Chezmoi config has no top-level umask. Only this allowlisted value was printed; no credentials/config content exposed.
+- Authenticated collector logs match development-server local runs 2026-09-27-221332.log and 2026-09-27-222114.log, both Ubuntu version 271. Both show the Chezmoi update before the mode-775 BB error. Live read-only metadata showed all three directory ctimes at 22:21:26 during the latter run (started 22:21:14). Current process umask is 0002; the native account Chezmoi config has no top-level umask. Only this allowlisted value was printed; no credentials/config content exposed.
 - Ran /usr/bin/python3 /tmp/bb-chezmoi-permission-repro.py with native Chezmoi v2.70.0 (6624b49786a9f039f05b4d929c35fd4f4bf17337). Manual 0755 -> native apply under 0002 -> 0775 for .config, .config/systemd, and .config/systemd/user, followed by the exact current BB diagnostic and exit 1. Repeated twice with the same result. No real HOME changes.
 - Controlled matrix: changing only source modes to 0755 still produces 0775; changing only process umask to 0022 gives 0755 and BB exit 0 across repeated runs; 0077 yields 0700 and exit 0. Explicit config umask 0002 overrides process 0022 and stays blocked; explicit config 0022 under process 0002 passes. This isolates inherited process umask as the actual cause on this host, not source modes or another installer.
 - Verified Bash subshell umask go-w maps 0002 -> 0022, preserves 0022/0077, and leaves the caller mask unchanged. Native chezmoi update --help confirms --apply defaults true. Production code and live directories/services are untouched; implementation requires approval of the plan.

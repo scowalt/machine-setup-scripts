@@ -26,7 +26,7 @@ Every behavioral invocation used this exact prefix, with suites appended as list
 
 ```bash
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tests/run-fixture-matrix.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh \
   --tool-path /usr/bin:/bin
 ```
@@ -50,7 +50,7 @@ Artifact root: `/tmp/setup-fixture-matrix-x0r0i4o2`. **21/21 suite entries retur
 
 ```bash
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tests/run-fixture-matrix.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh \
   --tool-path /usr/bin:/bin \
   tests/setup-default-contract.sh \
@@ -110,8 +110,8 @@ Mise is not exposed in the selected explicit tool PATH. Optional installed-code 
 /usr/bin/shellcheck mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh
 for script in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh; do /bin/bash -n "$script"; done
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tools/embed-opencode-cli.py --check
-env -i PATH=/usr/bin:/bin /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node --check lib/opencode-cli.cjs
-env -i PATH=/usr/bin:/bin /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node --check tests/opencode-cli.test.cjs
+env -i PATH=/usr/bin:/bin /home/operator/.local/share/mise/installs/node/24.20.0/bin/node --check lib/opencode-cli.cjs
+env -i PATH=/usr/bin:/bin /home/operator/.local/share/mise/installs/node/24.20.0/bin/node --check tests/opencode-cli.test.cjs
 git diff --check
 ```
 

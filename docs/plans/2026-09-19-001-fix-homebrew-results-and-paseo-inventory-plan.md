@@ -11,12 +11,12 @@ Deliver as two independently testable fixes:
 1. Propagate incomplete Homebrew updates into the macOS setup result.
 2. Bound the shared Muse helper's Linux process inspection without weakening owner verification, and distinguish expected deferrals from unverified safety checks.
 
-No automatic CLT upgrades, cask reinstalls, trust changes, privilege escalation, procfs permission changes, remote host changes, or unrelated cleanup. Do not fix the separate Infisical repository or ScoBot skill-link issues in these changes.
+No automatic CLT upgrades, cask reinstalls, trust changes, privilege escalation, procfs permission changes, remote host changes, or unrelated cleanup. Do not fix the separate Infisical repository or secondary-user skill-link issues in these changes.
 
 ## Evidence and confidence
 
-- `scott-macbook-m3/2026-09-18-20-12-11-356.log`: Homebrew reports `upgrade=1` after unsupported CLT errors, but setup prints `Setup complete!`. An extracted-function fixture against the reference commit confirms final status 0. This is a confirmed reporting defect, not a new defect introduced by the Node fix.
-- Ten Linux runs report `Paseo Muse deferred: process-inventory-unverified`. Representative logs are `arcane/2026-09-18-02-14-17-536.log`, `bazzite/2026-09-14-02-59-12-915.log`, `devinabox/2026-09-17-23-17-23-138.log`, and `scott-beelink-ubuntu/2026-09-18-00-06-39-203.log`.
+- `macos-laptop-a/2026-09-18-20-12-11-356.log`: Homebrew reports `upgrade=1` after unsupported CLT errors, but setup prints `Setup complete!`. An extracted-function fixture against the reference commit confirms final status 0. This is a confirmed reporting defect, not a new defect introduced by the Node fix.
+- Ten Linux runs report `Paseo Muse deferred: process-inventory-unverified`. Representative logs are `linux-desktop/2026-09-18-02-14-17-536.log`, `gaming-workstation/2026-09-14-02-59-12-915.log`, `development-server/2026-09-17-23-17-23-138.log`, and `linux-workstation/2026-09-18-00-06-39-203.log`.
 - An extracted inventory fixture confirms that an unreadable command line from an unrelated foreign-user process aborts inspection. The logs do not identify the failing syscall or process, so this is a demonstrated defect and plausible explanation, not proof of the cause of every logged deferral. Improved diagnostics are part of the fix.
 
 ## Agreed outcome model

@@ -34,7 +34,7 @@ Add Paseo Plain installation and update logic to the six standalone machine setu
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Revised scope: future setup runs only. No fleet inventory, SSH inspection, remote installation, canary rollout, or migration of the existing devinabox plugin. Confirm the fresh-install compatibility/enablement policy with Scott before coding.
+Revised scope: future setup runs only. No fleet inventory, SSH inspection, remote installation, canary rollout, or migration of the existing development-server plugin. Confirm the fresh-install compatibility/enablement policy with Scott before coding.
 
 1. Consume the public Git-installable release prepared in paseo-plain TASK-3. Use native Git install for an absent ID and native update only for an existing matching managed source. Never update all plugins or replace an unrelated/local-directory installation.
 2. Add standalone Bash/PowerShell installation functions to mac.sh, ubuntu.sh, wsl.sh, pi.sh, bazzite.sh, and win.ps1 after the required user runtimes and an available local Paseo daemon. Resolve only the local setup user's daemon/home/endpoint during that setup run. Do not inventory or contact other machines.

@@ -41,7 +41,7 @@ The aggregate ran sequentially with this explicit existing-tool selection and th
 
 ```bash
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tests/run-fixture-matrix.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh \
   --tool-path /usr/bin:/bin:/tmp/task56-audited-tools-wn5n3t7y --timeout 300 \
   tests/ai-coding-agent-contract.sh tests/attention-span-removal-contract.sh \

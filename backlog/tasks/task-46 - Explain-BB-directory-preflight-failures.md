@@ -14,14 +14,14 @@ dependencies: []
 references:
   - ubuntu.sh
   - tests/bb-server-contract.sh
-  - 'https://logs.scowalt.com/logs/devinabox/2026-09-27-23-06-20-855.log'
+  - 'https://logs.example.invalid/logs/development-server/2026-09-27-23-06-20-855.log'
 priority: medium
 ---
 
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-The devinabox setup run 2026-09-27-190459.log failed before BB installation because account-owned ~/.config, ~/.config/systemd, and ~/.config/systemd/user were mode 775. The directory preflight returned silently, leaving only a generic incomplete-setup message. Report controlled actionable diagnostics without weakening safety checks or changing live permissions.
+The development-server setup run 2026-09-27-190459.log failed before BB installation because account-owned ~/.config, ~/.config/systemd, and ~/.config/systemd/user were mode 775. The directory preflight returned silently, leaving only a generic incomplete-setup message. Report controlled actionable diagnostics without weakening safety checks or changing live permissions.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

@@ -23,7 +23,7 @@ After the public release and setup integration are approved and validated, apply
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 A private inventory accounts for every in-scope personal and work machine, daemon identity/home/owner, client and daemon compatibility, plugin trust state, and supported worker runtime.
-- [ ] #2 The release succeeds first on devinabox and one Mac daemon, then on other supported hosts, with source/commit, running state, original-text fallback, and preserved configuration recorded.
+- [ ] #2 The release succeeds first on development-server and one Mac daemon, then on other supported hosts, with source/commit, running state, original-text fallback, and preserved configuration recorded.
 - [ ] #3 Windows, WSL, ARM, offline machines, and missing credentials are verified on the relevant platform or remain explicit named blockers; no claim that all machines are complete while any target is unresolved.
 - [ ] #4 No authentication data or cached conversation content is copied between hosts; no unrelated services/plugins/agents are changed; no model call occurs except a separately approved synthetic test.
 - [ ] #5 A tested recovery path and concise per-host completion/pending report are available, with actual client confirmation distinguished from offline tests.

@@ -15,7 +15,7 @@ references:
   - ubuntu.sh
   - bazzite.sh
   - win.ps1
-  - 'https://logs.scowalt.com/logs/devinabox/2026-09-12-14-35-19-317.log'
+  - 'https://logs.example.invalid/logs/development-server/2026-09-12-14-35-19-317.log'
 priority: high
 ---
 

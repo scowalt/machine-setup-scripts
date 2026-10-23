@@ -17,7 +17,7 @@ references:
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-The Beelink setup log reported only a generic BB failure because existing managed-service drop-ins are rejected silently. Add actionable, non-secret diagnostics without changing the refusal policy or live machine state.
+The Linux workstation setup log reported only a generic BB failure because existing managed-service drop-ins are rejected silently. Add actionable, non-secret diagnostics without changing the refusal policy or live machine state.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -52,7 +52,7 @@ Red evidence: /tmp/setup-fixture-matrix-m15lhjnl (16 missing-diagnostic assertio
 
 Sequential contained matrix: /tmp/setup-fixture-matrix-pccih3c_ passed all 8 entries: extraction/containment, setup-default, BB-server, setup-reliability, BB-machine-preparation, headless, shared-node-runtime and weekly regressions. Used env -i, explicit existing Node 24.20.0 and Linux PowerShell, private copied Chezmoi tool, unchanged mandatory filter/self-test and private stdio/roots. Bash syntax, ShellCheck and git diff --check passed.
 
-Limitations: native mise activation/inventory skipped because mise was absent from the explicit fixture PATH; cross-repository runtime/dotfile integration was not enabled. Weekly managed-skill fixtures skipped 2 optional installed CLI probes and 1 dotfiles render probe. No native Windows/macOS, live BB continuity or rollout claim; no setup/service/configuration changes on Beelink.
+Limitations: native mise activation/inventory skipped because mise was absent from the explicit fixture PATH; cross-repository runtime/dotfile integration was not enabled. Weekly managed-skill fixtures skipped 2 optional installed CLI probes and 1 dotfiles render probe. No native Windows/macOS, live BB continuity or rollout claim; no setup/service/configuration changes on Linux workstation.
 
 Publication authorized. Remote main advanced to 3dc99ea (TASK-66 broader controlled BB diagnostics). Rebase preserves that implementation, its controlled preflight labels, corrected aggregate wording, and all unrelated upstream checks. Added our unit-specific drop-in detail alongside the existing local refusal label; loaded-override failures retain the upstream unit label. Ubuntu is now 291; BB-server contract version 2. Expanded our fixture to load the real upstream diagnostic helper, assert preserved labels and use its updated caller message. Prior v290 validation remains pre-integration evidence. No policy, lifecycle or remote-state changes.
 

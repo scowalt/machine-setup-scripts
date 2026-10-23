@@ -6,7 +6,7 @@ Policy supersession: the [2026-10-09 owner-approved native CLI delegation](2026-
 
 ## Read-only sources
 
-Inspected the installed `bb-app` **0.44.0** package under `/home/scowalt/.local/share/mise/installs/node/24.20.0/lib/node_modules/bb-app`, without executing its CLI, importing its modules, querying a live server, or executing plugins.
+Inspected the installed `bb-app` **0.44.0** package under `/home/operator/.local/share/mise/installs/node/24.20.0/lib/node_modules/bb-app`, without executing its CLI, importing its modules, querying a live server, or executing plugins.
 
 - `server/dist/start-server.js`, SHA-256 `344b576226854db7d54ecb4e397c3b904d0776936bb63743a28a05a67beeb008`.
 - `dist/bb-app.js`, SHA-256 `2eb3c34b952fe24769458e292c2670bafc882653ef8673587faebfc6f3cb5c4e`.
@@ -74,7 +74,7 @@ Exact aggregate command:
 
 ```bash
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tests/run-fixture-matrix.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /tmp/pi-shared-runtime-pwsh.2SlAPL/pwsh \
   --tool-path /usr/bin:/bin:/tmp/task56-audited-tools-wn5n3t7y --timeout 300 \
   tests/ai-coding-agent-contract.sh tests/attention-span-removal-contract.sh \

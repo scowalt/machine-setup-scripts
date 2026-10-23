@@ -1,8 +1,10 @@
-# Minith: Homebrew waiting on Keychain
+# macOS workstation: Homebrew waiting on Keychain
+
+Machine identifiers and evidence locations in this public copy are [sanitized](../agents/public-evidence.md); technical findings and limitations are unchanged.
 
 ## Captured evidence
 
-On October 13, 2026, a headless Minith setup appeared stalled after Homebrew download results, a failed `brew link` step and a newer-CLT advisory. The owner supplied a process snapshot and a three-second native `sample`; no live setup or update was run during development.
+On October 13, 2026, a headless macOS workstation setup appeared stalled after Homebrew download results, a failed `brew link` step and a newer-CLT advisory. The owner supplied a process snapshot and a three-second native `sample`; no live setup or update was run during development.
 
 The captured process chain was:
 
@@ -41,4 +43,4 @@ This is bounded credential acquisition, not a detector proving that no GUI dialo
 
 Every behavioral cohort used the audited sequential runner with sanitized `env -i`, private roots/stdio and mandatory kernel filter/self-test, existing native Node and PowerShell, and no optional live integrations. Additional tools were explicit existing native mise, Chezmoi and Bun executable selections in `/tmp/mac-headless-fixture-tools.kDHhskjU`; no tool was installed. Bash syntax, ShellCheck and whitespace checks pass. Markdownlint is unavailable as a trusted installed command; documentation was reviewed manually. Optional external-dotfile/installed-code integrations and native-platform behavior are not claimed.
 
-Native Apple Keychain/GUI behavior, macOS Perl/process-group behavior and a live Minith setup remain rollout evidence, not established by Linux fixtures. The separate [historical containment incident](2026-09-29-fixture-containment-incident.md) and its remote receipt/telemetry uncertainty are unchanged.
+Native Apple Keychain/GUI behavior, macOS Perl/process-group behavior and a live macOS workstation setup remain rollout evidence, not established by Linux fixtures. The separate [historical containment incident](2026-09-29-fixture-containment-incident.md) and its remote receipt/telemetry uncertainty are unchanged.

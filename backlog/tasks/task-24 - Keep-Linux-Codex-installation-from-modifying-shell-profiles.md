@@ -16,7 +16,7 @@ references:
   - wsl.sh
   - pi.sh
   - bazzite.sh
-  - 'https://logs.scowalt.com/logs/arcane/2026-09-11-18-54-46-585.log'
+  - 'https://logs.example.invalid/logs/linux-desktop/2026-09-11-18-54-46-585.log'
 priority: medium
 ---
 

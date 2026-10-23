@@ -1,6 +1,6 @@
 # Existing file group write — verification change
 
-[ADR 0018](../adr/0018-accept-existing-file-group-write.md) records the owner's repository-wide decision after Beelink's Visual Explainer installation returned success but post-install verification rejected an account-owned `0664` `.git/config`. Group write alone now passes Unix file verification; no machine permission repair or live setup is part of this change.
+[ADR 0018](../adr/0018-accept-existing-file-group-write.md) records the owner's repository-wide decision after Linux workstation's Visual Explainer installation returned success but post-install verification rejected an account-owned `0664` `.git/config`. Group write alone now passes Unix file verification; no machine permission repair or live setup is part of this change.
 
 ## Gate inventory
 
@@ -33,11 +33,11 @@ The original full-dispatch command was:
 
 ```sh
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tools/run-pre-push-contracts.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
   --pwsh /opt/microsoft/powershell/7/pwsh \
-  --mise /home/scowalt/.local/bin/mise \
-  --chezmoi /home/scowalt/.local/bin/chezmoi \
-  --bun /home/scowalt/.bun/bin/bun
+  --mise /home/operator/.local/bin/mise \
+  --chezmoi /home/operator/.local/bin/chezmoi \
+  --bun /home/operator/.bun/bin/bun
 ```
 
 Before publication, remote main advanced to `83345e6` with the generated bb ingress watchdog. Integration preserves its strict startup, identity checks, transient-failure tolerance and no-op regeneration while applying the file policy to the new identity-file check and unchanged `0720` guards. Ubuntu advances to version 342. The contained default, extraction/containment and expanded 29-method watchdog suites passed at `/tmp/setup-fixture-matrix-qb5s8rv2`; the earlier pre-push attempt was cancelled before publishing so that the integrated source could be validated instead.

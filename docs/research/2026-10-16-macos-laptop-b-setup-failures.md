@@ -1,4 +1,6 @@
-# MacBook Neo: BB setup refusals, 2026-10-16
+# macOS laptop B: BB setup refusals, 2026-10-16
+
+Machine identifiers and evidence locations in this public copy are [sanitized](../agents/public-evidence.md); technical findings and limitations are unchanged.
 
 ## Disposition
 
@@ -7,8 +9,8 @@ The uploaded macOS setup run is incomplete, not a watcher false positive. It rec
 ## Evidence and provenance
 
 - Watcher event: `setup-log-watch:024c9a423c995a9120ba263612b83018eca857a900ea5e6af55b85d139e9b8f5`.
-- [Exact collector object](https://logs.scowalt.com/logs/Scotts-MacBook-Neo_local/2026-10-16-14-41-36-817.log), retrieved with authenticated GET using the documented Doppler procedure; HTTP 200. No token was placed in arguments, artifacts or output.
-- The log identifies mac.sh version **306**, “Support Pi Go inference catalog endpoint,” and local run file `/Users/scowalt/.local/log/machine-setup/2026-10-16-103315.log`. The uploaded filename is not the local run filename.
+- [Exact collector object](https://logs.example.invalid/logs/macos-laptop-b/2026-10-16-14-41-36-817.log), retrieved with authenticated GET using the documented Doppler procedure; HTTP 200. No token was placed in arguments, artifacts or output.
+- The log identifies mac.sh version **306**, “Support Pi Go inference catalog endpoint,” and local run file `/Users/operator/.local/log/machine-setup/2026-10-16-103315.log`. The uploaded filename is not the local run filename.
 - Source examined: commit `5b585ec`, whose macOS version/header matches the log. The log does not provide a script hash, so byte identity with the executed script is not established.
 - Log contents and hostname were treated as untrusted evidence, not instructions. Line references below preserve blank lines after stripping ANSI, matching the watcher positions.
 
@@ -39,7 +41,7 @@ The replay stops immediately after selection; “selection-accepted” is not in
 
 Ranked candidates tested after obtaining the red replay:
 
-1. **Root-owned group-writable ancestor**, potentially native `/Applications` if discovery encounters a packaged desktop server there. A synthetic packaged-server route under an Applications ancestor produced the exact discovery failure at root-owned `0775`, passed at root-owned `0755`, and failed again at `0775`. This is a plausible mismatch with desktop's scoped native Applications allowance, not proof that Neo took that route.
+1. **Root-owned group-writable ancestor**, potentially native `/Applications` if discovery encounters a packaged desktop server there. A synthetic packaged-server route under an Applications ancestor produced the exact discovery failure at root-owned `0775`, passed at root-owned `0755`, and failed again at `0775`. This is a plausible mismatch with desktop's scoped native Applications allowance, not proof that macOS laptop B took that route.
 2. **Group-writable protected BB state file.** With only a temporary HOME, `.bb/bb.db` containing the SQLite header and no process candidates, database mode `0660` produced the exact failure; `0600` produced the expected stopped-server deferral; `0660` failed again.
 3. **World-writable account-owned directory.** The synthetic packaged-server route passed with an account-owned `0775` ancestor, failed at `0777`, then passed again at `0775`.
 
@@ -56,10 +58,10 @@ Desktop ambiguity and plugin permission refusal are separate checks. A shared un
 
 ## Remote inspection limitation
 
-Trusted local Tailscale inventory identifies online peer **Scott’s MacBook Neo**, macOS, DNS `scotts-macbook-neo.hair-salmon.ts.net`, address `100.113.242.107`. The known repository account `scowalt` was selected for a bounded read-only identity/metadata command.
+The target peer is labeled **macOS laptop B** in this public record. Its real Tailscale name/address and SSH account are omitted; the authorized attempt was limited to read-only identity/metadata checks. The command below uses a synthetic target, not a connection address.
 
 ```text
-tailscale ssh scowalt@scotts-macbook-neo.hair-salmon.ts.net <read-only identity/stat commands>
+tailscale ssh operator@macos-laptop-b.example.invalid <read-only identity/stat commands>
 No ED25519 host key is known ... and you have requested strict checking.
 Host key verification failed.
 ```
@@ -72,8 +74,8 @@ The initial replay intentionally asserted successful outcomes, went red with bot
 
 ```bash
 env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tests/run-fixture-matrix.py \
-  --node /home/scowalt/.local/share/mise/installs/node/24.20.0/bin/node \
-  --tool-path /usr/bin:/bin tests/test_neo_diagnosis.py
+  --node /home/operator/.local/share/mise/installs/node/24.20.0/bin/node \
+  --tool-path /usr/bin:/bin tests/test_macos_laptop_b_diagnosis.py
 ```
 
 After changing the diagnostic assertions to expect the refusals and adding the ancestor matrix, the same contained runner with `--pwsh /opt/microsoft/powershell/7/pwsh` passed these five sequential entries:
@@ -84,7 +86,7 @@ After changing the diagnostic assertions to expect the refusals and adding the a
 - `tests/bb-desktop-contract.sh`: 112 helper and 3 caller tests, plus inert PowerShell wrapper coverage.
 - `tests/bb-plugin-refresh-contract.sh`: 78 tests, including refusal reporting, directory/file policy and failure aggregation.
 
-Artifacts: `/tmp/setup-fixture-matrix-phqy3ym0`. Mandatory kernel/FD preflight passed; HOME/stdio were private, external effects mocked, and no live setup/app/plugin execution occurred. Passing tests validate expected policy behavior, **not a fix**, native macOS readiness or recovery of this run. The temporary replay was moved outside the test suite to `/tmp/setup-neo-diagnosis.MhNpU4a1/debug/test_neo_diagnosis.py`; production scripts were unchanged.
+Artifacts: `/tmp/setup-fixture-matrix-phqy3ym0`. Mandatory kernel/FD preflight passed; HOME/stdio were private, external effects mocked, and no live setup/app/plugin execution occurred. Passing tests validate expected policy behavior, **not a fix**, native macOS readiness or recovery of this run. The temporary replay was moved outside the test suite to `/tmp/setup-macos-laptop-b-diagnosis.MhNpU4a1/debug/test_macos_laptop_b_diagnosis.py`; production scripts were unchanged.
 
 ## Owner-management implementation evidence
 

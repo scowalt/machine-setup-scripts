@@ -15,14 +15,14 @@ references:
   - ubuntu.sh
   - win.ps1
   - tests/test_pi_opencode_go_setup.py
-  - 'https://logs.scowalt.com/logs/devinabox/2026-09-13-23-22-14-148.log'
+  - 'https://logs.example.invalid/logs/development-server/2026-09-13-23-22-14-148.log'
 priority: medium
 ---
 
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-The devinabox Ubuntu v251 run 2026-09-13-192123.log failed Go setup but exposed only a generic warning. Make future setup logs identify the failed validation or operation without disclosing credentials or weakening safety checks. This task covers diagnostics, not an assumed repair of the unproven machine-specific cause.
+The development-server Ubuntu v251 run 2026-09-13-192123.log failed Go setup but exposed only a generic warning. Make future setup logs identify the failed validation or operation without disclosing credentials or weakening safety checks. This task covers diagnostics, not an assumed repair of the unproven machine-specific cause.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
