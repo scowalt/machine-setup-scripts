@@ -5,7 +5,7 @@ $tokens = $null
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count -gt 0) { throw 'Windows setup contains syntax errors.' }
-foreach ($name in @('Set-PiDefaults', 'Remove-PiSyntheticModels', 'Set-JsonProperty', 'Seed-PiZaiModels', 'Get-EnvLocalValue')) {
+foreach ($name in @('Remove-PiSyntheticModels', 'Seed-PiZaiModels', 'Get-EnvLocalValue')) {
     $function = $ast.Find({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -14,13 +14,7 @@ foreach ($name in @('Set-PiDefaults', 'Remove-PiSyntheticModels', 'Set-JsonPrope
     . ([scriptblock]::Create($function.Extent.Text))
 }
 function Test-EnvLocalFlag { param($Name) [Environment]::GetEnvironmentVariable($Name) -eq '1' }
-function Assert-Defaults($Path) {
-    $settings = Get-Content -Raw $Path | ConvertFrom-Json
-    if ($settings.defaultProvider -ne 'openai-codex' -or $settings.defaultModel -ne 'gpt-6-astra' -or
-        $settings.defaultThinkingLevel -ne 'xhigh' -or $settings.modelThinkingLevels.'openai-codex/gpt-6-astra' -ne 'xhigh') {
-        throw 'Incorrect GPT-6 Astra defaults.'
-    }
-}
+$dotfilesSettings = '{"defaultProvider":"openai","defaultModel":"gpt-6.1-sol","defaultThinkingLevel":"xhigh","modelThinkingLevels":{"openai/gpt-6.1-sol":"max","openai-codex/gpt-6-astra":"xhigh"}}'
 function Get-Bytes($Path) { [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($Path)) }
 $success = 'PASS'
 $failIcon = 'FAIL'
@@ -39,8 +33,7 @@ try {
         $modelsPath = Join-Path $agent 'models.json'
         if (-not (Remove-PiSyntheticModels)) { throw 'Absent models cleanup failed.' }
         if (Test-Path $modelsPath) { throw 'Cleanup created absent models file.' }
-        if (-not (Set-PiDefaults)) { throw 'Fresh defaults failed.' }
-        Assert-Defaults $settingsPath
+        New-Item -ItemType Directory -Force -Path $agent | Out-Null
         foreach ($work in @('0', '1')) {
             $env:WORK_MACHINE = $work
             foreach ($key in @('', 'fixture-zai')) {
@@ -50,14 +43,10 @@ try {
                 $authPath = Join-Path $agent 'auth.json'
                 Set-Content $authPath '{"openai-codex":{"type":"oauth","fixture":true}}'
                 $authBefore = Get-Bytes $authPath
-                Set-Content $settingsPath '{"defaultProvider":"synthetic","defaultModel":"hf:moonshotai/Kimi-K3","theme":"dark","packages":["npm:pi-prose"],"modelThinkingLevels":{"openai-codex/gpt-6-astra":"low","other/model":"medium"}}'
+                Set-Content $settingsPath $dotfilesSettings
+                $settingsBefore = Get-Bytes $settingsPath
                 Set-Content $modelsPath '{"providers":{"synthetic":{"apiKey":"fixture-retired"},"zai":{"apiKey":"fixture-existing"},"custom":{"models":[{"id":"keep"}]}},"keep":true}'
                 foreach ($iteration in 1..2) {
-                    if (-not (Set-PiDefaults)) { throw 'Upgrade defaults failed.' }
-                    Assert-Defaults $settingsPath
-                    $settings = Get-Content -Raw $settingsPath | ConvertFrom-Json
-                    if ($settings.theme -ne 'dark' -or $settings.packages[0] -ne 'npm:pi-prose' -or
-                        $settings.modelThinkingLevels.'other/model' -ne 'medium') { throw 'Unrelated settings changed.' }
                     if (-not (Remove-PiSyntheticModels)) { throw 'Provider removal failed.' }
                     $models = Get-Content -Raw $modelsPath | ConvertFrom-Json
                     if ($models.providers.PSObject.Properties['synthetic'] -or
@@ -68,6 +57,7 @@ try {
                     if ((Get-Bytes $modelsPath) -cne $before) { throw 'No-op cleanup rewrote models.' }
                     if (-not (Seed-PiZaiModels)) { throw 'Existing z.ai key not preserved.' }
                     if ((Get-Bytes $modelsPath) -cne $before) { throw 'Existing z.ai provider changed.' }
+                    if ((Get-Bytes $settingsPath) -cne $settingsBefore) { throw 'Dotfiles Pi defaults changed.' }
                 }
                 if ((Get-Bytes $envPath) -cne $envBefore -or (Get-Bytes $authPath) -cne $authBefore) {
                     throw 'Local credentials changed.'
@@ -93,12 +83,8 @@ try {
             if (-not (Remove-PiSyntheticModels)) { throw 'Valid no-op cleanup failed.' }
             if ((Get-Bytes $modelsPath) -cne $before) { throw 'No-op cleanup changed file.' }
         }
-        Set-Content $settingsPath '{not-json'
-        $before = Get-Bytes $settingsPath
-        if (Set-PiDefaults) { throw 'Malformed settings accepted.' }
-        if ((Get-Bytes $settingsPath) -cne $before) { throw 'Malformed settings changed.' }
     }
-    Write-Output 'PASS: Windows GPT-6 Astra defaults, Synthetic removal, and optional z.ai provider'
+    Write-Output 'PASS: Windows Synthetic removal and optional z.ai provider, with dotfiles Pi defaults preserved'
 } finally {
     foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $oldEnvironment[$name]) }
     Remove-Item -Recurse -Force $tempHome

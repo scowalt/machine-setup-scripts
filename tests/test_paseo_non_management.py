@@ -66,7 +66,6 @@ class NonManagement(unittest.TestCase):
                 self.assertNotRegex(executable.lower(), r'paseo|@getpaseo|paseo-plain')
                 self.assertIn('OPENCODE_GO_API_KEY', executable)
                 self.assertIn('muse-spark-1.3-contributor', executable)
-                self.assertIn('gpt-6-astra', executable)
                 self.assertIn('npm:pi-mcp-adapter', executable)
                 self.assertNotIn('npm:pi-mcp-adapter@', executable)
 

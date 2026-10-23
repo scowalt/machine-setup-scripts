@@ -1,0 +1,5 @@
+# Let the dotfiles own Pi's default model
+
+The dotfiles own Pi's default model, model shortlist and thinking preferences through `private_settings.json.tmpl` and its shared `pi-model-policy.json`. Setup applies the dotfiles before its Pi steps, so any default it saved replaced theirs: setup kept saving `openai-codex/gpt-6-astra` after the dotfiles moved to GPT-6.1 Sol. Pi ignores a saved default that is not on its enabled list, which hid the conflict until Astra was enabled. Astra then became Pi's default in BB too, and BB's new-thread composer substitutes that default for any requested model that Pi does not list. Setup therefore writes none of `defaultProvider`, `defaultModel`, `defaultThinkingLevel` or `modelThinkingLevels`.
+
+Pi profiles that the dotfiles do not render, such as an explicit `PI_CODING_AGENT_DIR` elsewhere or a machine that skipped dotfiles, keep whatever default they already have or fall back to Pi's own choice. The boundary is exercised by the [Pi model defaults contract](../../tests/pi-model-defaults-contract.sh).

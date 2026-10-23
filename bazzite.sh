@@ -4863,51 +4863,6 @@ PI_OPENCODE_GO_JS
     return 0
 }
 
-configure_pi_defaults() {
-    local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
-    local _settings_file="${_agent_dir}/settings.json"
-    local _tmp=""
-    local _jq_expr='
-        .defaultProvider = "openai-codex"
-        | .defaultModel = "gpt-6-astra"
-        | .defaultThinkingLevel = "xhigh"
-        | .modelThinkingLevels = (.modelThinkingLevels // {})
-        | .modelThinkingLevels["openai-codex/gpt-6-astra"] = "xhigh"
-    '
-
-    if ! command -v jq &> /dev/null; then
-        print_warning "jq not found. Cannot set Pi default model in ${_settings_file}."
-        return 1
-    fi
-
-    mkdir -p "${_agent_dir}"
-    if [[ -L "${_settings_file}" ]]; then
-        print_debug "Pi settings at ${_settings_file} are symlinked (chezmoi-managed); writing defaults through the link."
-    elif [[ ! -f "${_settings_file}" ]]; then
-        printf '{}\n' > "${_settings_file}"
-    fi
-
-    if ! _tmp=$(mktemp); then
-        print_warning "Could not create a temporary file for Pi defaults at ${_settings_file}."
-        return 1
-    fi
-
-    if jq "${_jq_expr}" "${_settings_file}" > "${_tmp}"; then
-        if cat "${_tmp}" > "${_settings_file}"; then
-            rm -f "${_tmp}"
-            print_success "Pi default model set to GPT-6 Astra (OpenAI Codex) with xhigh thinking."
-            return 0
-        fi
-        rm -f "${_tmp}"
-        print_warning "Failed to write Pi defaults to ${_settings_file}."
-        return 1
-    fi
-
-    rm -f "${_tmp}"
-    print_warning "Failed to parse Pi settings at ${_settings_file}; leaving defaults unchanged."
-    return 1
-}
-
 # shellcheck disable=SC2312
 read_env_local_value() {
     local _key="$1"
@@ -9838,7 +9793,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 187 | Last changed: Verify source-built OpenCode Homebrew bottles"
+    echo -e "${GRAY}Version 188 | Last changed: Leave the Pi default model to dotfiles"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9983,7 +9938,6 @@ HELPER_EOF
         print_warning "Skipping Pi package setup because BB/Pi trust configuration failed."
         _setup_had_errors=1
     elif install_pi_cli; then
-        configure_pi_defaults
         remove_pi_synthetic_models
         seed_pi_zai_models
         if configure_pi_opencode_go; then

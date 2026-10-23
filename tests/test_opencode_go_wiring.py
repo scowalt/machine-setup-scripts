@@ -24,7 +24,7 @@ class WiringTests(unittest.TestCase):
     def run_bash(self, name, scenario, catalog_fixture=None):
         inert = (
             "remove_rtk_resources", "remove_attention_span_resources", "setup_matt_pocock_skills",
-            "configure_pi_defaults", "remove_pi_synthetic_models", "seed_pi_zai_models",
+            "remove_pi_synthetic_models", "seed_pi_zai_models",
             "setup_pi_mcp_adapter", "remove_pi_subagents", "remove_pi_rpiv_packages",
             "setup_pi_claude_bridge", "setup_pi_companion_packages", "setup_pi_visual_explainer", "setup_pi_goal_autoresearch",
             "refresh_pi_packages",
@@ -120,7 +120,7 @@ configure_pi_opencode_go() { record go; [[ "${SCENARIO}" != go-failure ]]; }
         block = main[main.index("    if (-not (Prepare-PiProfilePermissions))"):
                      main.index("    if (-not (Remove-SimpleEnglishSkill))")]
         inert = ("Remove-RtkResources", "Remove-AttentionSpanResources", "Setup-MattPocockSkills",
-                 "Set-PiDefaults", "Remove-PiSyntheticModels", "Seed-PiZaiModels",
+                 "Remove-PiSyntheticModels", "Seed-PiZaiModels",
                  "Setup-PiMcpAdapter", "Remove-PiSubagents", "Remove-PiRpivPackages",
                  "Setup-PiClaudeBridge", "Setup-PiCompanionPackages", "Setup-PiVisualExplainer", "Setup-PiGoalAutoresearch", "Update-PiPackages")
         code = "$ErrorActionPreference = 'Stop'\n$script:calls = @()\n"

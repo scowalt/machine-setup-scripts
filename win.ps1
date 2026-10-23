@@ -4826,50 +4826,6 @@ main().then(result => console.log(result)).catch(error => {
     }
 }
 
-function Set-PiDefaults {
-    if ($env:PI_CODING_AGENT_DIR) {
-        $agentDir = $env:PI_CODING_AGENT_DIR
-    }
-    else {
-        $agentDir = Join-Path $env:USERPROFILE ".pi\agent"
-    }
-
-    $settingsPath = Join-Path $agentDir "settings.json"
-
-    if (-not (Test-Path $agentDir)) {
-        New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
-    }
-
-    $settingsJson = "{}"
-    if (Test-Path $settingsPath) {
-        $settingsJson = Get-Content -Path $settingsPath -Raw
-        if ([string]::IsNullOrWhiteSpace($settingsJson)) {
-            $settingsJson = "{}"
-        }
-    }
-
-    try {
-        $settings = $settingsJson | ConvertFrom-Json
-        if ($null -eq $settings) {
-            $settings = New-Object PSObject
-        }
-        Set-JsonProperty -Object $settings -Name "defaultProvider" -Value "openai-codex"
-        Set-JsonProperty -Object $settings -Name "defaultModel" -Value "gpt-6-astra"
-        Set-JsonProperty -Object $settings -Name "defaultThinkingLevel" -Value "xhigh"
-        if ($null -eq $settings.modelThinkingLevels) {
-            Set-JsonProperty -Object $settings -Name "modelThinkingLevels" -Value ([PSCustomObject]@{})
-        }
-        Set-JsonProperty -Object $settings.modelThinkingLevels -Name "openai-codex/gpt-6-astra" -Value "xhigh"
-        $settings | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsPath -Encoding UTF8
-        Write-Host "$success Pi default model set to GPT-6 Astra (OpenAI Codex) with xhigh thinking." -ForegroundColor Green
-        return $true
-    }
-    catch {
-        Write-Host "$failIcon Failed to write Pi defaults to $settingsPath : $($_.Exception.Message)" -ForegroundColor Red
-        return $false
-    }
-}
-
 function Get-EnvLocalValue {
     param([Parameter(Mandatory=$true)][string]$Name)
 
@@ -9218,7 +9174,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 202 | Last changed: Verify source-built OpenCode Homebrew bottles"
+    Write-Host "Version 203 | Last changed: Leave the Pi default model to dotfiles"
 
     Assert-HeadlessUnsupported
 
@@ -9288,7 +9244,6 @@ function Invoke-WindowsSetupTasks {
         $piSetupFailed = $true
     }
     elseif (Install-PiCli) {
-        Set-PiDefaults
         Remove-PiSyntheticModels
         Seed-PiZaiModels
         if (Set-PiOpenCodeGoProvider) { $piOpenCodeGoReady = $true }

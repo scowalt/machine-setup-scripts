@@ -8,11 +8,12 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ("mac.sh", "ubuntu.sh", "wsl.sh", "pi.sh", "bazzite.sh")
-MODEL = "openai-codex/gpt-6-astra"
-DEFAULTS = {
-    "defaultProvider": "openai-codex",
-    "defaultModel": "gpt-6-astra",
+DOTFILES_SETTINGS = {
+    "defaultProvider": "openai",
+    "defaultModel": "gpt-6.1-sol",
     "defaultThinkingLevel": "xhigh",
+    "enabledModels": ["openai/gpt-6.1-sol", "openai-codex/gpt-6.1-sol", "openai-codex/gpt-6-astra"],
+    "modelThinkingLevels": {"openai/gpt-6.1-sol": "max", "openai-codex/gpt-6-astra": "xhigh"},
 }
 
 
@@ -25,8 +26,7 @@ class ModelDefaultsTests(unittest.TestCase):
     def run_function(self, script, home, agent, name, work="0"):
         source = (ROOT / script).read_text()
         functions = []
-        for function in ("configure_pi_defaults", "read_env_local_value",
-                         "remove_pi_synthetic_models", "seed_pi_zai_models"):
+        for function in ("read_env_local_value", "remove_pi_synthetic_models", "seed_pi_zai_models"):
             match = re.search(rf"^{function}\(\) \{{\n.*?^\}}", source, re.M | re.S)
             self.assertIsNotNone(match, (script, function))
             functions.append(match[0])
@@ -48,9 +48,10 @@ class ModelDefaultsTests(unittest.TestCase):
                 source = (ROOT / script).read_text()
                 self.assertNotRegex(source, r"Kimi-K3|Kimi K3|SYNTHETIC_API_KEY|api\.synthetic\.new")
                 self.assertNotRegex(source, r"seed_pi_synthetic_models|Seed-PiSyntheticModels|pi_zai_key_available|Test-PiZaiKeyAvailable")
-                self.assertNotRegex(source, r'defaultProvider[^\n]*(?:=|-Value) "zai"')
-                names = ("Set-PiDefaults", "Remove-PiSyntheticModels", "Seed-PiZaiModels") if script == "win.ps1" else (
-                    "configure_pi_defaults", "remove_pi_synthetic_models", "seed_pi_zai_models")
+                self.assertNotRegex(source, r"configure_pi_defaults|Set-PiDefaults|defaultProvider|defaultModel|"
+                                            r"defaultThinkingLevel|modelThinkingLevels")
+                names = ("Remove-PiSyntheticModels", "Seed-PiZaiModels") if script == "win.ps1" else (
+                    "remove_pi_synthetic_models", "seed_pi_zai_models")
                 positions = []
                 for name in names:
                     calls = list(re.finditer(rf"^ +{name}$", source, re.M))
@@ -60,7 +61,7 @@ class ModelDefaultsTests(unittest.TestCase):
                 if script != "win.ps1":
                     subprocess.run(["bash", "-n", str(ROOT / script)], check=True)
 
-    def test_defaults_on_all_machine_types(self):
+    def test_dotfiles_defaults_preserved_on_all_machine_types(self):
         for script in SCRIPTS:
             for work in ("", "0", "1"):
                 for custom in (False, True):
@@ -73,26 +74,17 @@ class ModelDefaultsTests(unittest.TestCase):
                                                 ("export ZAI_API_KEY='fixture-zai'\n" if key else ""))
                             initial_env = env_file.read_bytes()
                             settings = agent / "settings.json"
-                            self.assertEqual(self.run_function(script, home, agent if custom else None,
-                                                               "configure_pi_defaults", work).returncode, 0)
-                            self.assertEqual(json.loads(settings.read_text()),
-                                             dict(DEFAULTS, modelThinkingLevels={MODEL: "xhigh"}))
-                            old = {"defaultProvider": "zai" if key else "synthetic",
-                                   "defaultModel": "glm-5.3" if key else "hf:moonshotai/Kimi-K3",
-                                   "defaultThinkingLevel": "high", "theme": "dark",
-                                   "packages": ["npm:pi-prose"], "skills": ["keep"],
-                                   "modelThinkingLevels": {MODEL: "low", "other/model": "medium"}}
-                            write_json(settings, old)
-                            write_json(agent / "models.json", {"providers": {"zai": {"apiKey": "fixture-existing"}}})
+                            write_json(settings, DOTFILES_SETTINGS)
+                            write_json(agent / "models.json", {"providers": {"synthetic": {"apiKey": "fixture-retired"}}})
                             write_json(agent / "auth.json", {"openai-codex": {"type": "oauth", "fixture": True}})
+                            settings_before = settings.read_bytes()
                             auth_before = (agent / "auth.json").read_bytes()
                             for _ in range(2):
-                                result = self.run_function(script, home, agent if custom else None,
-                                                           "configure_pi_defaults", work)
-                                self.assertEqual(result.returncode, 0, result.stderr)
-                                expected = dict(old, **DEFAULTS,
-                                                modelThinkingLevels={MODEL: "xhigh", "other/model": "medium"})
-                                self.assertEqual(json.loads(settings.read_text()), expected)
+                                for name, status in (("remove_pi_synthetic_models", 0),
+                                                     ("seed_pi_zai_models", int(work == "1" and not key))):
+                                    result = self.run_function(script, home, agent if custom else None, name, work)
+                                    self.assertEqual(result.returncode, status, result.stderr)
+                                self.assertEqual(settings.read_bytes(), settings_before)
                             self.assertEqual(env_file.read_bytes(), initial_env)
                             self.assertEqual((agent / "auth.json").read_bytes(), auth_before)
 
@@ -146,25 +138,20 @@ class ModelDefaultsTests(unittest.TestCase):
                 home = Path(tmp)
                 agent = home / "agent"
                 agent.mkdir()
-                for filename, function, value in (
-                    ("settings.json", "configure_pi_defaults", {}),
-                    ("models.json", "remove_pi_synthetic_models", {"providers": {"synthetic": {}}}),
-                ):
-                    target = home / filename
-                    path = agent / filename
-                    write_json(target, value)
-                    path.symlink_to(target)
-                    self.assertEqual(self.run_function(script, home, agent, function).returncode, 0)
-                    self.assertTrue(path.is_symlink())
-                    self.assertNotEqual(json.loads(target.read_text()), value)
-                    invalid_values = ("{not-json", '[{"providers":{"synthetic":{}}}]')
-                    if filename == "models.json":
-                        invalid_values += ("", "null", '{"providers":[]}', '{"providers":"invalid"}')
-                    for invalid in invalid_values:
-                        target.write_text(invalid)
-                        self.assertNotEqual(self.run_function(script, home, agent, function).returncode, 0)
-                        self.assertEqual(target.read_text(), invalid)
-                    path.unlink()
+                value = {"providers": {"synthetic": {}}}
+                target = home / "models.json"
+                path = agent / "models.json"
+                write_json(target, value)
+                path.symlink_to(target)
+                self.assertEqual(self.run_function(script, home, agent, "remove_pi_synthetic_models").returncode, 0)
+                self.assertTrue(path.is_symlink())
+                self.assertNotEqual(json.loads(target.read_text()), value)
+                for invalid in ("{not-json", '[{"providers":{"synthetic":{}}}]', "", "null",
+                                '{"providers":[]}', '{"providers":"invalid"}'):
+                    target.write_text(invalid)
+                    self.assertNotEqual(self.run_function(script, home, agent, "remove_pi_synthetic_models").returncode, 0)
+                    self.assertEqual(target.read_text(), invalid)
+                path.unlink()
                 for value in ({}, {"providers": None}, {"providers": {"custom": {}}}):
                     path = agent / "models.json"
                     write_json(path, value)
