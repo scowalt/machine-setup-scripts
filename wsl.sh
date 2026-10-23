@@ -821,6 +821,10 @@ const compare = (a, b) => {
 };
 const samePath = (a, b) => process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 const digest = bytes => crypto.createHash('sha512').update(bytes).digest('base64');
+const sha256 = bytes => 'sha256:' + crypto.createHash('sha256').update(bytes).digest('hex');
+const bottleRepository = 'https://ghcr.io/v2/homebrew/core/opencode';
+const bottleTokenUrl = 'https://ghcr.io/token?service=ghcr.io&scope=repository:homebrew/core/opencode:pull';
+const bottleManifestType = 'application/vnd.oci.image.manifest.v1+json';
 function json(bytes) {
     const text = bytes.toString(); let value;
     try { value = JSON.parse(text); } catch { fail('metadata'); }
@@ -865,7 +869,8 @@ function formatFailure(error, recovering) {
         return `opencode-cli:recovery-required:${failureResult(error.original, true).slice('opencode-cli:'.length)}`;
     }
     if (isNativeError(error) && error.message === 'recovery-required') return 'opencode-cli:recovery-required';
-    if (typed && error instanceof DownloadError && ['latest-release', 'package-index', 'package-version', 'artifact-download', 'download'].includes(error.operation)) {
+    if (typed && error instanceof DownloadError && ['latest-release', 'package-index', 'package-version', 'artifact-download', 'download',
+        'bottle-auth', 'bottle-index', 'bottle-manifest', 'bottle-download'].includes(error.operation)) {
         const status = Number.isInteger(error.status) && error.status >= 100 && error.status <= 599 ? error.status : 'unknown';
         return `opencode-cli:download-failed:${error.operation}:http-${status}`;
     }
@@ -892,16 +897,25 @@ function downloadOperation(parsed) {
     if (/^\/(?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/.test(pathname)) return 'package-version';
     return 'download';
 }
-function fetchBytes(url, limit = 32 * 1024 * 1024) {
-    const parsed = new URL(url);
-    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port ||
-        !['registry.npmjs.org', 'opencode.ai'].includes(parsed.hostname)) fail('url');
-    const operation = downloadOperation(parsed);
-    const accept = operation === 'package-index' ? 'application/vnd.npm.install-v1+json' : operation === 'artifact-download' ? 'application/octet-stream' : 'application/json';
+function httpsBytes(url, limit, headers, operation, redirectDigest) {
     return new Promise((resolve, reject) => {
         let status;
-        const request = https.get(url, {rejectUnauthorized: true, headers: {'User-Agent': 'curl/8.0', Accept: accept}}, response => {
+        const request = https.get(url, {rejectUnauthorized: true, headers}, response => {
             status = response.statusCode;
+            response.on('error', () => reject(new DownloadError(operation, status)));
+            if (redirectDigest && [302, 307].includes(status)) {
+                response.resume();
+                let location;
+                try {
+                    if (typeof response.headers?.location !== 'string' || response.headers.location.length > 8192) fail('url');
+                    location = new URL(response.headers.location);
+                    if (location.protocol !== 'https:' || location.username || location.password || location.port || location.hash ||
+                        location.hostname !== 'pkg-containers.githubusercontent.com' ||
+                        location.pathname.match(/^\/ghcr[0-9]+\/blobs\/(sha256:[a-f0-9]{64})$/)?.[1] !== redirectDigest) fail('url');
+                } catch { reject(new DownloadError(operation, status)); return; }
+                httpsBytes(location.href, limit, {'User-Agent': 'curl/8.0', Accept: 'application/octet-stream'}, operation).then(resolve, reject);
+                return;
+            }
             if (status !== 200) { response.resume(); reject(new DownloadError(operation, status)); return; }
             const chunks = []; let length = 0;
             response.on('data', data => {
@@ -910,7 +924,6 @@ function fetchBytes(url, limit = 32 * 1024 * 1024) {
                 else chunks.push(data);
             });
             response.on('end', () => resolve(Buffer.concat(chunks)));
-            response.on('error', () => reject(new DownloadError(operation, status)));
         });
         const deadline = setTimeout(() => request.destroy(new Error('download-timeout')), 90000);
         request.on('close', () => clearTimeout(deadline));
@@ -918,7 +931,35 @@ function fetchBytes(url, limit = 32 * 1024 * 1024) {
         request.on('error', () => reject(new DownloadError(operation, status)));
     });
 }
-function unpack(bytes) {
+function fetchBytes(url, limit = 32 * 1024 * 1024, bottleToken) {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port || parsed.hash ||
+        !Number.isSafeInteger(limit) || limit < 1 || limit > 256 * 1024 * 1024) fail('url');
+    let operation, accept, redirectDigest;
+    const headers = {'User-Agent': 'curl/8.0'};
+    if (parsed.hostname === 'ghcr.io') {
+        const manifest = parsed.pathname.match(/^\/v2\/homebrew\/core\/opencode\/manifests\/(sha256:[a-f0-9]{64}|[0-9]+\.[0-9]+\.[0-9]+(?:_[1-9][0-9]*)?)$/);
+        const blob = parsed.pathname.match(/^\/v2\/homebrew\/core\/opencode\/blobs\/(sha256:[a-f0-9]{64})$/);
+        if (url === bottleTokenUrl && bottleToken === undefined) {
+            operation = 'bottle-auth'; accept = 'application/json';
+        } else {
+            if (parsed.search || (!manifest && !blob) || typeof bottleToken !== 'string' ||
+                !/^[A-Za-z0-9._~+/:=-]{1,16384}$/.test(bottleToken)) fail('url');
+            headers.Authorization = 'Bearer ' + bottleToken;
+            operation = blob ? 'bottle-download' : manifest[1].startsWith('sha256:') ? 'bottle-manifest' : 'bottle-index';
+            accept = blob ? 'application/octet-stream' : operation === 'bottle-index' ? 'application/vnd.oci.image.index.v1+json' : bottleManifestType;
+            redirectDigest = blob?.[1];
+        }
+    } else {
+        if (!['registry.npmjs.org', 'opencode.ai'].includes(parsed.hostname) || bottleToken !== undefined) fail('url');
+        operation = downloadOperation(parsed);
+        accept = operation === 'package-index' ? 'application/vnd.npm.install-v1+json' : operation === 'artifact-download' ? 'application/octet-stream' : 'application/json';
+    }
+    return httpsBytes(url, limit, {...headers, Accept: accept}, operation, redirectDigest);
+}
+function unpack(bytes, root = 'package') {
+    if (root !== 'package' && !/^opencode\/[0-9]+\.[0-9]+\.[0-9]+(?:_[1-9][0-9]*)?$/.test(root)) fail('archive-path');
+    const entryPath = new RegExp('^' + root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\/(?:[A-Za-z0-9_@.-]+\\/)*[A-Za-z0-9_.-]+\\/?$');
     let tar;
     try { tar = zlib.gunzipSync(bytes, {maxOutputLength: 512 * 1024 * 1024}); } catch { fail('archive'); }
     const files = new Map(); let ended = false;
@@ -930,9 +971,9 @@ function unpack(bytes) {
         if (!/^[0-7]+$/.test(sizeText) || !/^[0-7]+$/.test(checksum)) fail('archive-header');
         const sum = header.reduce((n, b, i) => n + (i >= 148 && i < 156 ? 32 : b), 0);
         if (sum !== parseInt(checksum, 8) || text(345, 500) || text(157, 257)) fail('archive-header');
-        if (!/^package\/(?:[A-Za-z0-9_@.-]+\/)*[A-Za-z0-9_.-]+\/?$/.test(name) ||
-            name.split('/').some(p => p === '..' || p === '.') || files.has(name)) fail('archive-path');
         const size = parseInt(sizeText, 8), type = text(156, 157);
+        if (!(entryPath.test(name) || name === root + '/' && type === '5') ||
+            name.split('/').some(p => p === '..' || p === '.') || files.has(name)) fail('archive-path');
         if (!['', '0', '5'].includes(type) || (type === '5' && size) || offset + size > tar.length) fail('archive-type');
         files.set(name, tar.subarray(offset, offset + size));
         offset += Math.ceil(size / 512) * 512;
@@ -1157,7 +1198,8 @@ function inspectBrewCopy(file) {
     inspect(path.join(prefix, 'var/homebrew/pinned/opencode'), 'pin', true);
     const trust = {command: file, link, snapshots};
     checkBrewTrust(trust);
-    return {binary, release: match[1], route: 'homebrew', trust};
+    return {binary, release: match[1], keg: match[1] + (match[2] ? '_' + match[2] : ''),
+        prefix, tap: receipt.source.tap, route: 'homebrew', trust};
 }
 function windowsNpmShims() {
     const relative = 'node_modules/opencode-ai/bin/opencode.exe';
@@ -1189,6 +1231,54 @@ function packageCommandDirectory(root, home) {
         if (/^\d+(?:\.\d+){0,2}$/.test(path.relative(mise, prefix)) && samePath(root, path.join(prefix, 'node_modules/opencode-ai'))) return prefix;
     }
     fail('custom-prefix');
+}
+async function matchesCoreBottle(brew, bytes, nativeTarget, get) {
+    if (brew?.tap !== 'homebrew/core') return false;
+    const platform = process.platform;
+    const architecture = platform === 'darwin' ? (brew.prefix === '/opt/homebrew' ? 'arm64' : brew.prefix === '/usr/local' ? 'amd64' : null)
+        : platform === 'linux' && brew.prefix === '/home/linuxbrew/.linuxbrew' ? (nativeTarget.startsWith('linux-arm64') ? 'arm64' : nativeTarget.startsWith('linux-x64') ? 'amd64' : null) : null;
+    if (!architecture) return false;
+    const auth = json(await get(bottleTokenUrl, 32768));
+    if (typeof auth?.token !== 'string' || !/^[A-Za-z0-9._~+/:=-]{1,16384}$/.test(auth.token)) fail('artifact-metadata');
+    const index = json(await get(`${bottleRepository}/manifests/${brew.keg}`, 2 * 1024 * 1024, auth.token));
+    const annotationsMatch = (document, tag) => document?.schemaVersion === 2 &&
+        document.annotations?.['com.github.package.type'] === 'homebrew_bottle' &&
+        document.annotations?.['org.opencontainers.image.vendor'] === 'homebrew' &&
+        document.annotations?.['org.opencontainers.image.version'] === brew.keg &&
+        document.annotations?.['org.opencontainers.image.ref.name'] === tag;
+    if (!annotationsMatch(index, brew.keg) || !Array.isArray(index.manifests) || !index.manifests.length || index.manifests.length > 64) fail('artifact-metadata');
+    const candidates = index.manifests.filter(item => item?.platform?.os === platform && item.platform.architecture === architecture);
+    if (!candidates.length || candidates.length > 8) fail('unverified-copy');
+    const tags = new Set(), digests = new Set();
+    const descriptor = (item, limit) => /^sha256:[a-f0-9]{64}$/.test(item?.digest || '') &&
+        Number.isSafeInteger(item.size) && item.size > 0 && item.size <= limit;
+    for (const item of candidates) {
+        const tag = item.annotations?.['org.opencontainers.image.ref.name'];
+        if (typeof tag !== 'string' || !tag.startsWith(brew.keg + '.')) fail('artifact-metadata');
+        const suffix = tag.slice(brew.keg.length + 1);
+        const validTag = platform === 'linux' ? suffix === (architecture === 'arm64' ? 'arm64_linux' : 'x86_64_linux')
+            : architecture === 'arm64' ? /^arm64_[a-z][a-z0-9_]{0,63}$/.test(suffix)
+                : /^[a-z][a-z0-9_]{0,63}$/.test(suffix) && !suffix.startsWith('arm64_') && !suffix.endsWith('linux');
+        if (!validTag || item.mediaType !== bottleManifestType || !descriptor(item, 2 * 1024 * 1024) || tags.has(tag) || digests.has(item.digest)) fail('artifact-metadata');
+        tags.add(tag); digests.add(item.digest);
+    }
+    for (const item of candidates) {
+        const manifestBytes = await get(`${bottleRepository}/manifests/${item.digest}`, 2 * 1024 * 1024, auth.token);
+        if (manifestBytes.length !== item.size || sha256(manifestBytes) !== item.digest) fail('integrity');
+        const manifest = json(manifestBytes), tag = item.annotations['org.opencontainers.image.ref.name'];
+        if (!annotationsMatch(manifest, tag) || !Array.isArray(manifest.layers) || manifest.layers.length !== 1) fail('artifact-metadata');
+        const layer = manifest.layers[0];
+        if (layer?.mediaType !== 'application/vnd.oci.image.layer.v1.tar+gzip' || !descriptor(layer, 256 * 1024 * 1024)) fail('artifact-metadata');
+        const archive = await get(`${bottleRepository}/blobs/${layer.digest}`, 256 * 1024 * 1024, auth.token);
+        if (archive.length !== layer.size || sha256(archive) !== layer.digest) fail('integrity');
+        const executable = unpack(archive, `opencode/${brew.keg}`).get(`opencode/${brew.keg}/bin/opencode`);
+        if (executable?.equals(bytes)) {
+            checkBrewTrust(brew.trust);
+            if (!boundedRead(brew.binary).equals(bytes)) fail('changed-copy');
+            return true;
+        }
+    }
+    return false;
 }
 async function identify(file, home, nativeTarget, get, directories) {
     const checkPath = (file, leafLink = false) => safePath(file, home, leafLink, directories);
@@ -1253,6 +1343,9 @@ async function identify(file, home, nativeTarget, get, directories) {
             const executable = official.get(`package/bin/opencode${process.platform === 'win32' ? '.exe' : ''}`);
             if (executable?.equals(bytes)) return {file, binary, release: candidate, route, brewTrust: brew?.trust, nativeHash: digest(bytes), bytes: st.isSymbolicLink() ? null : boundedRead(file), link: st.isSymbolicLink() ? fs.readlinkSync(file) : null};
         }
+    }
+    if (await matchesCoreBottle(brew, bytes, nativeTarget, get)) {
+        return {file, binary, release, route, brewTrust: brew.trust, nativeHash: digest(bytes), bytes: st.isSymbolicLink() ? null : boundedRead(file), link: st.isSymbolicLink() ? fs.readlinkSync(file) : null};
     }
     fail('unverified-copy');
 }
@@ -1438,7 +1531,7 @@ OPENCODE_CLI_JS
     if [[ "${status}" -ne 0 ]]; then
         if [[ "${result}" == opencode-cli:recovery-required || "${result}" == opencode-cli:recovery-required:failed ]]; then
             recovery=1
-        elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?download-failed:(latest-release|package-index|package-version|artifact-download|download):http-([1-5][0-9][0-9]|unknown)$ ]]; then
+        elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?download-failed:(latest-release|package-index|package-version|artifact-download|download|bottle-auth|bottle-index|bottle-manifest|bottle-download):http-([1-5][0-9][0-9]|unknown)$ ]]; then
             [[ -z "${BASH_REMATCH[1]}" ]] || recovery=1
             print_error "OpenCode CLI download failed (operation=${BASH_REMATCH[2]}, HTTP=${BASH_REMATCH[3]})."
         elif [[ "${result}" =~ ^opencode-cli:(recovery-required:)?policy-failed:installation:relative-path:command-discovery:([1-9][0-9]{0,5}):(empty|relative)$ ]]; then
@@ -9721,7 +9814,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 265 | Last changed: Accept existing group write during file verification${NC}"
+    echo -e "${GRAY}Version 266 | Last changed: Verify source-built OpenCode Homebrew bottles${NC}"
 
     if ! acquire_setup_lock; then
         return 1
