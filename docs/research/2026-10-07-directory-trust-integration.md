@@ -6,6 +6,8 @@ The later [BB file-trust decision, ADR 0014](../adr/0014-accept-account-owned-bb
 
 The later [desktop owner-management decision, ADR 0017](../adr/0017-leave-bb-desktop-owner-managed.md), removes the desktop installer family altogether. Its two inventory rows and validation counts below are historical, not active directory gates; no replacement desktop inspection or permission repair is introduced.
 
+[ADR 0018](../adr/0018-accept-existing-file-group-write.md) subsequently supersedes the regular-file group-write refusals recorded below across setup verification. Directory/private-boundary policy and the historical validation counts remain unchanged.
+
 ## Active-gate inventory
 
 **C** = changed ordinary-directory behavior; **P** = preserved file/system/private/identity rule; **A** = already compatible (not newly hardened). **B5** = macOS/Ubuntu/WSL/Pi/Bazzite Bash entries; **All6** adds Windows; **D3** = macOS/Ubuntu/Bazzite desktop payloads. Shared JavaScript Unix branches embedded in Windows do not change Windows ACLs. Each linked slice table names the individual gate, caller, preservation/race controls and red/green evidence; the rows here map their complete scope to the integrated distribution rather than duplicate those tables.

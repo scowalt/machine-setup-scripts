@@ -89,6 +89,13 @@ class ImpeccableStagingPermissions(unittest.TestCase):
         self.assertIn('verified', result.stdout)
         self.assert_safe_created_files()
 
+    def test_group_writable_staged_files_promote_and_dispose_without_permission_repair(self):
+        for mode in ('group-bundled-engine', 'group-npm-cache'):
+            with self.subTest(mode=mode):
+                self.env['IMPECCABLE_TEST_MODE'] = mode
+                result = self.run_adapter('ubuntu.sh')
+                self.assertIn('verified', result.stdout)
+
     def test_explicitly_restored_unsafe_engine_still_refuses_without_permission_repair(self):
         before = self.snapshot()
         self.env['IMPECCABLE_TEST_MODE'] = 'unsafe-bundled-engine'
@@ -98,7 +105,7 @@ class ImpeccableStagingPermissions(unittest.TestCase):
         self.assertEqual(self.snapshot(), before)
         stage = Path((self.root / 'stages').read_text().strip())
         binary = stage / '.claude/skills/impeccable/scripts/bin/linux-x64/impeccable'
-        self.assertEqual(binary.stat().st_mode & 0o777, 0o775)
+        self.assertEqual(binary.stat().st_mode & 0o777, 0o777)
         self.assertNotIn('verified', result.stdout)
 
     def test_explicitly_unsafe_cache_keeps_cleanup_failure_fatal(self):
@@ -108,7 +115,7 @@ class ImpeccableStagingPermissions(unittest.TestCase):
         self.assertNotIn('verified', result.stdout)
         stage = Path((self.root / 'stages').read_text().strip())
         self.assertTrue(os.path.isdir(stage))
-        self.assertEqual((stage / '.npm/_cacache/content/blob').stat().st_mode & 0o777, 0o664)
+        self.assertEqual((stage / '.npm/_cacache/content/blob').stat().st_mode & 0o777, 0o666)
         self.assertTrue((self.home / '.agents/.setup-impeccable.json').is_file())
 
 

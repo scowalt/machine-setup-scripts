@@ -47,7 +47,7 @@ class CompletionDirectories(unittest.TestCase):
                 for directory in paths[:3]:
                     file = directory / '_fixture'
                     file.write_text('inert completion')
-                    file.chmod(0o664)
+                    file.chmod(0o666 if scenario == 'chmod-failure' else 0o664)
                     files.append(file)
                 fixture = source
                 for logical, physical in zip(('/opt/homebrew/share/zsh-completions', '/opt/homebrew/share/zsh', '/usr/local/share/zsh'),
@@ -109,7 +109,7 @@ main
                 status = int(scenario in ('stat-failure', 'chmod-failure', 'prior-failure'))
                 self.assertEqual(result.returncode, status, result.stdout + result.stderr)
                 self.assertEqual({p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode) for p in paths}, expected)
-                file_mask = 0o020 if scenario in ('stat-failure', 'chmod-failure') else 0
+                file_mask = 0o022 if scenario == 'chmod-failure' else 0o020
                 self.assertTrue(all(p.stat().st_mode & 0o022 == file_mask for p in files))
                 events = (root / 'events').read_text().splitlines()
                 self.assertFalse(any('FORBIDDEN:' in e for e in events), events)
@@ -146,7 +146,7 @@ class CombinedOrdinaryCaller(unittest.TestCase):
                         (profile / 'npm').chmod(0o2775)
                         paths.append(profile / 'npm')
                     registration = self.put(self.home / '.claude.json', '{"mcpServers":{"backlog":{"command":"backlog","args":["mcp","start"]},"keep":{"command":"keep"}}}')
-                    registration.chmod(0o664 if scenario == 'backlog-file-failure' else 0o600)
+                    registration.chmod(0o666 if scenario == 'backlog-file-failure' else 0o664)
                     self.env['IMPECCABLE_TEST_MODE'] = 'failed-command' if scenario == 'installer-failure' else ''
                     self.put(self.root / 'events', '')
                     before = convergence.directory_metadata(paths)

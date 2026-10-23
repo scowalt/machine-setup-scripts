@@ -393,6 +393,15 @@ class BbIngressWatchdogTests(unittest.TestCase):
                     self.run_case([state], 2, startup=state, mode=mode, startup_failure=True)
                     self.assertTrue(all(e['timeout'] == 1 for e in self.events() if e['kind'] == 'curl'))
 
+    def test_group_write_alone_preserves_startup_runtime_and_endpoint_checks(self):
+        data = self.home / '.bb'
+        (data / 'auth.json').write_text('{"hostId":"fixture-host"}')
+        (data / 'env.json').write_text('{"env":{"BB_HOST_ID":"fixture-host"}}')
+        for target in (data / 'host-id', data / 'auth.json', data / 'env.json',
+                       self.home / '.config/setup-bb-server/endpoint'):
+            target.chmod(0o620)
+        self.run_case(['healthy'], 1)
+
     def test_unsafe_endpoint_metadata_prevents_startup(self):
         endpoint = self.home / '.config/setup-bb-server/endpoint'
         endpoint.chmod(0o644)
@@ -412,17 +421,19 @@ class BbIngressWatchdogTests(unittest.TestCase):
                 self.run_case(['serve-exit'], 2, serve_exit=status)
 
     def test_regeneration_is_byte_and_metadata_idempotent(self):
-        os.utime(self.guard, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
-        before = self.guard.stat()
-        content = self.guard.read_bytes()
-        for _ in range(2):
-            self.render_guard()
-            after = self.guard.stat()
-            for field in ('st_dev', 'st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_nlink', 'st_mtime_ns', 'st_ctime_ns'):
-                self.assertEqual(getattr(after, field), getattr(before, field), field)
-            self.assertEqual(self.guard.read_bytes(), content)
-            self.assertEqual(after.st_mode & 0o7777, 0o700)
-            self.assertEqual(list(self.guard.parent.glob('bb-guard.*')), [])
+        for mode in (0o700, 0o720):
+            self.guard.chmod(mode)
+            os.utime(self.guard, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+            before = self.guard.stat()
+            content = self.guard.read_bytes()
+            for _ in range(2):
+                self.render_guard()
+                after = self.guard.stat()
+                for field in ('st_dev', 'st_ino', 'st_uid', 'st_gid', 'st_mode', 'st_nlink', 'st_mtime_ns', 'st_ctime_ns'):
+                    self.assertEqual(getattr(after, field), getattr(before, field), field)
+                self.assertEqual(self.guard.read_bytes(), content)
+                self.assertEqual(after.st_mode & 0o7777, mode)
+                self.assertEqual(list(self.guard.parent.glob('bb-guard.*')), [])
 
     def test_regeneration_replaces_old_guard_and_retains_private_mode(self):
         content = self.guard.read_bytes()

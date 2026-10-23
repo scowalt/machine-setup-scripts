@@ -713,10 +713,12 @@ class BbServicePreflightTests(unittest.TestCase):
                         path.unlink()
                     self.assertEqual(saved.read_bytes(), content)
             saved.rename(path)
-        for mode in (0o400, 0o600):
+        for mode in (0o400, 0o420, 0o600, 0o620):
             (self.home / '.env.local').chmod(mode)
             self.run_preflight(mode='caller', systemd='reviewed', status=73, selection=('env.conf',))
         (self.units / UNITS[0]).chmod(0o664)
+        self.run_preflight(mode='caller', systemd='reviewed', status=73, selection=('env.conf',))
+        (self.units / UNITS[0]).chmod(0o666)
         result = self.run_preflight(mode='caller', systemd='reviewed', selection=('env.conf',))
         self.assert_caller_refusal(result)
         self.assertIn('[preflight.app-unit-file]', result.stderr)
@@ -829,7 +831,10 @@ class BbServicePreflightTests(unittest.TestCase):
     def test_tmpdir_artifact_types_and_permissions_never_trigger_repair(self):
         _, override, target = self.reviewed()
         content = override.read_bytes()
-        for mode in (0o644, 0o664, 0o620, 0o666, 0o000, 0o1600):
+        override.chmod(0o620)
+        self.run_preflight(mode='caller', systemd='reviewed', status=73)
+        self.assertEqual(override.stat().st_mode & 0o777, 0o620)
+        for mode in (0o644, 0o664, 0o666, 0o000, 0o1600):
             with self.subTest(mode=oct(mode)):
                 override.chmod(mode)
                 self.assert_caller_refusal(self.run_preflight(mode='caller', systemd='reviewed'))

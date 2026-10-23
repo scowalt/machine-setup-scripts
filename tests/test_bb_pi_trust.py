@@ -393,13 +393,17 @@ process.exitCode = ''' + str(status) + ';\n')
             self.assertNotIn('SECRET-SENTINEL', result.stdout + result.stderr)
 
     @unittest.skipIf(os.name == 'nt', 'POSIX CLI file-mode safeguards')
-    def test_group_writable_adapter_cli_is_not_covered_by_trust_file_exception(self):
+    def test_group_writable_adapter_cli_passes_without_permission_repair(self):
         target = self.fake_doctor([{'name': 'reviewed', 'state': 'ok', 'tools': 1}])
         cli = self.agent / 'npm/node_modules/pi-mcp-adapter/cli.js'
         cli.chmod(0o664)
         result = self.policy('health', target, 'reviewed')
+        self.assertEqual((result.returncode, result.stdout), (0, 'ok\n'))
+        self.assertTrue(Path(self.env['FIXTURE_DOCTOR_CALL']).exists())
+        self.assertEqual(cli.stat().st_mode & 0o777, 0o664)
+        cli.chmod(0o666)
+        result = self.policy('health', target, 'reviewed')
         self.assertEqual((result.returncode, result.stdout), (1, 'failed:unsafe-cli\n'))
-        self.assertFalse(Path(self.env['FIXTURE_DOCTOR_CALL']).exists())
 
     @unittest.skipUnless(PWSH, 'Set PWSH_BIN to parse the native ACL payload')
     def test_windows_acl_payload_parses_without_executing_native_operations(self):
