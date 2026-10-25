@@ -747,35 +747,54 @@ test('bottle transport pins anonymous auth scope, repository, negotiation and TL
     assert.throws(() => h.api.fetchBytes('https://registry.npmjs.org/opencode-ai', 1024, 'BOTTLE_TOKEN_SECRET'), /url/);
     assert.equal(h.requests.length, before);
 });
-test('bottle blob follows only one digest-specific public CDN redirect and strips Authorization', async t => {
+for (const prefix of ['ghcr1', 'ghcrblobs12']) for (const status of [302, 307])
+    test(`bottle blob follows only one digest-specific ${prefix} HTTP-${status} redirect and strips Authorization`, async t => {
     const h = bottleTransport(t), [url, , token] = h.endpoints[3];
-    const location = 'https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:' + 'b'.repeat(64) + '?sig=SIGNED_URL_SECRET';
-    h.replies.set(url, {status: 307, headers: {location}});
+    const location = `https://pkg-containers.githubusercontent.com/${prefix}/blobs/sha256:` + 'b'.repeat(64) + '?sig=SIGNED_URL_SECRET';
+    h.replies.set(url, {status, headers: {location}});
     assert.equal((await h.api.fetchBytes(url, 1024, token)).toString(), 'fixture');
     assert.equal(h.requests.length, 2);
     assert.equal(h.requests[0].options.headers.Authorization, 'Bearer BOTTLE_TOKEN_SECRET');
     assert.equal(h.requests[1].options.headers.Authorization, undefined);
     assert.equal(h.requests[1].options.headers.Cookie, undefined);
-    h.replies.set(location, {status: 302, headers: {location}});
-    await assert.rejects(h.api.fetchBytes(url, 1024, token), error => {
-        assert.equal(h.api.failureResult(error), 'opencode-cli:download-failed:bottle-download:http-302'); return true;
+    h.replies.set(location, {body: Buffer.from('oversized')});
+    await assert.rejects(h.api.fetchBytes(url, 1, token), error => {
+        assert.equal(h.api.failureResult(error), 'opencode-cli:download-failed:bottle-download:http-200'); return true;
     });
-    assert.equal(h.requests.length, 4, 'CDN must not redirect again');
+    h.replies.set(location, {status, headers: {location}});
+    await assert.rejects(h.api.fetchBytes(url, 1024, token), error => {
+        assert.equal(h.api.failureResult(error), `opencode-cli:download-failed:bottle-download:http-${status}`); return true;
+    });
+    assert.equal(h.requests.length, 6, 'CDN must not redirect again');
 });
 for (const destination of ['http://pkg-containers.githubusercontent.com/ghcr1/blobs/',
     'https://attacker.invalid/ghcr1/blobs/', 'https://ghcr.io/ghcr1/blobs/',
     'https://user:SECRET@pkg-containers.githubusercontent.com/ghcr1/blobs/',
     'https://pkg-containers.githubusercontent.com:444/ghcr1/blobs/',
-    'https://pkg-containers.githubusercontent.com/other/']) {
-    test(`bottle blob rejects redirect boundary ${destination.split('/')[2]}`, async t => {
+    'https://pkg-containers.githubusercontent.com/other/',
+    'https://pkg-containers.githubusercontent.com/ghcrblobs/blobs/',
+    'https://pkg-containers.githubusercontent.com/ghcrblobs12x/blobs/',
+    'https://pkg-containers.githubusercontent.com/ghcrblobs12/blobs/nested/',
+    'https://pkg-containers.githubusercontent.com/ghcrblobs12/other/']) {
+    test(`bottle blob rejects redirect boundary ${destination}`, async t => {
         const h = bottleTransport(t), [url, , token] = h.endpoints[3];
-        h.replies.set(url, {status: 302, headers: {location: destination + 'sha256:' + 'b'.repeat(64)}});
+        h.replies.set(url, {status: 307, headers: {location: destination + 'sha256:' + 'b'.repeat(64)}});
         await assert.rejects(h.api.fetchBytes(url, 1024, token), error => {
-            assert.equal(h.api.failureResult(error), 'opencode-cli:download-failed:bottle-download:http-302'); return true;
+            assert.equal(h.api.failureResult(error), 'opencode-cli:download-failed:bottle-download:http-307'); return true;
         });
         assert.equal(h.requests.length, 1);
     });
 }
+for (const suffix of ['sha256:' + 'a'.repeat(64), 'sha256:' + 'b'.repeat(64) + '#fragment'])
+    test(`bottle blob rejects current CDN digest or fragment boundary ${suffix}`, async t => {
+    const h = bottleTransport(t), [url, , token] = h.endpoints[3];
+    const location = 'https://pkg-containers.githubusercontent.com/ghcrblobs12/blobs/' + suffix;
+    h.replies.set(url, {status: 307, headers: {location}});
+    await assert.rejects(h.api.fetchBytes(url, 1024, token), error => {
+        assert.equal(h.api.failureResult(error), 'opencode-cli:download-failed:bottle-download:http-307'); return true;
+    });
+    assert.equal(h.requests.length, 1);
+});
 for (const operation of ['bottle-auth', 'bottle-index', 'bottle-manifest', 'bottle-download']) {
     test(`bottle transport preserves controlled ${operation} failures and size bounds`, async t => {
         const h = bottleTransport(t), [url, , token] = h.endpoints.find(e => e[1] === operation);
