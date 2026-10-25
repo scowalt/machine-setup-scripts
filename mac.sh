@@ -1676,7 +1676,7 @@ function httpsBytes(url, limit, headers, operation, redirectDigest) {
                     location = new URL(response.headers.location);
                     if (location.protocol !== 'https:' || location.username || location.password || location.port || location.hash ||
                         location.hostname !== 'pkg-containers.githubusercontent.com' ||
-                        location.pathname.match(/^\/ghcr[0-9]+\/blobs\/(sha256:[a-f0-9]{64})$/)?.[1] !== redirectDigest) fail('url');
+                        location.pathname.match(/^\/ghcr(?:blobs)?[0-9]+\/blobs\/(sha256:[a-f0-9]{64})$/)?.[1] !== redirectDigest) fail('url');
                 } catch { reject(new DownloadError(operation, status)); return; }
                 httpsBytes(location.href, limit, {'User-Agent': 'curl/8.0', Accept: 'application/octet-stream'}, operation).then(resolve, reject);
                 return;
@@ -10317,7 +10317,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 311 | Last changed: Leave the Pi default model to dotfiles${NC}"
+    echo -e "${GRAY}Version 312 | Last changed: Accept GHCR bottle CDN paths${NC}"
 
     if ! acquire_setup_lock; then
         return 1

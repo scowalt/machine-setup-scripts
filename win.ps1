@@ -1379,7 +1379,7 @@ function httpsBytes(url, limit, headers, operation, redirectDigest) {
                     location = new URL(response.headers.location);
                     if (location.protocol !== 'https:' || location.username || location.password || location.port || location.hash ||
                         location.hostname !== 'pkg-containers.githubusercontent.com' ||
-                        location.pathname.match(/^\/ghcr[0-9]+\/blobs\/(sha256:[a-f0-9]{64})$/)?.[1] !== redirectDigest) fail('url');
+                        location.pathname.match(/^\/ghcr(?:blobs)?[0-9]+\/blobs\/(sha256:[a-f0-9]{64})$/)?.[1] !== redirectDigest) fail('url');
                 } catch { reject(new DownloadError(operation, status)); return; }
                 httpsBytes(location.href, limit, {'User-Agent': 'curl/8.0', Accept: 'application/octet-stream'}, operation).then(resolve, reject);
                 return;
@@ -9174,7 +9174,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 203 | Last changed: Leave the Pi default model to dotfiles"
+    Write-Host "Version 204 | Last changed: Accept GHCR bottle CDN paths"
 
     Assert-HeadlessUnsupported
 
