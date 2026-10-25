@@ -3,3 +3,4 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 python3 "${repo_root}/tests/test_pi_visual_explainer.py"
+python3 "${repo_root}/tests/test_visual_explainer_dependencies.py"

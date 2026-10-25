@@ -17,12 +17,16 @@ function Invoke-PiVisualExplainerPolicy {
     finally { $env:NODE_OPTIONS = $savedOptions; $env:NODE_PATH = $savedPath }
     if ($status -eq 0) {
         if ($Mode -ceq 'plan' -and $result.StartsWith('source:')) { return $result.Substring(7) }
-        if ($Mode -ceq 'finish' -and $result -ceq 'ok') { return 'ok' }
+        if ($Mode -cne 'plan' -and $result -ceq 'ok') { return 'ok' }
     }
-    if ($result -cnotmatch '^failed:(unsafe-profile|unsafe-directory|unsafe-file|unsafe-acl|invalid-metadata|source-conflict|redirected-git|unverified-checkout|modified-checkout|invalid-payload|legacy-conflict|changed-input|unverified-install|invalid-mode)$') {
+    if ($result -cnotmatch '^failed:(unsafe-profile|unsafe-directory|unsafe-file|unsafe-acl|invalid-metadata|source-conflict|redirected-git|unverified-checkout|modified-checkout|invalid-payload|legacy-conflict|changed-input|unverified-install|invalid-mode|dependency-conflict|dependency-recovery|native-command)$') {
         $result = 'failed:unknown'
     }
-    Write-Warning "Visual Explainer: $result. Existing custom resources and diagrams were preserved; reconcile conflicts before retrying."
+    if ($result -ceq 'failed:dependency-recovery') {
+        Write-Warning 'Visual Explainer: failed:dependency-recovery. Inspect .setup-visual-explainer-dependencies in the active Pi profile; saved dependencies were not deleted or overwritten.'
+    } else {
+        Write-Warning "Visual Explainer: $result. Existing custom resources and diagrams were preserved; reconcile conflicts before retrying."
+    }
     return $null
 }
 
@@ -44,19 +48,7 @@ function Setup-PiVisualExplainer {
     $source = Invoke-PiVisualExplainerPolicy -Mode plan
     if (-not $source) { return $false }
     Write-Message 'Installing/updating the native Visual Explainer Pi package...'
-    $savedOptions = $env:NODE_OPTIONS; $savedPath = $env:NODE_PATH
-    $status = $null
-    try {
-        $env:NODE_OPTIONS = $null; $env:NODE_PATH = $null
-        $ErrorActionPreference = 'Continue'; $PSNativeCommandUseErrorActionPreference = $false
-        $null = & pi install $source --no-approve 2>$null
-        $status = $LASTEXITCODE
-    } catch { $status = 1 }
-    finally { $env:NODE_OPTIONS = $savedOptions; $env:NODE_PATH = $savedPath }
-    if ($status -ne 0) {
-        Write-Warning 'Visual Explainer: native Pi package installation failed.'
-        return $false
-    }
+    if ((Invoke-PiVisualExplainerPolicy -Mode install -Source $source) -cne 'ok') { return $false }
     if ((Invoke-PiVisualExplainerPolicy -Mode finish -Source $source) -cne 'ok') { return $false }
     Write-Success 'Visual Explainer Pi package installed/updated; existing pins and resource selections preserved.'
     return $true

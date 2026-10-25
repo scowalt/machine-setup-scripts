@@ -111,6 +111,16 @@ function Write-Warning { param($Text) Write-Host "WARNING: $Text" }
 function Write-Error { param($Text) Write-Host "ERROR: $Text" }
 function Test-EnvLocalFlag { param($Name) return [Environment]::GetEnvironmentVariable($Name) -eq '1' }
 ''' + '\n'.join(extract(script, name) for name in names)
+            code += r'''
+$tokens=$null; $errors=$null
+$ast=[System.Management.Automation.Language.Parser]::ParseFile($env:FIXTURE_SOURCE,[ref]$tokens,[ref]$errors)
+if ($errors.Count) { throw 'Invalid fixture source' }
+foreach ($definition in $ast.EndBlock.Statements) {
+    if ($definition -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $definition.Name -eq 'Invoke-PiVisualExplainerPolicy') {
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+}
+'''
             code += '\n$result=' + FUNCTIONS[helper][1] + '\nif ($result -isnot [bool]) { Write-Host "INVALID-RESULT"; exit 99 }; if (-not $result) { exit 1 }\n'
             fixture = self.root / 'fixture.ps1'
             fixture.write_text(code)
@@ -124,8 +134,10 @@ print_success() { printf 'SUCCESS: %s\\n' "$*"; }
 print_warning() { printf 'WARNING: %s\\n' "$*"; }
 print_error() { printf 'ERROR: %s\\n' "$*"; }
 ''' + '\n'.join(extract(script, name) for name in names) + '\n' + FUNCTIONS[helper][0] + '\n'
+            from test_pi_visual_explainer import bash_definitions
+            code = bash_definitions(script) + '\n' + code
             command = ['bash', '--noprofile', '--norc']
-        result = subprocess.run(command, input=code, env=self.env, cwd=self.root,
+        result = subprocess.run(command, input=code, env={**self.env, 'FIXTURE_SOURCE': str(ROOT / script)}, cwd=self.root,
                                 text=True, capture_output=True, timeout=15)
         self.state = json.loads(self.statefile.read_text())
         return result
@@ -201,7 +213,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
             names = re.findall(r'^function ([\w-]+)(?:\s|\()', text, re.M)
             real = ('Prepare-PiProfilePermissions', 'Disable-PiAskClaude', 'Remove-PiProse',
                     'Configure-BbPiTrust', 'Invoke-BbPiTrustPolicy',
-                    'Set-PiOpenCodeGoProvider', 'Prepare-PiMcpAdapter', 'Setup-PiMcpAdapter', 'Update-PiPackages')
+                    'Set-PiOpenCodeGoProvider', 'Prepare-PiMcpAdapter', 'Setup-PiMcpAdapter', 'Update-PiPackages', 'Invoke-PiVisualExplainerPolicy')
             code = r'''$ErrorActionPreference='Stop'
 $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($env:FIXTURE_SOURCE,[ref]$tokens,[ref]$errors)
@@ -239,7 +251,7 @@ function Complete-SetupLog { Write-Host 'LOG-FINALIZED' }
             from extract_setup_fixture import definitions
             real = ('prepare_pi_profile_permissions', 'disable_pi_askclaude', 'remove_pi_prose',
                     'configure_bb_pi_trust', 'bb_pi_trust_policy',
-                    'configure_pi_opencode_go', 'prepare_pi_mcp_adapter', 'setup_pi_mcp_adapter', 'refresh_pi_packages')
+                    'configure_pi_opencode_go', 'prepare_pi_mcp_adapter', 'setup_pi_mcp_adapter', 'refresh_pi_packages', 'pi_visual_explainer_policy')
             code = definitions(text) + '\n'
             code += '\n'.join(n + '() { return 0; }' for n in names if n not in real)
             code += '''
