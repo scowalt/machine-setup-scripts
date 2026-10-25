@@ -6858,7 +6858,6 @@ remove_pi_rpiv_packages() {
 refresh_pi_packages() {
     local _agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
     local _result=""
-    local _output=""
 
     if ! command -v node &> /dev/null || ! command -v git &> /dev/null || ! command -v pi &> /dev/null; then
         print_warning "Pi package refresh prerequisites are unavailable. Required refresh is incomplete."
@@ -6964,7 +6963,8 @@ try {
         const status = inspect(['status', '--porcelain=v1', '-z', visual ? '--untracked-files=normal' : '--untracked-files=all', '--ignored=matching']);
         if (status.error || status.status !== 0 || status.signal || status.stdout.length > 1024 * 1024) throw new Error('unverified checkout');
         const records = status.stdout.split('\0').filter(Boolean);
-        if (records.some(record => !visual || !['?? node_modules/', '!! node_modules/', '?? package-lock.json', '!! package-lock.json'].includes(record))) throw new Error('modified checkout');
+        if (records.some(record => !visual || !['?? node_modules/', '!! node_modules/', '?? package-lock.json', '!! package-lock.json',
+            '?? plugins/visual-explainer/node_modules/', '!! plugins/visual-explainer/node_modules/'].includes(record))) throw new Error('modified checkout');
         if (visual) {
             const origin = inspect(['remote', 'get-url', 'origin']);
             const remote = origin.status === 0 && !origin.error && parseGit(origin.stdout.trim().replace(/^git@/, 'git:git@'));
@@ -6988,7 +6988,7 @@ PI_PACKAGE_REFRESH_JS
     fi
 
     print_message "Refreshing packages in the active global Pi profile..."
-    if _output=$(pi update --extensions --no-approve 2>&1); then
+    if pi_visual_explainer_policy refresh; then
         print_success "Pi packages refreshed in the active global profile."
         return 0
     fi
@@ -7531,6 +7531,7 @@ const { spawnSync } = require('node:child_process');
 const SOURCE = 'git:github.com/nicobailon/visual-explainer';
 const REPOSITORY = 'nicobailon/visual-explainer';
 const PAYLOAD = 'plugins/visual-explainer';
+const OPTIONAL = PAYLOAD + '/node_modules';
 const MAX_BYTES = 4 * 1024 * 1024;
 const fail = reason => { throw new Error(reason); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -7683,7 +7684,7 @@ function selection(settings) {
     if (matches.length > 1) fail('source-conflict');
     return matches[0] || null;
 }
-function context(homeInput, profileInput) {
+function context(homeInput, profileInput, registeredOnly = false) {
     const ctx = { snapshots: new Map() };
     const home = absolute(homeInput);
     directory(ctx, home);
@@ -7695,13 +7696,18 @@ function context(homeInput, profileInput) {
     const relative = path.relative(ctx.home, ctx.agent);
     if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) ||
         process.platform !== 'win32' && (stat(ctx.agent).uid !== process.getuid() || (stat(ctx.agent).mode & 0o077))) fail('unsafe-profile');
+    ctx.recovery = path.join(ctx.agent, '.setup-visual-explainer-dependencies');
+    if (stat(ctx.recovery)) fail('dependency-recovery');
+    remember(ctx, ctx.recovery, null);
     const bytes = regular(ctx, path.join(ctx.agent, 'settings.json'), true);
     ctx.settings = bytes ? json(bytes) : {};
     ctx.source = selection(ctx.settings);
     ctx.checkout = path.join(ctx.agent, 'git/github.com', REPOSITORY);
-    directory(ctx, ctx.checkout, true);
-    for (const variable of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES']) {
-        if (process.env[variable]) fail('redirected-git');
+    if (!registeredOnly || ctx.source) {
+        directory(ctx, ctx.checkout, true);
+        for (const variable of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES']) {
+            if (process.env[variable]) fail('redirected-git');
+        }
     }
     return ctx;
 }
@@ -7725,13 +7731,130 @@ function checkout(ctx) {
     if (!matchesBlob(manifest, git(ctx, ['show', 'HEAD:package.json'], true))) fail('modified-checkout');
     const status = git(ctx, ['status', '--porcelain=v1', '-z', '--untracked-files=normal', '--ignored=matching']);
     for (const record of status.split('\0').filter(Boolean)) {
-        if (!['?? node_modules/', '!! node_modules/', '?? package-lock.json', '!! package-lock.json'].includes(record)) fail('modified-checkout');
+        if (!['?? node_modules/', '!! node_modules/', '?? package-lock.json', '!! package-lock.json',
+            '?? ' + OPTIONAL + '/', '!! ' + OPTIONAL + '/'].includes(record)) fail('modified-checkout');
     }
     const modules = path.join(ctx.checkout, 'node_modules');
     directory(ctx, modules, true);
     const lock = regular(ctx, path.join(ctx.checkout, 'package-lock.json'), true);
     if (lock) json(lock);
     ctx.head = git(ctx, ['rev-parse', 'HEAD']).trim();
+    optionalDependencies(ctx);
+}
+function optionalDependencies(ctx) {
+    const root = path.join(ctx.checkout, OPTIONAL);
+    directory(ctx, root, true);
+    if (!stat(root)) return;
+    if (git(ctx, ['ls-files', '--', OPTIONAL]).length) fail('modified-checkout');
+    const names = fs.readdirSync(root);
+    if (!names.includes('playwright-core') || names.some(name => !['playwright-core', '.bin', '.package-lock.json'].includes(name))) fail('dependency-conflict');
+    const manifest = json(regular(ctx, path.join(root, 'playwright-core/package.json')));
+    if (manifest.name !== 'playwright-core' || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(manifest.version) ||
+        manifest.bin?.['playwright-core'] !== 'cli.js') fail('dependency-conflict');
+    directory(ctx, path.join(root, '.bin'), true);
+    const lock = regular(ctx, path.join(root, '.package-lock.json'), true);
+    if (lock) {
+        const value = json(lock);
+        if (value.lockfileVersion !== 3 || !object(value.packages) || Object.keys(value.packages).length !== 1 ||
+            value.packages['node_modules/playwright-core']?.version !== manifest.version ||
+            value.packages['node_modules/playwright-core']?.link) fail('dependency-conflict');
+    }
+    let count = 0, total = 0;
+    const walk = (dir, prefix = '') => {
+        directory(ctx, dir);
+        for (const name of fs.readdirSync(dir)) {
+            if (++count > 8192) fail('dependency-conflict');
+            const file = path.join(dir, name), relative = prefix + name, info = stat(file);
+            if (prefix === '.bin/' && !['playwright-core', 'playwright-core.cmd', 'playwright-core.ps1'].includes(name)) fail('dependency-conflict');
+            if (info?.isSymbolicLink()) {
+                if (process.platform === 'win32' || relative !== '.bin/playwright-core' || info.uid !== process.getuid() || info.nlink !== 1 ||
+                    fs.readlinkSync(file) !== '../playwright-core/cli.js') fail('unsafe-file');
+                remember(ctx, file, info);
+            } else if (info?.isDirectory()) {
+                if (prefix === '.bin/') fail('dependency-conflict');
+                walk(file, relative + '/');
+            } else {
+                total += regular(ctx, file).length;
+                if (total > 128 * 1024 * 1024) fail('dependency-conflict');
+            }
+        }
+    };
+    walk(root);
+    if (!regular(ctx, path.join(root, 'playwright-core/cli.js')).length) fail('dependency-conflict');
+    ctx.optional = root;
+}
+function nativePi(args) {
+    const env = { ...process.env };
+    delete env.NODE_OPTIONS; delete env.NODE_PATH;
+    let command = 'pi', input;
+    if (process.platform === 'win32') {
+        const system = env.SystemRoot || 'C:\\Windows';
+        if (!/^[A-Za-z]:\\Windows$/i.test(system)) fail('unsafe-acl');
+        command = path.join(system, 'System32/WindowsPowerShell/v1.0/powershell.exe');
+        const code = "$ErrorActionPreference='Stop'; try { $request=[Console]::In.ReadToEnd() | ConvertFrom-Json; & pi @($request.arguments); exit $LASTEXITCODE } catch { exit 1 }";
+        input = JSON.stringify({ arguments: args });
+        args = ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(code, 'utf16le').toString('base64')];
+    }
+    const result = spawnSync(command, args, { env, input, stdio: [input ? 'pipe' : 'ignore', 'ignore', 'ignore'], windowsHide: true });
+    return !result.error && !result.signal && result.status === 0;
+}
+function protectDependencies(ctx) {
+    if (!ctx.optional) return null;
+    const original = ctx.optional, saved = path.join(ctx.recovery, 'node_modules');
+    const prefix = original + path.sep;
+    recheck(ctx); acl(ctx); recheck(ctx);
+    try { fs.mkdirSync(ctx.recovery, { mode: 0o700 }); } catch { fail('dependency-recovery'); }
+    const reservation = stat(ctx.recovery);
+    ctx.snapshots.set(ctx.recovery, reservation);
+    const held = { home: ctx.home, snapshots: new Map() };
+    for (const [file, info] of ctx.snapshots) {
+        if (file === original || file.startsWith(prefix)) held.snapshots.set(saved + file.slice(original.length), info);
+        else if (file === ctx.recovery || info?.isDirectory() && original.startsWith(file.endsWith(path.sep) ? file : file + path.sep)) held.snapshots.set(file, info);
+    }
+    let moved = false;
+    try {
+        directory(ctx, ctx.recovery);
+        if (process.platform !== 'win32' && (reservation.mode & 0o077)) fail('unsafe-directory');
+        acl(ctx); recheck(ctx);
+        fs.renameSync(original, saved);
+        moved = true;
+        recheck(held);
+        return { held, original, saved, recovery: ctx.recovery, acl: acl(held) };
+    } catch {
+        if (!moved && same(reservation, stat(ctx.recovery))) {
+            try { fs.rmdirSync(ctx.recovery); } catch {}
+        }
+        fail('dependency-recovery');
+    }
+}
+function restoreDependencies(transaction) {
+    if (!transaction) return;
+    const { held, original, saved, recovery } = transaction;
+    try {
+        recheck(held);
+        if (acl(held) !== transaction.acl || stat(original)) fail('dependency-recovery');
+        fs.renameSync(saved, original);
+        const restored = { home: held.home, snapshots: new Map() };
+        for (const [file, info] of held.snapshots) {
+            restored.snapshots.set(file === saved || file.startsWith(saved + path.sep) ? original + file.slice(saved.length) : file, info);
+        }
+        recheck(restored); acl(restored); recheck(restored);
+        fs.rmdirSync(recovery);
+    } catch { fail('dependency-recovery'); }
+}
+function maintain(ctx, mode, expected) {
+    if (mode === 'install' && expected !== (ctx.source || SOURCE)) fail('unverified-install');
+    recheck(ctx); acl(ctx); recheck(ctx);
+    const transaction = protectDependencies(ctx);
+    let ok = false;
+    try { ok = nativePi(mode === 'install' ? ['install', expected, '--no-approve'] : ['update', '--extensions', '--no-approve']); }
+    finally { restoreDependencies(transaction); }
+    if (!ok) fail('native-command');
+    if (mode === 'refresh' && ctx.source) {
+        const after = context(ctx.home, ctx.agent);
+        if (after.source !== ctx.source || !stat(after.checkout)) fail('unverified-install');
+        checkout(after); payload(after); acl(after); recheck(after);
+    }
 }
 function payload(ctx) {
     const manifest = json(regular(ctx, path.join(ctx.checkout, 'package.json')));
@@ -7822,9 +7945,14 @@ function migration(ctx, tree) {
 function main(args) {
     try {
         const [mode, home, agent, expected] = args;
-        if (!['plan', 'finish'].includes(mode)) fail('invalid-mode');
-        const ctx = context(home, agent);
-        if (stat(ctx.checkout)) checkout(ctx);
+        if (!['plan', 'finish', 'install', 'refresh'].includes(mode)) fail('invalid-mode');
+        const ctx = context(home, agent, mode === 'refresh');
+        if ((mode !== 'refresh' || ctx.source) && stat(ctx.checkout)) checkout(ctx);
+        if (mode === 'install' || mode === 'refresh') {
+            maintain(ctx, mode, expected);
+            console.log('ok');
+            return 0;
+        }
         if (mode === 'finish') {
             if (!ctx.source || ctx.source !== expected || !ctx.head) fail('unverified-install');
             migration(ctx, payload(ctx));
@@ -7834,27 +7962,32 @@ function main(args) {
         return 0;
     } catch (error) {
         const reasons = ['unsafe-profile', 'unsafe-directory', 'unsafe-file', 'unsafe-acl', 'invalid-metadata', 'source-conflict',
-            'redirected-git', 'unverified-checkout', 'modified-checkout', 'invalid-payload', 'legacy-conflict', 'changed-input', 'unverified-install', 'invalid-mode'];
+            'redirected-git', 'unverified-checkout', 'modified-checkout', 'invalid-payload', 'legacy-conflict', 'changed-input', 'unverified-install', 'invalid-mode',
+            'dependency-conflict', 'dependency-recovery', 'native-command'];
         console.log('failed:' + (reasons.includes(error.message) ? error.message : 'unknown'));
         return 1;
     }
 }
 if (require.main === module || process.argv[1] === '-') process.exitCode = main(process.argv.slice(2));
-module.exports = { main, matchesBlob };
+module.exports = { main, matchesBlob, nativePi };
 PI_VISUAL_EXPLAINER_JS
     if [[ "${_status}" -eq 0 ]]; then
         if [[ "${_mode}" == plan && "${_result}" == source:* ]]; then
             printf '%s\n' "${_result#source:}"
             return 0
-        elif [[ "${_mode}" == finish && "${_result}" == ok ]]; then
+        elif [[ "${_mode}" != plan && "${_result}" == ok ]]; then
             return 0
         fi
     fi
     case "${_result}" in
-        failed:unsafe-profile|failed:unsafe-directory|failed:unsafe-file|failed:unsafe-acl|failed:invalid-metadata|failed:source-conflict|failed:redirected-git|failed:unverified-checkout|failed:modified-checkout|failed:invalid-payload|failed:legacy-conflict|failed:changed-input|failed:unverified-install|failed:invalid-mode) ;;
+        failed:unsafe-profile|failed:unsafe-directory|failed:unsafe-file|failed:unsafe-acl|failed:invalid-metadata|failed:source-conflict|failed:redirected-git|failed:unverified-checkout|failed:modified-checkout|failed:invalid-payload|failed:legacy-conflict|failed:changed-input|failed:unverified-install|failed:invalid-mode|failed:dependency-conflict|failed:dependency-recovery|failed:native-command) ;;
         *) _result=failed:unknown ;;
     esac
-    print_warning "Visual Explainer: ${_result}. Existing custom resources and diagrams were preserved; reconcile conflicts before retrying." >&2
+    if [[ "${_result}" == failed:dependency-recovery ]]; then
+        print_warning 'Visual Explainer: failed:dependency-recovery. Inspect .setup-visual-explainer-dependencies in the active Pi profile; saved dependencies were not deleted or overwritten.' >&2
+    else
+        print_warning "Visual Explainer: ${_result}. Existing custom resources and diagrams were preserved; reconcile conflicts before retrying." >&2
+    fi
     return 1
 }
 
@@ -7877,10 +8010,7 @@ setup_pi_visual_explainer() {
     esac
     _source=$(pi_visual_explainer_policy plan) || return 1
     print_message 'Installing/updating the native Visual Explainer Pi package...'
-    if ! (unset NODE_OPTIONS NODE_PATH; pi install "${_source}" --no-approve > /dev/null 2>&1); then
-        print_warning 'Visual Explainer: native Pi package installation failed.'
-        return 1
-    fi
+    pi_visual_explainer_policy install "${_source}" || return 1
     pi_visual_explainer_policy finish "${_source}" || return 1
     print_success 'Visual Explainer Pi package installed/updated; existing pins and resource selections preserved.'
 }
@@ -10282,7 +10412,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 285 | Last changed: Accept GHCR bottle CDN paths"
+    echo -e "${GRAY}Version 286 | Last changed: Preserve Visual Explainer optional dependencies during Pi updates"
 
     if ! acquire_setup_lock; then
         return 1

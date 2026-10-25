@@ -11,15 +11,19 @@ PI_VISUAL_EXPLAINER_JS
         if [[ "${_mode}" == plan && "${_result}" == source:* ]]; then
             printf '%s\n' "${_result#source:}"
             return 0
-        elif [[ "${_mode}" == finish && "${_result}" == ok ]]; then
+        elif [[ "${_mode}" != plan && "${_result}" == ok ]]; then
             return 0
         fi
     fi
     case "${_result}" in
-        failed:unsafe-profile|failed:unsafe-directory|failed:unsafe-file|failed:unsafe-acl|failed:invalid-metadata|failed:source-conflict|failed:redirected-git|failed:unverified-checkout|failed:modified-checkout|failed:invalid-payload|failed:legacy-conflict|failed:changed-input|failed:unverified-install|failed:invalid-mode) ;;
+        failed:unsafe-profile|failed:unsafe-directory|failed:unsafe-file|failed:unsafe-acl|failed:invalid-metadata|failed:source-conflict|failed:redirected-git|failed:unverified-checkout|failed:modified-checkout|failed:invalid-payload|failed:legacy-conflict|failed:changed-input|failed:unverified-install|failed:invalid-mode|failed:dependency-conflict|failed:dependency-recovery|failed:native-command) ;;
         *) _result=failed:unknown ;;
     esac
-    print_warning "Visual Explainer: ${_result}. Existing custom resources and diagrams were preserved; reconcile conflicts before retrying." >&2
+    if [[ "${_result}" == failed:dependency-recovery ]]; then
+        print_warning 'Visual Explainer: failed:dependency-recovery. Inspect .setup-visual-explainer-dependencies in the active Pi profile; saved dependencies were not deleted or overwritten.' >&2
+    else
+        print_warning "Visual Explainer: ${_result}. Existing custom resources and diagrams were preserved; reconcile conflicts before retrying." >&2
+    fi
     return 1
 }
 
@@ -42,10 +46,7 @@ setup_pi_visual_explainer() {
     esac
     _source=$(pi_visual_explainer_policy plan) || return 1
     print_message 'Installing/updating the native Visual Explainer Pi package...'
-    if ! (unset NODE_OPTIONS NODE_PATH; pi install "${_source}" --no-approve > /dev/null 2>&1); then
-        print_warning 'Visual Explainer: native Pi package installation failed.'
-        return 1
-    fi
+    pi_visual_explainer_policy install "${_source}" || return 1
     pi_visual_explainer_policy finish "${_source}" || return 1
     print_success 'Visual Explainer Pi package installed/updated; existing pins and resource selections preserved.'
 }
