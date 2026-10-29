@@ -4,6 +4,8 @@ import subprocess
 import tempfile
 import unittest
 
+from extract_setup_fixture import validate_function
+
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / 'mac.sh').read_text()
 
@@ -13,6 +15,53 @@ def function(name):
 
 
 class HomebrewResults(unittest.TestCase):
+    def run_core_packages(self, installed=(), failed_package=''):
+        helper = function('install_core_packages')
+        validate_function(helper)
+        script = helper + r'''
+print_message() { printf '%s\n' "$*"; }
+print_warning() { printf '%s\n' "$*"; }
+print_success() { printf '%s\n' "$*"; }
+print_debug() { printf '%s\n' "$*"; }
+ensure_brew_item_trusted() { return 0; }
+brew() {
+    printf '%s\n' "$*" >> "${HOME}/brew-calls"
+    case "$*" in
+        'list --formula -1') return 0 ;;
+        'list --cask -1') printf '%s\n' "${INSTALLED_CASKS}" ;;
+        install\ *) [[ "$2" != "${FAILED_PACKAGE}" ]] ;;
+        *) return 90 ;;
+    esac
+}
+install_core_packages
+'''
+        with tempfile.TemporaryDirectory() as home:
+            result = subprocess.run(['/bin/bash', '-u', '-c', script], text=True, capture_output=True,
+                                    env={'PATH': '/usr/bin:/bin', 'HOME': home,
+                                         'INSTALLED_CASKS': '\n'.join(installed),
+                                         'FAILED_PACKAGE': failed_package}, timeout=20)
+            calls = (Path(home) / 'brew-calls').read_text().splitlines()
+        self.assertEqual(result.stderr, '')
+        return result, calls
+
+    def test_1password_app_and_cli_are_installed_independently_and_idempotently(self):
+        for installed in ((), ('1password-cli',), ('1password',), ('1password', '1password-cli')):
+            with self.subTest(installed=installed):
+                result, calls = self.run_core_packages(installed)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                for package in ('1password', '1password-cli'):
+                    self.assertEqual(calls.count('install ' + package), int(package not in installed))
+                self.assertNotIn('sessionwatcher', '\n'.join(calls).lower())
+
+    def test_1password_install_failures_are_nonzero_without_stopping_other_packages(self):
+        for package in ('1password', '1password-cli'):
+            with self.subTest(package=package):
+                result, calls = self.run_core_packages(failed_package=package)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn('Failed packages: ' + package, result.stdout)
+                self.assertIn('install gh', calls)
+                self.assertNotIn('All core packages installed.', result.stdout)
+
     def run_setup(self, phase='', earlier=0, outdated='', pinned='', trust=0, readiness='ready'):
         tail = function('run_setup_tasks').split(
             '    if is_main_user; then\n        print_section "Final Updates"', 1)[1]

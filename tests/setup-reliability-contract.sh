@@ -472,7 +472,9 @@ assert_contains mac.sh 'brew trust "\$\{_trust_flag\}" "\$\{_item\}"' 'item-leve
 assert_contains mac.sh 'ensure_brew_item_trusted formula "libsql/sqld/sqld"' 'item-level libsql trust'
 assert_contains mac.sh 'ensure_brew_item_trusted formula "tursodatabase/tap/turso"' 'item-level Turso trust'
 assert_contains mac.sh 'ensure_brew_item_trusted formula "dopplerhq/cli/doppler"' 'item-level Doppler trust'
-assert_contains mac.sh 'ensure_brew_item_trusted cask "soren-starck/tap/sessionwatcher"' 'item-level SessionWatcher trust'
+for file in "${bash_setup_scripts[@]}" win.ps1; do
+    assert_not_contains "${file}" 'install_sessionwatcher|soren-starck/tap/sessionwatcher' 'SessionWatcher installer or managed trust'
+done
 assert_not_contains mac.sh 'brew trust "\$\{tap\}"' 'whole-tap trust'
 assert_contains mac.sh 'Unmanaged Homebrew .* remains untrusted and may be skipped' 'actionable unmanaged-tap item warning'
 
