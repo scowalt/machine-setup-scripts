@@ -821,7 +821,7 @@ install_core_packages() {
     ensure_brew_item_trusted formula "libsql/sqld/sqld" "libsql/sqld" || true
     ensure_brew_item_trusted formula "tursodatabase/tap/turso" "tursodatabase/tap" || true
 
-    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "mise" "act" "terminal-notifier" "hammerspoon" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook" "poppler" "ffmpeg" "kubernetes-cli")
+    local packages=("git" "curl" "jq" "fish" "tmux" "1password-cli" "gh" "chezmoi" "starship" "mise" "act" "terminal-notifier" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook" "poppler" "ffmpeg" "kubernetes-cli")
     local to_install=()
 
     print_message "Getting list of installed packages..."
@@ -10447,7 +10447,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 313 | Last changed: Preserve Visual Explainer optional dependencies during Pi updates${NC}"
+    echo -e "${GRAY}Version 314 | Last changed: Remove Hammerspoon from core packages${NC}"
 
     if ! acquire_setup_lock; then
         return 1
