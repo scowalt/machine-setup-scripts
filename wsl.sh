@@ -8705,21 +8705,21 @@ refresh_bb_plugins() {
     fi
     while IFS= read -r _bb_refresh_line; do
         case "${_bb_refresh_line}" in
-            'BB_PLUGIN_REFRESH absent') print_debug 'No verified local BB main server requires plugin refresh.' ;;
+            'BB_PLUGIN_REFRESH absent') print_debug 'No local BB main server requires plugin refresh.' ;;
             'BB_PLUGIN_REFRESH readiness-deferred') print_warning 'Managed BB plugin refresh deferred because normal server readiness failed.' ;;
             'BB_PLUGIN_REFRESH stopped') print_warning 'Stopped local BB main-server plugin refresh deferred; no server was started.' ;;
             'BB_PLUGIN_REFRESH safe-mode') print_warning 'BB plugin refresh deliberately deferred: native safe mode remains enabled.' ;;
             'BB_PLUGIN_REFRESH completed') print_message 'BB native plugin update command completed; BB determines update outcomes.' ;;
             'BB_PLUGIN_REFRESH failed') print_error 'BB plugin refresh failed: helper-result / unverified-result.'; _bb_refresh_status=1; _bb_refresh_diagnostic=1 ;;
             'BB_PLUGIN_REFRESH failed '*)
-                if [[ ! "${_bb_refresh_line}" =~ ^BB_PLUGIN_REFRESH\ failed\ (preflight|discovery|identity|inventory|update|verification)\ ([a-z-]+)$ ]]; then
+                if [[ ! "${_bb_refresh_line}" =~ ^BB_PLUGIN_REFRESH\ failed\ (preflight|discovery|readiness|update)\ ([a-z-]+)$ ]]; then
                     print_error 'BB plugin refresh failed: helper-result / unverified-result.'
                     return 1
                 fi
                 _bb_refresh_operation=${BASH_REMATCH[1]}
                 _bb_refresh_reason=${BASH_REMATCH[2]}
                 case "${_bb_refresh_reason}" in
-                    ambiguous-endpoint|ambiguous-main-server|ambiguous-process|changed-local-state|changed-process|foreign-local-state|foreign-process|malformed-result|native-command-failed|native-request-failed|operation-timeout|process-proof-unavailable|server-move-in-progress|unsupported-account|unsupported-native-contract|unsupported-platform|unverified-home|unverified-local-state|unverified-main-server|unverified-peer|unverified-policy|unverified-result|writable-local-state|unknown-failure) ;;
+                    invalid-policy|invalid-port|malformed-result|native-command-failed|native-request-failed|operation-timeout|server-move-in-progress|server-not-ready|unsupported-platform|unknown-failure) ;;
                     *) print_error 'BB plugin refresh failed: helper-result / unverified-result.'; return 1 ;;
                 esac
                 print_error "BB plugin refresh failed: ${_bb_refresh_operation} / ${_bb_refresh_reason}."
@@ -8746,52 +8746,14 @@ import http.client
 import json
 import os
 from pathlib import Path
-import re
 import signal
-import socket
-import stat
 import subprocess
 import sys
 import time
 
-MAX_BYTES = 8388608
-MAX_PROCESSES = 32768
-
 
 class Refusal(Exception):
     pass
-
-
-class Diagnostics:
-    def __init__(self):
-        self.operation = 'preflight'
-        self.first = None
-
-    def record(self, error):
-        if self.first is not None:
-            return
-        operations = ('preflight', 'discovery', 'identity', 'inventory', 'update', 'verification')
-        reasons = ('ambiguous-endpoint', 'ambiguous-main-server', 'ambiguous-process',
-                   'changed-local-state', 'changed-process', 'foreign-local-state',
-                   'foreign-process', 'malformed-result', 'native-command-failed',
-                   'native-request-failed', 'operation-timeout', 'process-proof-unavailable',
-                   'server-move-in-progress', 'unsupported-account', 'unsupported-native-contract',
-                   'unsupported-platform', 'unverified-home', 'unverified-local-state',
-                   'unverified-main-server', 'unverified-peer', 'unverified-policy',
-                   'unverified-result', 'writable-local-state')
-        reason = error.args[0] if type(error) is Refusal and len(error.args) == 1 else None
-        if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
-            reason = 'operation-timeout'
-        elif isinstance(error, (ConnectionError, http.client.HTTPException)):
-            reason = 'native-request-failed'
-        if type(reason) is not str or reason not in reasons:
-            reason = 'unknown-failure'
-        operation = self.operation if self.operation in operations else 'preflight'
-        self.first = (operation, reason)
-
-    def report(self):
-        if self.first is not None:
-            print('BB_PLUGIN_REFRESH failed ' + ' '.join(self.first))
 
 
 def need(value, reason):
@@ -8799,559 +8761,168 @@ def need(value, reason):
         raise Refusal(reason)
 
 
-def object_json(raw):
-    def pairs(items):
-        result = {}
-        for key, value in items:
-            need(key not in result, 'malformed-result')
-            result[key] = value
-        return result
-    try:
-        return json.loads(raw, object_pairs_hook=pairs,
-                          parse_constant=lambda _: (_ for _ in ()).throw(Refusal('malformed-result')))
-    except (ValueError, UnicodeError):
-        raise Refusal('malformed-result') from None
+def main_entry(argv):
+    return next((Path(arg) for arg in argv[1:] if arg.endswith('/server/dist/index.js')), None)
 
 
-def bounded_read(path, limit=MAX_BYTES):
-    with open(path, 'rb') as stream:
-        raw = stream.read(limit + 1)
-    need(len(raw) <= limit, 'unverified-local-state')
-    return raw
-
-
-def fingerprint(info):
-    return (info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode,
-            info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink)
-
-
-class LocalFiles:
-    def __init__(self, home, uid):
-        self.original_home = Path(home)
-        self.home = self.original_home.resolve(strict=True)
-        self.uid = uid
-        self.seen = {}
-        need(self.home.is_absolute() and self.home != Path('/'), 'unverified-home')
-        need(self.home.stat().st_uid == uid, 'unverified-home')
-
-    def normalize(self, path):
-        path = Path(path)
-        try:
-            return self.home / path.relative_to(self.original_home)
-        except ValueError:
-            return path
-
-    def inspect(self, path, directory=False, optional=False, volatile=False):
-        path = self.normalize(path)
-        need(path.is_absolute() and '..' not in path.parts, 'unverified-local-state')
-        chain = list(reversed(path.parents)) + [path]
-        for current in chain:
-            try:
-                info = current.lstat()
-            except FileNotFoundError:
-                if optional:
-                    return None
-                raise Refusal('unverified-local-state') from None
-            need(not stat.S_ISLNK(info.st_mode), 'unverified-local-state')
-            is_dir = current != path or directory
-            need(stat.S_ISDIR(info.st_mode) if is_dir else stat.S_ISREG(info.st_mode),
-                 'unverified-local-state')
-            need(info.st_uid in (0, self.uid), 'foreign-local-state')
-            sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-            mask = 0o002 if not is_dir or info.st_uid == self.uid and info.st_uid != 0 else 0o022
-            need(not info.st_mode & mask or sticky_tmp, 'writable-local-state')
-            if not is_dir:
-                need(info.st_nlink == 1, 'unverified-local-state')
-            previous = self.seen.get(str(current))
-            mark = fingerprint(info)[:5] if is_dir or volatile else fingerprint(info)
-            need(previous is None or previous == mark, 'changed-local-state')
-            self.seen[str(current)] = mark
-        return info
-
-    def main_evidence(self, path):
-        path = self.normalize(path)
-        need(path.is_absolute() and '..' not in path.parts, 'unverified-local-state')
-        names = ('bb.db', 'bb.db-wal', 'bb.db-shm', 'bb.db-journal',
-                 'bb-app-runtime.json', 'server-moved.json', 'server-import.json')
-        handles = []
-        completed = False
-        missing = None
-        try:
-            for current in list(reversed(path.parents)) + [path]:
-                parent = handles[-1][0] if handles else None
-                name = current.name if parent is not None else '/'
-                try:
-                    info = os.stat(name, dir_fd=parent, follow_symlinks=False)
-                except FileNotFoundError:
-                    need(parent is not None, 'unverified-local-state')
-                    missing = (parent, name)
-                    break
-                need(stat.S_ISDIR(info.st_mode), 'unverified-local-state')
-                leaf = current == path
-                need(info.st_uid == self.uid if leaf else info.st_uid in (0, self.uid),
-                     'foreign-local-state')
-                sticky_tmp = current == Path('/tmp') and info.st_uid == 0 and bool(info.st_mode & stat.S_ISVTX)
-                mask = 0o002 if info.st_uid == self.uid and info.st_uid != 0 else 0o022
-                need(not info.st_mode & mask or sticky_tmp, 'writable-local-state')
-                previous = self.seen.get(str(current))
-                need(previous is None or previous == fingerprint(info)[:5], 'changed-local-state')
-                fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
-                handles.append((fd, parent, name, info, leaf))
-                need(fingerprint(os.fstat(fd))[:5] == fingerprint(info)[:5], 'changed-local-state')
-            def probe():
-                evidence = []
-                for name in names:
-                    try:
-                        info = os.stat(name, dir_fd=handles[-1][0], follow_symlinks=False)
-                    except FileNotFoundError:
-                        evidence.append(None)
-                    else:
-                        evidence.append(fingerprint(info)[:5] + (info.st_nlink,))
-                return evidence
-            before = probe() if missing is None else []
-            present = any(item is not None for item in before)
-            if missing is not None:
-                try:
-                    os.stat(missing[1], dir_fd=missing[0], follow_symlinks=False)
-                except FileNotFoundError:
-                    pass
-                else:
-                    raise Refusal('changed-local-state')
-            else:
-                need(probe() == before, 'changed-local-state')
-            for fd, parent, name, info, leaf in handles:
-                expected = fingerprint(info) if leaf and not present else fingerprint(info)[:5]
-                for observed in (os.fstat(fd), os.stat(name, dir_fd=parent, follow_symlinks=False)):
-                    mark = fingerprint(observed) if leaf and not present else fingerprint(observed)[:5]
-                    need(mark == expected, 'changed-local-state')
-            completed = True
-            return present
-        except (OSError, NotImplementedError):
-            raise Refusal('unverified-local-state') from None
-        finally:
-            close_failed = False
-            for fd, *_ in reversed(handles):
-                try:
-                    os.close(fd)
-                except Exception:
-                    close_failed = True
-            if completed and close_failed:
-                raise Refusal('unverified-local-state')
-
-    def read(self, path, optional=False, header=False):
-        path = self.normalize(path)
-        info = self.inspect(path, optional=optional, volatile=header)
-        if info is None:
-            return None
-        def stable(observed):
-            if header:
-                return fingerprint(observed)[:5] == fingerprint(info)[:5] and observed.st_nlink == 1
-            return fingerprint(observed) == fingerprint(info)
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        completed = False
-        try:
-            need(stable(os.fstat(fd)), 'changed-local-state')
-            with os.fdopen(fd, 'rb', closefd=False) as stream:
-                raw = stream.read(16 if header else MAX_BYTES + 1)
-            need(len(raw) <= MAX_BYTES, 'unverified-local-state')
-            need(stable(os.fstat(fd)), 'changed-local-state')
-            need(stable(os.lstat(path)), 'changed-local-state')
-            completed = True
-            return raw
-        finally:
-            if completed:
-                os.close(fd)
-            else:
-                try:
-                    os.close(fd)
-                except Exception:
-                    pass   
-
-    def json(self, path, optional=False):
-        raw = self.read(path, optional)
-        return None if raw is None else object_json(raw)
-
-
-def command(args, allow_missing=False):
-    result = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, timeout=10, close_fds=True,
-                            env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL': 'C'})
-    if allow_missing and result.returncode == 1 and not result.stdout and not result.stderr:
-        return b''
-    need(result.returncode == 0 and not result.stderr and len(result.stdout) <= MAX_BYTES, 'process-proof-unavailable')
-    return result.stdout
-
-
-def parse_environment(raw):
-    result = {}
-    for item in raw.split(b'\0'):
-        key, separator, value = item.partition(b'=')
-        if separator and key in (b'HOME', b'BB_DATA_DIR', b'BB_SERVER_PORT', b'BB_SERVER_LAUNCH_ID'):
-            name = key.decode('ascii')
-            need(name not in result, 'ambiguous-process')
-            result[name] = value.decode('utf-8', 'strict')
-    return result
-
-
-def darwin_uid(text):
-    need(re.fullmatch(r'(?:[0-9]{1,10}|-[1-9][0-9]{0,9})', text) is not None,
-         'process-proof-unavailable')
-    value = int(text)
-    need(-(1 << 31) <= value < (1 << 32) - 1 and value != -1,
-         'process-proof-unavailable')
-    return value if value >= 0 else value + (1 << 32)
-
-
-class Processes:
-    def __init__(self, uid):
-        self.uid = uid
-        self.system = sys.platform
-        need(self.system in ('linux', 'darwin'), 'unsupported-platform')
-
-    def table(self):
-        raw = command(['/bin/ps', '-axo', 'uid=,pid='])
-        if self.system == 'darwin':
-            need(raw.isascii(), 'process-proof-unavailable')
-        rows = raw.decode('ascii').splitlines()
-        need(len(rows) <= MAX_PROCESSES, 'process-proof-unavailable')
-        result = []
-        for row in rows:
-            parts = row.split()
-            need(len(parts) == 2, 'process-proof-unavailable')
-            if self.system == 'darwin':
-                uid = darwin_uid(parts[0])
-                need(re.fullmatch(r'[0-9]{1,10}', parts[1]) is not None
-                     and int(parts[1]) <= (1 << 31) - 1, 'process-proof-unavailable')
-            else:
-                need(all(p.isdecimal() for p in parts), 'process-proof-unavailable')
-                uid = int(parts[0])
-            if uid == self.uid:
-                result.append(int(parts[1]))
-        return result
-
-    def read(self, pid):
-        if self.system == 'linux':
-            root = Path('/proc') / str(pid)
-            try:
-                need(root.stat().st_uid == self.uid, 'foreign-process')
-                stamp = bounded_read(root / 'stat', 65536).rsplit(b')', 1)[1].split()[19]
-                argv = [x.decode('utf-8', 'strict') for x in bounded_read(root / 'cmdline', 2097152).split(b'\0') if x]
-                env = bounded_read(root / 'environ', 2097152) if main_entry(argv) is not None else b''
-                again = bounded_read(root / 'stat', 65536).rsplit(b')', 1)[1].split()[19]
-            except (FileNotFoundError, ProcessLookupError):
-                return None
-            need(stamp == again, 'changed-process')
-            return (argv, parse_environment(env), stamp)
-        raw_rows = command(['/bin/ps', '-p', str(pid), '-o', 'uid=,lstart='], allow_missing=True)
-        if not raw_rows:
-            return None
-        need(raw_rows.isascii(), 'process-proof-unavailable')
-        row = re.fullmatch(
-            r'[ \t]*(-?[0-9]{1,10})[ \t]+'
-            r'((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[ \t]+'
-            r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[ \t]+'
-            r'(?:0?[1-9]|[12][0-9]|3[01])[ \t]+'
-            r'(?:[01][0-9]|2[0-3]):[0-5][0-9]:(?:[0-5][0-9]|60)[ \t]+[0-9]{4})[ \t]*\n?',
-            raw_rows.decode('ascii'))
-        need(row is not None, 'process-proof-unavailable')
-        uid, stamp = row.groups()
-        need(darwin_uid(uid) == self.uid, 'foreign-process')
+def process_record(pid):
+    if sys.platform == 'linux':
+        root = Path('/proc') / str(pid)
+        argv = [arg.decode() for arg in (root / 'cmdline').read_bytes().split(b'\0') if arg]
+        raw_env = (root / 'environ').read_bytes() if main_entry(argv) else b''
+    else:
         libc = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
         maximum = ctypes.c_int()
-        maximum_size = ctypes.c_size_t(ctypes.sizeof(maximum))
-        need(libc.sysctlbyname(b'kern.argmax', ctypes.byref(maximum), ctypes.byref(maximum_size), None, 0) == 0
-             and maximum_size.value == ctypes.sizeof(maximum)
-             and ctypes.sizeof(ctypes.c_int) < maximum.value <= MAX_BYTES, 'process-proof-unavailable')
-        mib = (ctypes.c_int * 3)(1, 49, pid)
+        size = ctypes.c_size_t(ctypes.sizeof(maximum))
+        if libc.sysctlbyname(b'kern.argmax', ctypes.byref(maximum), ctypes.byref(size), None, 0):
+            raise OSError(ctypes.get_errno(), 'process inventory unavailable')
+        buffer = ctypes.create_string_buffer(maximum.value)
         size = ctypes.c_size_t(maximum.value)
-        buffer = ctypes.create_string_buffer(size.value)
-        need(libc.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0) == 0
-             and ctypes.sizeof(ctypes.c_int) <= size.value <= maximum.value, 'process-proof-unavailable')
+        mib = (ctypes.c_int * 3)(1, 49, pid)
+        if libc.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0):
+            raise OSError(ctypes.get_errno(), 'process arguments unavailable')
         raw = buffer.raw[:size.value]
         argc = int.from_bytes(raw[:4], sys.byteorder, signed=True)
-        need(0 < argc <= 4096, 'ambiguous-process')
-        rest = raw[4:].split(b'\0', 1)
-        need(len(rest) == 2, 'ambiguous-process')
-        values = rest[1].lstrip(b'\0').split(b'\0')
-        need(len(values) >= argc, 'ambiguous-process')
-        argv = [value.decode('utf-8', 'strict') for value in values[:argc]]
-        return argv, parse_environment(b'\0'.join(values[argc:])), stamp
-
-    def database_open(self, path):
-        if self.system == 'darwin':
-            return bool(command(['/usr/sbin/lsof', '-nP', '-Fpu', '--', str(path)], allow_missing=True))
-        expected = path.stat()
-        for pid in self.table():
-            try:
-                entries = list((Path('/proc') / str(pid) / 'fd').iterdir())
-            except FileNotFoundError:
-                continue
-            need(len(entries) <= 65536, 'process-proof-unavailable')
-            for entry in entries:
-                try:
-                    observed = entry.stat()
-                except FileNotFoundError:
-                    continue
-                if (observed.st_dev, observed.st_ino) == (expected.st_dev, expected.st_ino):
-                    return True
-        return False
-
-    def peer_owned(self, pid, port, client_port):
-        if self.system == 'darwin':
-            raw = command(['/usr/sbin/lsof', '-nP', '-a', '-p', str(pid), '-iTCP', '-FpnT']).decode('utf-8')
-            expected = f'n127.0.0.1:{port}->127.0.0.1:{client_port}'
-            return f'p{pid}' in raw.splitlines() and expected + '\nTST=ESTABLISHED' in raw
-        expected_local = f'0100007F:{port:04X}'
-        expected_peer = f'0100007F:{client_port:04X}'
-        matches = set()
-        for name, local, peer in (('tcp', expected_local, expected_peer),
-                                 ('tcp6', '0000000000000000FFFF0000' + expected_local,
-                                  '0000000000000000FFFF0000' + expected_peer)):
-            for line in bounded_read(Path('/proc/net') / name).decode('ascii').splitlines()[1:]:
-                values = line.split()
-                need(len(values) >= 10, 'process-proof-unavailable')
-                if values[1:4] == [local, peer, '01'] and values[7] == str(self.uid):
-                    matches.add(values[9])
-        descriptors = list((Path('/proc') / str(pid) / 'fd').iterdir())
-        need(len(descriptors) <= 65536, 'process-proof-unavailable')
-        for descriptor in descriptors:
-            try:
-                target = os.readlink(descriptor)
-            except FileNotFoundError:
-                continue
-            if target.startswith('socket:[') and target[8:-1] in matches:
-                return True
-        return False
+        values = raw[4:].split(b'\0', 1)[1].lstrip(b'\0').split(b'\0')
+        argv = [arg.decode() for arg in values[:argc]]
+        raw_env = b'\0'.join(values[argc:])
+    env = {}
+    for item in raw_env.split(b'\0'):
+        key, separator, value = item.partition(b'=')
+        if separator and key in (b'HOME', b'BB_DATA_DIR', b'BB_SERVER_PORT'):
+            env[key.decode()] = value.decode()
+    return argv, env
 
 
-def main_entry(argv):
-    entries = [arg for arg in argv[1:] if arg.endswith('/server/dist/index.js')]
-    if not entries:
-        return None
-    need(len(entries) == 1 and Path(entries[0]).is_absolute(), 'ambiguous-process')
-    return Path(entries[0])
-
-
-def verify_package(files, entry):
-    root = entry.parents[2]
-    try:
-        metadata = files.json(root / 'package.json', optional=True)
-    except (Refusal, OSError):
-        if root.name != 'bb-app':
-            return False   
-        raise
-    if not isinstance(metadata, dict) or metadata.get('name') != 'bb-app':
-        need(root.name != 'bb-app', 'unverified-main-server')
-        workspace = files.json(entry.parents[1] / 'package.json', optional=True)
-        need(not isinstance(workspace, dict) or workspace.get('name') != '@bb/server', 'unsupported-native-contract')
-        return False
-    need(metadata.get('bin', {}).get('bb-server') == 'dist/bb-server.js', 'unverified-main-server')
-    files.inspect(entry)
-    files.inspect(root / 'server/dist/start-server.js')
-    return True
-
-
-def discover(files, processes, configured_data=None, block_default=False):
-    servers = []
-    data_dirs = {files.home / '.bb'}
-    if configured_data:
-        need(Path(configured_data).is_absolute(), 'unverified-local-state')
-        data_dirs.add(files.normalize(configured_data))
-    for pid in processes.table():
-        record = processes.read(pid)
-        if record is None:
+def processes():
+    need(sys.platform in ('linux', 'darwin'), 'unsupported-platform')
+    result = subprocess.run(['/bin/ps', '-U', str(os.getuid()), '-o', 'pid='],
+                            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                            timeout=10, check=True)
+    for value in result.stdout.split():
+        try:
+            yield process_record(int(value))
+        except (FileNotFoundError, ProcessLookupError):
             continue
-        argv, env, stamp = record
+
+
+def discover(home, block_default=False):
+    default = (home / '.bb').resolve()
+    data_dirs = {default}
+    if os.environ.get('BB_DATA_DIR'):
+        data_dirs.add(Path(os.environ['BB_DATA_DIR']).resolve())
+    servers = {}
+    for argv, env in processes():
         entry = main_entry(argv)
         if entry is None:
             continue
-        if not verify_package(files, entry):
+        package = entry.parents[2]
+        cli = package / 'host-daemon/dist/bb'
+        if package.name != 'bb-app' and not cli.is_file():
             continue
-        need(len(argv) == 2, 'ambiguous-process')
-        home = env.get('HOME') or str(files.home)
-        need(Path(home).is_absolute(), 'unverified-home')
-        data = files.normalize(env.get('BB_DATA_DIR') or str(Path(home) / '.bb'))
-        if block_default and data == files.home / '.bb':
-            continue   
-        files.inspect(data, directory=True)
-        need(data.stat().st_uid == files.uid, 'foreign-local-state')
-        need(files.read(data / 'bb.db', header=True) == b'SQLite format 3\0'
-             and (data / 'bb.db').stat().st_uid == files.uid, 'unverified-main-server')
-        need(files.read(data / 'server-moved.json', optional=True) is None
-             and files.read(data / 'server-import.json', optional=True) is None, 'server-move-in-progress')
-        port_text = env.get('BB_SERVER_PORT', '38886')
-        need(re.fullmatch(r'[0-9]{1,5}', port_text) is not None and 0 < int(port_text) < 65536,
-             'ambiguous-endpoint')
-        key = (data.stat().st_dev, data.stat().st_ino)
-        need(not any(s['key'] == key or s['port'] == int(port_text) for s in servers), 'ambiguous-main-server')
-        servers.append({'pid': pid, 'record': record, 'entry': entry, 'data': data,
-                        'key': key, 'port': int(port_text), 'launch': env.get('BB_SERVER_LAUNCH_ID')})
-        data_dirs.add(data)
-    stopped = 0
-    for data in data_dirs:
-        if block_default and data == files.home / '.bb':
+        data = Path(env.get('BB_DATA_DIR') or str(Path(env.get('HOME') or home) / '.bb')).resolve()
+        if block_default and data == default:
             continue
-        if any(s['data'] == data for s in servers):
-            files.inspect(data, directory=True)
+        need(not (data / 'server-moved.json').exists() and not (data / 'server-import.json').exists(),
+             'server-move-in-progress')
+        port = int(env.get('BB_SERVER_PORT', '38886'))
+        need(0 < port < 65536, 'invalid-port')
+        servers.setdefault(data, {'node': argv[0], 'cli': cli, 'data': data, 'port': port})
+    stopped = False
+    for data in data_dirs - servers.keys():
+        if block_default and data == default or (data / 'server-moved.json').exists():
             continue
-        if not files.main_evidence(data):
-            continue
-        info = files.inspect(data, directory=True)
-        if any(s['key'] == (info.st_dev, info.st_ino) for s in servers):
-            continue
-        db = files.read(data / 'bb.db', header=True)
-        need(info.st_uid == files.uid and (data / 'bb.db').stat().st_uid == files.uid
-             and db[:16] == b'SQLite format 3\0', 'unverified-main-server')
-        moved = files.json(data / 'server-moved.json', optional=True)
-        if moved is not None:
-            need(isinstance(moved, dict) and moved.get('version') == 1
-                 and moved.get('mode') in ('connect', 'direct')
-                 and all(isinstance(moved.get(k), str) and moved[k]
-                         for k in ('moveId', 'fromHostId', 'toHostId', 'toHostName', 'serverUrl'))
-                 and type(moved.get('movedAt')) is int and moved['movedAt'] >= 0
-                 and isinstance(moved.get('oldCopyEntries'), list), 'unverified-local-state')
-            continue   
-        need(files.read(data / 'server-import.json', optional=True) is None, 'server-move-in-progress')
-        runtime = files.json(data / 'bb-app-runtime.json', optional=True)
-        if runtime is not None:
-            need(isinstance(runtime, dict) and type(runtime.get('pid')) is int, 'unverified-local-state')
-            need(processes.read(runtime['pid']) is None, 'unverified-main-server')
-        need(not processes.database_open(data / 'bb.db'), 'unverified-main-server')
-        stopped += 1
-    return servers, stopped
+        need(not (data / 'server-import.json').exists(), 'server-move-in-progress')
+        stopped |= (data / 'bb.db').exists() or (data / 'bb-app-runtime.json').exists()
+    return list(servers.values()), stopped
 
 
-class NativeApi:
-    def __init__(self, files, processes, server, deadline):
-        self.files, self.processes, self.server, self.deadline = files, processes, server, deadline
-
-    def request(self, method, path, payload=None):
-        need(time.monotonic() < self.deadline, 'operation-timeout')
-        s = self.server
-        need(self.processes.read(s['pid']) == s['record'], 'changed-process')
-        need(verify_package(self.files, s['entry']), 'unverified-main-server')
-        self.files.inspect(s['data'], directory=True)
-        connection = http.client.HTTPConnection('127.0.0.1', s['port'],
-                                               timeout=min(180, self.deadline - time.monotonic()))
-        failed = True
-        try:
-            connection.connect()
-            connection.auto_open = 0   
-            client_port = connection.sock.getsockname()[1]
-            until = min(self.deadline, time.monotonic() + 2)
-            while not self.processes.peer_owned(s['pid'], s['port'], client_port):
-                need(time.monotonic() < until, 'unverified-peer')
-                time.sleep(0.025)
-            need(self.processes.read(s['pid']) == s['record'], 'changed-process')
-            body = None if payload is None else json.dumps(payload).encode('ascii')
-            connection.request(method, path, body, {'Content-Type': 'application/json', 'Accept-Encoding': 'identity'})
-            response = connection.getresponse()
-            need(response.getheader('Content-Encoding') in (None, 'identity'), 'malformed-result')
-            raw = response.read(MAX_BYTES + 1)
-            need(len(raw) <= MAX_BYTES, 'malformed-result')
-            need(self.processes.read(s['pid']) == s['record'], 'changed-process')
-            result = object_json(raw)
-            need(response.status == 200, 'native-request-failed')   
-            failed = False
-            return result
-        except (TimeoutError, socket.timeout):
-            raise Refusal('operation-timeout') from None
-        finally:
-            if not failed:
-                connection.close()
-            else:
-                try:
-                    connection.close()
-                except Exception:
-                    pass
-
-    def verify(self):
-        health = self.request('GET', '/health')
-        need(isinstance(health, dict) and health.get('ok') is True and not health.get('serverMove'),
-             'unverified-main-server')
-        if self.server['launch']:
-            need(health.get('launchId') == self.server['launch'], 'unverified-main-server')
-        config = self.request('GET', '/api/v1/system/config')
-        need(isinstance(config, dict) and isinstance(config.get('dataDir'), str)
-             and self.files.normalize(config['dataDir']) == self.server['data'], 'unverified-main-server')
-
-    def update(self):
-        server = self.server
-        node = Path(server['record'][0][0])
-        cli = server['entry'].parents[2] / 'host-daemon/dist/bb'
-        self.files.inspect(node)
-        need(self.files.inspect(cli).st_size > 0, 'unverified-main-server')
-        self.files.inspect(cli.parent / 'bb-chunks', directory=True)
-        need(self.processes.read(server['pid']) == server['record'], 'changed-process')
-        need(verify_package(self.files, server['entry']), 'unverified-main-server')
-        self.files.inspect(server['data'], directory=True)
-        remaining = self.deadline - time.monotonic()
-        need(remaining > 0, 'operation-timeout')
-        env = {'HOME': str(self.files.home), 'PATH': str(node.parent) + ':/usr/bin:/bin',
-               'BB_DATA_DIR': str(server['data']), 'BB_SERVER_URL': f"http://127.0.0.1:{server['port']}",
-               'BB_CLI_REEXEC': '1', 'ELECTRON_RUN_AS_NODE': '1', 'NO_COLOR': '1', 'NODE_ENV': 'production',
-               'BB_APP_VERSION': self.files.json(server['entry'].parents[2] / 'package.json')['version']}
-        result = subprocess.run([str(node), str(cli), 'plugin', 'update', '--all', '--yes'],
-                                cwd=server['data'], env=env, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                timeout=remaining, close_fds=True)
-        need(result.returncode == 0, 'native-command-failed')
+def remaining(deadline):
+    seconds = deadline - time.monotonic()
+    if seconds <= 0:
+        raise TimeoutError()
+    return seconds
 
 
-def safe_mode(api):
-    state = api.request('GET', '/api/v1/plugins/safe-mode')
-    need(isinstance(state, dict) and type(state.get('enabled')) is bool, 'malformed-result')
-    return state['enabled']
+def request(port, path, deadline):
+    connection = http.client.HTTPConnection('127.0.0.1', port, timeout=min(10, remaining(deadline)))
+    try:
+        connection.request('GET', path, headers={'Accept-Encoding': 'identity'})
+        response = connection.getresponse()
+        need(response.status == 200, 'native-request-failed')
+        value = json.loads(response.read())
+        need(isinstance(value, dict), 'malformed-result')
+        return value
+    finally:
+        connection.close()
 
 
-def refresh(api, diagnostics=None):
-    diagnostics = diagnostics if diagnostics is not None else Diagnostics()
-    diagnostics.operation = 'identity'
-    api.verify()
-    diagnostics.operation = 'inventory'
-    if safe_mode(api):
-        return 'safe-mode'
-    diagnostics.operation = 'update'
-    api.update()
-    return 'completed'
+def update(server, home, deadline):
+    env = dict(os.environ, HOME=str(home), BB_DATA_DIR=str(server['data']),
+               BB_SERVER_URL=f"http://127.0.0.1:{server['port']}", BB_CLI_REEXEC='1',
+               ELECTRON_RUN_AS_NODE='1', NO_COLOR='1')
+    subprocess.run([server['node'], str(server['cli']), 'plugin', 'update', '--all', '--yes'],
+                   cwd=server['data'], env=env, stdin=subprocess.DEVNULL,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   timeout=remaining(deadline), check=True)
+
+
+def report(operation, error):
+    reason = 'unknown-failure'
+    if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+        reason = 'operation-timeout'
+    elif isinstance(error, subprocess.CalledProcessError):
+        reason = 'native-command-failed'
+    elif isinstance(error, (ConnectionError, http.client.HTTPException)):
+        reason = 'native-request-failed'
+    elif isinstance(error, (ValueError, UnicodeError)):
+        reason = 'malformed-result'
+    elif type(error) is Refusal:
+        reason = error.args[0]
+    print(f'BB_PLUGIN_REFRESH failed {operation} {reason}')
 
 
 def run():
-    labels = {'safe-mode', 'completed'}
-    diagnostics = Diagnostics()
+    operation = 'preflight'
+    previous = signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError()))
+    signal.alarm(1800)
     try:
-        need(os.getuid() != 0, 'unsupported-account')
-        deadline = time.monotonic() + 1800
-        signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(Refusal('operation-timeout')))
-        signal.alarm(1800)   
-        files = LocalFiles(sys.argv[1], os.getuid())
-        processes = Processes(os.getuid())
+        home = Path(sys.argv[1]).resolve()
         policy = sys.argv[2] if len(sys.argv) > 2 else 'ready'
-        need(policy in ('ready', 'block-default'), 'unverified-policy')
-        diagnostics.operation = 'discovery'
-        servers, stopped = discover(files, processes, os.environ.get('BB_DATA_DIR'), policy == 'block-default')
-        failed = False
+        need(policy in ('ready', 'block-default'), 'invalid-policy')
+        deadline = time.monotonic() + 1800
+        operation = 'discovery'
+        servers, stopped = discover(home, policy == 'block-default')
         if policy == 'block-default':
             print('BB_PLUGIN_REFRESH readiness-deferred')
         if stopped:
             print('BB_PLUGIN_REFRESH stopped')
         if not stopped and not servers:
             print('BB_PLUGIN_REFRESH absent')
+        failed = False
         for server in servers:
             try:
-                diagnostics.operation = 'verification'
-                state = refresh(NativeApi(files, processes, server, deadline), diagnostics)
-                need(state in labels, 'unverified-result')
-                print('BB_PLUGIN_REFRESH ' + state)
+                operation = 'readiness'
+                health = request(server['port'], '/health', deadline)
+                need(health.get('ok') is True and not health.get('serverMove'), 'server-not-ready')
+                safe = request(server['port'], '/api/v1/plugins/safe-mode', deadline)
+                need(type(safe.get('enabled')) is bool, 'malformed-result')
+                if safe['enabled']:
+                    print('BB_PLUGIN_REFRESH safe-mode')
+                    continue
+                operation = 'update'
+                update(server, home, deadline)
+                print('BB_PLUGIN_REFRESH completed')
             except Exception as error:
                 failed = True
-                diagnostics.record(error)
-        diagnostics.report()
+                report(operation, error)
         return int(failed)
     except Exception as error:
-        diagnostics.record(error)
-        diagnostics.report()
+        report(operation, error)
         return 1
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 if __name__ == '__main__':
@@ -9899,7 +9470,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 269 | Last changed: Preserve Visual Explainer optional dependencies during Pi updates${NC}"
+    echo -e "${GRAY}Version 270 | Last changed: Simplify BB plugin refresh through native CLI${NC}"
 
     if ! acquire_setup_lock; then
         return 1
