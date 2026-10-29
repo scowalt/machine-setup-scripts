@@ -5918,7 +5918,7 @@ try {
     $retirementResult = ($result | Out-String).Trim()
     if ($retirementExitCode -ne 0) {
         if ($retirementResult -eq 'write-failed') { Write-Error "Global Backlog MCP retirement failed during a write; review the affected global metadata before retrying." }
-        elseif ($retirementResult -in @('unsafe-path','unsafe-home','unsafe-profile','unsafe-boundary','unsafe-metadata','malformed-metadata','duplicate-key','unsupported-json-number','malformed-toml','unsupported-toml','toml-parser-failed','toml-parser-unavailable','unsafe-toml-edit','metadata-changed','boundary-changed','native-wrapper-required','native-preflight-failed','filesystem-error')) { Write-Error "Global Backlog MCP retirement preflight failed; no changes were made." }
+        elseif ($retirementResult -in @('unsafe-path','unsafe-home','unsafe-profile','unsafe-boundary','unsafe-metadata','malformed-metadata','duplicate-key','unsupported-json-number','malformed-toml','unsupported-toml','toml-parser-failed','toml-parser-unavailable','unsafe-toml-edit','metadata-changed','boundary-changed','native-wrapper-required','native-preflight-failed','filesystem-error')) { Write-Error "Global Backlog MCP retirement preflight failed ($retirementResult); no changes were made." }
         else { Write-Error "Global Backlog MCP retirement failed for an unknown controlled reason; review global metadata before retrying." }
         return $false
     }
@@ -9295,7 +9295,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 205 | Last changed: Preserve Visual Explainer optional dependencies during Pi updates"
+    Write-Host "Version 206 | Last changed: Explain controlled Backlog retirement failures"
 
     Assert-HeadlessUnsupported
 
