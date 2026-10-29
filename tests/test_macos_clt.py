@@ -164,7 +164,7 @@ class CLT(unittest.TestCase):
                 self.assertNotIn('apple:--list', calls)
 
     def test_actual_failures_continue_later_work_and_finalize_nonzero(self):
-        for task in ('install_homebrew', 'install_core_packages', 'install_sessionwatcher',
+        for task in ('install_homebrew', 'install_core_packages',
                      'install_secrets_manager', 'install_gcloud_cli', 'setup_tailscale',
                      'install_nerd_font', 'install_betterdisplay', 'initialize_chezmoi',
                      'install_tmux_plugins', 'install_opencode_cli', 'install_gitea_client',
