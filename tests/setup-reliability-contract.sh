@@ -394,6 +394,7 @@ for file in "${linux_apt_scripts[@]}"; do
 done
 
 python3 tests/test_homebrew_results.py
+python3 tests/test_homebrew_convergence.py
 
 brew_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" bash -c '
     source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
@@ -417,7 +418,9 @@ brew_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_w
 ')
 grep -q '^status=1$' <<< "${brew_output}" || fail 'mac.sh: Brew failure returned success'
 grep -q 'Homebrew update/upgrade incomplete' <<< "${brew_output}" || fail 'mac.sh: brew failure lacks a concise warning'
-grep -q 'brew reinstall --cask --force bartender' <<< "${brew_output}" || fail 'mac.sh: brew failure lacks cask remediation'
+if grep -q 'brew reinstall --cask --force bartender' <<< "${brew_output}"; then
+    fail 'mac.sh: unrelated brew failure recommended a forced Bartender reinstall'
+fi
 if grep -q 'Homebrew updated\.' <<< "${brew_output}"; then
     fail 'mac.sh: failed brew upgrade was reported as successful'
 fi
@@ -471,7 +474,7 @@ fi
 assert_contains mac.sh 'brew trust "\$\{_trust_flag\}" "\$\{_item\}"' 'item-level trust command'
 assert_contains mac.sh 'ensure_brew_item_trusted formula "libsql/sqld/sqld"' 'item-level libsql trust'
 assert_contains mac.sh 'ensure_brew_item_trusted formula "tursodatabase/tap/turso"' 'item-level Turso trust'
-assert_contains mac.sh 'ensure_brew_item_trusted formula "dopplerhq/cli/doppler"' 'item-level Doppler trust'
+assert_contains mac.sh 'ensure_brew_item_trusted cask "dopplerhq/doppler/doppler"' 'item-level Doppler cask trust'
 for file in "${bash_setup_scripts[@]}" win.ps1; do
     assert_not_contains "${file}" 'install_sessionwatcher|soren-starck/tap/sessionwatcher' 'SessionWatcher installer or managed trust'
 done

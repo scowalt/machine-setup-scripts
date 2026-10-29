@@ -5199,7 +5199,7 @@ BACKLOG_MCP_RETIREMENT_JS
         case "${_result}" in
             write-failed) print_error "Global Backlog MCP retirement failed during a write; review the affected global metadata before retrying." ;;
             unsafe-path|unsafe-home|unsafe-profile|unsafe-boundary|unsafe-metadata|malformed-metadata|duplicate-key|unsupported-json-number|malformed-toml|unsupported-toml|toml-parser-failed|toml-parser-unavailable|unsafe-toml-edit|metadata-changed|boundary-changed|native-wrapper-required|filesystem-error)
-                print_error "Global Backlog MCP retirement preflight failed; no changes were made." ;;
+                print_error "Global Backlog MCP retirement preflight failed (${_result}); no changes were made." ;;
             *) print_error "Global Backlog MCP retirement failed for an unknown controlled reason; review global metadata before retrying." ;;
         esac
         return 1
@@ -9470,7 +9470,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 270 | Last changed: Simplify BB plugin refresh through native CLI${NC}"
+    echo -e "${GRAY}Version 271 | Last changed: Explain controlled Backlog retirement failures${NC}"
 
     if ! acquire_setup_lock; then
         return 1

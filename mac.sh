@@ -726,6 +726,7 @@ ensure_brew_item_trusted() {
     local _item=$2
     local _tap=$3
     local _trust_flag
+    local _taps
 
     case "${_type}" in
         formula) _trust_flag="--formula" ;;
@@ -737,7 +738,12 @@ ensure_brew_item_trusted() {
             ;;
     esac
 
-    if ! { brew tap || true; } | grep -q "^${_tap}$"; then
+    if ! _taps=$(brew tap); then
+        SETUP_BREW_TRUST_FAILURES=1
+        print_warning "Could not inspect Homebrew taps; cannot manage ${_item}."
+        return 1
+    fi
+    if ! grep -Fxq "${_tap}" <<< "${_taps}"; then
         print_message "Adding Homebrew tap ${_tap}..."
         if ! brew tap "${_tap}"; then
             SETUP_BREW_TRUST_FAILURES=1
@@ -792,8 +798,13 @@ report_unmanaged_untrusted_brew_items() {
         _item=${_item#  }
 
         case "${_item}" in
-            libsql/sqld/sqld|tursodatabase/tap/turso|dopplerhq/cli/doppler)
+            libsql/sqld/sqld|tursodatabase/tap/turso)
                 continue
+                ;;
+            dopplerhq/doppler/doppler)
+                if [[ "${_section}" == "cask" && "${WORK_MACHINE:-}" != "1" ]]; then
+                    continue
+                fi
                 ;;
             *) ;;
         esac
@@ -815,6 +826,32 @@ report_unmanaged_untrusted_brew_items() {
     [[ "${_unmanaged_count}" -eq 0 ]]
 }
 
+verify_existing_1password_app() {
+    local app="/Applications/1Password.app"
+    local before after
+    if [[ ! -e "${app}" && ! -L "${app}" ]]; then
+        return 2
+    fi
+    if [[ ! -d "${app}" || -L "${app}" || -L "${app%/*}" ]]; then
+        print_warning "Existing 1Password app has an unsupported path; leaving it untouched."
+        return 1
+    fi
+    if ! before=$(/usr/bin/stat -f '%d:%i:%u:%g:%p:%m:%c' "${app}" 2>/dev/null) ||
+        ! /usr/bin/codesign --verify --deep --strict --test-requirement \
+            'anchor apple generic and identifier "com.1password.1password" and certificate leaf[subject.OU] = "2BUA8C4S2C"' \
+            "${app}" >/dev/null 2>&1; then
+        print_warning "Existing 1Password app could not be verified; leaving it untouched."
+        return 1
+    fi
+    if ! after=$(/usr/bin/stat -f '%d:%i:%u:%g:%p:%m:%c' "${app}" 2>/dev/null) ||
+        [[ "${before}" != "${after}" || ! -d "${app}" || -L "${app}" || -L "${app%/*}" ]]; then
+        print_warning "Existing 1Password app changed during verification; leaving it untouched."
+        return 1
+    fi
+    print_debug "Verified existing 1Password app; preserving its installation and native updater."
+    return 0
+}
+
 install_core_packages() {
     print_message "Checking and installing core packages as needed..."
 
@@ -822,16 +859,17 @@ install_core_packages() {
     ensure_brew_item_trusted formula "tursodatabase/tap/turso" "tursodatabase/tap" || true
 
     local packages=("git" "curl" "jq" "fish" "tmux" "1password" "1password-cli" "gh" "chezmoi" "starship" "mise" "act" "terminal-notifier" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook" "poppler" "ffmpeg" "kubernetes-cli")
-    local to_install=()
+    local to_install=() failed=()
+    local app_status
 
     print_message "Getting list of installed packages..."
-    local installed_formulae
-    local brew_formulae_list
-    brew_formulae_list=$(brew list --formula -1 2>/dev/null)
+    local installed_formulae brew_formulae_list installed_casks brew_casks_list
+    if ! brew_formulae_list=$(brew list --formula -1 2>/dev/null) ||
+        ! brew_casks_list=$(brew list --cask -1 2>/dev/null); then
+        print_warning "Could not verify the installed Homebrew inventory; skipping core package installation."
+        return 1
+    fi
     installed_formulae=$(echo "${brew_formulae_list}" | tr '\n' ' ')
-    local installed_casks
-    local brew_casks_list
-    brew_casks_list=$(brew list --cask -1 2>/dev/null)
     installed_casks=$(echo "${brew_casks_list}" | tr '\n' ' ')
     local all_installed=" ${installed_formulae} ${installed_casks} "
 
@@ -840,25 +878,35 @@ install_core_packages() {
         if [[ "${all_installed}" =~ \ ${package}\  ]] || [[ "${all_installed}" =~ \ ${short_name}\  ]]; then
             print_debug "${package} is already installed."
         else
+            if [[ "${package}" == "1password" ]]; then
+                if verify_existing_1password_app; then
+                    continue
+                else
+                    app_status=$?
+                fi
+                if [[ "${app_status}" != 2 ]]; then
+                    failed+=("${package}")
+                    continue
+                fi
+            fi
             to_install+=("${package}")
         fi
     done
 
     if [[ "${#to_install[@]}" -gt 0 ]]; then
         print_message "Installing ${#to_install[@]} missing packages..."
-        local failed=()
         for package in "${to_install[@]}"; do
             if ! brew install "${package}" 2>&1; then
                 print_warning "Failed to install ${package}"
                 failed+=("${package}")
             fi
         done
-        if [[ "${#failed[@]}" -gt 0 ]]; then
-            print_warning "Failed packages: ${failed[*]}"
-            return 1
-        else
-            print_success "All core packages installed."
-        fi
+    fi
+    if [[ "${#failed[@]}" -gt 0 ]]; then
+        print_warning "Failed packages: ${failed[*]}"
+        return 1
+    elif [[ "${#to_install[@]}" -gt 0 ]]; then
+        print_success "All core packages installed."
     else
         print_success "All core packages are already installed."
     fi
@@ -910,22 +958,125 @@ setup_tailscale() {
     fi
 }
 
+doppler_tap_git() {
+    local tap_path=$1
+    shift
+    env -i PATH=/usr/bin:/bin HOME="${HOME}" GIT_CONFIG_NOSYSTEM=1 \
+        GIT_CONFIG_GLOBAL=/dev/null GIT_OPTIONAL_LOCKS=0 \
+        /usr/bin/git -c core.hooksPath=/dev/null -c core.fsmonitor=false -C "${tap_path}" "$@"
+}
+
+doppler_tap_snapshot() {
+    /usr/bin/python3 -I -S - "$1" <<'DOPPLER_TAP_SNAPSHOT'
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+try:
+    tap = Path(sys.argv[1])
+    entries = [*reversed(tap.parents), tap, tap / '.git']
+    result = []
+    for entry in entries:
+        value = entry.lstat()
+        mask = 0o022 if value.st_uid == 0 else 0o002
+        sticky_root = value.st_uid == 0 and value.st_mode & stat.S_ISVTX
+        if (not stat.S_ISDIR(value.st_mode) or value.st_uid not in (0, os.getuid()) or
+                value.st_mode & mask and not sticky_root):
+            raise ValueError()
+        result.append([value.st_dev, value.st_ino, value.st_uid, value.st_gid, value.st_mode])
+    for entry in (tap / '.git/config', tap / '.git/HEAD'):
+        value = entry.lstat()
+        if (not stat.S_ISREG(value.st_mode) or value.st_nlink != 1 or
+                value.st_uid not in (0, os.getuid()) or value.st_mode & 0o002):
+            raise ValueError()
+        result.append([value.st_dev, value.st_ino, value.st_uid, value.st_gid, value.st_mode,
+                       value.st_size, value.st_mtime_ns, value.st_ctime_ns])
+    for entry in (tap, tap / '.git'):
+        value = entry.lstat()
+        result.append([value.st_mtime_ns, value.st_ctime_ns])
+    print(json.dumps(result))
+except (OSError, ValueError):
+    sys.exit(1)
+DOPPLER_TAP_SNAPSHOT
+}
+
+retire_legacy_doppler_tap() {
+    local taps tap_info tap_path inventory before after status head upstream extra final_head
+    if ! taps=$(brew tap); then
+        print_warning "Could not inspect the legacy Doppler tap; no tap was removed."
+        return 1
+    fi
+    grep -Fxq 'dopplerhq/cli' <<< "${taps}" || return 0
+
+    if ! tap_info=$(HOMEBREW_NO_AUTO_UPDATE=1 brew tap-info --json=v1 dopplerhq/cli 2>/dev/null) ||
+        ! tap_path=$(printf '%s' "${tap_info}" | jq -er '
+            select(type == "array" and length == 1) | .[0] |
+            select(.name == "dopplerhq/cli" and .installed == true) |
+            select((.remote | ascii_downcase | rtrimstr(".git")) == "https://github.com/dopplerhq/homebrew-cli" or
+                   (.remote | ascii_downcase | rtrimstr(".git")) == "https://github.com/dopplerhq/homebrew-doppler") |
+            .path | select(type == "string")' 2>/dev/null); then
+        print_warning "Legacy Doppler tap identity is unverified; preserving it for manual review."
+        return 1
+    fi
+    if [[ "${tap_path}" != /*/Library/Taps/dopplerhq/homebrew-cli || "${tap_path}" == *$'\n'* ||
+        "${tap_path}" == */../* || "${tap_path}" == */./* ]]; then
+        print_warning "Legacy Doppler tap path is unsupported; preserving it for manual review."
+        return 1
+    fi
+    if ! before=$(doppler_tap_snapshot "${tap_path}" 2>/dev/null) ||
+        [[ -e "${tap_path}/.gitmodules" || -L "${tap_path}/.gitmodules" || -e "${tap_path}/.git/modules" ]]; then
+        print_warning "Legacy Doppler tap paths are unverified; preserving it for manual review."
+        return 1
+    fi
+    if ! status=$(doppler_tap_git "${tap_path}" status --porcelain --untracked-files=all --ignored 2>/dev/null) ||
+        ! head=$(doppler_tap_git "${tap_path}" rev-parse --verify HEAD 2>/dev/null) ||
+        ! upstream=$(doppler_tap_git "${tap_path}" rev-parse --verify refs/remotes/origin/HEAD 2>/dev/null) ||
+        ! extra=$(doppler_tap_git "${tap_path}" rev-list --all --not --remotes=origin 2>/dev/null) ||
+        [[ -n "${status}" || -n "${extra}" || -z "${head}" || "${head}" != "${upstream}" ]]; then
+        print_warning "Legacy Doppler tap contains local work or could not be verified; preserving it."
+        return 1
+    fi
+    if ! inventory=$(HOMEBREW_NO_AUTO_UPDATE=1 brew info --json=v2 --installed 2>/dev/null) ||
+        ! printf '%s' "${inventory}" | jq -e '
+            type == "object" and (.formulae | type == "array") and (.casks | type == "array") and
+            all(.formulae[], .casks[]; (.tap | type == "string") and .tap != "dopplerhq/cli")' >/dev/null 2>&1; then
+        print_warning "Legacy Doppler tap may still own installed packages; preserving it without uninstalling anything."
+        return 1
+    fi
+    if ! after=$(doppler_tap_snapshot "${tap_path}" 2>/dev/null) || [[ "${before}" != "${after}" ]] ||
+        ! status=$(doppler_tap_git "${tap_path}" status --porcelain --untracked-files=all --ignored 2>/dev/null) || [[ -n "${status}" ]] ||
+        ! final_head=$(doppler_tap_git "${tap_path}" rev-parse --verify HEAD 2>/dev/null) || [[ "${head}" != "${final_head}" ]] ||
+        ! extra=$(doppler_tap_git "${tap_path}" rev-list --all --not --remotes=origin 2>/dev/null) || [[ -n "${extra}" ]]; then
+        print_warning "Legacy Doppler tap changed during verification; preserving it."
+        return 1
+    fi
+    if ! (unset HOMEBREW_DEVELOPER; NONINTERACTIVE=1 brew untap dopplerhq/cli < /dev/null) ||
+        ! taps=$(brew tap) || grep -Fxq 'dopplerhq/cli' <<< "${taps}"; then
+        print_warning "Could not retire the unused legacy Doppler tap; manual review is required."
+        return 1
+    fi
+    print_debug "Retired unused legacy Doppler tap; installed tools and credentials were preserved."
+    return 0
+}
+
 install_secrets_manager() {
-    if [[ "${WORK_MACHINE:-}" != "1" ]]; then
-        if ! ensure_brew_item_trusted formula "dopplerhq/cli/doppler" "dopplerhq/cli"; then
-            print_warning "Doppler formula is not trusted; skipping Doppler CLI."
-            return
-        fi
-        if command -v doppler &>/dev/null; then
-            print_debug "Doppler CLI already installed."
-            return
-        fi
-        print_message "Installing Doppler CLI..."
-        if brew install dopplerhq/cli/doppler; then
-            print_success "Doppler CLI installed."
-        else
-            print_error "Failed to install Doppler CLI."
-        fi
+    [[ "${WORK_MACHINE:-}" != "1" ]] || return 0
+    if ! ensure_brew_item_trusted cask "dopplerhq/doppler/doppler" "dopplerhq/doppler"; then
+        print_warning "Doppler cask is not trusted; skipping Doppler CLI."
+        return 1
+    fi
+    retire_legacy_doppler_tap || return 1
+    if command -v doppler &>/dev/null; then
+        print_debug "Doppler CLI already installed."
+        return 0
+    fi
+    print_message "Installing Doppler CLI..."
+    if brew install --cask dopplerhq/doppler/doppler; then
+        print_success "Doppler CLI installed."
+    else
+        print_error "Failed to install Doppler CLI."
+        return 1
     fi
 }
 
@@ -5933,7 +6084,7 @@ BACKLOG_MCP_RETIREMENT_JS
         case "${_result}" in
             write-failed) print_error "Global Backlog MCP retirement failed during a write; review the affected global metadata before retrying." ;;
             unsafe-path|unsafe-home|unsafe-profile|unsafe-boundary|unsafe-metadata|malformed-metadata|duplicate-key|unsupported-json-number|malformed-toml|unsupported-toml|toml-parser-failed|toml-parser-unavailable|unsafe-toml-edit|metadata-changed|boundary-changed|native-wrapper-required|filesystem-error)
-                print_error "Global Backlog MCP retirement preflight failed; no changes were made." ;;
+                print_error "Global Backlog MCP retirement preflight failed (${_result}); no changes were made." ;;
             *) print_error "Global Backlog MCP retirement failed for an unknown controlled reason; review global metadata before retrying." ;;
         esac
         return 1
@@ -8977,7 +9128,6 @@ update_brew() {
 
     if [[ "${update_status}" -ne 0 ]] || [[ "${upgrade_status}" -ne 0 ]] || [[ "${unpin_status}" -ne 0 ]]; then
         print_warning "Homebrew update/upgrade incomplete (update=${update_status}, upgrade=${upgrade_status}, unpin=${unpin_status}); fix the errors above, then run: brew update && brew upgrade"
-        print_warning "For a missing Bartender app, run: brew reinstall --cask --force bartender"
         return 1
     fi
 
@@ -10000,7 +10150,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 316 | Last changed: Simplify BB plugin refresh through native CLI${NC}"
+    echo -e "${GRAY}Version 317 | Last changed: Preserve existing 1Password, migrate Doppler tap, and explain Backlog failures${NC}"
 
     if ! acquire_setup_lock; then
         return 1

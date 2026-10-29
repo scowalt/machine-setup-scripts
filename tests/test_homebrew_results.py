@@ -24,6 +24,7 @@ print_warning() { printf '%s\n' "$*"; }
 print_success() { printf '%s\n' "$*"; }
 print_debug() { printf '%s\n' "$*"; }
 ensure_brew_item_trusted() { return 0; }
+verify_existing_1password_app() { return 2; }
 brew() {
     printf '%s\n' "$*" >> "${HOME}/brew-calls"
     case "$*" in

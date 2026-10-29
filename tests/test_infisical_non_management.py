@@ -125,7 +125,7 @@ class NonManagement(unittest.TestCase):
                    'CONTAINER': container, 'MACOS_DEVELOPER_TOOLS_STATE': readiness, 'TRUST': trust}
             gated = headless == '1' and (name == 'wsl.sh' or container == '1')
             failed = (failure != 'none' or gated
-                      or (name == 'bazzite.sh' and work == '0' and trust == '0'))
+                      or (name in BREW and persona == 'primary' and work == '0' and trust == '0'))
             for repeat in range(2):
                 events.write_text('')
                 result = subprocess.run(['/bin/bash', '--noprofile', '--norc', '-c', bash_fixture(name)],
@@ -165,7 +165,8 @@ class NonManagement(unittest.TestCase):
                         with self.subTest(platform=name, persona=persona, work=work, residual=residual):
                             calls = self.run_bash(name, work, residual, persona=persona)
                             self.assertEqual('brew-update' in calls, persona == 'primary')
-                            installs = [c for c in calls if c.startswith('brew:install dopplerhq/')]
+                            install = 'brew:install --cask dopplerhq/doppler/doppler' if name == 'mac.sh' else 'brew:install dopplerhq/'
+                            installs = [c for c in calls if c.startswith(install)]
                             self.assertEqual(len(installs), int(work == '0' and persona == 'primary'))
                             if persona == 'secondary':
                                 self.assertNotIn('request:install_homebrew', calls)
