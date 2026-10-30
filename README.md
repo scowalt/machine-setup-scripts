@@ -54,4 +54,10 @@ curl -sL https://scripts.scowalt.com/setup/bazzite.sh | bash
 iwr -useb https://scripts.scowalt.com/setup/win.ps1 | iex
 ```
 
+## Pi context configuration
+
+Dotfiles own Pi's model context overrides and per-model compaction budgets as well as model selection. In particular, `openai-codex/gpt-6-astra` uses an 872,000-token window with a 128,000-token response reserve (compaction above 744,000). Setup's retired-provider cleanup and optional z.ai seeding preserve the existing `openai-codex.modelOverrides` and `compaction.modelOverrides` instead of replacing them. Custom global profiles retain their existing configuration; setup does not seed this override outside Chezmoi's managed profile.
+
+Run `bash tests/pi-model-defaults-contract.sh` to verify preservation across repeated setup helpers, personal/work settings, default/custom profiles, and optional z.ai credentials. The suite uses temporary homes and extracted helpers, not live setup. PowerShell coverage runs when `pwsh` is installed; running it on Linux does not establish native Windows ACL behavior. Dotfiles separately tests rendering, repeated applies, and Pi's native compaction threshold.
+
 For contributors: [agent guidance](CLAUDE.md) and [design decisions](docs/adr/).
