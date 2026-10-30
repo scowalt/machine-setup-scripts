@@ -14,7 +14,7 @@ foreach ($name in @('Remove-PiSyntheticModels', 'Seed-PiZaiModels', 'Get-EnvLoca
     . ([scriptblock]::Create($function.Extent.Text))
 }
 function Test-EnvLocalFlag { param($Name) [Environment]::GetEnvironmentVariable($Name) -eq '1' }
-$dotfilesSettings = '{"defaultProvider":"openai","defaultModel":"gpt-6.1-sol","defaultThinkingLevel":"xhigh","modelThinkingLevels":{"openai/gpt-6.1-sol":"max","openai-codex/gpt-6-astra":"xhigh"}}'
+$dotfilesSettings = '{"defaultProvider":"openai","defaultModel":"gpt-6.1-sol","defaultThinkingLevel":"xhigh","modelThinkingLevels":{"openai/gpt-6.1-sol":"max","openai-codex/gpt-6-astra":"xhigh"},"compaction":{"enabled":true,"modelOverrides":{"openai-codex/gpt-6-astra":{"reserveTokens":128000}}}}'
 function Get-Bytes($Path) { [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($Path)) }
 $success = 'PASS'
 $failIcon = 'FAIL'
@@ -45,12 +45,13 @@ try {
                 $authBefore = Get-Bytes $authPath
                 Set-Content $settingsPath $dotfilesSettings
                 $settingsBefore = Get-Bytes $settingsPath
-                Set-Content $modelsPath '{"providers":{"synthetic":{"apiKey":"fixture-retired"},"zai":{"apiKey":"fixture-existing"},"custom":{"models":[{"id":"keep"}]}},"keep":true}'
+                Set-Content $modelsPath '{"providers":{"synthetic":{"apiKey":"fixture-retired"},"zai":{"apiKey":"fixture-existing"},"custom":{"models":[{"id":"keep"}]},"openai-codex":{"modelOverrides":{"gpt-6-astra":{"contextWindow":872000}}}},"keep":true}'
                 foreach ($iteration in 1..2) {
                     if (-not (Remove-PiSyntheticModels)) { throw 'Provider removal failed.' }
                     $models = Get-Content -Raw $modelsPath | ConvertFrom-Json
                     if ($models.providers.PSObject.Properties['synthetic'] -or
                         $models.providers.zai.apiKey -ne 'fixture-existing' -or
+                        $models.providers.'openai-codex'.modelOverrides.'gpt-6-astra'.contextWindow -ne 872000 -or
                         $models.providers.custom.models[0].id -ne 'keep' -or -not $models.keep) { throw 'Wrong provider cleanup.' }
                     $before = Get-Bytes $modelsPath
                     if (-not (Remove-PiSyntheticModels)) { throw 'Repeat provider removal failed.' }
@@ -63,10 +64,11 @@ try {
                     throw 'Local credentials changed.'
                 }
                 if ($key) {
-                    Set-Content $modelsPath '{"providers":{"custom":{"models":[{"id":"keep"}]}}}'
+                    Set-Content $modelsPath '{"providers":{"custom":{"models":[{"id":"keep"}]},"openai-codex":{"modelOverrides":{"gpt-6-astra":{"contextWindow":872000}}}}}'
                     if (-not (Seed-PiZaiModels)) { throw 'Optional z.ai seeding failed.' }
                     $models = Get-Content -Raw $modelsPath | ConvertFrom-Json
                     if ($models.providers.zai.apiKey -ne $key -or $models.providers.zai.models.Count -ne 3 -or
+                        $models.providers.'openai-codex'.modelOverrides.'gpt-6-astra'.contextWindow -ne 872000 -or
                         $models.providers.custom.models[0].id -ne 'keep') { throw 'Wrong z.ai seeding.' }
                 }
             }

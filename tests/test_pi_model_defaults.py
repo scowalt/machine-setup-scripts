@@ -14,7 +14,12 @@ DOTFILES_SETTINGS = {
     "defaultThinkingLevel": "xhigh",
     "enabledModels": ["openai/gpt-6.1-sol", "openai-codex/gpt-6.1-sol", "openai-codex/gpt-6-astra"],
     "modelThinkingLevels": {"openai/gpt-6.1-sol": "max", "openai-codex/gpt-6-astra": "xhigh"},
+    "compaction": {"enabled": True, "modelOverrides": {
+        "openai-codex/gpt-6-astra": {"reserveTokens": 128000},
+        "kourier/deepseek-v4.1-flash": {"reserveTokens": 65536},
+    }},
 }
+ASTRA_PROVIDER = {"modelOverrides": {"gpt-6-astra": {"contextWindow": 872000}}}
 
 
 def write_json(path, value):
@@ -75,7 +80,10 @@ class ModelDefaultsTests(unittest.TestCase):
                             initial_env = env_file.read_bytes()
                             settings = agent / "settings.json"
                             write_json(settings, DOTFILES_SETTINGS)
-                            write_json(agent / "models.json", {"providers": {"synthetic": {"apiKey": "fixture-retired"}}})
+                            write_json(agent / "models.json", {"providers": {
+                                "synthetic": {"apiKey": "fixture-retired"},
+                                "openai-codex": ASTRA_PROVIDER,
+                            }})
                             write_json(agent / "auth.json", {"openai-codex": {"type": "oauth", "fixture": True}})
                             settings_before = settings.read_bytes()
                             auth_before = (agent / "auth.json").read_bytes()
@@ -85,6 +93,8 @@ class ModelDefaultsTests(unittest.TestCase):
                                     result = self.run_function(script, home, agent if custom else None, name, work)
                                     self.assertEqual(result.returncode, status, result.stderr)
                                 self.assertEqual(settings.read_bytes(), settings_before)
+                                self.assertEqual(json.loads((agent / "models.json").read_text())['providers']['openai-codex'],
+                                                 ASTRA_PROVIDER)
                             self.assertEqual(env_file.read_bytes(), initial_env)
                             self.assertEqual((agent / "auth.json").read_bytes(), auth_before)
 
@@ -99,6 +109,7 @@ class ModelDefaultsTests(unittest.TestCase):
                     self.assertEqual(self.run_function(script, home, argument, "remove_pi_synthetic_models").returncode, 0)
                     self.assertFalse(models.exists())
                     initial = {"keep": [1, 2], "providers": {
+                        "openai-codex": ASTRA_PROVIDER,
                         "synthetic": {"apiKey": "fixture-retired", "models": [{"id": "hf:moonshotai/Kimi-K3"}]},
                         "custom": {"apiKey": "fixture-custom", "models": [{"id": "other"}]}}}
                     write_json(models, initial)
@@ -123,6 +134,7 @@ class ModelDefaultsTests(unittest.TestCase):
                         providers = json.loads(models.read_text())["providers"]
                         self.assertNotIn("synthetic", providers)
                         self.assertEqual(providers["custom"], initial["providers"]["custom"])
+                        self.assertEqual(providers["openai-codex"], ASTRA_PROVIDER)
                         self.assertEqual(providers["zai"]["apiKey"], "fixture-zai")
                         self.assertEqual([m["id"] for m in providers["zai"]["models"]], ["glm-5.3", "glm-5-turbo", "glm-4.7"])
                     self.assertEqual(env_file.read_bytes(), env_before)
