@@ -96,6 +96,7 @@ class Fixture:
         self.http_status = 200
         self.inventory_error = None
         self.native_inventory = False
+        self.native_platform = 'linux'
         self.process_root = self.root / 'proc'
         self.closed = 0
 
@@ -134,8 +135,17 @@ class Fixture:
 
     def execute(self, args, **kwargs):
         if args[0] == '/bin/ps':
-            assert self.native_inventory and args == ['/bin/ps', '-U', str(os.getuid()), '-o', 'pid=']
-            return types.SimpleNamespace(stdout='101\n102\n103\n')
+            assert self.native_inventory
+            assert args[:4] == ['/bin/ps', '-U', str(os.getuid()), '-o']
+            assert args[4] in ('pid=', 'pid=,args=')
+            assert args[5:] == (['-ww'] if args[4] == 'pid=,args=' else [])
+            text = '101\n102\n103\n'
+            if args[4] == 'pid=,args=':
+                assert self.native_platform == 'darwin'
+                text = ('101 /System/Library/protected-helper\n'
+                        f'102 {self.node} --use-system-ca {self.entry}\n'
+                        '103 /other/node /other/host-daemon/dist/daemon-bundle.mjs\n')
+            return types.SimpleNamespace(stdout=text)
         assert args[:2] == [str(self.node), str(self.cli)]
         assert args[2:] == ['plugin', 'update', '--all', '--yes']
         assert kwargs['stdin'] == kwargs['stdout'] == kwargs['stderr'] == subprocess.DEVNULL
@@ -160,7 +170,7 @@ class Fixture:
             stack.enter_context(patch.object(P.http.client, 'HTTPConnection', side_effect=self.connection))
             stack.enter_context(patch.object(P.os, 'kill', side_effect=AssertionError('process mutation forbidden')))
             if self.native_inventory:
-                stack.enter_context(patch.object(P.sys, 'platform', 'linux'))
+                stack.enter_context(patch.object(P.sys, 'platform', self.native_platform))
                 stack.enter_context(patch.object(P, 'Path', side_effect=lambda value: self.process_root if value == '/proc' else Path(value)))
             else:
                 stack.enter_context(patch.object(P, 'processes', side_effect=self.inventory_error or (lambda: iter(self.records))))
@@ -235,6 +245,33 @@ class Refresh(unittest.TestCase):
                 P.process_record(101)
             with patch.object(P.ctypes, 'get_errno', return_value=13), self.assertRaises(PermissionError):
                 P.process_record(101)
+
+    def test_darwin_does_not_read_protected_unrelated_process_arguments(self):
+        self.f.native_inventory = True
+        self.f.native_platform = 'darwin'
+        self.f.server()
+        inspected = []
+
+        def record(pid):
+            inspected.append(pid)
+            if pid != 102:
+                raise PermissionError(1, 'secret-sentinel')
+            return self.f.records[0]
+
+        with patch.object(P, 'process_record', side_effect=record):
+            self.assertEqual(self.f.run(), (0, 'BB_PLUGIN_REFRESH completed\n'))
+        self.assertEqual(inspected, [102])
+        self.assertEqual(len(self.f.commands), 1)
+
+    def test_darwin_candidate_inspection_failure_remains_nonzero_and_controlled(self):
+        self.f.native_inventory = True
+        self.f.native_platform = 'darwin'
+        self.f.server()
+        for error, reason in ((PermissionError(1, 'secret-sentinel'), 'native-permission-denied'),
+                              (OSError(5, 'secret-sentinel'), 'native-system-error')):
+            with self.subTest(reason=reason), patch.object(P, 'process_record', side_effect=error):
+                self.assertEqual(self.f.run(), (1, f'BB_PLUGIN_REFRESH failed discovery {reason}\n'))
+        self.assertFalse(self.f.commands or self.f.requests)
 
     def test_absent_prepared_enrolled_and_unrelated_servers_do_not_update(self):
         data = self.f.home / '.bb'
@@ -547,7 +584,9 @@ upload_log() { cp -- "$SETUP_LOG_FILE" "$HOME/completed-upload.log"; }
                    'BB_PLUGIN_REFRESH failed readiness server-not-ready\nsecret-sentinel',
                    'BB_PLUGIN_REFRESH completed\n' * 700)
         cases = [(text, 0, 1) for text in refused]
-        cases += [('BB_PLUGIN_REFRESH completed', 1, 1), ('BB_PLUGIN_REFRESH completed', 0, 0),
+        cases += [('BB_PLUGIN_REFRESH failed discovery native-permission-denied', 1, 1),
+                  ('BB_PLUGIN_REFRESH failed discovery native-system-error', 1, 1),
+                  ('BB_PLUGIN_REFRESH completed', 1, 1), ('BB_PLUGIN_REFRESH completed', 0, 0),
                   ('BB_PLUGIN_REFRESH failed', 0, 1), ('BB_PLUGIN_REFRESH safe-mode', 0, 0),
                   ('BB_PLUGIN_REFRESH failed update operation-timeout', 0, 1)]
         for text, status, expected in cases:

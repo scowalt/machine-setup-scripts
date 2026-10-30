@@ -27,7 +27,7 @@ refresh_bb_plugins() {
                 _bb_refresh_operation=${BASH_REMATCH[1]}
                 _bb_refresh_reason=${BASH_REMATCH[2]}
                 case "${_bb_refresh_reason}" in
-                    invalid-policy|invalid-port|malformed-result|native-command-failed|native-request-failed|operation-timeout|server-move-in-progress|server-not-ready|unsupported-platform|unknown-failure) ;;
+                    invalid-policy|invalid-port|malformed-result|native-command-failed|native-request-failed|native-permission-denied|native-system-error|operation-timeout|server-move-in-progress|server-not-ready|unsupported-platform|unknown-failure) ;;
                     *) print_error 'BB plugin refresh failed: helper-result / unverified-result.'; return 1 ;;
                 esac
                 print_error "BB plugin refresh failed: ${_bb_refresh_operation} / ${_bb_refresh_reason}."
