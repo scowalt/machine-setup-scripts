@@ -57,7 +57,18 @@ fixture_codesign() {
     printf '%s\n' "$*" >> "${HOME}/probes"
     [[ "${RACE}" != 1 ]] || : > "${HOME}/raced"
     [[ "${SIGNATURE}" == 0 ]] || return "${SIGNATURE}"
-    if [[ "$*" == *--test-requirement* ]]; then return "${IDENTITY}"; fi
+    while [[ "$#" -gt 0 ]]; do
+        if [[ "$1" == --test-requirement ]]; then
+            shift
+            if [[ "${1:-}" != =* ]]; then
+                printf 'requirement-file\n' >> "${HOME}/probes"
+                return 2
+            fi
+            printf 'inline-requirement=%s\n' "${1#=}" >> "${HOME}/probes"
+            return "${IDENTITY}"
+        fi
+        shift
+    done
     return 0
 }
 brew() {
@@ -101,6 +112,18 @@ install_core_packages
                                 'com.1password.1password', '2BUA8C4S2C'):
                 self.assertIn(requirement, probes)
             self.assertIn('preserv', result.stdout.lower())
+
+    def test_identity_requirement_is_inline_source_not_a_filename(self):
+        requirement = ('anchor apple generic and identifier "com.1password.1password" '
+                       'and certificate leaf[subject.OU] = "2BUA8C4S2C"')
+        for identity in (0, 1):
+            with self.subTest(identity=identity):
+                result, calls, probes = self.core(identity=identity)
+                self.assertEqual(result.returncode, identity, result.stdout)
+                self.assertIn('inline-requirement=' + requirement + '\n', probes)
+                self.assertNotIn('requirement-file\n', probes)
+                self.assertNotIn('install 1password\n', calls)
+                self.assertEqual('identity-check-failed' in result.stdout, bool(identity))
 
     def test_absent_app_and_brew_registered_app_keep_native_behavior(self):
         for options, install in (({'app': 'absent'}, True), ({'receipt': True}, False)):
