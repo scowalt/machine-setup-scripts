@@ -5851,7 +5851,7 @@ if candidate != expected:
 print(json.dumps({'status':'removed','output':output}))
 `;
 function transformTomlNative(text) {
-    // Windows uses the built-in parser in Bun, already provisioned by WinGet.
+    // Use Bun's built-in parser on Windows and as the Unix Python fallback.
     const parse = value => { try { return Bun.TOML.parse(value); } catch { fail('malformed-toml'); } };
     const data = parse(text), servers = data.mcp_servers;
     if (servers === undefined) return {status: 'absent'};
@@ -5946,15 +5946,40 @@ function pythonForToml() {
         });
         if (!probe.error && probe.status === 0 && probe.stdout.trim() === 'ready' && !probe.stderr) { tomlInterpreter = resolved; return resolved; }
     }
+    return null;
+}
+function bunTomlResult(text) {
+    const home = absolute(process.argv[2]);
+    const allowed = ['/opt/homebrew/', '/usr/local/', path.join(home, '.bun') + '/'];
+    for (const candidate of [path.join(home, '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']) {
+        if (!info(candidate)) continue;
+        safeBoundary(path.dirname(candidate), true);
+        const resolved = fs.realpathSync(candidate), target = info(resolved);
+        if (!target?.isFile() || ![0, process.getuid()].includes(target.uid) || target.mode & 0o002) fail('toml-parser-unavailable');
+        safeBoundary(path.dirname(resolved), true);
+        if (target.uid !== 0 && !allowed.some(prefix => resolved.startsWith(prefix))) fail('toml-parser-unavailable');
+        // Reuse the Windows native planner, not a second TOML implementation.
+        // Input stays on stdin; no project startup files or inherited preload controls.
+        const program = `const object = ${object.toString()};
+const fail = reason => { throw new Error(reason); };
+${backlog.toString()}
+${transformTomlNative.toString()}
+try { console.log(JSON.stringify(transformTomlNative(require('node:fs').readFileSync(0, 'utf8')))); }
+catch (error) { console.log(JSON.stringify({error: ['malformed-toml', 'unsupported-toml', 'unsafe-toml-edit'].includes(error.message) ? error.message : 'toml-parser-failed'})); }`;
+        return spawnSync(resolved, ['--no-env-file', '--no-install', '--config=/dev/null', '--eval', program], {
+            input: text, encoding: 'utf8', maxBuffer: 3 * 1024 * 1024, timeout: 10000,
+            cwd: '/', env: {PATH: '/usr/bin:/bin', HOME: '/', XDG_CONFIG_HOME: '/', LANG: 'C', LC_ALL: 'C', DO_NOT_TRACK: '1', BUN_TELEMETRY_DISABLE: '1'}
+        });
+    }
     fail('toml-parser-unavailable');
 }
 function transformToml(text) {
     if (typeof Bun !== 'undefined') return transformTomlNative(text);
     const command = pythonForToml();
-    const result = spawnSync(command, ['-I', '-S', '-B', '-c', tomlProgram], {
+    const result = command ? spawnSync(command, ['-I', '-S', '-B', '-c', tomlProgram], {
         input: text, encoding: 'utf8', maxBuffer: 3 * 1024 * 1024, timeout: 10000, windowsHide: true,
         cwd: '/', env: {PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', PYTHONHASHSEED: '0'}
-    });
+    }) : bunTomlResult(text);
     if (result.error || result.status !== 0 || result.stderr || !result.stdout) fail('toml-parser-failed');
     let report; try { report = JSON.parse(result.stdout); } catch { fail('toml-parser-failed'); }
     if (report.error) fail(report.error);
@@ -9232,7 +9257,7 @@ refresh_bb_plugins() {
                 _bb_refresh_operation=${BASH_REMATCH[1]}
                 _bb_refresh_reason=${BASH_REMATCH[2]}
                 case "${_bb_refresh_reason}" in
-                    invalid-policy|invalid-port|malformed-result|native-command-failed|native-request-failed|operation-timeout|server-move-in-progress|server-not-ready|unsupported-platform|unknown-failure) ;;
+                    invalid-policy|invalid-port|malformed-result|native-command-failed|native-request-failed|native-permission-denied|native-system-error|operation-timeout|server-move-in-progress|server-not-ready|unsupported-platform|unknown-failure) ;;
                     *) print_error 'BB plugin refresh failed: helper-result / unverified-result.'; return 1 ;;
                 esac
                 print_error "BB plugin refresh failed: ${_bb_refresh_operation} / ${_bb_refresh_reason}."
@@ -9309,12 +9334,20 @@ def process_record(pid):
 
 def processes():
     need(sys.platform in ('linux', 'darwin'), 'unsupported-platform')
-    result = subprocess.run(['/bin/ps', '-U', str(os.getuid()), '-o', 'pid='],
-                            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+    darwin = sys.platform == 'darwin'
+    command = ['/bin/ps', '-U', str(os.getuid()), '-o', 'pid=,args=' if darwin else 'pid=']
+    if darwin:
+        command.append('-ww')
+    result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                             timeout=10, check=True)
-    for value in result.stdout.split():
+    for line in result.stdout.splitlines():
+        fields = line.split(maxsplit=1)
+        if not fields:
+            continue
+        if darwin and (len(fields) < 2 or '/server/dist/index.js' not in fields[1]):
+            continue
         try:
-            yield process_record(int(value))
+            yield process_record(int(fields[0]))
         except (FileNotFoundError, ProcessLookupError):
             continue
 
@@ -9388,6 +9421,10 @@ def report(operation, error):
         reason = 'native-command-failed'
     elif isinstance(error, (ConnectionError, http.client.HTTPException)):
         reason = 'native-request-failed'
+    elif isinstance(error, PermissionError):
+        reason = 'native-permission-denied'
+    elif isinstance(error, OSError):
+        reason = 'native-system-error'
     elif isinstance(error, (ValueError, UnicodeError)):
         reason = 'malformed-result'
     elif type(error) is Refusal:
@@ -9983,7 +10020,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 288 | Last changed: Explain controlled Backlog retirement failures"
+    echo -e "${GRAY}Version 289 | Last changed: Repair TOML fallback and macOS discovery diagnostics"
 
     if ! acquire_setup_lock; then
         return 1

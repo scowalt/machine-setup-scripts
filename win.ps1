@@ -5673,7 +5673,7 @@ if candidate != expected:
 print(json.dumps({'status':'removed','output':output}))
 `;
 function transformTomlNative(text) {
-    // Windows uses the built-in parser in Bun, already provisioned by WinGet.
+    // Use Bun's built-in parser on Windows and as the Unix Python fallback.
     const parse = value => { try { return Bun.TOML.parse(value); } catch { fail('malformed-toml'); } };
     const data = parse(text), servers = data.mcp_servers;
     if (servers === undefined) return {status: 'absent'};
@@ -5768,15 +5768,40 @@ function pythonForToml() {
         });
         if (!probe.error && probe.status === 0 && probe.stdout.trim() === 'ready' && !probe.stderr) { tomlInterpreter = resolved; return resolved; }
     }
+    return null;
+}
+function bunTomlResult(text) {
+    const home = absolute(process.argv[2]);
+    const allowed = ['/opt/homebrew/', '/usr/local/', path.join(home, '.bun') + '/'];
+    for (const candidate of [path.join(home, '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']) {
+        if (!info(candidate)) continue;
+        safeBoundary(path.dirname(candidate), true);
+        const resolved = fs.realpathSync(candidate), target = info(resolved);
+        if (!target?.isFile() || ![0, process.getuid()].includes(target.uid) || target.mode & 0o002) fail('toml-parser-unavailable');
+        safeBoundary(path.dirname(resolved), true);
+        if (target.uid !== 0 && !allowed.some(prefix => resolved.startsWith(prefix))) fail('toml-parser-unavailable');
+        // Reuse the Windows native planner, not a second TOML implementation.
+        // Input stays on stdin; no project startup files or inherited preload controls.
+        const program = `const object = ${object.toString()};
+const fail = reason => { throw new Error(reason); };
+${backlog.toString()}
+${transformTomlNative.toString()}
+try { console.log(JSON.stringify(transformTomlNative(require('node:fs').readFileSync(0, 'utf8')))); }
+catch (error) { console.log(JSON.stringify({error: ['malformed-toml', 'unsupported-toml', 'unsafe-toml-edit'].includes(error.message) ? error.message : 'toml-parser-failed'})); }`;
+        return spawnSync(resolved, ['--no-env-file', '--no-install', '--config=/dev/null', '--eval', program], {
+            input: text, encoding: 'utf8', maxBuffer: 3 * 1024 * 1024, timeout: 10000,
+            cwd: '/', env: {PATH: '/usr/bin:/bin', HOME: '/', XDG_CONFIG_HOME: '/', LANG: 'C', LC_ALL: 'C', DO_NOT_TRACK: '1', BUN_TELEMETRY_DISABLE: '1'}
+        });
+    }
     fail('toml-parser-unavailable');
 }
 function transformToml(text) {
     if (typeof Bun !== 'undefined') return transformTomlNative(text);
     const command = pythonForToml();
-    const result = spawnSync(command, ['-I', '-S', '-B', '-c', tomlProgram], {
+    const result = command ? spawnSync(command, ['-I', '-S', '-B', '-c', tomlProgram], {
         input: text, encoding: 'utf8', maxBuffer: 3 * 1024 * 1024, timeout: 10000, windowsHide: true,
         cwd: '/', env: {PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', PYTHONHASHSEED: '0'}
-    });
+    }) : bunTomlResult(text);
     if (result.error || result.status !== 0 || result.stderr || !result.stdout) fail('toml-parser-failed');
     let report; try { report = JSON.parse(result.stdout); } catch { fail('toml-parser-failed'); }
     if (report.error) fail(report.error);
@@ -9295,7 +9320,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 206 | Last changed: Explain controlled Backlog retirement failures"
+    Write-Host "Version 207 | Last changed: Reuse native Bun when TOML Python is unavailable"
 
     Assert-HeadlessUnsupported
 

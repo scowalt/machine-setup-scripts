@@ -53,12 +53,20 @@ def process_record(pid):
 
 def processes():
     need(sys.platform in ('linux', 'darwin'), 'unsupported-platform')
-    result = subprocess.run(['/bin/ps', '-U', str(os.getuid()), '-o', 'pid='],
-                            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+    darwin = sys.platform == 'darwin'
+    command = ['/bin/ps', '-U', str(os.getuid()), '-o', 'pid=,args=' if darwin else 'pid=']
+    if darwin:
+        command.append('-ww')
+    result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                             timeout=10, check=True)
-    for value in result.stdout.split():
+    for line in result.stdout.splitlines():
+        fields = line.split(maxsplit=1)
+        if not fields:
+            continue
+        if darwin and (len(fields) < 2 or '/server/dist/index.js' not in fields[1]):
+            continue
         try:
-            yield process_record(int(value))
+            yield process_record(int(fields[0]))
         except (FileNotFoundError, ProcessLookupError):
             continue
 
@@ -132,6 +140,10 @@ def report(operation, error):
         reason = 'native-command-failed'
     elif isinstance(error, (ConnectionError, http.client.HTTPException)):
         reason = 'native-request-failed'
+    elif isinstance(error, PermissionError):
+        reason = 'native-permission-denied'
+    elif isinstance(error, OSError):
+        reason = 'native-system-error'
     elif isinstance(error, (ValueError, UnicodeError)):
         reason = 'malformed-result'
     elif type(error) is Refusal:

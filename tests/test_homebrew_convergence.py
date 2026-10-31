@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 
-from extract_setup_fixture import validate_function
+from extract_setup_fixture import definitions, validate_function
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / 'mac.sh').read_text()
@@ -27,7 +27,8 @@ LOGGERS = '\n'.join(f'{name}() {{ printf "%s\\n" "$*"; }}' for name in
 
 
 class HomebrewConvergence(unittest.TestCase):
-    def core(self, app='valid', receipt=False, signature=0, race=False, inventory_failure=False, missing_other=False):
+    def core(self, app='valid', receipt=False, signature=0, race=False, inventory_failure=False, missing_other=False,
+             identity=0, stat_failure=False):
         with tempfile.TemporaryDirectory() as raw:
             home = Path(raw)
             bundle = home / 'Applications/1Password.app'
@@ -49,12 +50,15 @@ class HomebrewConvergence(unittest.TestCase):
 ensure_brew_item_trusted() { return 0; }
 fixture_stat() {
     printf 'stat\n' >> "${HOME}/probes"
+    [[ "${STAT_FAILURE}" != 1 ]] || return 1
     if [[ -f "${HOME}/raced" ]]; then printf 'changed\n'; else printf 'stable\n'; fi
 }
 fixture_codesign() {
     printf '%s\n' "$*" >> "${HOME}/probes"
     [[ "${RACE}" != 1 ]] || : > "${HOME}/raced"
-    return "${SIGNATURE}"
+    [[ "${SIGNATURE}" == 0 ]] || return "${SIGNATURE}"
+    if [[ "$*" == *--test-requirement* ]]; then return "${IDENTITY}"; fi
+    return 0
 }
 brew() {
     printf '%s\n' "$*" >> "${HOME}/calls"
@@ -77,6 +81,7 @@ install_core_packages
             result = subprocess.run(['/bin/bash', '-u', '-c', code], text=True, capture_output=True,
                                     env={'PATH': '/usr/bin:/bin', 'HOME': raw, 'INSTALLED': '\n'.join(installed),
                                          'SIGNATURE': str(signature), 'RACE': str(int(race)),
+                                         'IDENTITY': str(identity), 'STAT_FAILURE': str(int(stat_failure)),
                                          'RECEIPT': str(int(receipt)), 'INVENTORY_FAILURE': str(int(inventory_failure))}, timeout=10)
             calls = (home / 'calls').read_text()
             probes = (home / 'probes').read_text() if (home / 'probes').exists() else ''
@@ -118,10 +123,54 @@ install_core_packages
         self.assertIn('install gh\n', calls)
         self.assertNotIn('install 1password\n', calls)
 
+    def test_app_verification_reports_controlled_operation_without_native_output(self):
+        for options, reason in (({'stat_failure': True}, 'metadata-read-failed'),
+                                ({'signature': 1}, 'signature-check-failed'),
+                                ({'identity': 1}, 'identity-check-failed')):
+            with self.subTest(reason=reason):
+                result, calls, _ = self.core(**options)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(reason, result.stdout)
+                self.assertNotIn('install 1password\n', calls)
+
     def test_failed_inventory_is_not_treated_as_absence(self):
         result, calls, _ = self.core(app='absent', inventory_failure=True)
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertNotIn('install ', calls)
+
+    def test_mac_caller_provisions_parser_before_retirement_and_preserves_failure(self):
+        selected = definitions(SOURCE)
+        names = set(re.findall(r'^(\w+)\(\)', selected, re.M))
+        real = {'run_setup_tasks', 'main'}
+        code = '\n'.join(f'{name}() {{ :; }}' for name in names - real)
+        for name in real:
+            code += '\n' + re.search(rf'^{name}\(\) \{{\n.*?^\}}', selected, re.M | re.S)[0]
+        code += '\n' + LOGGERS + r'''
+BUN_READY=0
+whoami() { printf 'fixture\n'; }
+is_main_user() { return 0; }
+check_dotfiles_access() { return 1; }
+setup_dotfiles_deploy_key() { return 1; }
+install_bun() { echo bun-provisioned; BUN_READY=1; return "${BUN_STATUS}"; }
+retire_global_backlog_mcp() { echo retirement; [[ "${BUN_READY}" == 1 ]]; }
+install_codex_cli() { echo independent; }
+check_pending_reboot() { echo reboot; }
+finish_setup_log() { echo "final:$1"; return "$1"; }
+'''
+        for name in ('curl', 'brew', 'sudo', 'npm', 'bun', 'bb', 'pi', 'chezmoi', 'tmux'):
+            code += f'\n{name}() {{ echo FORBIDDEN:{name}; return 99; }}'
+        code += '\nmain\n'
+        with tempfile.TemporaryDirectory() as home:
+            for status in (0, 1):
+                result = subprocess.run(['/bin/bash', '-c', code], text=True, capture_output=True, timeout=10,
+                                        env={'HOME': home, 'PATH': '/usr/bin:/bin', 'BUN_STATUS': str(status)})
+                self.assertEqual(result.returncode, status, result.stdout + result.stderr)
+                self.assertLess(result.stdout.index('bun-provisioned'), result.stdout.index('retirement'))
+                self.assertEqual(result.stdout.count('bun-provisioned'), 1)
+                self.assertIn('independent', result.stdout)
+                self.assertIn('reboot', result.stdout)
+                self.assertIn(f'final:{status}', result.stdout)
+                self.assertNotIn('FORBIDDEN:', result.stdout + result.stderr)
 
     def doppler(self, legacy=False, dirty=False, referenced=False, remote='official', failure='', installed=True, work=False, native_git=False, state=''):
         with tempfile.TemporaryDirectory() as raw:
