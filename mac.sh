@@ -845,7 +845,7 @@ verify_existing_1password_app() {
         return 1
     fi
     if ! /usr/bin/codesign --verify --deep --strict --test-requirement \
-        'anchor apple generic and identifier "com.1password.1password" and certificate leaf[subject.OU] = "2BUA8C4S2C"' \
+        '=anchor apple generic and identifier "com.1password.1password" and certificate leaf[subject.OU] = "2BUA8C4S2C"' \
         "${app}" >/dev/null 2>&1; then
         print_warning "Existing 1Password app could not be verified (identity-check-failed); leaving it untouched."
         return 1
@@ -10194,7 +10194,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 318 | Last changed: Repair TOML fallback and macOS discovery diagnostics${NC}"
+    echo -e "${GRAY}Version 319 | Last changed: Fix inline 1Password identity verification${NC}"
 
     if ! acquire_setup_lock; then
         return 1
