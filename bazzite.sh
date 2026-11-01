@@ -2056,6 +2056,7 @@ install_codex_cli() {
     local curl_bin=""
     local installer=""
     local installer_home=""
+    local installer_line=""
     local install_status=0
     local native_path="${HOME}/.local/bin/codex"
     local resolved_codex=""
@@ -2093,13 +2094,25 @@ install_codex_cli() {
     fi
 
     chmod 700 "${installer}"
+    if ! (umask 077; : > "${installer_home}/stderr"); then
+        rm -rf -- "${installer_home}"
+        print_error "Failed to prepare Codex installer diagnostics."
+        return 1
+    fi
     if claude_code_run_safely /usr/bin/env CODEX_NON_INTERACTIVE=1 \
         HOME="${installer_home}" CODEX_INSTALL_DIR="${HOME}/.local/bin" \
-        CODEX_HOME="${CODEX_HOME:-${HOME}/.codex}" /bin/sh "${installer}"; then
+        CODEX_HOME="${CODEX_HOME:-${HOME}/.codex}" /bin/sh "${installer}" 2> "${installer_home}/stderr"; then
         install_status=0
     else
         install_status=$?
     fi
+    while IFS= read -r installer_line || [[ -n "${installer_line}" ]]; do
+        if [[ "${install_status}" -eq 0 && "${installer_line}" == "WARNING: Could not safely inspect old Codex releases; skipped remaining cleanup." ]]; then
+            print_debug "Codex deferred optional old-release cleanup; remaining releases were retained."
+        else
+            printf '%s\n' "${installer_line}" >&2
+        fi
+    done < "${installer_home}/stderr"
     rm -rf -- "${installer_home}"
     if [[ "${install_status}" -ne 0 ]]; then
         print_error "Codex installer failed with exit code ${install_status}."
@@ -9531,7 +9544,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 193 | Last changed: Repair TOML fallback and macOS discovery diagnostics"
+    echo -e "${GRAY}Version 194 | Last changed: Report optional Codex cleanup as a deferral"
 
     if ! acquire_setup_lock; then
         return 1
