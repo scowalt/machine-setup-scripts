@@ -4167,7 +4167,8 @@ function installedPackages(home) {
     if (matches.length !== 1 || matches[0] !== model ||
         ((typed || Object.hasOwn(model, 'type')) && model.type !== 'chat') || model.provider !== 'opencode-go' ||
         model.api !== 'openai-responses' ||
-        !['https://opencode.ai/zen/go/v1', 'https://opencode.ai/inference/go/v1'].includes(model.baseUrl) ||
+        !['https://opencode.ai/zen/go/v1', 'https://opencode.ai/inference/go/v1',
+            'https://opencode.ai/inference/go/openai/v1'].includes(model.baseUrl) ||
         model.reasoning !== true || model.thinkingLevelMap?.xhigh !== 'xhigh') fail('catalog-incompatible');
     return {request, dependency, prefix};
 }
@@ -9520,7 +9521,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 273 | Last changed: Report optional Codex cleanup as a deferral${NC}"
+    echo -e "${GRAY}Version 274 | Last changed: Accept Pi 1.5 Go catalog endpoint${NC}"
 
     if ! acquire_setup_lock; then
         return 1
