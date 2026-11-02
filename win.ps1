@@ -4568,7 +4568,8 @@ function installedPackages(home) {
     if (matches.length !== 1 || matches[0] !== model ||
         ((typed || Object.hasOwn(model, 'type')) && model.type !== 'chat') || model.provider !== 'opencode-go' ||
         model.api !== 'openai-responses' ||
-        !['https://opencode.ai/zen/go/v1', 'https://opencode.ai/inference/go/v1'].includes(model.baseUrl) ||
+        !['https://opencode.ai/zen/go/v1', 'https://opencode.ai/inference/go/v1',
+            'https://opencode.ai/inference/go/openai/v1'].includes(model.baseUrl) ||
         model.reasoning !== true || model.thinkingLevelMap?.xhigh !== 'xhigh') fail('catalog-incompatible');
     return {request, dependency, prefix};
 }
@@ -9320,7 +9321,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 207 | Last changed: Reuse native Bun when TOML Python is unavailable"
+    Write-Host "Version 208 | Last changed: Accept Pi 1.5 Go catalog endpoint"
 
     Assert-HeadlessUnsupported
 

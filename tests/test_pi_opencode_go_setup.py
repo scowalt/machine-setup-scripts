@@ -18,7 +18,8 @@ KEY = "fixture-go-key-not-a-real-credential"
 BEGIN = "// BEGIN PI_OPENCODE_GO_SETUP"
 END = "// END PI_OPENCODE_GO_SETUP"
 TYPED_CATALOG = json.loads((ROOT / 'tests/fixtures/pi-ai-0.99.2-muse.json').read_text())['catalog']
-CURRENT_CATALOG = json.loads((ROOT / 'tests/fixtures/pi-ai-1.3.0-muse.json').read_text())['catalog']
+LEGACY_INFERENCE_CATALOG = json.loads((ROOT / 'tests/fixtures/pi-ai-1.3.0-muse.json').read_text())['catalog']
+CURRENT_CATALOG = json.loads((ROOT / 'tests/fixtures/pi-ai-1.5.0-muse.json').read_text())['catalog']
 
 
 def embedded(script):
@@ -259,27 +260,39 @@ class GoSetupTests(unittest.TestCase):
         self.put(self.catalog, {'openai-responses': {MODEL: {**self.model, 'type': 'chat'}}})
         self.assertEqual(self.run_helper().returncode, 0)
 
-    def test_current_inference_catalog_succeeds_through_every_wrapper(self):
-        self.put(self.catalog, CURRENT_CATALOG)
-        self.put(self.package / 'package.json', {'name': '@earendil-works/pi-coding-agent', 'version': '1.3.0'})
-        self.put(self.catalog.parents[3] / 'package.json', {'name': '@earendil-works/pi-ai', 'version': '1.3.0'})
+    def test_inference_catalogs_succeed_through_every_wrapper(self):
         self.put(self.profile / 'models.json', {'providers': {'keep': {'apiKey': 'unrelated'}}})
         models = (self.profile / 'models.json').read_bytes()
-        for script, use_wrapper in [('ubuntu.sh', False)] + [(s, True) for s in SCRIPTS if s != 'win.ps1' or PWSH]:
-            with self.subTest(script=script, wrapper=use_wrapper):
-                self.put(self.auth, {'keep': {'type': 'api_key', 'key': 'unrelated'},
-                                     'opencode': {'type': 'api_key', 'key': 'zen-untouched'}})
-                result = self.run_helper(script, use_wrapper=use_wrapper)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertEqual(json.loads(self.auth.read_text()), {
-                    'keep': {'type': 'api_key', 'key': 'unrelated'},
-                    'opencode': {'type': 'api_key', 'key': 'zen-untouched'},
-                    'opencode-go': {'type': 'api_key', 'key': KEY}})
-                before = self.auth.read_bytes(), self.auth.stat().st_mtime_ns
-                self.assertEqual(self.run_helper(script, use_wrapper=use_wrapper).returncode, 0)
-                self.assertEqual((self.auth.read_bytes(), self.auth.stat().st_mtime_ns), before)
-                self.assertEqual((self.profile / 'models.json').read_bytes(), models)
-                self.assertFalse(self.auth.with_suffix('.json.lock').exists())
+        for version, catalog in (('1.3.0', LEGACY_INFERENCE_CATALOG), ('1.5.0', CURRENT_CATALOG)):
+            self.put(self.catalog, catalog)
+            self.put(self.package / 'package.json', {'name': '@earendil-works/pi-coding-agent', 'version': version})
+            self.put(self.catalog.parents[3] / 'package.json', {'name': '@earendil-works/pi-ai', 'version': version})
+            for script, use_wrapper in [('ubuntu.sh', False)] + [(s, True) for s in SCRIPTS if s != 'win.ps1' or PWSH]:
+                with self.subTest(version=version, script=script, wrapper=use_wrapper):
+                    self.put(self.auth, {'keep': {'type': 'api_key', 'key': 'unrelated'},
+                                         'opencode': {'type': 'api_key', 'key': 'zen-untouched'}})
+                    result = self.run_helper(script, use_wrapper=use_wrapper)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(json.loads(self.auth.read_text()), {
+                        'keep': {'type': 'api_key', 'key': 'unrelated'},
+                        'opencode': {'type': 'api_key', 'key': 'zen-untouched'},
+                        'opencode-go': {'type': 'api_key', 'key': KEY}})
+                    before = self.auth.read_bytes(), self.auth.stat().st_mtime_ns
+                    self.assertEqual(self.run_helper(script, use_wrapper=use_wrapper).returncode, 0)
+                    self.assertEqual((self.auth.read_bytes(), self.auth.stat().st_mtime_ns), before)
+                    self.assertEqual((self.profile / 'models.json').read_bytes(), models)
+                    self.assertFalse(self.auth.with_suffix('.json.lock').exists())
+
+    def test_current_catalog_without_key_preserves_auth(self):
+        self.put(self.catalog, CURRENT_CATALOG)
+        self.envfile.unlink()
+        self.put(self.auth, 'existing auth must not be opened without input')
+        before = self.auth.read_bytes(), self.auth.stat().st_mtime_ns
+        result = self.run_helper('mac.sh', use_wrapper=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Pi Go authentication not supplied', result.stdout)
+        self.assertEqual((self.auth.read_bytes(), self.auth.stat().st_mtime_ns), before)
+        self.assertFalse(self.auth.with_suffix('.json.lock').exists())
 
     def test_current_catalog_rejects_paid_or_unrecognized_endpoints_without_mutation(self):
         model = CURRENT_CATALOG['openai-responses']['chat:' + MODEL]
@@ -288,7 +301,13 @@ class GoSetupTests(unittest.TestCase):
         for url in ('https://opencode.ai/inference/v1', 'https://opencode.ai/zen/v1',
                     'https://opencode.ai/inference/go/v1/', 'http://opencode.ai/inference/go/v1',
                     'https://opencode.ai/inference/go/v1?balance=1',
-                    'https://opencode.ai.example.invalid/inference/go/v1'):
+                    'https://opencode.ai.example.invalid/inference/go/v1',
+                    'https://opencode.ai/inference/openai/v1', 'https://opencode.ai/zen/openai/v1',
+                    'https://opencode.ai/inference/go/openai/v1/', 'http://opencode.ai/inference/go/openai/v1',
+                    'https://opencode.ai/inference/go/openai/v1?balance=1',
+                    'https://opencode.ai/inference/go/openai/v1#fragment',
+                    'https://opencode.ai.example.invalid/inference/go/openai/v1',
+                    'https://opencode.ai@evil.example.invalid/inference/go/openai/v1'):
             for key in (MODEL, 'chat:' + MODEL):
                 with self.subTest(url=url, key=key):
                     self.put(self.catalog, {'openai-responses': {key: {**model, 'baseUrl': url}}})
