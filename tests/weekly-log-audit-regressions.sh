@@ -79,40 +79,7 @@ assert_contains win.ps1 'Required Pi coding agent setup failed' 'fatal required 
 
 python3 tests/test_managed_skill_suite.py
 
-tmux_tmp=$(mktemp -d)
-mkdir -p "${tmux_tmp}/home/.config/systemd/user"
-touch "${tmux_tmp}/home/.config/systemd/user/tmux.service"
-tmux_output=$(SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" \
-    HOME="${tmux_tmp}/home" CALL_LOG="${tmux_tmp}/calls" bash -c '
-        source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
-        service_active=0
-        id() { [[ "$1" == "-u" ]] && printf "%s\n" 1001; }
-        whoami() { printf "%s\n" tester; }
-        systemctl() {
-            if [[ "$1" == "--user" ]]; then
-                return 1
-            fi
-            [[ "$1" == "--machine=tester@" && "$2" == "--user" ]] || return 90
-            shift 2
-            printf "%s\n" "$*" >> "${CALL_LOG}"
-            case "$1" in
-                daemon-reload|enable) return 0 ;;
-                is-enabled) return 0 ;;
-                is-active) [[ "${service_active}" -eq 1 ]] ;;
-                start) service_active=1 ;;
-                restart) return 91 ;;
-            esac
-        }
-        enable_tmux_service
-    ')
-grep -q '^daemon-reload$' "${tmux_tmp}/calls" || fail 'ubuntu.sh: tmux daemon reload did not use the user-manager fallback'
-grep -q '^enable tmux.service$' "${tmux_tmp}/calls" || fail 'ubuntu.sh: tmux enable did not use the user-manager fallback'
-grep -q '^start tmux.service$' "${tmux_tmp}/calls" || fail 'ubuntu.sh: tmux start did not use the user-manager fallback'
-if grep -q '^restart ' "${tmux_tmp}/calls"; then
-    fail 'ubuntu.sh: tmux fallback restarted an existing service'
-fi
-grep -q 'tmux service started' <<< "${tmux_output}" || fail 'ubuntu.sh: tmux fallback success was not reported'
-rm -rf "${tmux_tmp}"
+python3 tests/test_tmux_persistence_retirement.py
 
 for file in ubuntu.sh pi.sh; do
     tailscale_pref_tmp=$(mktemp -d)

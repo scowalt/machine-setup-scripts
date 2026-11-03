@@ -1122,32 +1122,6 @@ install_sfw() {
 }
 
 
-install_tmux_plugins() {
-    local plugin_dir=~/.tmux/plugins
-    if [[ ! -d "${plugin_dir}/tpm" ]]; then
-        print_message "Installing tmux plugin manager..."
-        git clone -q https://github.com/tmux-plugins/tpm "${plugin_dir}/tpm"
-        print_success "tmux plugin manager installed."
-    else
-        print_debug "tmux plugin manager already installed."
-    fi
-
-    for plugin in tmux-resurrect tmux-continuum; do
-        if [[ ! -d "${plugin_dir}/${plugin}" ]]; then
-            print_message "Installing ${plugin}..."
-            git clone -q "https://github.com/tmux-plugins/${plugin}" "${plugin_dir}/${plugin}"
-            print_success "${plugin} installed."
-        else
-            print_debug "${plugin} already installed."
-        fi
-    done
-
-    tmux source ~/.tmux.conf 2> /dev/null || print_warning "tmux not started; source tmux.conf manually if needed."
-    ~/.tmux/plugins/tpm/bin/install_plugins > /dev/null
-    print_success "tmux plugins installed and updated."
-}
-
-
 setup_code_directory() {
     local code_dir="${HOME}/Code"
 
@@ -9545,7 +9519,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 195 | Last changed: Accept Pi 1.5 Go catalog endpoint"
+    echo -e "${GRAY}Version 196 | Last changed: Remove automatic tmux session persistence"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9653,7 +9627,6 @@ HELPER_EOF
     fi
 
     print_section "Shell Configuration"
-    install_tmux_plugins
     enable_user_lingering
 
     print_section "Development Tools"

@@ -145,7 +145,7 @@ class CLT(unittest.TestCase):
         return [c for c in calls if 'softwareupdate --install' in c]
 
     def test_stale_sdk_does_not_gate_normal_work(self):
-        common = ('initialize_chezmoi', 'install_tmux_plugins', 'install_codex_cli', 'install_gitea_client',
+        common = ('initialize_chezmoi', 'install_codex_cli', 'install_gitea_client',
                   'setup_bb_machine', 'refresh_bb_plugins', 'setup_matt_pocock_skills',
                   'install_pi_cli', 'refresh_pi_packages', 'retire_global_backlog_mcp',
                   'prepare_pi_profile_permissions', 'install_claude_code', 'install_ntn_cli')
@@ -167,7 +167,7 @@ class CLT(unittest.TestCase):
         for task in ('install_homebrew', 'install_core_packages',
                      'install_secrets_manager', 'install_gcloud_cli', 'setup_tailscale',
                      'install_nerd_font', 'install_betterdisplay', 'initialize_chezmoi',
-                     'install_tmux_plugins', 'install_opencode_cli', 'install_gitea_client',
+                     'install_opencode_cli', 'install_gitea_client',
                      'install_codex_cli', 'install_bun', 'install_sfw', 'install_gemini_cli',
                      'install_portless_cli', 'setup_bb_machine', 'refresh_bb_plugins',
                      'install_claude_code', 'install_ntn_cli', 'setup_matt_pocock_skills', 'update_brew'):
