@@ -5277,29 +5277,6 @@ install_pi_cli() {
 }
 
 
-systemctl_user() {
-    local _uid=""
-    local _runtime_dir=""
-    local _user=""
-
-    _uid=$(id -u 2>/dev/null || true)
-    [[ "${_uid}" =~ ^[0-9]+$ ]] || return 1
-    _runtime_dir="/run/user/${_uid}"
-
-    if XDG_RUNTIME_DIR="${_runtime_dir}" \
-        DBUS_SESSION_BUS_ADDRESS="unix:path=${_runtime_dir}/bus" \
-        systemctl --user "$@" 2>/dev/null; then
-        return 0
-    fi
-
-    _user=$(whoami 2>/dev/null || true)
-    if [[ -z "${_user}" ]]; then
-        return 1
-    fi
-
-    systemctl --machine="${_user}@" --user "$@" 2>/dev/null
-}
-
 is_wsl_environment() {
     grep -qiE '(microsoft|wsl)' /proc/version /proc/sys/kernel/osrelease 2>/dev/null || [[ -n "${WSL_DISTRO_NAME:-}" ]] || [[ -f /proc/sys/fs/binfmt_misc/WSLInterop ]]
 }
@@ -9142,35 +9119,6 @@ install_uv() {
     fi
 }
 
-install_tmux_plugins() {
-    local plugin_dir=~/.tmux/plugins
-    if [[ ! -d "${plugin_dir}/tpm" ]]; then
-        print_message "Installing tmux plugin manager..."
-        git clone -q https://github.com/tmux-plugins/tpm "${plugin_dir}/tpm"
-        print_success "tmux plugin manager installed."
-    else
-        print_debug "tmux plugin manager already installed."
-    fi
-
-    print_message "Installing/updating tmux plugins via tpm..."
-    local tpm_installer=~/.tmux/plugins/tpm/bin/install_plugins
-    
-    local output
-    if ! output=$(${tpm_installer} 2>&1); then
-        print_error "Failed to install tmux plugins. tpm output was:"
-        echo "${output}"
-        return
-    fi
-
-    local tmux_conf="${HOME}/.config/tmux/tmux.conf"
-    if [[ -f "${tmux_conf}" ]]; then
-        tmux source-file "${tmux_conf}" >/dev/null 2>&1
-    elif [[ -f "${HOME}/.tmux.conf" ]]; then  
-        tmux source-file "${HOME}/.tmux.conf" >/dev/null 2>&1
-    fi
-    print_success "tmux plugins installed and updated."
-}
-
 enable_user_lingering() {
     if { loginctl show-user "$(whoami || true)" --property=Linger 2>/dev/null || true; } | grep -q 'Linger=yes'; then
         print_debug "User lingering already enabled."
@@ -9188,41 +9136,6 @@ enable_user_lingering() {
     else
         print_warning "No sudo access — cannot enable user lingering."
         print_debug "Run 'sudo loginctl enable-linger $(whoami || true)' manually."
-    fi
-}
-
-enable_tmux_service() {
-    local service_file="${HOME}/.config/systemd/user/tmux.service"
-    if [[ ! -f "${service_file}" ]]; then
-        print_debug "tmux.service not found - will be created by chezmoi apply"
-        return
-    fi
-
-    print_message "Enabling tmux systemd user service..."
-
-    if ! systemctl_user daemon-reload; then
-        print_warning "Could not reload the user service manager; skipping tmux service setup."
-        return 1
-    fi
-
-    if systemctl_user enable tmux.service; then
-        print_success "tmux service enabled."
-    elif systemctl_user is-enabled tmux.service; then
-        print_debug "tmux service already enabled."
-    else
-        print_warning "Could not enable tmux service."
-        return 1
-    fi
-
-    if ! systemctl_user is-active tmux.service; then
-        if systemctl_user start tmux.service; then
-            print_success "tmux service started."
-        else
-            print_warning "Could not start tmux service."
-            return 1
-        fi
-    else
-        print_debug "tmux service already running."
     fi
 }
 
@@ -11321,7 +11234,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 351 | Last changed: Accept Pi 1.5 Go catalog endpoint"
+    echo -e "${GRAY}Version 352 | Last changed: Remove automatic tmux session persistence"
 
     if ! acquire_setup_lock; then
         return 1
@@ -11442,7 +11355,6 @@ HELPER_EOF
             _setup_had_errors=1
         fi
         bootstrap_ssh_config
-        tmux source ~/.tmux.conf 2>/dev/null || true
     else
         print_warning "Skipping dotfiles management - no access to repository."
     fi
@@ -11454,11 +11366,7 @@ HELPER_EOF
     print_section "Shell Configuration"
     set_fish_as_default_shell
     install_act
-    install_tmux_plugins
     enable_user_lingering
-    if ! enable_tmux_service; then
-        _setup_had_errors=1
-    fi
     install_iterm2_shell_integration
 
     print_section "Additional Development Tools"

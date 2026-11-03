@@ -8508,31 +8508,6 @@ install_sfw() {
     fi
 }
 
-install_tmux_plugins() {
-    local plugin_dir=~/.tmux/plugins
-    if [[ ! -d "${plugin_dir}/tpm" ]]; then
-        print_message "Installing tmux plugin manager..."
-        git clone -q https://github.com/tmux-plugins/tpm "${plugin_dir}/tpm"
-        print_success "tmux plugin manager installed."
-    else
-        print_debug "tmux plugin manager already installed."
-    fi
-
-    for plugin in tmux-resurrect tmux-continuum; do
-        if [[ ! -d "${plugin_dir}/${plugin}" ]]; then
-            print_message "Installing ${plugin}..."
-            git clone -q "https://github.com/tmux-plugins/${plugin}" "${plugin_dir}/${plugin}"
-            print_success "${plugin} installed."
-        else
-            print_debug "${plugin} already installed."
-        fi
-    done
-
-    tmux source ~/.tmux.conf 2> /dev/null || print_warning "tmux not started; source tmux.conf manually if needed."
-    ~/.tmux/plugins/tpm/bin/install_plugins > /dev/null
-    print_success "tmux plugins installed and updated."
-}
-
 install_iterm2_shell_integration() {
     local shell_integration_file="${HOME}/.iterm2_shell_integration.fish"
     if [[ -f "${shell_integration_file}" ]]; then
@@ -9521,7 +9496,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 274 | Last changed: Accept Pi 1.5 Go catalog endpoint${NC}"
+    echo -e "${GRAY}Version 275 | Last changed: Remove automatic tmux session persistence${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9587,7 +9562,6 @@ run_setup_tasks() {
             _setup_had_errors=1
         fi
         bootstrap_ssh_config
-        tmux source ~/.tmux.conf 2>/dev/null || true
     else
         print_warning "Skipping dotfiles management - no access to repository."
     fi
@@ -9599,7 +9573,6 @@ run_setup_tasks() {
     print_section "Shell Configuration"
     set_fish_as_default_shell
     install_act
-    install_tmux_plugins
     enable_user_lingering
     install_iterm2_shell_integration
 

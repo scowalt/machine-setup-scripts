@@ -72,19 +72,11 @@ sudo() { echo "sudo:$*" >&2; if [[ "$1" == tee ]]; then while IFS= read -r line;
                     self.assertEqual('sudo:tee' in result.stderr, authorized)
                     self.assertEqual('sudo:chmod 0440' in result.stderr, authorized)
 
-    def test_ubuntu_tmux_keeps_generic_user_bus_fallback(self):
+    def test_ubuntu_keeps_user_lingering_without_tmux_autostart(self):
         source = (ROOT / 'ubuntu.sh').read_text()
-        code = '''id() { echo 1234; }; whoami() { echo fixture; }
-systemctl() {
-    echo "${XDG_RUNTIME_DIR:-unset}|${DBUS_SESSION_BUS_ADDRESS:-unset}|$*"
-    [[ "$*" != '--user is-active tmux.service' ]]
-}
-''' + function(source, 'systemctl_user') + '\nsystemctl_user is-active tmux.service'
-        result = self.run_bash(code)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('/run/user/1234|unix:path=/run/user/1234/bus|--user is-active tmux.service', result.stdout)
-        self.assertIn('--machine=fixture@ --user is-active tmux.service', result.stdout)
-        self.assertIn('systemctl_user start tmux.service', function(source, 'enable_tmux_service'))
+        self.assertIn('    enable_user_lingering', function(source, 'run_setup_tasks'))
+        self.assertNotIn('tmux.service', source)
+        self.assertNotIn('enable_tmux_service', source)
 
     def test_macos_and_bb_keep_exact_headless_effects(self):
         mac = (ROOT / 'mac.sh').read_text()
