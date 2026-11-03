@@ -72,6 +72,7 @@ brew() { :; }
 print_message() { printf '%s\n' "$*"; }
 print_error() { printf '%s\n' "$*"; }
 install_bb_desktop() { echo FORBIDDEN-desktop; return 97; }
+install_desktop_forks() { echo desktop-forks-reached; }
 bb_machine_existing_role() { echo FORBIDDEN-role-inspection; return 97; }
 bb_machine_platform_ready() { echo FORBIDDEN-platform-inspection; return 97; }
 bb_setup_directory_preflight() { echo FORBIDDEN-server-preflight; return 97; }
@@ -93,9 +94,11 @@ finish_setup_log() { printf 'final:%s\n' "$1"; return "$1"; }
         self.assertEqual(result.returncode, int(failed), result.stdout + result.stderr)
         self.assertNotIn('FORBIDDEN', result.stdout + result.stderr)
         self.assertEqual(snapshot(self.home), before)
+        if operation == 'main':
+            self.assertEqual(result.stdout.count('desktop-forks-reached'), int(entry == 'mac'))
         return result.stdout
 
-    def test_headed_callers_neither_install_nor_update_bb(self):
+    def test_headed_callers_leave_bb_alone_except_the_mac_fork_installer(self):
         for existing in (False, True):
             if existing:
                 self.seed_custom_installation()
@@ -138,13 +141,14 @@ finish_setup_log() { printf 'final:%s\n' "$1"; return "$1"; }
                 out = self.run_entry(entry, '1')
                 self.assertIn('final:0', out)
 
-    def test_desktop_install_is_absent_from_all_bash_callers(self):
+    def test_retired_installer_is_absent_from_all_bash_callers_and_only_mac_calls_the_fork_installer(self):
         for entry in SCRIPTS:
             source = (ROOT / (entry + '.sh')).read_text()
             start = source.index('\nrun_setup_tasks() {')
             caller = source[start:source.index('\nmain() {', start)]
             self.assertNotIn('install_bb_desktop', caller)
             self.assertNotIn('bb_desktop_payload', caller)
+            self.assertEqual(caller.count('install_desktop_forks'), int(entry == 'mac'))
 
 
 if __name__ == '__main__':

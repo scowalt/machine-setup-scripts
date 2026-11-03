@@ -49,8 +49,12 @@ A user-level configuration file or directory whose desired contents and permissi
 _Avoid_: BB-owned configuration, Any file under HOME
 
 **bb desktop app**:
-The native graphical application for the bb agentic IDE published by get-bb/bb. It is distinct from browser access and a separately managed bb server.
+The native graphical application for the bb agentic IDE, published upstream by get-bb/bb and, for the owner, as the owner fork scowalt/bb. It is distinct from browser access and a separately managed bb server.
 _Avoid_: BBEdit, bb browser shortcut
+
+**Owner fork**:
+The owner's own fork of an upstream desktop application, published through GitHub releases: the bb desktop app as scowalt/bb, and OmaCal (a Tauri calendar application unrelated to bb) as scowalt/omacal. Setup installs one on a headed Apple Silicon Mac only when no copy exists, then leaves updates to the application.
+_Avoid_: Official build, Managed desktop installation
 
 **bb server**:
 An independent main application server for the bb agentic IDE published by get-bb/bb, with its own projects and sessions. It is distinct from BBEdit and from an execution machine enrolled with another bb server.

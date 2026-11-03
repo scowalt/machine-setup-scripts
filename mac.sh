@@ -9350,6 +9350,111 @@ enable_screen_sharing() {
     print_debug "Screen Sharing is enabled and accepting connections."
 }
 
+bb_desktop_fork_archive_url() {
+    local _release="https://github.com/scowalt/bb/releases/latest/download"
+    local _feed _line _file=""
+    _feed=$(curl -fsSL --retry 3 --connect-timeout 30 --max-time 60 "${_release}/latest-mac.yml") || return 1
+    while IFS= read -r _line; do
+        if [[ "${_line}" == "path: "* ]]; then
+            _file="${_line#path: }"
+            break
+        fi
+    done <<< "${_feed}"
+    [[ "${_file}" =~ ^bb-[A-Za-z0-9._+-]+-arm64[.]zip$ ]] || return 1
+    printf '%s/%s\n' "${_release}" "${_file}"
+}
+
+omacal_fork_archive_url() {
+    printf '%s\n' "https://github.com/scowalt/omacal/releases/latest/download/omacal-fork-aarch64.app.zip"
+}
+
+unpack_fork_application() {
+    local _label="$1" _url="$2" _bundle="$3" _bundle_id="$4" _stage="$5"
+    local _app="${_stage}/unpacked/${_bundle}"
+    local _actual_id _executable
+
+    if ! curl -fsSL --retry 3 --connect-timeout 30 --speed-limit 10240 --speed-time 60 -o "${_stage}/archive.zip" "${_url}"; then
+        print_error "Failed to download ${_label}."
+        return 1
+    fi
+
+    if ! /usr/bin/ditto -x -k "${_stage}/archive.zip" "${_stage}/unpacked"; then
+        print_error "Failed to unpack ${_label}."
+        return 1
+    fi
+
+    _actual_id=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${_app}/Contents/Info.plist" 2>/dev/null || true)
+    _executable=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "${_app}/Contents/Info.plist" 2>/dev/null || true)
+    if [[ "${_actual_id}" != "${_bundle_id}" ]] || [[ -z "${_executable}" ]] || [[ ! -x "${_app}/Contents/MacOS/${_executable}" ]]; then
+        print_error "The ${_label} archive does not contain the expected application."
+        return 1
+    fi
+}
+
+install_fork_application() {
+    local _label="$1" _bundle="$2" _bundle_id="$3" _resolve_url="$4"
+    local _system_apps="/Applications" _user_apps="${HOME}/Applications"
+    local _existing _apps_dir _url _stage _installed=0
+
+    for _existing in "${_system_apps}/${_bundle}" "${_user_apps}/${_bundle}"; do
+        if [[ -e "${_existing}" ]] || [[ -L "${_existing}" ]]; then
+            print_debug "${_label} is already present at ${_existing}; leaving it untouched."
+            return 0
+        fi
+    done
+
+    print_message "Installing ${_label}..."
+    if ! _url=$("${_resolve_url}"); then
+        print_error "Failed to locate the ${_label} release."
+        return 1
+    fi
+
+    _apps_dir="${_system_apps}"
+    if [[ ! -w "${_apps_dir}" ]]; then
+        _apps_dir="${_user_apps}"
+        if ! mkdir -p "${_apps_dir}"; then
+            print_error "Failed to create ${_apps_dir}."
+            return 1
+        fi
+    fi
+
+    if ! _stage=$(mktemp -d "${TMPDIR:-/tmp}/fork-application.XXXXXX"); then
+        print_error "Failed to create a temporary directory for ${_label}."
+        return 1
+    fi
+
+    if unpack_fork_application "${_label}" "${_url}" "${_bundle}" "${_bundle_id}" "${_stage}"; then
+        if mv "${_stage}/unpacked/${_bundle}" "${_apps_dir}/${_bundle}"; then
+            _installed=1
+        else
+            print_error "Failed to move ${_label} into ${_apps_dir}."
+        fi
+    fi
+    rm -rf "${_stage:?}"
+
+    [[ "${_installed}" -eq 1 ]] || return 1
+    print_success "${_label} installed to ${_apps_dir}."
+}
+
+install_desktop_forks() {
+    if [[ "${HEADLESS:-}" == "1" ]]; then
+        print_debug "Headless machine; skipping desktop applications."
+        return 0
+    fi
+
+    local _apple_silicon
+    _apple_silicon=$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null || true)
+    if [[ "${_apple_silicon}" != "1" ]]; then
+        print_debug "The desktop application forks are published for Apple Silicon only; skipping."
+        return 0
+    fi
+
+    local _status=0
+    install_fork_application "bb desktop" "bb.app" "dev.bb.desktop" bb_desktop_fork_archive_url || _status=1
+    install_fork_application "OmaCal" "OmaCal.app" "com.omacal.app" omacal_fork_archive_url || _status=1
+    return "${_status}"
+}
+
 check_pending_reboot() {
     local signals=0
 
@@ -10170,7 +10275,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 321 | Last changed: Remove automatic tmux session persistence${NC}"
+    echo -e "${GRAY}Version 322 | Last changed: Install the owner's bb desktop and OmaCal forks on headed Macs${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -10184,7 +10289,8 @@ run_setup_tasks() {
     print_section "Xcode Command Line Tools"
     install_xcode_cli_tools || _setup_had_errors=1
 
-    print_debug "bb desktop is owner-managed; existing applications and forks are untouched."
+    print_section "Desktop Applications"
+    install_desktop_forks || _setup_had_errors=1
 
     if is_main_user; then
         echo -e "${CYAN}Running full setup for main user (scowalt)${NC}"

@@ -4,6 +4,9 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ('mac', 'ubuntu', 'bazzite', 'pi', 'wsl')
+FORK_INSTALLER = ('install_desktop_forks', 'install_fork_application', 'unpack_fork_application',
+                  'bb_desktop_fork_archive_url', 'omacal_fork_archive_url', 'scowalt/omacal',
+                  'scowalt/bb/releases', 'OmaCal')
 
 
 def seed(home, layout):
@@ -50,7 +53,7 @@ def snapshot(home):
 
 
 class NonManagement(unittest.TestCase):
-    def test_all_entry_points_retire_desktop_installers_without_retiring_other_bb_roles(self):
+    def test_retired_installer_stays_retired_and_only_macos_installs_the_owner_forks(self):
         for entry in (*SCRIPTS, 'win'):
             source = (ROOT / (entry + ('.ps1' if entry == 'win' else '.sh'))).read_text()
             with self.subTest(entry=entry):
@@ -58,6 +61,9 @@ class NonManagement(unittest.TestCase):
                               'install_bb_desktop', 'Install-BbDesktop', 'bbDesktopSetupFailed',
                               'desktop-latest', '.setup-bb-desktop.lock', 'dev.bb.desktop.desktop'):
                     self.assertNotIn(token, source)
+                if entry != 'mac':
+                    for token in FORK_INSTALLER:
+                        self.assertNotIn(token, source)
                 if entry != 'win':
                     self.assertIn('setup_bb_machine ', source)
                     self.assertIn('refresh_bb_plugins ready', source)
