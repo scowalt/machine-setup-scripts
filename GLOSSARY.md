@@ -53,11 +53,11 @@ The native graphical application for the bb agentic IDE, published upstream by g
 _Avoid_: BBEdit, bb browser shortcut
 
 **Owner fork**:
-The owner's own fork of an upstream desktop application, published through GitHub releases: the bb desktop app as scowalt/bb, and OmaCal (a Tauri calendar application unrelated to bb) as scowalt/omacal. Setup installs one on a headed Apple Silicon Mac only when no copy exists, then leaves updates to the application.
+The owner's own fork of an upstream application, published through GitHub releases: the bb desktop app and the bb-app server package as scowalt/bb, and OmaCal (a Tauri calendar application unrelated to bb) as scowalt/omacal. Setup installs a desktop fork on a headed Apple Silicon Mac only when no copy exists, then leaves updates to the application. bb servers and BB machine preparation install the fork's latest bb-app release.
 _Avoid_: Official build, Managed desktop installation
 
 **bb server**:
-An independent main application server for the bb agentic IDE published by get-bb/bb, with its own projects and sessions. It is distinct from BBEdit and from an execution machine enrolled with another bb server.
+An independent main application server for the bb agentic IDE, published upstream by get-bb/bb and installed by setup from the owner fork's bb-app releases, with its own projects and sessions. It is distinct from BBEdit and from an execution machine enrolled with another bb server.
 _Avoid_: BBEdit server, bb execution machine
 
 **Local bb server**:

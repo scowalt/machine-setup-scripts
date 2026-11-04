@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ('mac', 'ubuntu', 'bazzite', 'pi', 'wsl')
 FORK_INSTALLER = ('install_desktop_forks', 'install_fork_application', 'unpack_fork_application',
                   'bb_desktop_fork_archive_url', 'omacal_fork_archive_url', 'scowalt/omacal',
-                  'scowalt/bb/releases', 'OmaCal')
+                  'scowalt/bb/releases/latest', 'OmaCal')
 
 
 def seed(home, layout):

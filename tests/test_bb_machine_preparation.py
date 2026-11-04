@@ -124,7 +124,7 @@ if args[:5]==base+['config','get']:
         value='better-sqlite3,node-pty,@parcel/watcher' if rest==[allow] else os.environ.get('STRICT','true')
     else: value=values[key]
     print(value); sys.exit(0)
-install=['install']+base+['--engine-strict','--strict-allow-scripts',allow,'bb-app@latest']
+install=['install']+base+['--engine-strict','--strict-allow-scripts',allow,'https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz']
 rebuild=['rebuild']+base+['--strict-allow-scripts',allow,'better-sqlite3','node-pty','@parcel/watcher']
 assert args in [install,rebuild], args
 if os.environ.get('NATIVE')=='1':
@@ -133,7 +133,7 @@ if os.environ.get('NATIVE')=='1':
     observed=json.loads(subprocess.check_output([os.environ['FIXTURE_NODE'],str(root/'native-config.cjs'),json.dumps(actual)],text=True))
     observed['operation']=args[0]
     with open(root/'native-config.jsonl','a') as f: f.write(json.dumps(observed)+'\\n')
-    actual=[str(root/'fixture.tgz') if a=='bb-app@latest' else a for a in actual]
+    actual=[str(root/'fixture.tgz') if a=='https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz' else a for a in actual]
     actual+=['--offline','--audit=false','--fund=false']
     sys.exit(subprocess.call([os.environ['FIXTURE_NODE'],os.environ['FIXTURE_NPM']]+actual))
 if args==rebuild: sys.exit(int(os.environ.get('FAIL_REBUILD','0')))
@@ -229,7 +229,7 @@ brew() { :; }
         sentinel.mkdir(mode=0o775)
         (sentinel / 'keep').write_text('unchanged')
         for platform in ('mac', 'ubuntu', 'pi', 'bazzite'):
-            for version in ['0.44.0', '0.44.0', '0.45.0']:
+            for version in ['0.44.0', '0.44.0', '0.45.0', '0.48.2-fork.5']:
                 with self.subTest(platform=platform, version=version):
                     directories = [self.home, *[p for p in self.home.rglob('*') if p.is_dir()]]
                     for p in directories:

@@ -781,7 +781,7 @@ npm() {
             esac;;
         prefix) [[ "${2:-}" == -g ]] && printf '%s\n' "${BB_TEST_PREFIX:-$prefix}";;
         install)
-            [[ "$*" == *'--strict-allow-scripts'* && "$*" == *'--allow-scripts=better-sqlite3,node-pty,@parcel/watcher'* && "$*" == *'bb-app@latest'* ]] || return 1
+            [[ "$*" == *'--strict-allow-scripts'* && "$*" == *'--allow-scripts=better-sqlite3,node-pty,@parcel/watcher'* && "$*" == *'https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz'* ]] || return 1
             printf 'install\n' >> "$BB_TEST_ROOT/npm-events"
             [[ "${BB_TEST_NPM_FAIL:-0}" != 1 ]] || return 1
             [[ "${BB_TEST_SKIP_PACKAGE:-0}" == 1 ]] || { ( umask 077; make_package ); return 0; };;
@@ -838,6 +838,10 @@ unset BB_TEST_PREFIX
 mv "$HOME/.config/setup-bb-server/package-owner" "$HOME/.config/setup-bb-server/package-owner.next"
 # A prerelease, missing native dependency, or failed npm command is not
 # accepted because a previous registration or partial directory exists.
+( BB_TEST_VERSION=0.48.2-fork.5; umask 077; make_package )
+bb_package_artifacts_ready "$prefix" "$package"
+( BB_TEST_VERSION=0.45.0-rc.1; umask 077; make_package )
+! bb_package_artifacts_ready "$prefix" "$package"
 BB_TEST_VERSION=0.45.0-rc.1
 ! bb_install_package
 unset BB_TEST_VERSION
