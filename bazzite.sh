@@ -9354,7 +9354,7 @@ try {
     for (const dir of [path.join(prefix, 'lib/node_modules'), path.join(prefix, 'bin')]) fs.mkdirSync(dir, {recursive: true, mode: 0o700});
   } else if (mode === 'verify') {
     const j = json(path.join(pkg, 'package.json'), true);
-    check(j.name === 'bb-app' && /^\d+\.\d+\.\d+$/.test(j.version));
+    check(j.name === 'bb-app' && /^\d+\.\d+\.\d+(-fork\.\d+)?$/.test(j.version));
     check(Array.isArray(j.os) && j.os.includes(process.platform));
     for (const [bin, entry] of Object.entries(bins)) {
       check(j.bin?.[bin] === entry); regular(path.join(pkg, entry), true);
@@ -9501,7 +9501,7 @@ setup_bb_machine() {
     [[ "${_found}" == better-sqlite3,node-pty,@parcel/watcher ]] || return 1
     bb_machine_package_state reserve || return 1
     print_message 'Installing stable BB preparation software (no enrollment or service startup)...'
-    if ! ( umask 077; npm install --global --prefix "${_prefix}" "${_npm_context[@]}" --engine-strict --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher bb-app@latest < /dev/null >/dev/null 2>&1 ); then
+    if ! ( umask 077; npm install --global --prefix "${_prefix}" "${_npm_context[@]}" --engine-strict --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz < /dev/null >/dev/null 2>&1 ); then
         print_error 'BB preparation npm install failed; the owned partial copy can be retried.'; return 1
     fi
     if ! ( umask 077; npm rebuild --global --prefix "${_prefix}" "${_npm_context[@]}" --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher better-sqlite3 node-pty @parcel/watcher < /dev/null >/dev/null 2>&1 ); then
