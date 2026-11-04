@@ -39,6 +39,7 @@ print_debug() { printf 'debug:%s\n' "$*"; }
 print_warning() { printf 'warning:%s\n' "$*"; }
 print_error() { printf 'error:%s\n' "$*"; }
 install_bb_desktop() { echo FORBIDDEN:desktop-installer; return 99; }
+install_desktop_forks() { echo desktop-forks-reached; }
 bb_desktop_payload() { echo FORBIDDEN:desktop-payload; return 99; }
 install_opencode_cli() { [[ "$FAILURE" != independent ]]; }
 setup_bb_machine() { echo bb-preparation; }
@@ -65,10 +66,11 @@ finish_setup_log() { printf 'final:%s\n' "$1"; return "$1"; }
         for marker in ('bb-preparation', 'plugin-refresh', 'independent-work', 'reboot-reported'):
             self.assertIn(marker, result.stdout)
         self.assertEqual(result.stdout.count('final:'), 1)
+        self.assertEqual(result.stdout.count('desktop-forks-reached'), int(entry == 'mac'))
         self.assertIn('final:' + str(int(failure != 'none')), result.stdout)
         self.assertLess(result.stdout.index('reboot-reported'), result.stdout.index('final:'))
 
-    def test_all_bash_callers_preserve_absent_fork_duplicate_and_linked_desktop_state(self):
+    def test_bash_callers_leave_desktop_state_to_the_owner_except_the_mac_fork_installer(self):
         for entry in SCRIPTS:
             for layout in ('absent', 'duplicates', 'links'):
                 for headless in ('', '0', '1', 'true'):
