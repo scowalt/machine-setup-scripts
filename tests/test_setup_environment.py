@@ -90,44 +90,18 @@ class Environment(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn('credential', result.stdout + result.stderr)
 
-    def test_bash_engineering_skill_inputs_preserve_literals_precedence_and_alias_conflicts(self):
-        keys = ('BAN_SCOWALT_ENGINEERING_SKILLS', 'BAN_MATT_POCOCK_SKILLS', 'BAN_MATT_POCKOCK_SKILLS')
-        code = '''setup_load_environment || exit 1
-[[ "$GH_TOKEN" == 'credential#literal' && "$BAN_IMPECCABLE" == 1 && "$BAN_PI_MCP_ADAPTER" == 0 && "$BAN_PI_GOAL_AUTORESEARCH" == 1 ]] || exit 2
-[[ "${BAN_SCOWALT_ENGINEERING_SKILLS+x}" == "$EXPECT_PRESENT" && "${BAN_SCOWALT_ENGINEERING_SKILLS-}" == "$EXPECTED" ]] || exit 3
-[[ "${BAN_MATT_POCOCK_SKILLS-}" == "$EXPECTED_LEGACY" && "${BAN_MATT_POCKOCK_SKILLS-}" == "$EXPECTED_TYPO" ]]
-'''
-        policy = CONTENTS + 'BAN_IMPECCABLE=1\nBAN_PI_MCP_ADAPTER=0\nBAN_PI_GOAL_AUTORESEARCH=1\n'
-        for case in input_cases(keys[0]):
-            with self.subTest(case=case):
-                environment = {'EXPECTED': case.expected or '',
-                               'EXPECT_PRESENT': 'x' if case.expected is not None else '',
-                               'EXPECTED_LEGACY': '0', 'EXPECTED_TYPO': '1'}
-                aliases = 'BAN_MATT_POCOCK_SKILLS=0\nBAN_MATT_POCKOCK_SKILLS=1\n'
-                if case.inherited is not None:
-                    environment.update({keys[0]: case.inherited, keys[1]: '1', keys[2]: '0',
-                                        'EXPECTED_LEGACY': '1', 'EXPECTED_TYPO': '0'})
-                    aliases = ''
-                result = self.bash(code, policy + aliases + case.data, environment)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertNotIn('credential', result.stdout + result.stderr)
-        for canonical, legacy, typo in (('1', '0', '0'), ('0', '1', '0'), ('0', '0', '1')):
-            with self.subTest(conflict=(canonical, legacy, typo)):
-                saved = ''.join(f'{key}={value}\n' for key, value in zip(keys, (canonical, legacy, typo)))
-                result = self.bash(code, policy + saved,
-                                   {keys[0]: 'inherited', keys[1]: 'inherited', keys[2]: 'inherited',
-                                    'EXPECTED': canonical, 'EXPECT_PRESENT': 'x',
-                                    'EXPECTED_LEGACY': legacy, 'EXPECTED_TYPO': typo})
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        result = self.bash('setup_load_environment', 'BAN_SCOWALT_ENGINEERING_SKILLS=two words\n')
-        self.assertEqual(result.returncode, 1)
-        self.assertIn('Failed:', result.stdout)
+    def test_bash_ignores_retired_engineering_skill_exclusions(self):
+        saved = 'BAN_SCOWALT_ENGINEERING_SKILLS=two words\nBAN_MATT_POCOCK_SKILLS=1\nBAN_MATT_POCKOCK_SKILLS=1\n'
+        result = self.bash('''setup_load_environment || exit 1
+[[ -z "${BAN_SCOWALT_ENGINEERING_SKILLS+x}${BAN_MATT_POCOCK_SKILLS+x}${BAN_MATT_POCKOCK_SKILLS+x}" && "$GH_TOKEN" == 'credential#literal' ]]
+''', CONTENTS + saved)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn('two words', result.stdout + result.stderr)
 
     def test_bash_impeccable_input_is_literal_and_independent_of_other_exclusions(self):
-        policy = CONTENTS + 'BAN_MATT_POCOCK_SKILLS=1\nBAN_MATT_POCKOCK_SKILLS=0\nBAN_PI_MCP_ADAPTER=0\nBAN_PI_GOAL_AUTORESEARCH=1\n'
+        policy = CONTENTS + 'BAN_PI_MCP_ADAPTER=0\nBAN_PI_GOAL_AUTORESEARCH=1\n'
         code = '''setup_load_environment || exit 1
-[[ "$BAN_MATT_POCOCK_SKILLS" == 1 && "$BAN_MATT_POCKOCK_SKILLS" == 0 && "$BAN_PI_MCP_ADAPTER" == 0 && "$BAN_PI_GOAL_AUTORESEARCH" == 1 ]] || exit 2
+[[ "$BAN_PI_MCP_ADAPTER" == 0 && "$BAN_PI_GOAL_AUTORESEARCH" == 1 ]] || exit 2
 if [[ "$EXPECT_PRESENT" == 1 ]]; then
     [[ "${BAN_IMPECCABLE+x}" == x && "$BAN_IMPECCABLE" == "$EXPECTED" ]]
 else
@@ -168,53 +142,27 @@ fi
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     @unittest.skipUnless(PWSH, 'Set PWSH_BIN; native Windows is not claimed')
-    def test_powershell_engineering_skill_inputs_preserve_literals_precedence_and_alias_conflicts(self):
+    def test_powershell_ignores_retired_engineering_skill_exclusions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             script = root / 'fixture.ps1'
             script.write_text("$ErrorActionPreference='Stop'\n" + (ROOT / 'lib/setup-policy.ps1').read_text() + """
 $file = Join-Path $env:USERPROFILE '.env.local'
-$policy = "GH_TOKEN='credential#literal'`r`nBAN_IMPECCABLE=1`r`nBAN_PI_MCP_ADAPTER=0`r`nBAN_PI_GOAL_AUTORESEARCH=1`r`n"
-""" + powershell_cases('BAN_SCOWALT_ENGINEERING_SKILLS') + """
-foreach ($case in $cases) {
-    [Environment]::SetEnvironmentVariable('BAN_SCOWALT_ENGINEERING_SKILLS', $case.Before, 'Process')
-    $env:BAN_MATT_POCOCK_SKILLS='1'; $env:BAN_MATT_POCKOCK_SKILLS='0'
-    [IO.File]::WriteAllText($file, $policy + $case.Data + "`r`n")
-    $before = [Convert]::ToBase64String([IO.File]::ReadAllBytes($file))
-    Read-SetupEnvironment
-    if ([string]$env:BAN_SCOWALT_ENGINEERING_SKILLS -cne $case.Expected) { throw 'Engineering input changed' }
-    if ($env:BAN_MATT_POCOCK_SKILLS -cne '1' -or $env:BAN_MATT_POCKOCK_SKILLS -cne '0' -or
-        $env:BAN_IMPECCABLE -cne '1' -or $env:BAN_PI_MCP_ADAPTER -cne '0' -or
-        $env:BAN_PI_GOAL_AUTORESEARCH -cne '1' -or $env:GH_TOKEN -cne 'credential#literal') { throw 'Independent input changed' }
-    if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($file)) -cne $before) { throw 'Environment file changed' }
+[IO.File]::WriteAllText($file, "GH_TOKEN='credential#literal'`r`nBAN_SCOWALT_ENGINEERING_SKILLS=two words`r`nBAN_MATT_POCOCK_SKILLS=1`r`nBAN_MATT_POCKOCK_SKILLS=1`r`n")
+Read-SetupEnvironment
+foreach ($key in @('BAN_SCOWALT_ENGINEERING_SKILLS', 'BAN_MATT_POCOCK_SKILLS', 'BAN_MATT_POCKOCK_SKILLS')) {
+    if ($null -ne [Environment]::GetEnvironmentVariable($key)) { throw "Retired input loaded: $key" }
 }
-foreach ($values in @(@('1','0','0'), @('0','1','0'), @('0','0','1'))) {
-    $env:BAN_SCOWALT_ENGINEERING_SKILLS='inherited'
-    $env:BAN_MATT_POCOCK_SKILLS='inherited'; $env:BAN_MATT_POCKOCK_SKILLS='inherited'
-    [IO.File]::WriteAllText($file, $policy + "BAN_SCOWALT_ENGINEERING_SKILLS=$($values[0])`r`nBAN_MATT_POCOCK_SKILLS=$($values[1])`r`nBAN_MATT_POCKOCK_SKILLS=$($values[2])`r`n")
-    $before = [Convert]::ToBase64String([IO.File]::ReadAllBytes($file))
-    Read-SetupEnvironment
-    if ($env:BAN_SCOWALT_ENGINEERING_SKILLS -cne $values[0] -or $env:BAN_MATT_POCOCK_SKILLS -cne $values[1] -or
-        $env:BAN_MATT_POCKOCK_SKILLS -cne $values[2]) { throw 'Conflicting aliases changed' }
-    if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($file)) -cne $before) { throw 'Environment file changed' }
-}
-[IO.File]::WriteAllText($file, "BAN_SCOWALT_ENGINEERING_SKILLS=two words`n")
-$rejected = $false
-try { Read-SetupEnvironment } catch {
-    if ($_.Exception.Message -ne 'Unsupported environment-file value') { throw }
-    $rejected = $true
-}
-if (-not $rejected) { throw 'Malformed engineering input accepted' }
-Write-Output 'PASS: data-only engineering-skill inputs'
+if ($env:GH_TOKEN -cne 'credential#literal') { throw 'Independent input changed' }
+Write-Output 'PASS: retired engineering-skill inputs'
 """)
             result = subprocess.run([PWSH, '-NoLogo', '-NoProfile', '-NonInteractive', '-File', str(script)],
-                                    cwd=tmp, env=dict(os.environ, HOME=tmp, USERPROFILE=tmp),
+                                    cwd=tmp, env={k: v for k, v in dict(os.environ, HOME=tmp, USERPROFILE=tmp).items()
+                                                  if not k.startswith('BAN_')},
                                     capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('PASS:', result.stdout)
             self.assertNotIn('credential', result.stdout + result.stderr)
-            self.assertFalse((root / 'escaped').exists())
-            self.assertEqual((root / '.env.local').read_bytes(), b'BAN_SCOWALT_ENGINEERING_SKILLS=two words\n')
 
     @unittest.skipUnless(PWSH, 'Set PWSH_BIN; native Windows is not claimed')
     def test_powershell_impeccable_input_is_literal_and_independent_of_other_exclusions(self):
@@ -223,7 +171,7 @@ Write-Output 'PASS: data-only engineering-skill inputs'
             script = root / 'fixture.ps1'
             script.write_text("$ErrorActionPreference='Stop'\n" + (ROOT / 'lib/setup-policy.ps1').read_text() + """
 $file = Join-Path $env:USERPROFILE '.env.local'
-$policy = "BAN_MATT_POCOCK_SKILLS=1`nBAN_MATT_POCKOCK_SKILLS=0`nBAN_PI_MCP_ADAPTER=0`nBAN_PI_GOAL_AUTORESEARCH=1`n"
+$policy = "BAN_PI_MCP_ADAPTER=0`nBAN_PI_GOAL_AUTORESEARCH=1`n"
 """ + powershell_cases('BAN_IMPECCABLE') + """
 foreach ($case in $cases) {
     [Environment]::SetEnvironmentVariable('BAN_IMPECCABLE', $case.Before, 'Process')
@@ -231,8 +179,7 @@ foreach ($case in $cases) {
     $before = [Convert]::ToBase64String([IO.File]::ReadAllBytes($file))
     Read-SetupEnvironment
     if ([string]$env:BAN_IMPECCABLE -cne $case.Expected) { throw 'Impeccable input changed' }
-    if ($env:BAN_MATT_POCOCK_SKILLS -cne '1' -or $env:BAN_MATT_POCKOCK_SKILLS -cne '0' -or
-        $env:BAN_PI_MCP_ADAPTER -cne '0' -or $env:BAN_PI_GOAL_AUTORESEARCH -cne '1') { throw 'Independent exclusion changed' }
+    if ($env:BAN_PI_MCP_ADAPTER -cne '0' -or $env:BAN_PI_GOAL_AUTORESEARCH -cne '1') { throw 'Independent exclusion changed' }
     if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($file)) -cne $before) { throw 'Environment file changed' }
 }
 [IO.File]::WriteAllText($file, "BAN_IMPECCABLE=two words`n")

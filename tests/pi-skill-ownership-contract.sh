@@ -22,26 +22,14 @@ for file in "${bash_setup_scripts[@]}"; do
     default_pi="${test_home}/.pi/agent/skills"
     custom_pi="${active_pi}/skills"
 
-    mkdir -p "${shared}/tdd" "${default_pi}/tdd" \
-        "${custom_pi}/tdd" "${shared}/codebase-design" "${default_pi}/codebase-design" \
-        "${custom_pi}/codebase-design" "${shared}/diagnosing-bugs" \
-        "${default_pi}/diagnosing-bugs" "${custom_pi}/diagnosing-bugs"
-    printf 'canonical\n' > "${shared}/tdd/SKILL.md"
+    mkdir -p "${shared}/pr/agents" "${shared}/tdd" "${default_pi}/tdd" "${custom_pi}"
+    printf 'dotfiles pr\n' > "${shared}/pr/SKILL.md"
+    printf 'dotfiles pr metadata\n' > "${shared}/pr/agents/openai.yaml"
+    cp -R "${shared}/pr" "${default_pi}/pr"
+    cp -R "${shared}/pr" "${custom_pi}/pr"
+    printf 'user-modified metadata\n' > "${custom_pi}/pr/agents/openai.yaml"
+    printf 'retired\n' > "${shared}/tdd/SKILL.md"
     cp "${shared}/tdd/SKILL.md" "${default_pi}/tdd/SKILL.md"
-    cp "${shared}/tdd/SKILL.md" "${custom_pi}/tdd/SKILL.md"
-    printf 'canonical-codebase-design\n' > "${shared}/codebase-design/SKILL.md"
-    cp "${shared}/codebase-design/SKILL.md" "${default_pi}/codebase-design/SKILL.md"
-    printf 'user-modified-codebase-design\n' > "${custom_pi}/codebase-design/SKILL.md"
-    printf 'canonical\n' > "${shared}/diagnosing-bugs/SKILL.md"
-    printf 'user-modified\n' > "${default_pi}/diagnosing-bugs/SKILL.md"
-    cp "${shared}/diagnosing-bugs/SKILL.md" "${custom_pi}/diagnosing-bugs/SKILL.md"
-    mkdir -p "${shared}/code-review/references"
-    for artifact in SKILL.md LICENSE references/graph-document.md references/config.md references/example.graph.json; do
-        printf 'canonical %s\n' "${artifact}" > "${shared}/code-review/${artifact}"
-    done
-    cp -R "${shared}/code-review" "${default_pi}/code-review"
-    cp -R "${shared}/code-review" "${custom_pi}/code-review"
-    printf 'user-modified reference\n' > "${custom_pi}/code-review/references/config.md"
     mkdir -p "${active_pi}/extensions"
     printf '%s\n' '{"theme":"keep","skills":["user-skill"]}' > "${active_pi}/settings.json"
     printf '%s\n' '{"display":{"keep":true},"shortcuts":{"another":"ctrl+x"}}' > "${active_pi}/extensions/pi-autoresearch.json"
@@ -55,24 +43,17 @@ for file in "${bash_setup_scripts[@]}"; do
             configure_pi_autoresearch_shortcut > /dev/null
         '
 
-    [[ ! -e "${default_pi}/tdd" ]] || fail "${file}: identical default Pi duplicate remains"
-    [[ ! -e "${custom_pi}/tdd" ]] || fail "${file}: identical custom Pi duplicate remains"
-    [[ ! -e "${default_pi}/codebase-design" ]] || fail "${file}: identical default codebase-design duplicate remains"
-    [[ -f "${custom_pi}/codebase-design/SKILL.md" ]] || fail "${file}: modified codebase-design copy was removed"
-    [[ $(< "${custom_pi}/codebase-design/SKILL.md") == user-modified-codebase-design ]] || fail "${file}: modified codebase-design copy changed"
-    [[ ! -e "${custom_pi}/diagnosing-bugs" ]] || fail "${file}: identical custom Matt Pocock duplicate remains"
-    [[ -f "${default_pi}/diagnosing-bugs/SKILL.md" ]] || fail "${file}: modified user copy was removed"
-    [[ $(< "${default_pi}/diagnosing-bugs/SKILL.md") == user-modified ]] || fail "${file}: modified user copy changed"
-
-    [[ ! -e "${default_pi}/code-review" ]] || fail "${file}: identical default code-review duplicate remains"
-    [[ $(< "${custom_pi}/code-review/references/config.md") == 'user-modified reference' ]] || fail "${file}: modified code-review reference changed"
-    [[ -s "${shared}/code-review/references/config.md" ]] || fail "${file}: canonical code-review copy was removed"
+    [[ ! -e "${default_pi}/pr" ]] || fail "${file}: identical default Pi pr duplicate remains"
+    [[ $(< "${custom_pi}/pr/agents/openai.yaml") == 'user-modified metadata' ]] || fail "${file}: modified pr copy changed"
+    [[ -s "${shared}/pr/SKILL.md" ]] || fail "${file}: canonical pr copy was removed"
     for direct_pi in "${default_pi}" "${custom_pi}"; do
-        exclusion="!${direct_pi}/code-review/**"
+        exclusion="!${direct_pi}/pr/**"
         count=$(jq --arg entry "${exclusion}" '[.skills[] | select(. == $entry)] | length' "${active_pi}/settings.json")
-        [[ "${count}" -eq 1 ]] || fail "${file}: code-review exclusion missing or repeated at ${direct_pi}"
+        [[ "${count}" -eq 1 ]] || fail "${file}: pr exclusion missing or repeated at ${direct_pi}"
     done
-    jq -e --arg entry "!${shared}/code-review/**" '.skills | index($entry) == null' "${active_pi}/settings.json" > /dev/null || fail "${file}: canonical code-review copy was excluded"
+    jq -e --arg entry "!${shared}/pr/**" '.skills | index($entry) == null' "${active_pi}/settings.json" > /dev/null || fail "${file}: canonical pr copy was excluded"
+    [[ -f "${default_pi}/tdd/SKILL.md" ]] || fail "${file}: ownership removed a retired-name copy"
+    jq -e '[.skills[] | select(contains("/tdd/"))] | length == 0' "${active_pi}/settings.json" > /dev/null || fail "${file}: ownership excluded a retired name"
 
     jq -e '.theme == "keep" and (.skills | index("user-skill"))' "${active_pi}/settings.json" > /dev/null || fail "${file}: existing Pi settings changed"
     for skill in pi-goal-writer autoresearch-create autoresearch-finalize autoresearch-hooks; do

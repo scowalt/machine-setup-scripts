@@ -65,7 +65,7 @@ setup_load_environment() {
         setup_trim "${line%%=*}"; key="${SETUP_TRIMMED}"
         [[ "${key}" =~ ^[A-Za-z_][A-Za-z_0-9]*$ ]] || { setup_environment_failure 'unsupported environment-file key'; return 1; }
         case "${key}" in
-            HEADLESS|HEADLESS_PASSWORDLESS_SUDO|BB_SERVER|BB_DATA_DIR|BB_APP_NPM_PREFIX|WORK_MACHINE|MACHINE_TYPE|BAN_PI_MCP_ADAPTER|BAN_PI_GOAL_AUTORESEARCH|BAN_SCOWALT_ENGINEERING_SKILLS|BAN_MATT_POCOCK_SKILLS|BAN_MATT_POCKOCK_SKILLS|BAN_IMPECCABLE|GH_TOKEN|GH_TOKEN_SCOWALT|OP_SERVICE_ACCOUNT_TOKEN|ZAI_API_KEY|OPENCODE_GO_API_KEY|CLAUDE_CONFIG_DIR|CODEX_HOME|PI_CODING_AGENT_DIR) ;;
+            HEADLESS|HEADLESS_PASSWORDLESS_SUDO|BB_SERVER|BB_DATA_DIR|BB_APP_NPM_PREFIX|WORK_MACHINE|MACHINE_TYPE|BAN_PI_MCP_ADAPTER|BAN_PI_GOAL_AUTORESEARCH|BAN_IMPECCABLE|GH_TOKEN|GH_TOKEN_SCOWALT|OP_SERVICE_ACCOUNT_TOKEN|ZAI_API_KEY|OPENCODE_GO_API_KEY|CLAUDE_CONFIG_DIR|CODEX_HOME|PI_CODING_AGENT_DIR) ;;
             *) continue ;;
         esac
         setup_trim "${line#*=}"; value="${SETUP_TRIMMED}"
@@ -175,8 +175,6 @@ create_env_local() {
 # WORK_MACHINE=1
 # BAN_PI_MCP_ADAPTER=1
 # BAN_PI_GOAL_AUTORESEARCH=1
-# BAN_SCOWALT_ENGINEERING_SKILLS=1
-# Legacy aliases: BAN_MATT_POCOCK_SKILLS=1 or BAN_MATT_POCKOCK_SKILLS=1
 # BAN_IMPECCABLE=1
 # ZAI_API_KEY=<your z.ai API key>
 # OpenCode Go console key (Go subscription; keep Use balance disabled in the console)
@@ -7347,7 +7345,7 @@ matt_pocock_skill_policy() {
     // Shared by all six standalone setup scripts. Never execute installed skills.
     const fs = require('node:fs');
     const path = require('node:path');
-    const [homeInput, activePiInput, blocked, mode, reportFile] = process.argv.slice(2);
+    const [homeInput, activePiInput, blocked, mode] = process.argv.slice(2);
     const env = process.env;
     const fail = reason => { throw new Error(reason); };
     const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -7362,9 +7360,12 @@ matt_pocock_skill_policy() {
         'git-guardrails-claude-code', 'migrate-to-shoehorn', 'scaffold-exercises', 'setup-pre-commit',
         'grill-me', 'grilling', 'handoff', 'teach', 'to-questionnaire', 'wait-what', 'writing-for-agents'
     ];
-    // Upstream-retired names remain managed, but ordinary installs preserve copies.
+    // Names upstream retired or renamed while setup still installed the suite.
     const historical = ['resolving-merge-conflicts'];
     const obsolete = ['diagnose', 'zoom-out'];
+    // Dotfiles own pr after the suite's retirement: keep its copies, drop only suite records.
+    const kept = ['pr'];
+    const suiteSources = ['mattpocock/skills', 'scowalt/engineering-skills'];
     function stat(file) {
         try { return fs.lstatSync(file); }
         catch (error) { if (error.code === 'ENOENT') return null; throw error; }
@@ -7440,14 +7441,6 @@ matt_pocock_skill_policy() {
         } else fs.unlinkSync(file);
         if (stat(file)) fail('removal-failed');
     }
-    function copiedTree(file) {
-        const st = stat(file);
-        if (!st || st.isSymbolicLink()) fail('invalid-skill-copy');
-        owned(file);
-        if (st.isDirectory()) {
-            for (const entry of fs.readdirSync(file)) copiedTree(path.join(file, entry));
-        } else if (!st.isFile()) fail('invalid-skill-copy');
-    }
     function sameTree(left, right) {
         const a = stat(left), b = stat(right);
         if (!a || !b || a.isSymbolicLink() || b.isSymbolicLink()) return false;
@@ -7457,21 +7450,6 @@ matt_pocock_skill_policy() {
         return JSON.stringify(names) === JSON.stringify(other) && names.every(name => sameTree(path.join(left, name), path.join(right, name)));
     }
     try {
-        if (mode === 'dispose') {
-            const stage = absolute(reportFile);
-            const tempRoot = fs.realpathSync(require('node:os').tmpdir());
-            if (path.dirname(stage) !== tempRoot || !/^setup-matt-pocock-[a-zA-Z0-9]+$/.test(path.basename(stage))) fail('unsafe-stage');
-            directory(tempRoot);
-            const st = stat(stage);
-            if (st) {
-                owned(stage);
-                if (!st.isSymbolicLink() && (!st.isDirectory() || process.platform !== 'win32' && (st.mode & 0o077))) fail('unsafe-stage');
-                // Explicit unlink traversal also avoids legacy PowerShell junction
-                // recursion. A replaced stage root is unlinked, never followed.
-                remove(stage);
-            }
-            process.exit(0);
-        }
         const home = absolute(homeInput);
         directory(home);
         const profile = (value, fallback) => {
@@ -7484,7 +7462,6 @@ matt_pocock_skill_policy() {
         const piDirs = blocked === '1' ? [] : unique([defaultPi, profile(activePiInput, '.pi/agent')]);
         const claude = profile(env.CLAUDE_CONFIG_DIR, '.claude');
         const shared = path.join(home, '.agents/skills');
-        const installDirs = unique([path.join(claude, 'skills'), shared]);
         const allDirs = unique([
             shared, path.join(home, '.claude/skills'), path.join(claude, 'skills'),
             path.join(home, '.codex/skills'), path.join(profile(env.CODEX_HOME, '.codex'), 'skills'),
@@ -7504,18 +7481,21 @@ matt_pocock_skill_policy() {
             return {file, data};
         });
         const tracked = locks.flatMap(({data}) => Object.entries(data?.skills || {})
-            .filter(([, entry]) => ['mattpocock/skills', 'scowalt/engineering-skills'].includes(entry.source)).map(([name]) => name));
+            .filter(([, entry]) => suiteSources.includes(entry.source)).map(([name]) => name));
         if (!tracked.every(nameOK)) fail('invalid-inventory');
         const inventory = unique([...known, ...historical, ...(manifest?.skills || []), ...tracked]);
         const checkDirs = dirs => dirs.forEach(dir => { directory(dir); owned(dir); });
-        const preflight = names => {
-            checkDirs(installDirs);
-            for (const dir of installDirs) {
+        const forget = (names, sources) => {
+            for (const {file, data} of locks) {
+                if (!data) continue;
+                let changed = false;
                 for (const name of names) {
-                    const target = path.join(dir, name);
-                    if (stat(target)?.isSymbolicLink()) fail('linked-install-target');
-                    if (stat(target)) copiedTree(target);
+                    if (Object.hasOwn(data.skills, name) && (!sources || sources.includes(data.skills[name].source))) {
+                        delete data.skills[name];
+                        changed = true;
+                    }
                 }
+                if (changed) writeJson(file, data);
             }
         };
         const cleanup = (names, dirs, extraPaths = []) => {
@@ -7523,106 +7503,17 @@ matt_pocock_skill_policy() {
             const paths = dirs.flatMap(dir => names.map(name => path.join(dir, name))).concat(extraPaths);
             paths.forEach(removable);
             paths.forEach(remove);
-            for (const {file, data} of locks) {
-                if (!data) continue;
-                let changed = false;
-                for (const name of names) {
-                    if (Object.hasOwn(data.skills, name)) { delete data.skills[name]; changed = true; }
-                }
-                if (changed) writeJson(file, data);
-            }
+            forget(names);
         };
-        if (mode === 'names') {
-            process.stdout.write(inventory.join('\n') + '\n');
-        } else if (['remove-pr-lens', 'remove-simple-english', 'remove-show-me'].includes(mode)) {
+        if (['remove-pr-lens', 'remove-simple-english', 'remove-show-me'].includes(mode)) {
             const skill = mode.slice('remove-'.length);
             // Direct Markdown skills are also discoverable in Pi's own skills directory.
             cleanup([skill], allDirs, piDirs.map(dir => path.join(dir, 'skills', skill + '.md')));
             if (blocked === '1') fail('pi-profiles-blocked');
-        } else if (mode === 'remove-matt' || mode === 'remove-obsolete') {
-            cleanup(mode === 'remove-matt' ? unique([...inventory, ...obsolete]) : obsolete, allDirs);
+        } else if (mode === 'remove-matt') {
+            cleanup(unique([...inventory, ...obsolete]).filter(name => !kept.includes(name)), allDirs);
+            forget(kept, suiteSources);
             // Retain inventory for offline retries and custom profiles selected on a later run.
-        } else if (mode === 'preflight') {
-            // Known managed names fail early. The complete native selection, including
-            // new upstream names, is checked again before promotion, never after it.
-            preflight(inventory);
-        } else if (mode === 'stage') {
-            const tempRoot = fs.realpathSync(require('node:os').tmpdir());
-            directory(tempRoot);
-            process.stdout.write(fs.mkdtempSync(path.join(tempRoot, 'setup-matt-pocock-')) + '\n');
-        } else if (mode === 'promote') {
-            // Native --list cannot emit JSON. One isolated native install is both
-            // discovery and the source snapshot: do not fetch/reselect during promotion.
-            const stage = absolute(reportFile);
-            directory(stage);
-            owned(stage);
-            if (!stat(stage)?.isDirectory() || (process.platform !== 'win32' && (stat(stage).mode & 0o077))) fail('unsafe-stage');
-            if (path.dirname(stage) !== fs.realpathSync(require('node:os').tmpdir()) ||
-                !/^setup-matt-pocock-[a-zA-Z0-9]+$/.test(path.basename(stage))) fail('unsafe-stage');
-            const sourceDirs = [path.join(stage, '.claude/skills'), path.join(stage, '.agents/skills')];
-            checkDirs(sourceDirs);
-            const reportPath = path.join(stage, 'report.json');
-            const reportStat = stat(reportPath);
-            if (!reportStat?.isFile() || reportStat.isSymbolicLink() || reportStat.nlink !== 1) fail('invalid-install-report');
-            owned(reportPath);
-            let report;
-            try { report = JSON.parse(fs.readFileSync(reportPath, 'utf8').replace(/^\uFEFF/, '')); }
-            catch { fail('invalid-install-report'); }
-            if (!Array.isArray(report) || report.length === 0) fail('invalid-install-report');
-            const names = [];
-            for (const entry of report) {
-                if (!object(entry) || !nameOK(entry.name) || entry.status !== 'installed' || entry.source !== 'scowalt/engineering-skills' ||
-                    entry.scope !== 'global' || entry.mode !== 'copy' || !Array.isArray(entry.agents) ||
-                    entry.agents.length !== 3 || !['Claude Code', 'Codex', 'Gemini CLI'].every(agent => entry.agents.includes(agent))) fail('invalid-install-report');
-                if (names.includes(entry.name)) fail('invalid-install-report');
-                names.push(entry.name);
-                for (const dir of sourceDirs) {
-                    const skill = path.join(dir, entry.name);
-                    copiedTree(skill);
-                    const md = stat(path.join(skill, 'SKILL.md'));
-                    if (!md?.isFile() || md.size === 0) fail('invalid-skill-copy');
-                }
-            }
-            // A validation floor, never an installation allowlist: newly discovered
-            // skills are accepted too. Retired/renamed baseline skills need review.
-            if (!known.every(name => names.includes(name))) fail('incomplete-suite');
-            for (const dir of sourceDirs) {
-                const entries = fs.readdirSync(dir);
-                if (entries.length !== names.length || !entries.every(name => names.includes(name))) fail('invalid-install-report');
-            }
-            if (!names.every(name => sameTree(path.join(sourceDirs[0], name), path.join(sourceDirs[1], name)))) fail('invalid-skill-copy');
-            const stageLock = jsonFile(path.join(stage, '.state/skills/.skill-lock.json'));
-            if (!stageLock || stageLock.version !== 3 || !object(stageLock.skills) ||
-                Object.keys(stageLock.skills).length !== names.length || !names.every(name => {
-                    const entry = stageLock.skills[name];
-                    return object(entry) && entry.source === 'scowalt/engineering-skills' && entry.sourceType === 'github' &&
-                        entry.sourceUrl === 'https://github.com/scowalt/engineering-skills.git';
-                })) fail('invalid-skill-lock');
-            // All report, snapshot, metadata, and selected destinations must pass
-            // before touching either real copy. Unrelated entries are never traversed.
-            preflight(unique([...inventory, ...names]));
-            for (const dir of installDirs) {
-                directory(dir);
-                fs.mkdirSync(dir, {recursive: true, mode: 0o700});
-                for (const name of names) {
-                    const source = path.join(sourceDirs[0], name), target = path.join(dir, name);
-                    remove(target);
-                    fs.cpSync(source, target, {recursive: true, dereference: false, errorOnExist: true, force: false});
-                    copiedTree(target);
-                    if (!sameTree(source, target)) fail('invalid-skill-copy');
-                }
-            }
-            // Merge only this run's native records into the selected global lock;
-            // retain unrelated entries, preferences, and the other legacy lock.
-            const selectedLock = locks[locks.length - 1];
-            const data = selectedLock.data || {version: 3, skills: {}};
-            for (const name of names) {
-                const entry = {...stageLock.skills[name]};
-                if (data.skills[name]?.installedAt !== undefined) entry.installedAt = data.skills[name].installedAt;
-                data.skills[name] = entry;
-            }
-            writeJson(selectedLock.file, data);
-            writeJson(manifestFile, {version: 1, skills: unique([...inventory, ...names])});
         } else if (mode === 'ownership') {
             if (blocked !== '1') {
                 checkDirs([shared, ...piDirs.flatMap(dir => [dir, path.join(dir, 'skills')])]);
@@ -7632,8 +7523,8 @@ matt_pocock_skill_policy() {
                     if (data.skills !== undefined && (!Array.isArray(data.skills) || !data.skills.every(value => typeof value === 'string'))) fail('invalid-settings');
                     return {file, data};
                 });
-                const names = inventory;
-                const duplicates = piDirs.flatMap(dir => names.map(name => ({file: path.join(dir, 'skills', name), canonical: path.join(shared, name)})));
+                // Only names dotfiles still manage have canonical shared copies to deduplicate.
+                const duplicates = piDirs.flatMap(dir => kept.map(name => ({file: path.join(dir, 'skills', name), canonical: path.join(shared, name)})));
                 const equal = duplicates.filter(({file, canonical}) => sameTree(file, canonical));
                 equal.forEach(({file}) => removable(file));
                 equal.forEach(({file}) => remove(file));
@@ -7649,8 +7540,8 @@ matt_pocock_skill_policy() {
         } else fail('unknown-operation');
     } catch (error) {
         const allowed = ['unsafe-path', 'linked-directory', 'not-directory', 'wrong-owner', 'unsafe-metadata', 'malformed-metadata',
-            'unsupported-file', 'removal-failed', 'invalid-skill-copy', 'invalid-inventory', 'invalid-skill-lock',
-            'pi-profiles-blocked', 'linked-install-target', 'invalid-install-report', 'incomplete-suite', 'invalid-settings', 'unsafe-stage', 'unknown-operation'];
+            'unsupported-file', 'removal-failed', 'invalid-inventory', 'invalid-skill-lock',
+            'pi-profiles-blocked', 'invalid-settings', 'unknown-operation'];
         const reason = allowed.includes(error.message) ? error.message : ['EACCES', 'EPERM', 'ENOENT', 'ENOSPC', 'EROFS', 'EBUSY'].includes(error.code) ? error.code : 'operation-failed';
         process.stderr.write('Managed skills: ' + reason + '.\n');
         process.exitCode = 1;
@@ -7658,75 +7549,13 @@ matt_pocock_skill_policy() {
 MANAGED_SKILL_POLICY_JS
 }
 
-matt_pocock_skills() {
-    matt_pocock_skill_policy names
-}
-
-matt_pocock_obsolete_skills() {
-    printf '%s\n' diagnose zoom-out
-}
-
-matt_pocock_all_managed_skills() {
-    matt_pocock_skills || return 1
-    matt_pocock_obsolete_skills
-}
-
-matt_pocock_skills_disabled() {
-    [[ "${BAN_SCOWALT_ENGINEERING_SKILLS:-}" == "1" || "${BAN_MATT_POCOCK_SKILLS:-}" == "1" || "${BAN_MATT_POCKOCK_SKILLS:-}" == "1" ]]
-}
-
 remove_matt_pocock_skills() {
     matt_pocock_skill_policy remove-matt
 }
 
-remove_obsolete_matt_pocock_skills() {
-    matt_pocock_skill_policy remove-obsolete
-}
-
 setup_matt_pocock_skills() {
-    local _stage="" _npm_userconfig="" _npm_globalconfig=""
-    local _matt_failed=0
-    if matt_pocock_skills_disabled; then
-        remove_matt_pocock_skills
-        return
-    fi
-    if ! ensure_skills_cli_node_runtime; then
-        print_warning "Cannot install Scowalt engineering skills because the skills CLI runtime is not ready."
-        return 1
-    fi
-    if ! command -v npx &> /dev/null; then
-        print_warning "npx is not available; cannot install Scowalt engineering skills."
-        return 1
-    fi
-    matt_pocock_skill_policy preflight || return 1
-    if ! _npm_userconfig=$(npm config get userconfig 2>/dev/null) || [[ -z "${_npm_userconfig}" ]] ||
-        ! _npm_globalconfig=$(npm config get globalconfig 2>/dev/null) || [[ -z "${_npm_globalconfig}" ]]; then
-        print_warning "Cannot preserve npm configuration for staged skill installation."
-        return 1
-    fi
-    _stage=$(matt_pocock_skill_policy stage) || return 1
-    print_message "Installing/updating the full Scowalt engineering skill suite for Claude Code, Codex, Gemini CLI, and Pi..."
-    if ! HOME="${_stage}" USERPROFILE="${_stage}" \
-        CLAUDE_CONFIG_DIR="${_stage}/.claude" CODEX_HOME="${_stage}/.codex" PI_CODING_AGENT_DIR="${_stage}/.pi/agent" \
-        XDG_STATE_HOME="${_stage}/.state" XDG_CONFIG_HOME="${_stage}/.config" \
-        XDG_CACHE_HOME="${_stage}/.cache" XDG_DATA_HOME="${_stage}/.local/share" \
-        npm_config_userconfig="${_npm_userconfig}" NPM_CONFIG_USERCONFIG="${_npm_userconfig}" \
-        npm_config_globalconfig="${_npm_globalconfig}" NPM_CONFIG_GLOBALCONFIG="${_npm_globalconfig}" \
-        npx --yes skills@latest add scowalt/engineering-skills --global \
-        --agent claude-code --agent codex --agent gemini-cli \
-        --skill '*' --full-depth --copy --yes --json < /dev/null > "${_stage}/report.json" 2>/dev/null; then
-        print_warning "Failed to install the full Scowalt engineering skill suite."
-        _matt_failed=1
-    elif ! matt_pocock_skill_policy promote "${_stage}"; then
-        _matt_failed=1
-    elif ! remove_obsolete_matt_pocock_skills; then
-        _matt_failed=1
-    fi
-    matt_pocock_skill_policy dispose "${_stage}" || _matt_failed=1
-    if [[ "${_matt_failed}" -eq 0 ]]; then
-        print_success "Full Scowalt engineering skill suite installed/updated through copied global skills."
-    fi
-    return "${_matt_failed}"
+    remove_matt_pocock_skills || return 1
+    print_success "Retired Scowalt engineering skills are removed; dotfiles manage pr."
 }
 
 

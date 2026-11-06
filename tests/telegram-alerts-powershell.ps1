@@ -25,11 +25,8 @@ try {
             throw "Missing or duplicate placeholder: $key"
         }
     }
-    if ([regex]::Matches($initial, '(?m)^# BAN_SCOWALT_ENGINEERING_SKILLS=1\r?$').Count -ne 1) {
-        throw 'Missing or duplicate commented engineering-skill exclusion'
-    }
-    if ($initial -match '(?m)^\s*BAN_(SCOWALT_ENGINEERING|MATT_POCOCK|MATT_POCKOCK)_SKILLS=') {
-        throw 'Active engineering-skill exclusion in template'
+    if ($initial -match 'BAN_(SCOWALT_ENGINEERING|MATT_POCOCK|MATT_POCKOCK)_SKILLS') {
+        throw 'Template advertises a retired engineering-skill exclusion'
     }
     if ([regex]::Matches($initial, '(?m)^# BAN_IMPECCABLE=1\r?$').Count -ne 1) {
         throw 'Missing or duplicate commented Impeccable exclusion'

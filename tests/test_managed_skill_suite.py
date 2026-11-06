@@ -15,6 +15,9 @@ PWSH = os.environ.get('PWSH_BIN') or shutil.which('pwsh')
 NODE = shutil.which('node')
 KNOWN = json.loads((ROOT / 'tests/fixtures/matt-pocock-skills.json').read_text())['skills']
 HISTORICAL = ['resolving-merge-conflicts']
+OBSOLETE = ['diagnose', 'zoom-out']
+KEPT = ['pr']
+RETIRED = [name for name in KNOWN + HISTORICAL + OBSOLETE if name not in KEPT]
 
 
 def embedded(script):
@@ -28,16 +31,12 @@ def functions(script):
     text = (ROOT / script).read_text()
     if script == 'win.ps1':
         names = ['Invoke-MattPocockSkillPolicy', 'Remove-MattPocockSkills', 'Setup-MattPocockSkills',
-                 'Test-MattPocockSkillsDisabled', 'Test-EnvLocalFlag', 'Set-PiSkillOwnership', 'Remove-PrLensSkill',
-                 'Remove-SimpleEnglishSkill', 'Remove-ShowMeSkill', 'Read-SetupEnvironment',
-                 'ConvertFrom-SetupEnvironmentValue']
+                 'Set-PiSkillOwnership', 'Remove-PrLensSkill', 'Remove-SimpleEnglishSkill', 'Remove-ShowMeSkill']
         pattern = lambda name: r'^function ' + name + r' \{.*?^\}'
     else:
-        names = ['matt_pocock_skill_policy', 'matt_pocock_skills', 'matt_pocock_skills_disabled',
-                 'remove_matt_pocock_skills', 'remove_obsolete_matt_pocock_skills', 'setup_matt_pocock_skills',
+        names = ['matt_pocock_skill_policy', 'remove_matt_pocock_skills', 'setup_matt_pocock_skills',
                  'configure_pi_skill_ownership', 'remove_pr_lens_skill', 'remove_simple_english_skill',
-                 'remove_show_me_skill', 'setup_environment_failure', 'setup_trim',
-                 'setup_environment_value', 'setup_load_environment']
+                 'remove_show_me_skill']
         pattern = lambda name: r'^' + name + r'\(\) \{.*?^\}'
     return '\n\n'.join(re.search(pattern(name), text, re.M | re.S)[0] for name in names)
 
@@ -51,14 +50,11 @@ class ManagedSkills(unittest.TestCase):
         (self.home / '.test-owned').touch()
         self.env = {k: v for k, v in os.environ.items() if k not in (
             'HOME', 'USERPROFILE', 'PI_CODING_AGENT_DIR', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_STATE_HOME',
-            'BAN_SCOWALT_ENGINEERING_SKILLS', 'BAN_MATT_POCOCK_SKILLS', 'BAN_MATT_POCKOCK_SKILLS',
             'NODE_OPTIONS', 'NODE_PATH', 'WORK_MACHINE')}
-        self.env.update(HOME=str(self.home), USERPROFILE=str(self.home), SKILL_TEST_HOME=str(self.home),
-                        SKILL_TEST_CALLS=str(self.root / 'calls'), SKILL_TEST_PYTHON=sys.executable,
-                        SKILL_TEST_MOCK=str(ROOT / 'tests/mock_managed_skills.py'),
-                        SKILL_TEST_STAGES=str(self.root / 'stages'), TMPDIR=str(self.root),
-                        TMP=str(self.root), TEMP=str(self.root), XDG_CACHE_HOME=str(self.root / 'cache'),
-                        XDG_CONFIG_HOME=str(self.root / 'config'), XDG_DATA_HOME=str(self.root / 'data'))
+        self.env.update(HOME=str(self.home), USERPROFILE=str(self.home), SKILL_TEST_CALLS=str(self.root / 'calls'),
+                        TMPDIR=str(self.root), TMP=str(self.root), TEMP=str(self.root),
+                        XDG_CACHE_HOME=str(self.root / 'cache'), XDG_CONFIG_HOME=str(self.root / 'config'),
+                        XDG_DATA_HOME=str(self.root / 'data'))
         self.shared = self.home / '.agents/skills'
         self.default_pi = self.home / '.pi/agent'
         self.custom_pi = self.home / 'custom pi'
@@ -85,16 +81,16 @@ class ManagedSkills(unittest.TestCase):
         visit(self.home)
         return state
 
-    def policy(self, mode, success=True, blocked=False, script='mac.sh', argument=''):
+    def policy(self, mode, success=True, blocked=False, script='mac.sh'):
         helper = self.root / 'policy.cjs'
         helper.write_text(embedded(script))
         proc = subprocess.run([NODE, str(helper), str(self.home), self.env.get('PI_CODING_AGENT_DIR', ''),
-                               '1' if blocked else '0', mode, str(argument)], env=self.env, text=True, capture_output=True, timeout=30)
+                               '1' if blocked else '0', mode], env=self.env, text=True, capture_output=True, timeout=30)
         self.assertEqual(proc.returncode == 0, success, proc.stdout + proc.stderr)
         self.assertNotIn('PRIVATE-SENTINEL', proc.stdout + proc.stderr)
         return proc
 
-    def wrapper(self, script, operation='install', success=True, blocked=False, load_environment=False):
+    def wrapper(self, script, operation='install', success=True, blocked=False):
         if script == 'win.ps1' and not PWSH:
             self.skipTest('Set PWSH_BIN for PowerShell wrapper coverage')
         if script == 'win.ps1':
@@ -106,31 +102,9 @@ class ManagedSkills(unittest.TestCase):
 function Write-Message($Message) { }
 function Write-Warning($Message) { [Console]::Error.WriteLine($Message) }
 function Write-Success($Message) { }
-function Enable-SkillsCliNodeRuntime { return $env:SKILL_TEST_MODE -ne 'bad-runtime' }
-function npm {
-    param([string]$Command, [string]$Action, [string]$Key)
-    if ($Command -ne 'config' -or $Action -ne 'get' -or $Key -notin @('userconfig','globalconfig')) { throw 'unexpected npm call' }
-    $global:LASTEXITCODE = 0
-    if ($env:SKILL_TEST_MODE -eq 'failed-npm-config') { $global:LASTEXITCODE = 1; return }
-    Join-Path $env:SKILL_TEST_HOME ($Key + '.npmrc')
-}
-function npx {
-    param([Parameter(ValueFromRemainingArguments=$true)][object[]]$Arguments)
-    # Unix PowerShell expands native '*' arguments. Pass the captured argv as
-    # JSON so this mock models Windows npx.cmd without Unix glob expansion.
-    $env:SKILL_TEST_ARGS = ConvertTo-Json -InputObject @($Arguments) -Compress
-    try { & $env:SKILL_TEST_PYTHON $env:SKILL_TEST_MOCK }
-    finally { $env:SKILL_TEST_ARGS = $null }
-}
-''' + ('\nRead-SetupEnvironment\n' if load_environment else '')
-                               + '\n$trackedEnvironment = [System.Collections.Generic.Dictionary[string,object]]::new([System.StringComparer]::Ordinal)\n'
-                               + 'foreach ($key in @("HOME","USERPROFILE","CLAUDE_CONFIG_DIR","CODEX_HOME","PI_CODING_AGENT_DIR",'
-                               + '"XDG_STATE_HOME","XDG_CONFIG_HOME","XDG_CACHE_HOME","XDG_DATA_HOME",'
-                               + '"npm_config_userconfig","npm_config_globalconfig","NPM_CONFIG_USERCONFIG","NPM_CONFIG_GLOBALCONFIG")) '
-                               + '{ $trackedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key) }\n'
-                               + f'$script:PiProfileMutationsBlocked=${str(blocked).lower()}\n$result = {action}\n'
-                               + 'foreach ($key in $trackedEnvironment.Keys) { if ([Environment]::GetEnvironmentVariable($key) -cne '
-                               + '$trackedEnvironment[$key]) { throw "Environment was not restored: $key" } }\n'
+function npm { [IO.File]::WriteAllText($env:SKILL_TEST_CALLS, 'npm'); throw 'unexpected npm call' }
+function npx { [IO.File]::WriteAllText($env:SKILL_TEST_CALLS, 'npx'); throw 'unexpected npx call' }
+''' + f'$script:PiProfileMutationsBlocked=${str(blocked).lower()}\n$result = {action}\n'
                                + 'if (-not $result) { exit 1 }\n')
             command = [PWSH, '-NoProfile', '-NonInteractive', '-File', str(fixture)]
         else:
@@ -143,23 +117,14 @@ print_message() { :; }
 print_success() { :; }
 print_warning() { printf '%s\n' "$1" >&2; }
 print_error() { printf '%s\n' "$1" >&2; }
-ensure_skills_cli_node_runtime() { [[ "${SKILL_TEST_MODE:-}" != bad-runtime ]]; }
-npm() {
-    [[ "$1 $2" == 'config get' && ( "$3" == userconfig || "$3" == globalconfig ) ]] || return 90
-    [[ "${SKILL_TEST_MODE:-}" != failed-npm-config ]] || return 1
-    printf '%s/%s.npmrc\n' "${SKILL_TEST_HOME}" "$3"
-}
-npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
-''' + ('\nsetup_load_environment\n' if load_environment else '')
-                               + f'\nPI_PROFILE_MUTATIONS_BLOCKED={int(blocked)}\n{action}\n')
+npm() { : > "${SKILL_TEST_CALLS}"; return 90; }
+npx() { : > "${SKILL_TEST_CALLS}"; return 90; }
+''' + f'\nPI_PROFILE_MUTATIONS_BLOCKED={int(blocked)}\n{action}\n')
             command = ['bash', str(fixture)]
         proc = subprocess.run(command, env=self.env, cwd=self.root, text=True, capture_output=True, timeout=30)
         self.assertEqual(proc.returncode == 0, success, script + ': ' + proc.stdout + proc.stderr)
         self.assertNotIn('PRIVATE-SENTINEL', proc.stdout + proc.stderr)
-        self.assertNotIn('Environment was not restored', proc.stdout + proc.stderr)
-        if Path(self.env['SKILL_TEST_STAGES']).exists():
-            for stage in Path(self.env['SKILL_TEST_STAGES']).read_text().splitlines():
-                self.assertFalse(os.path.lexists(stage), 'staging HOME was not removed')
+        self.assertFalse(Path(self.env['SKILL_TEST_CALLS']).exists(), 'retirement must not run the skills CLI')
         return proc
 
     def all_dirs(self):
@@ -172,134 +137,80 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
         for script in SCRIPTS:
             self.assertEqual(embedded(script), baseline, script)
             text = (ROOT / script).read_text()
-            self.assertNotIn('setup_pr_lens_skill', text)
-            self.assertNotIn('Install-PrLensSkill', text)
-            self.assertNotIn('coldteadotai/pr-lens', text)
-            self.assertNotIn('setup_simple_english_skill', text)
-            self.assertNotIn('Install-SimpleEnglishSkill', text)
-            self.assertNotIn('AminBlg/SimpleEnglish', text)
-            self.assertNotIn('setup_show_me_skill', text)
-            self.assertNotIn('Install-ShowMeSkill', text)
-            self.assertNotIn('humanlayer/skills', text)
+            for retired in ('setup_pr_lens_skill', 'Install-PrLensSkill', 'coldteadotai/pr-lens',
+                            'setup_simple_english_skill', 'Install-SimpleEnglishSkill', 'AminBlg/SimpleEnglish',
+                            'setup_show_me_skill', 'Install-ShowMeSkill', 'humanlayer/skills',
+                            "--skill '*'", 'BAN_SCOWALT_ENGINEERING_SKILLS', 'BAN_MATT_POCOCK_SKILLS',
+                            'BAN_MATT_POCKOCK_SKILLS', 'Test-MattPocockSkillsDisabled', 'matt_pocock_skills_disabled'):
+                self.assertNotIn(retired, text, script)
             if script != 'win.ps1':
                 self.assertRegex(text, r'remove_show_me_skill(?:; then| \|\| _setup_had_errors=1)')
                 self.assertRegex(text, r'remove_simple_english_skill(?:; then| \|\| _setup_had_errors=1)')
                 self.assertRegex(text, r'remove_pr_lens_skill(?:; then| \|\| _setup_had_errors=1)')
                 self.assertRegex(text, r'setup_matt_pocock_skills(?:; then| \|\| _setup_had_errors=1)')
-                self.assertIn("--skill '*' --full-depth --copy --yes --json", text)
             else:
-                self.assertIn('Required PR Lens skill removal failed.', text)
                 self.assertIn('if (-not (Remove-PrLensSkill))', text)
-                self.assertIn('Required Simple English skill removal failed.', text)
                 self.assertIn('if (-not (Remove-SimpleEnglishSkill))', text)
-                self.assertIn('Required show-me skill removal failed.', text)
                 self.assertIn('if (-not (Remove-ShowMeSkill))', text)
-        powershell = functions('win.ps1')
-        self.assertNotIn('$IsWindows', powershell)   
-        self.assertIn('[Environment]::OSVersion.Platform', powershell)
-        self.assertNotIn('Remove-Item -LiteralPath $stage -Recurse', powershell)
+                self.assertIn('Setup-MattPocockSkills', text)
         self.assertEqual(len(KNOWN), 37)
-        for name in KNOWN:
+        for name in KNOWN + HISTORICAL + OBSOLETE + KEPT:
             self.assertIn("'" + name + "'", baseline)
 
-    def test_every_wrapper_updates_all_categories_and_future_skills_on_personal_and_work(self):
+    def test_every_wrapper_retires_suite_but_keeps_pr_and_unrelated_data(self):
+        self.env['XDG_STATE_HOME'] = str(self.home / 'state')
+        manifest = self.home / '.agents/.setup-matt-pocock-skills.json'
+        locks = [self.home / '.agents/.skill-lock.json', self.home / 'state/skills/.skill-lock.json']
+        tracked = {'old-future': 'mattpocock/skills', 'fork-future': 'scowalt/engineering-skills'}
+        sentinels = [self.put(self.home / name, 'PRIVATE-SENTINEL') for name in (
+            '.env.local', 'project/.agents/skills/tdd/SKILL.md', '.claude/hooks/keep')]
         for script in SCRIPTS:
             if script == 'win.ps1' and not PWSH:
                 continue
             for work in ('0', '1'):
                 with self.subTest(script=script, work=work):
                     self.env['WORK_MACHINE'] = work
-                    for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
-                        self.put(base / 'tdd/SKILL.md', 'locally edited original-source copy')
-                    call_file = Path(self.env['SKILL_TEST_CALLS'])
-                    before_calls = len(call_file.read_text().splitlines()) if call_file.exists() else 0
+                    self.put(manifest, json.dumps({'version': 1, 'skills': ['inventory-only', 'pr']}))
+                    for lock in locks:
+                        self.put(lock, json.dumps({'version': 3, 'skills': {
+                            **{name: {'source': source} for name, source in tracked.items()},
+                            'tdd': {'source': 'scowalt/engineering-skills'},
+                            'pr': {'source': 'scowalt/engineering-skills'},
+                            'keep': {'source': 'other/repo'}}, 'dismissed': {'keep': True}}))
+                    names = RETIRED + ['inventory-only', *tracked]
+                    for base in self.all_dirs():
+                        for name in names:
+                            self.put(base / name / 'references/guide.md', 'user-modified managed copy')
+                        self.put(base / 'pr/SKILL.md', 'dotfiles-managed pr')
+                        self.put(base / 'keep-me/SKILL.md', 'unrelated skill')
                     for _ in range(2):
                         self.wrapper(script)
-                    calls = [json.loads(line) for line in call_file.read_text().splitlines()]
-                    self.assertEqual(len(calls) - before_calls, 2)
-                    self.assertTrue(all(call[3] == 'scowalt/engineering-skills' for call in calls))
-                    records = json.loads((self.home / '.agents/.skill-lock.json').read_text())['skills']
-                    for name in KNOWN + ['new-upstream-skill']:
-                        self.assertEqual(records[name]['source'], 'scowalt/engineering-skills')
-                        self.assertEqual(records[name]['sourceUrl'], 'https://github.com/scowalt/engineering-skills.git')
-                        self.assertEqual((self.shared / name / 'SKILL.md').read_text(),
-                                         f'---\nname: {name}\ndescription: Inert test skill.\n---\nFixture only.\n')
-                    inventory = json.loads((self.home / '.agents/.setup-matt-pocock-skills.json').read_text())
-                    self.assertEqual(set(inventory['skills']), set(KNOWN + HISTORICAL + ['new-upstream-skill']))
-                    for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
-                        self.assertFalse((base / HISTORICAL[0]).exists())
-                        for name in KNOWN + ['new-upstream-skill']:
-                            self.assertGreater((base / name / 'SKILL.md').stat().st_size, 0)
-                            self.assertEqual((base / name / 'references/guide.md').read_text(), 'Upstream fixture: do not execute.\n')
-                    self.assertFalse((self.custom_pi / 'skills/tdd').exists())
-                    self.assertFalse((Path(self.env['CODEX_HOME']) / 'skills/tdd').exists())
+                    for base in self.all_dirs():
+                        self.assertEqual(sorted(p.name for p in base.iterdir()), ['keep-me', 'pr'], base)
+                        self.assertEqual((base / 'pr/SKILL.md').read_text(), 'dotfiles-managed pr')
+                    for lock in locks:
+                        self.assertEqual(json.loads(lock.read_text()), {'version': 3, 'skills': {
+                            'keep': {'source': 'other/repo'}}, 'dismissed': {'keep': True}})
+                    self.assertEqual(json.loads(manifest.read_text())['skills'], ['inventory-only', 'pr'])
+        for sentinel in sentinels:
+            self.assertEqual(sentinel.read_text(), 'PRIVATE-SENTINEL')
 
-    def test_reviewed_current_snapshot_promotes_without_recreating_retired_skill(self):
-        self.assertIn('pr', KNOWN)
-        self.assertNotIn(HISTORICAL[0], KNOWN)
-        self.env['SKILL_TEST_MODE'] = 'current-snapshot'
-        for script in ('mac.sh', 'win.ps1'):
-            if script == 'win.ps1' and not PWSH:
-                continue
-            self.wrapper(script)
-            for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
-                self.assertEqual({p.name for p in base.iterdir()}, set(KNOWN))
-            inventory = json.loads((self.home / '.agents/.setup-matt-pocock-skills.json').read_text())
-            self.assertEqual(set(inventory['skills']), set(KNOWN + HISTORICAL))
+    def test_retirement_keeps_unrelated_pr_lock_records(self):
+        lock = self.put(self.home / '.agents/.skill-lock.json', json.dumps({'version': 3, 'skills': {
+            'pr': {'source': 'scowalt/dotfiles'}, 'tdd': {'source': 'mattpocock/skills'}}}))
+        self.policy('remove-matt')
+        self.assertEqual(json.loads(lock.read_text())['skills'], {'pr': {'source': 'scowalt/dotfiles'}})
 
-    def test_each_required_skill_remains_required_despite_an_extra_name(self):
-        self.put(self.shared / 'pr/SKILL.md', 'previous')
-        before = self.snapshot()
-        for name in KNOWN:
-            with self.subTest(missing=name):
-                self.env['SKILL_TEST_OMIT'] = name
-                result = self.wrapper('mac.sh', success=False)
-                self.assertIn('incomplete-suite', result.stderr)
-                self.assertEqual(self.snapshot(), before)
-
-    def test_historical_copies_survive_install_and_inventory_but_keep_duplicate_rules(self):
-        name = HISTORICAL[0]
-        for script in ('mac.sh', 'win.ps1'):
-            if script == 'win.ps1' and not PWSH:
-                continue
-            for file in (self.home / '.agents/.setup-matt-pocock-skills.json', self.home / '.agents/.skill-lock.json'):
-                file.unlink(missing_ok=True)
-            for base in self.all_dirs():
-                self.put(base / name / 'SKILL.md', 'historical copy')
-            self.put(self.custom_pi / 'skills' / name / 'SKILL.md', 'modified historical copy')
-            self.wrapper(script)
-            for base in self.all_dirs():
-                expected = 'modified historical copy' if base == self.custom_pi / 'skills' else 'historical copy'
-                self.assertEqual((base / name / 'SKILL.md').read_text(), expected)
-            inventory = json.loads((self.home / '.agents/.setup-matt-pocock-skills.json').read_text())
-            self.assertIn(name, inventory['skills'])
-            (self.home / '.agents/.setup-matt-pocock-skills.json').unlink()
-            self.wrapper(script, 'ownership')
-            self.assertFalse((self.default_pi / 'skills' / name).exists())
-            self.assertEqual((self.custom_pi / 'skills' / name / 'SKILL.md').read_text(), 'modified historical copy')
-            self.assertEqual((self.shared / name / 'SKILL.md').read_text(), 'historical copy')
-            for profile in (self.default_pi, self.custom_pi):
-                settings = json.loads((profile / 'settings.json').read_text())
-                self.assertIn('!' + str(profile / 'skills' / name) + '/**', settings['skills'])
-            for ban in ('BAN_MATT_POCOCK_SKILLS', 'BAN_MATT_POCKOCK_SKILLS'):
-                for base in self.all_dirs():
-                    self.put(base / name / 'SKILL.md', 'historical copy')
-                self.env[ban] = '1'
-                self.wrapper(script)
-                self.env.pop(ban)
-                for base in self.all_dirs():
-                    self.assertFalse((base / name).exists())
-
-    def test_group_writable_containers_already_converge_exclude_and_retire_without_mode_repair(self):
+    def test_group_writable_containers_retire_without_mode_repair(self):
         self.env['XDG_STATE_HOME'] = str(self.home / 'state')
         state = self.put(self.home / 'state/skills/.skill-lock.json', json.dumps({
-            'version': 3, 'skills': {'keep': {'source': 'other/repo'}}, 'dismissed': {'keep': True}}))
-        sentinels = [self.put(self.home / name, 'PRIVATE-SENTINEL') for name in (
-            '.env.local', 'project/.agents/skills/tdd/SKILL.md', 'hosted/diagram.html', '.claude/hooks/keep')]
+            'version': 3, 'skills': {'keep': {'source': 'other/repo'}, 'tdd': {'source': 'mattpocock/skills'}},
+            'dismissed': {'keep': True}}))
         for base in self.all_dirs():
             self.put(base / 'keep-me/SKILL.md', 'unrelated skill')
+            self.put(base / 'tdd/SKILL.md', 'retired copy')
         private = {self.default_pi, self.custom_pi}
-        containers = [self.home] + [p for p in self.home.rglob('*') if p.is_dir()]
+        containers = [self.home] + [p for p in self.home.rglob('*') if p.is_dir() and p.name != 'tdd']
         for directory in containers:
             directory.chmod(0o700 if directory in private else 0o2775)
         metadata = {p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode, p.stat().st_ino) for p in containers}
@@ -309,219 +220,91 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
             with self.subTest(script=script):
                 for _ in range(2):
                     self.wrapper(script)
-                for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
-                    for name in KNOWN + ['new-upstream-skill']:
-                        self.assertGreater((base / name / 'SKILL.md').stat().st_size, 0)
-                inventory = json.loads((self.home / '.agents/.setup-matt-pocock-skills.json').read_text())
-                self.assertEqual(set(inventory['skills']), set(KNOWN + HISTORICAL + ['new-upstream-skill']))
-                shutil.copytree(self.shared / 'tdd', self.default_pi / 'skills/tdd')
-                self.put(self.custom_pi / 'skills/tdd/SKILL.md', 'custom duplicate')
-                self.wrapper(script, 'ownership')
-                self.wrapper(script, 'ownership')
-                self.assertFalse((self.default_pi / 'skills/tdd').exists())
-                self.assertEqual((self.custom_pi / 'skills/tdd/SKILL.md').read_text(), 'custom duplicate')
-                for profile in (self.default_pi, self.custom_pi):
-                    selected = json.loads((profile / 'settings.json').read_text())['skills']
-                    self.assertIn('!' + str(profile / 'skills/tdd') + '/**', selected)
-                    self.assertNotIn('!' + str(self.shared / 'tdd') + '/**', selected)
-                calls = Path(self.env['SKILL_TEST_CALLS']).read_bytes()
-                for name, operation in (('pr-lens', 'retire'), ('simple-english', 'retire-simple'), ('show-me', 'retire-show')):
-                    for base in self.all_dirs():
-                        self.put(base / name / 'SKILL.md', 'user-modified retired copy')
-                        (base / name).chmod(0o2775)
-                    self.wrapper(script, operation)
-                    self.wrapper(script, operation)
-                    self.assertTrue(all(not (base / name).exists() for base in self.all_dirs()))
-                self.env.update(BAN_MATT_POCOCK_SKILLS='1', SKILL_TEST_MODE='bad-runtime')
-                self.wrapper(script)
-                self.wrapper(script)
-                self.env.pop('BAN_MATT_POCOCK_SKILLS')
-                self.env.pop('SKILL_TEST_MODE')
+                    self.wrapper(script, 'ownership')
                 for base in self.all_dirs():
                     self.assertEqual([p.name for p in base.iterdir()], ['keep-me'])
-                self.assertEqual(Path(self.env['SKILL_TEST_CALLS']).read_bytes(), calls)
                 self.assertEqual(json.loads(state.read_text()), {
                     'version': 3, 'skills': {'keep': {'source': 'other/repo'}}, 'dismissed': {'keep': True}})
-                self.assertEqual({p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode, p.stat().st_ino) for p in containers}, metadata)
-                for sentinel in sentinels:
-                    self.assertEqual(sentinel.read_text(), 'PRIVATE-SENTINEL')
+                self.assertEqual({p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode, p.stat().st_ino)
+                                  for p in containers}, metadata)
 
-    def test_group_writable_staging_remains_private_not_an_ordinary_container(self):
-        stage = Path(self.policy('stage').stdout.strip())
-        stage.chmod(0o770)
-        for mode in ('promote', 'dispose'):
-            result = self.policy(mode, argument=stage, success=False)
-            self.assertIn('unsafe-stage', result.stderr)
-            self.assertEqual(stage.stat().st_mode & 0o777, 0o770)
-        stage.chmod(0o700)
-        self.policy('dispose', argument=stage)
-
-    def test_default_claude_and_xdg_state_paths(self):
+    def test_default_claude_path_is_covered(self):
         self.env.pop('CLAUDE_CONFIG_DIR')
-        self.env['XDG_STATE_HOME'] = str(self.home / 'state')
-        containers = [self.home / name for name in ('', '.claude', '.claude/skills', '.agents', '.agents/skills', 'state', 'state/skills')]
-        for directory in containers:
-            directory.mkdir(parents=True, exist_ok=True)
-            directory.chmod(0o775)
-        before = {p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode, p.stat().st_ino) for p in containers}
+        self.put(self.home / '.claude/skills/retro/SKILL.md')
+        self.put(self.home / '.claude/skills/pr/SKILL.md')
         self.wrapper('mac.sh')
-        self.assertTrue((self.home / '.claude/skills/retro/SKILL.md').is_file())
-        self.assertTrue((self.home / 'state/skills/.skill-lock.json').is_file())
-        self.env['BAN_MATT_POCOCK_SKILLS'] = '1'
-        self.wrapper('mac.sh')
-        self.assertFalse((self.shared / 'new-upstream-skill').exists())
-        self.assertEqual(json.loads((self.home / 'state/skills/.skill-lock.json').read_text())['skills'], {})
-        self.assertEqual({p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode, p.stat().st_ino) for p in containers}, before)
+        self.assertFalse((self.home / '.claude/skills/retro').exists())
+        self.assertTrue((self.home / '.claude/skills/pr/SKILL.md').is_file())
 
-    def test_both_optouts_remove_all_global_copies_and_future_inventory_offline(self):
+    def test_ownership_deduplicates_only_dotfiles_managed_pr(self):
+        self.put(self.shared / 'pr/SKILL.md', 'dotfiles pr')
+        self.put(self.shared / 'tdd/SKILL.md', 'unrelated shared copy')
         for script in ('mac.sh', 'win.ps1'):
             if script == 'win.ps1' and not PWSH:
                 continue
-            for ban in ('BAN_MATT_POCOCK_SKILLS', 'BAN_MATT_POCKOCK_SKILLS'):
-                with self.subTest(script=script, ban=ban):
-                    self.wrapper(script)
-                    for base in self.all_dirs():
-                        for name in KNOWN + HISTORICAL + ['new-upstream-skill', 'diagnose', 'zoom-out']:
-                            self.put(base / name / 'SKILL.md')
-                        self.put(base / 'keep-me/SKILL.md')
-                    calls = Path(self.env['SKILL_TEST_CALLS']).read_text()
-                    self.env[ban] = '1'
-                    self.env['SKILL_TEST_MODE'] = 'bad-runtime'
-                    self.wrapper(script)
-                    self.wrapper(script)
-                    self.env.pop(ban)
-                    self.env.pop('SKILL_TEST_MODE')
-                    self.assertEqual(Path(self.env['SKILL_TEST_CALLS']).read_text(), calls)
-                    for base in self.all_dirs():
-                        self.assertEqual(list(p.name for p in base.iterdir()), ['keep-me'])
+            with self.subTest(script=script):
+                self.put(self.default_pi / 'skills/pr/SKILL.md', 'dotfiles pr')
+                self.put(self.custom_pi / 'skills/pr/SKILL.md', 'user-modified pr')
+                for profile in (self.default_pi, self.custom_pi):
+                    self.put(profile / 'skills/prototype/SKILL.md', 'Pi-local prototype')
+                    self.put(profile / 'settings.json', '{"theme":"keep","skills":["custom"]}')
+                for _ in range(2):
+                    self.wrapper(script, 'ownership')
+                self.assertFalse((self.default_pi / 'skills/pr').exists())
+                self.assertEqual((self.custom_pi / 'skills/pr/SKILL.md').read_text(), 'user-modified pr')
+                for profile in (self.default_pi, self.custom_pi):
+                    self.assertEqual((profile / 'skills/prototype/SKILL.md').read_text(), 'Pi-local prototype')
+                    settings = json.loads((profile / 'settings.json').read_text())
+                    self.assertEqual(settings['theme'], 'keep')
+                    self.assertIn('custom', settings['skills'])
+                    self.assertEqual(settings['skills'].count('!' + str(profile / 'skills/pr') + '/**'), 1)
+                    self.assertFalse(any('prototype' in rule or '/tdd/' in rule for rule in settings['skills']))
 
-    def test_exact_one_in_any_exclusion_wins_conflicts_offline_and_clearing_reinstalls(self):
-        flags = ('BAN_SCOWALT_ENGINEERING_SKILLS', 'BAN_MATT_POCOCK_SKILLS', 'BAN_MATT_POCKOCK_SKILLS')
-        for script in SCRIPTS:
-            if script == 'win.ps1' and not PWSH:
-                continue
-            for active in flags:
-                with self.subTest(script=script, active=active):
-                    self.env.pop('SKILL_TEST_MODE', None)
-                    self.env.update(dict(zip(flags, ('0', 'true', '01'))))
-                    self.wrapper(script)
-                    for base in self.all_dirs():
-                        self.put(base / 'new-upstream-skill/SKILL.md', 'managed future copy')
-                        self.put(base / 'keep-me/SKILL.md', 'unrelated skill')
-                    calls = Path(self.env['SKILL_TEST_CALLS']).read_bytes()
-                    self.env.update({active: '1', 'SKILL_TEST_MODE': 'bad-runtime'})
-                    for _ in range(2):
-                        self.wrapper(script)
-                    self.assertEqual(Path(self.env['SKILL_TEST_CALLS']).read_bytes(), calls)
-                    for base in self.all_dirs():
-                        self.assertFalse((base / 'new-upstream-skill').exists())
-                        self.assertEqual((base / 'keep-me/SKILL.md').read_text(), 'unrelated skill')
-                    self.assertEqual(json.loads((self.home / '.agents/.skill-lock.json').read_text())['skills'], {})
-                    self.env.pop('SKILL_TEST_MODE')
-                    for flag in flags:
-                        self.env.pop(flag)
-                    self.wrapper(script)
-                    self.assertTrue((self.shared / 'new-upstream-skill/SKILL.md').is_file())
+    def test_blocked_profiles_are_untouched_and_unrelated_cleanup_continues(self):
+        for profile in (self.default_pi, self.custom_pi):
+            self.put(profile / 'settings.json', 'PRIVATE-SENTINEL malformed')
+            self.put(profile / 'skills/pr-lens/SKILL.md')
+            self.put(profile / 'skills/tdd/SKILL.md')
+        self.put(self.shared / 'pr-lens/SKILL.md')
+        self.put(self.shared / 'tdd/SKILL.md')
+        self.policy('remove-pr-lens', blocked=True, success=False)
+        self.policy('remove-matt', blocked=True)
+        for script in ('mac.sh', 'win.ps1'):
+            if script != 'win.ps1' or PWSH:
+                self.wrapper(script, 'ownership', blocked=True)
+        for profile in (self.default_pi, self.custom_pi):
+            self.assertEqual((profile / 'settings.json').read_text(), 'PRIVATE-SENTINEL malformed')
+            self.assertTrue((profile / 'skills/pr-lens/SKILL.md').exists())
+            self.assertTrue((profile / 'skills/tdd/SKILL.md').exists())
+        self.assertFalse((self.shared / 'pr-lens').exists())
+        self.assertFalse((self.shared / 'tdd').exists())
 
-    @unittest.skipUnless(PWSH, 'Set PWSH_BIN; native Windows is not claimed')
-    def test_powershell_reader_literal_quotes_do_not_exclude_the_suite(self):
-        self.wrapper('win.ps1')
-        env_file = self.put(self.home / '.env.local', 'BAN_SCOWALT_ENGINEERING_SKILLS="\'1\'"\n')
-        before = env_file.read_bytes()
-        calls = Path(self.env['SKILL_TEST_CALLS']).read_bytes()
-        self.wrapper('win.ps1', load_environment=True)
-        self.assertNotEqual(Path(self.env['SKILL_TEST_CALLS']).read_bytes(), calls)
-        for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
-            self.assertEqual((base / 'tdd/SKILL.md').read_text(),
-                             '---\nname: tdd\ndescription: Inert test skill.\n---\nFixture only.\n')
-        records = json.loads((self.home / '.agents/.skill-lock.json').read_text())['skills']
-        self.assertEqual(records['tdd']['source'], 'scowalt/engineering-skills')
-        self.assertEqual(env_file.read_bytes(), before)
-
-    def test_reader_then_wrapper_honors_exact_exclusions_aliases_and_saved_precedence(self):
-        flags = ('BAN_SCOWALT_ENGINEERING_SKILLS', 'BAN_MATT_POCOCK_SKILLS', 'BAN_MATT_POCKOCK_SKILLS')
-        cases = (("{key}=\"'1'\"\n", None, False), ("{key}='\"1\"'\n", None, False),
-                 ('{key}=1 # intentional exclusion\n', None, True),
-                 ('export {key}="1"\r\n', None, True), ("{key}='1'\n", None, True),
-                 ('{key}=0\n', None, False), ('{key}=\n', None, False),
-                 ('{key}=true\n', None, False), ('{key}=01\n', None, False),
-                 ("{key}=' 1 '\n", None, False), ('{key}=1#literal\n', None, False),
-                 ("{key}='$(touch escaped)'\n", None, False),
-                 ('# {key}=0\n', '1', True), ('{key}=0\n', '1', False),
-                 ('{key}=1\n', '0', True), ('{key}=1\n{key}=0\n', None, False))
-        preserved = [self.put(self.home / name, 'PRIVATE-SENTINEL') for name in
-                     ('.pi/agent/auth.json', 'project/.agents/skills/tdd/SKILL.md', '.claude/hooks/keep')]
-        for base in self.all_dirs():
-            preserved.append(self.put(base / 'keep-me/SKILL.md', 'PRIVATE-SENTINEL'))
-        lock = self.home / '.agents/.skill-lock.json'
-        inventory = self.home / '.agents/.setup-matt-pocock-skills.json'
-        calls = Path(self.env['SKILL_TEST_CALLS'])
+    def test_suite_retirement_rejects_unsafe_metadata_and_linked_ancestors_before_removal(self):
+        keep = self.put(self.shared / 'tdd/SKILL.md')
+        for content in ('PRIVATE-SENTINEL malformed', '{"version":2,"skills":["tdd"]}', '{"version":1,"skills":["../x"]}'):
+            with self.subTest(inventory=content):
+                manifest = self.put(self.home / '.agents/.setup-matt-pocock-skills.json', content)
+                self.policy('remove-matt', success=False)
+                self.assertTrue(keep.is_file())
+                manifest.unlink()
+        lock = self.put(self.home / '.agents/.skill-lock.json', 'PRIVATE-SENTINEL malformed')
+        self.policy('remove-matt', success=False)
+        self.assertTrue(keep.is_file())
+        lock.unlink()
+        target = self.put(self.home / 'lock-target.json', '{"version":3,"skills":{}}')
+        lock.symlink_to(target)
+        self.policy('remove-matt', success=False)
+        self.assertTrue(keep.is_file())
+        lock.unlink()
+        linked = self.put(self.home / 'sentinel/tdd/SKILL.md', 'PRIVATE-SENTINEL').parent.parent
+        (self.home / '.gemini').mkdir()
+        (self.home / '.gemini/skills').symlink_to(linked, target_is_directory=True)
         for script in ('mac.sh', 'win.ps1'):
             if script == 'win.ps1' and not PWSH:
                 continue
-            for active in flags:
-                for saved, inherited, excluded in cases:
-                    with self.subTest(script=script, active=active, saved=saved, inherited=inherited):
-                        for flag in flags:
-                            self.env.pop(flag, None)
-                        if inherited is not None:
-                            self.env[active] = inherited
-                        self.put(inventory, json.dumps({'version': 1, 'skills': ['new-upstream-skill']}))
-                        self.put(lock, json.dumps({'version': 3, 'skills': {
-                            'keep': {'source': 'other/repo'}, 'tdd': {'source': 'mattpocock/skills'},
-                            'new-upstream-skill': {'source': 'scowalt/engineering-skills'}},
-                            'dismissed': {'keep': True}}))
-                        for base in self.all_dirs():
-                            for name in ('tdd', 'new-upstream-skill'):
-                                self.put(base / name / 'SKILL.md', 'previous managed bytes')
-                        env_file = self.put(self.home / '.env.local',
-                                            "GH_TOKEN='credential#literal'\n" + saved.format(key=active))
-                        before_file = env_file.read_bytes()
-                        before_calls = calls.read_text().splitlines() if calls.exists() else []
-                        if excluded:
-                            self.env['SKILL_TEST_MODE'] = 'bad-runtime'
-                        else:
-                            self.env.pop('SKILL_TEST_MODE', None)
-                        result = self.wrapper(script, load_environment=True)
-                        after_calls = calls.read_text().splitlines() if calls.exists() else []
-                        self.assertEqual(len(after_calls) - len(before_calls), 0 if excluded else 1)
-                        records = json.loads(lock.read_text())
-                        self.assertEqual(records['dismissed'], {'keep': True})
-                        self.assertEqual(records['skills']['keep'], {'source': 'other/repo'})
-                        if excluded:
-                            self.assertEqual(records['skills'], {'keep': {'source': 'other/repo'}})
-                            for base in self.all_dirs():
-                                for name in ('tdd', 'new-upstream-skill'):
-                                    self.assertFalse((base / name).exists())
-                        else:
-                            self.assertEqual(json.loads(after_calls[-1])[3], 'scowalt/engineering-skills')
-                            for name in KNOWN + ['new-upstream-skill']:
-                                self.assertEqual(records['skills'][name]['source'], 'scowalt/engineering-skills')
-                                for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
-                                    self.assertEqual((base / name / 'SKILL.md').read_text(),
-                                                     f'---\nname: {name}\ndescription: Inert test skill.\n---\nFixture only.\n')
-                            self.assertIn('new-upstream-skill', json.loads(inventory.read_text())['skills'])
-                        for file in preserved:
-                            self.assertEqual(file.read_text(), 'PRIVATE-SENTINEL')
-                        self.assertEqual(env_file.read_bytes(), before_file)
-                        self.assertFalse((self.root / 'escaped').exists())
-                        self.assertNotIn('credential', result.stdout + result.stderr)
-
-    def test_reader_rejects_malformed_exclusions_before_wrapper_effects(self):
-        flags = ('BAN_SCOWALT_ENGINEERING_SKILLS', 'BAN_MATT_POCOCK_SKILLS', 'BAN_MATT_POCKOCK_SKILLS')
-        self.put(self.shared / 'tdd/SKILL.md', 'previous managed bytes')
-        for script in ('mac.sh', 'win.ps1'):
-            if script == 'win.ps1' and not PWSH:
-                continue
-            for active in flags:
-                with self.subTest(script=script, active=active):
-                    self.put(self.home / '.env.local', f'{active}=two words\n')
-                    before = self.snapshot()
-                    result = self.wrapper(script, success=False, load_environment=True)
-                    self.assertEqual(self.snapshot(), before)
-                    self.assertFalse(Path(self.env['SKILL_TEST_CALLS']).exists())
-                    self.assertNotIn('two words', result.stdout + result.stderr)
-                    self.assertIn('environment-file value', result.stdout + result.stderr)
+            self.wrapper(script, success=False)
+            self.assertTrue(keep.is_file())
+            self.assertEqual((linked / 'tdd/SKILL.md').read_text(), 'PRIVATE-SENTINEL')
 
     def test_retirement_covers_all_profiles_links_and_both_lock_paths(self):
         target = self.put(self.home / 'sentinel/SKILL.md', 'PRIVATE-SENTINEL').parent
@@ -621,7 +404,7 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
             self.assertTrue((profile / 'skills/simple-english/SKILL.md').exists())
             self.assertEqual((profile / 'settings.json').read_text(), 'PRIVATE-SENTINEL malformed')
 
-    def test_all_three_retirements_preserve_full_suite_on_personal_and_work_machines(self):
+    def test_all_three_retirements_preserve_other_skills_on_personal_and_work_machines(self):
         retired = {'simple-english': ('retire-simple', 'AminBlg/SimpleEnglish'),
                    'show-me': ('retire-show', 'humanlayer/skills'),
                    'pr-lens': ('retire', 'coldteadotai/pr-lens')}
@@ -636,9 +419,8 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
             for work in ('0', '1'):
                 with self.subTest(script=script, work=work):
                     self.env['WORK_MACHINE'] = work
-                    self.wrapper(script)
-                    calls = Path(self.env['SKILL_TEST_CALLS']).read_bytes()
                     for base in self.all_dirs():
+                        self.put(base / 'pr/SKILL.md', 'dotfiles-managed pr')
                         for skill in retired:
                             self.put(base / skill / 'SKILL.md', 'user-modified retired skill')
                         self.put(base / 'keep-me/SKILL.md', 'keep unrelated skill')
@@ -654,11 +436,9 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
                         expected_locks[lock] = json.loads(json.dumps(data))
                         data['skills'].update({skill: {'source': source} for skill, (_, source) in retired.items()})
                         self.put(lock, json.dumps(data))
-                    self.env['SKILL_TEST_MODE'] = 'bad-runtime'
                     for _ in range(2):
                         for operation, _source in retired.values():
                             self.wrapper(script, operation)
-                    self.env.pop('SKILL_TEST_MODE')
                     self.wrapper(script, 'ownership')
                     for base in self.all_dirs():
                         for skill in retired:
@@ -670,11 +450,7 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
                             self.assertNotIn(skill, (profile / 'settings.json').read_text())
                     for lock in locks:
                         self.assertEqual(json.loads(lock.read_text()), expected_locks[lock])
-                    for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
-                        for name in KNOWN + ['new-upstream-skill']:
-                            self.assertGreater((base / name / 'SKILL.md').stat().st_size, 0)
-                            self.assertEqual((base / name / 'references/guide.md').read_text(), 'Upstream fixture: do not execute.\n')
-                    self.assertEqual(Path(self.env['SKILL_TEST_CALLS']).read_bytes(), calls)
+                    self.assertEqual((self.shared / 'pr/SKILL.md').read_text(), 'dotfiles-managed pr')
         self.assertEqual(sentinel.read_text(), 'PRIVATE-SENTINEL')
         self.assertEqual(project.read_text(), 'project copy')
         self.assertEqual(env_file.read_text(), 'PRIVATE-SENTINEL existing environment')
@@ -732,202 +508,6 @@ npx() { "${SKILL_TEST_PYTHON}" "${SKILL_TEST_MOCK}" "$@"; }
         self.assertTrue(keep.is_file())
         self.assertEqual(target.read_text(), '{"version":3,"skills":{}}')
 
-    def test_failures_never_accept_old_or_partial_installations(self):
-        for script in ('mac.sh', 'win.ps1'):
-            if script == 'win.ps1' and not PWSH:
-                continue
-            for mode in ('failed-command', 'partial-report', 'failed-result', 'skipped-result', 'missing-agent',
-                         'wrong-source', 'duplicate-name', 'unsafe-name', 'invalid-json', 'bad-runtime', 'failed-npm-config'):
-                with self.subTest(script=script, mode=mode):
-                    self.env.pop('SKILL_TEST_MODE', None)
-                    self.wrapper(script)
-                    before = (self.home / '.agents/.setup-matt-pocock-skills.json').read_bytes()
-                    self.env['SKILL_TEST_MODE'] = mode
-                    self.wrapper(script, success=False)
-                    self.assertEqual((self.home / '.agents/.setup-matt-pocock-skills.json').read_bytes(), before)
-
-    def test_incomplete_or_invalid_snapshot_cannot_mutate_any_destination(self):
-        modes = ('failed-command', 'partial-report', 'omit-future-report', 'unreported-directory',
-                 'different-copy', 'invalid-lock', 'missing-lock', 'wrong-lock-source', 'extra-lock-entry',
-                 'original-report-source', 'original-lock-source', 'original-lock-url', 'wrong-lock-type')
-        for script in ('mac.sh', 'win.ps1'):
-            if script == 'win.ps1' and not PWSH:
-                continue
-            self.env.pop('SKILL_TEST_MODE', None)
-            self.wrapper(script)
-            before = self.snapshot()
-            for mode in modes:
-                with self.subTest(script=script, mode=mode):
-                    self.env['SKILL_TEST_MODE'] = mode
-                    self.wrapper(script, success=False)
-                    self.assertEqual(self.snapshot(), before)
-
-    def test_stage_disposal_unlinks_external_links_without_following_targets(self):
-        target = self.put(self.home / 'external/SKILL.md', 'PRIVATE-SENTINEL').parent
-        stage = Path(self.policy('stage').stdout.strip())
-        (stage / 'linked-directory').symlink_to(target, target_is_directory=True)
-        (stage / 'linked-file').symlink_to(target / 'SKILL.md')
-        before = self.snapshot()
-        self.policy('dispose', argument=stage)
-        self.assertFalse(stage.exists())
-        self.assertEqual(self.snapshot(), before)
-        stage = Path(self.policy('stage').stdout.strip())
-        stage.rmdir(); stage.symlink_to(target, target_is_directory=True)
-        self.policy('dispose', argument=stage)
-        self.assertFalse(os.path.lexists(stage))
-        self.assertEqual(self.snapshot(), before)
-        self.policy('dispose', argument=target, success=False)
-        self.assertEqual(self.snapshot(), before)
-
-    def test_disposal_is_independent_of_changed_global_metadata(self):
-        stage = Path(self.policy('stage').stdout.strip())
-        self.put(stage / '.agents/skills/tdd/SKILL.md', 'inert')
-        self.put(self.home / '.agents/.skill-lock.json', 'PRIVATE-SENTINEL malformed')
-        before = self.snapshot()
-        self.policy('dispose', argument=stage)
-        self.assertFalse(stage.exists())
-        self.assertEqual(self.snapshot(), before)
-
-    def test_promotion_preserves_unrelated_lock_data_and_effective_npm_configuration(self):
-        self.env['XDG_STATE_HOME'] = str(self.home / 'state')
-        self.env['npm_config_userconfig'] = str(self.home / 'userconfig.npmrc')
-        self.env['NPM_CONFIG_USERCONFIG'] = str(self.home / 'unused-uppercase.npmrc')
-        self.env['npm_config_globalconfig'] = str(self.home / 'globalconfig.npmrc')
-        self.env['NPM_CONFIG_GLOBALCONFIG'] = str(self.home / 'unused-global-uppercase.npmrc')
-        configs = [self.put(self.home / name, 'PRIVATE-SENTINEL preserve npm policy') for name in
-                   ('userconfig.npmrc', 'globalconfig.npmrc', 'unused-uppercase.npmrc', 'unused-global-uppercase.npmrc')]
-        legacy = self.put(self.home / '.agents/.skill-lock.json', json.dumps({'version': 3, 'skills': {
-            'unrelated': {'source': 'other/repo'}, 'tdd': {'source': 'mattpocock/skills'}}}))
-        before = legacy.read_bytes()
-        selected = self.home / 'state/skills/.skill-lock.json'
-        for script in ('mac.sh', 'win.ps1'):
-            if script == 'win.ps1' and not PWSH:
-                continue
-            self.put(selected, json.dumps({'version': 3, 'skills': {'unrelated': {'source': 'other/repo'},
-                                           'tdd': {'source': 'mattpocock/skills', 'installedAt': 'original-install-time'}},
-                                           'dismissed': {'keep': True}, 'custom': 'preserve'}))
-            self.wrapper(script)
-            data = json.loads(selected.read_text())
-            self.assertEqual(data['skills']['unrelated'], {'source': 'other/repo'})
-            self.assertEqual(data['skills']['tdd']['installedAt'], 'original-install-time')
-            self.assertEqual(data['skills']['tdd']['source'], 'scowalt/engineering-skills')
-            self.assertEqual(data['dismissed'], {'keep': True})
-            self.assertEqual(data['custom'], 'preserve')
-            self.assertEqual(data['skills']['new-upstream-skill']['source'], 'scowalt/engineering-skills')
-            self.assertEqual(legacy.read_bytes(), before)
-            for config in configs:
-                self.assertEqual(config.read_text(), 'PRIVATE-SENTINEL preserve npm policy')
-
-    def test_original_and_fork_tracking_survive_migration_without_inventory(self):
-        self.env['XDG_STATE_HOME'] = str(self.home / 'state')
-        legacy = self.home / '.agents/.skill-lock.json'
-        selected = self.home / 'state/skills/.skill-lock.json'
-        manifest = self.home / '.agents/.setup-matt-pocock-skills.json'
-        tracked = {'old-future': 'mattpocock/skills', 'fork-future': 'scowalt/engineering-skills',
-                   'legacy-lock-future': 'mattpocock/skills'}
-        for script in SCRIPTS:
-            if script == 'win.ps1' and not PWSH:
-                continue
-            with self.subTest(script=script):
-                self.put(manifest, json.dumps({'version': 1, 'skills': ['inventory-only']}))
-                self.put(legacy, json.dumps({'version': 3, 'skills': {
-                    'legacy-lock-future': {'source': tracked['legacy-lock-future']},
-                    'keep': {'source': 'other/repo'}}, 'dismissed': {'keep': True}}))
-                self.put(selected, json.dumps({'version': 3, 'skills': {
-                    name: {'source': source} for name, source in tracked.items() if name != 'legacy-lock-future'},
-                    'dismissed': {'keep': True}}))
-                before_legacy = legacy.read_bytes()
-                for base in self.all_dirs():
-                    for name in tracked:
-                        self.put(base / name / 'SKILL.md', 'historical tracked copy: ' + name)
-                    self.put(base / 'tdd/SKILL.md', 'locally edited managed copy')
-                self.put(self.custom_pi / 'skills/fork-future/SKILL.md', 'custom Pi duplicate')
-                for _ in range(2):
-                    self.wrapper(script)
-                inventory = json.loads(manifest.read_text())
-                self.assertEqual(inventory['version'], 1)
-                self.assertEqual(set(inventory['skills']), set(KNOWN + HISTORICAL +
-                                 ['inventory-only', 'new-upstream-skill', *tracked]))
-                self.assertEqual(legacy.read_bytes(), before_legacy)
-                for name in tracked:
-                    self.assertEqual((self.shared / name / 'SKILL.md').read_text(), 'historical tracked copy: ' + name)
-                manifest.unlink()
-                for _ in range(2):
-                    self.wrapper(script, 'ownership')
-                for name in tracked:
-                    self.assertFalse((self.default_pi / 'skills' / name).exists())
-                self.assertEqual((self.custom_pi / 'skills/fork-future/SKILL.md').read_text(), 'custom Pi duplicate')
-                settings = json.loads((self.custom_pi / 'settings.json').read_text())['skills']
-                self.assertEqual(settings.count('!' + str(self.custom_pi / 'skills/fork-future') + '/**'), 1)
-                calls = Path(self.env['SKILL_TEST_CALLS']).read_bytes()
-                self.env.update(BAN_SCOWALT_ENGINEERING_SKILLS='1', SKILL_TEST_MODE='bad-runtime')
-                for _ in range(2):
-                    self.wrapper(script)
-                self.env.pop('BAN_SCOWALT_ENGINEERING_SKILLS')
-                self.env.pop('SKILL_TEST_MODE')
-                self.assertEqual(Path(self.env['SKILL_TEST_CALLS']).read_bytes(), calls)
-                for base in self.all_dirs():
-                    self.assertTrue(all(not (base / name).exists() for name in tracked))
-                self.assertEqual(json.loads(legacy.read_text()), {'version': 3, 'skills': {
-                    'keep': {'source': 'other/repo'}}, 'dismissed': {'keep': True}})
-                self.assertEqual(json.loads(selected.read_text()), {'version': 3, 'skills': {}, 'dismissed': {'keep': True}})
-
-    def test_all_reported_skills_validate_both_copies_and_nested_links(self):
-        for script in ('mac.sh', 'win.ps1'):
-            if script == 'win.ps1' and not PWSH:
-                continue
-            for mode in ('missing-file', 'empty-file', 'linked-file', 'linked-references', 'directory-file'):
-                for copy in ('0', '1'):
-                    with self.subTest(script=script, mode=mode, copy=copy):
-                        for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
-                            shutil.rmtree(base, ignore_errors=True)
-                        self.env['SKILL_TEST_MODE'] = mode
-                        self.env['SKILL_TEST_COPY'] = copy
-                        self.wrapper(script, success=False)
-
-    def test_ownership_uses_future_inventory_and_preserves_modified_copies(self):
-        for script in ('mac.sh', 'win.ps1'):
-            if script == 'win.ps1' and not PWSH:
-                continue
-            self.wrapper(script)
-            for profile in (self.default_pi, self.custom_pi):
-                for name in ('new-upstream-skill', 'retro'):
-                    dest = profile / 'skills' / name
-                    shutil.rmtree(dest, ignore_errors=True)
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copytree(self.shared / name, dest)
-                self.put(profile / 'skills/retro/references/guide.md', 'user modified')
-                self.put(profile / 'settings.json', '{"theme":"keep","skills":["custom"]}')
-            self.wrapper(script, 'ownership')
-            self.wrapper(script, 'ownership')
-            for profile in (self.default_pi, self.custom_pi):
-                self.assertFalse((profile / 'skills/new-upstream-skill').exists())
-                self.assertEqual((profile / 'skills/retro/references/guide.md').read_text(), 'user modified')
-                settings = json.loads((profile / 'settings.json').read_text())
-                self.assertEqual(settings['theme'], 'keep')
-                self.assertEqual(settings['skills'].count('!' + str(profile / 'skills/retro') + '/**'), 1)
-                self.assertNotIn('!' + str(self.shared / 'retro') + '/**', settings['skills'])
-                self.assertIn('custom', settings['skills'])
-
-    def test_blocked_profiles_are_untouched_and_unrelated_cleanup_continues(self):
-        for profile in (self.default_pi, self.custom_pi):
-            self.put(profile / 'settings.json', 'PRIVATE-SENTINEL malformed')
-            self.put(profile / 'skills/pr-lens/SKILL.md')
-            self.put(profile / 'skills/tdd/SKILL.md')
-        self.put(self.shared / 'pr-lens/SKILL.md')
-        self.put(self.shared / 'tdd/SKILL.md')
-        self.policy('remove-pr-lens', blocked=True, success=False)
-        self.policy('remove-matt', blocked=True)
-        for script in ('mac.sh', 'win.ps1'):
-            if script != 'win.ps1' or PWSH:
-                self.wrapper(script, 'ownership', blocked=True)
-        for profile in (self.default_pi, self.custom_pi):
-            self.assertEqual((profile / 'settings.json').read_text(), 'PRIVATE-SENTINEL malformed')
-            self.assertTrue((profile / 'skills/pr-lens/SKILL.md').exists())
-            self.assertTrue((profile / 'skills/tdd/SKILL.md').exists())
-        self.assertFalse((self.shared / 'pr-lens').exists())
-        self.assertFalse((self.shared / 'tdd').exists())
-
     @unittest.skipUnless(sys.platform == 'linux', 'Linux-only trusted system alias')
     def test_trusted_system_home_alias_with_temporary_filesystem(self):
         root = self.root / 'system'
@@ -955,7 +535,7 @@ fs.lstatSync = (file, ...args) => {
         env = {**self.env, 'FIXTURE_ROOTS': json.dumps([str(p) for p in system_paths])}
         env.pop('CLAUDE_CONFIG_DIR', None)
         env.pop('CODEX_HOME', None)
-        command = [NODE, '--require', str(shim), str(helper), str(alias / 'account'), '', '0', 'names']
+        command = [NODE, '--require', str(shim), str(helper), str(alias / 'account'), '', '0', 'remove-matt']
         def run(ok, **extra):
             result = subprocess.run(command, env={**env, **extra}, capture_output=True, text=True, timeout=30)
             self.assertEqual(result.returncode == 0, ok, result.stderr)
@@ -973,7 +553,7 @@ fs.lstatSync = (file, ...args) => {
         alias.symlink_to('var/../var/home', target_is_directory=True)
         run(False)
 
-    def test_optout_removes_leaf_links_without_following_targets_or_touching_projects(self):
+    def test_retirement_removes_leaf_links_without_following_targets_or_touching_projects(self):
         target = self.put(self.home / 'sentinel/keep', 'PRIVATE-SENTINEL').parent
         project = self.put(self.home / 'project/.agents/skills/tdd/SKILL.md', 'project')
         self.shared.mkdir(parents=True)
@@ -989,142 +569,30 @@ fs.lstatSync = (file, ...args) => {
         self.assertEqual((target / 'keep').read_text(), 'PRIVATE-SENTINEL')
         self.assertEqual(project.read_text(), 'project')
 
-    @unittest.skipUnless(os.environ.get('MANAGED_SKILLS_CLI'), 'Set MANAGED_SKILLS_CLI for offline native discovery coverage')
-    def test_native_cli_discovers_all_categories_and_emits_expected_json(self):
-        source = self.home / 'upstream-fixture'
-        categories = ['engineering'] * 18 + ['in-progress'] * 8 + ['misc'] * 4 + ['productivity'] * 7
-        for name, category in zip(KNOWN, categories):
-            self.put(source / 'skills' / category / name / 'SKILL.md', f'---\nname: {name}\ndescription: Inert skill fixture.\n---\nNever execute.\n')
-            self.put(source / 'skills' / category / name / 'references/guide.md', 'reference')
-        self.put(source / '.claude-plugin/plugin.json', json.dumps({'name': 'fixture', 'skills': ['./skills/engineering/tdd']}))
-        blocker = self.put(self.home / 'block-network.cjs', '''
-const deny = () => { throw new Error('NETWORK_OR_CHILD_PROCESS_FORBIDDEN'); };
-globalThis.fetch = deny;
-for (const module of ['node:http', 'node:https']) {
-    const api = require(module); api.request = deny; api.get = deny;
-}
-const net = require('node:net'); net.connect = deny; net.createConnection = deny;
-const cp = require('node:child_process');
-for (const method of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync']) cp[method] = deny;
-require('node:module').syncBuiltinESMExports();
-''')
-        env = {k: v for k, v in self.env.items() if not k.startswith('GIT_')}
-        env.update(XDG_CONFIG_HOME=str(self.home / '.config'), XDG_CACHE_HOME=str(self.home / '.cache'),
-                   XDG_DATA_HOME=str(self.home / '.local/share'), DISABLE_TELEMETRY='1')
-        discovery = subprocess.run([NODE, '--require', str(blocker), os.environ['MANAGED_SKILLS_CLI'],
-                                    'add', str(source), '--list', '--full-depth', '--yes', '--json'],
-                                   env=env, text=True, capture_output=True, timeout=60)
-        self.assertNotEqual(discovery.returncode, 0)
-        self.assertIn('cannot be combined with --list', json.loads(discovery.stdout)[0]['error'])
-        self.assertFalse(self.shared.exists())
-        result = subprocess.run([NODE, '--require', str(blocker), os.environ['MANAGED_SKILLS_CLI'],
-                                 'add', str(source), '--global', '--agent', 'claude-code', '--agent', 'codex',
-                                 '--agent', 'gemini-cli', '--skill', '*', '--full-depth', '--copy', '--yes', '--json'],
-                                env=env, text=True, capture_output=True, timeout=60)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        report = json.loads(result.stdout)
-        self.assertEqual({entry['name'] for entry in report}, set(KNOWN))
-        for entry in report:
-            self.assertEqual(entry['status'], 'installed')
-            self.assertEqual(entry['mode'], 'copy')
-            self.assertEqual(entry['scope'], 'global')
-            self.assertEqual(set(entry['agents']), {'Claude Code', 'Codex', 'Gemini CLI'})
-        for name, category in zip(KNOWN, categories):
-            for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
-                self.assertEqual((base / name / 'SKILL.md').read_bytes(), (source / 'skills' / category / name / 'SKILL.md').read_bytes())
-                self.assertEqual((base / name / 'references/guide.md').read_text(), 'reference')
-        self.assertFalse((self.home / '.gemini/skills').exists())
-        self.assertFalse((self.custom_pi / 'skills').exists())
-
-    @unittest.skipUnless(os.environ.get('MANAGED_SKILLS_CLI'), 'Set MANAGED_SKILLS_CLI for offline native snapshot coverage')
-    def test_native_snapshot_promotes_without_reselecting_a_changed_upstream(self):
-        source = self.root / 'upstream'
-        names = KNOWN + ['new-upstream-skill']
-        for name in names:
-            self.put(source / 'skills/in-progress' / name / 'SKILL.md',
-                     f'---\nname: {name}\ndescription: Inert fixture.\n---\nNever execute.\n')
-            self.put(source / 'skills/in-progress' / name / 'references/guide.md', 'snapshot content')
-        hooks = self.root / 'empty-hooks'
-        hooks.mkdir()
-        config = self.put(self.root / 'gitconfig',
-                          f'[core]\n\thooksPath = {hooks}\n[url "{source.as_uri()}"]\n'
-                          '\tinsteadOf = https://github.com/scowalt/engineering-skills.git\n')
-        env = {k: v for k, v in self.env.items() if not k.startswith('GIT_') and k not in ('GH_TOKEN', 'GITHUB_TOKEN')}
-        env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=str(config), GIT_TEMPLATE_DIR=str(hooks),
-                   GIT_TERMINAL_PROMPT='0', GIT_ALLOW_PROTOCOL='file', DISABLE_TELEMETRY='1')
-        def git(*args):
-            return subprocess.run(['git', '-C', str(source), '-c', 'user.name=Fixture',
-                                   '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', *args],
-                                  env=env, check=True, text=True, capture_output=True, timeout=30).stdout.strip()
-        git('init')
-        self.assertEqual(Path(git('rev-parse', '--show-toplevel')).resolve(), source.resolve())
-        git('add', '.')
-        git('commit', '-m', 'Inert snapshot')
-        blocker = self.put(self.root / 'offline-native.cjs', '''
-const deny = () => { throw new Error('NETWORK_OR_CHILD_PROCESS_FORBIDDEN'); };
-globalThis.fetch = deny;
-for (const name of ['node:http', 'node:https']) {
-    const api = require(name); api.request = deny; api.get = deny;
-}
-const net = require('node:net'); net.connect = deny; net.createConnection = deny;
-const cp = require('node:child_process'), spawn = cp.spawn;
-for (const method of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync']) cp[method] = deny;
-cp.spawn = (command, args, options) => {
-    // Native simple-git may only clone the inert repository. Even if URL rewriting
-    // fails, file-only transport prevents a network request or credential lookup.
-    if (command !== 'git' || !args.includes('clone') || !args.includes('https://github.com/scowalt/engineering-skills.git')) deny();
-    return spawn(command, args, {...options, env: {...options.env, GIT_ALLOW_PROTOCOL: 'file'}});
-};
-require('node:module').syncBuiltinESMExports();
-''')
-        stage = Path(self.policy('stage').stdout.strip())
-        env.update(HOME=str(stage), USERPROFILE=str(stage), CLAUDE_CONFIG_DIR=str(stage / '.claude'),
-                   CODEX_HOME=str(stage / '.codex'), XDG_STATE_HOME=str(stage / '.state'))
-        try:
-            result = subprocess.run([NODE, '--require', str(blocker), os.environ['MANAGED_SKILLS_CLI'],
-                                     'add', 'scowalt/engineering-skills', '--global', '--agent', 'claude-code', '--agent', 'codex',
-                                     '--agent', 'gemini-cli', '--skill', '*', '--full-depth', '--copy', '--yes', '--json'],
-                                    env=env, text=True, capture_output=True, timeout=60)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            report = json.loads(result.stdout)
-            self.assertEqual({entry['name'] for entry in report}, set(names))
-            self.assertTrue(all(entry['source'] == 'scowalt/engineering-skills' for entry in report))
-            self.put(stage / 'report.json', result.stdout)
-            target = self.put(self.home / 'sentinel/SKILL.md', 'PRIVATE-SENTINEL').parent
-            for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
-                self.put(base / 'tdd/SKILL.md', 'previous copy')
-                (base / 'omarchy').symlink_to(self.home / 'missing', target_is_directory=True)
-            collision = self.shared / 'new-upstream-skill'
-            collision.symlink_to(target, target_is_directory=True)
-            before = self.snapshot()
-            self.policy('promote', argument=stage, success=False)
-            self.assertEqual(self.snapshot(), before)
-            collision.unlink()
-            self.put(source / 'skills/in-progress/another-future-name/SKILL.md',
-                     '---\nname: another-future-name\ndescription: New fixture.\n---\nNever execute.\n')
-            self.put(source / 'skills/in-progress/tdd/references/guide.md', 'changed upstream')
-            git('add', '.')
-            git('commit', '-m', 'Advance inert source after staging')
-            self.policy('promote', argument=stage)
-            for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
-                self.assertTrue((base / 'omarchy').is_symlink())
-                self.assertFalse((base / 'another-future-name').exists())
-                for name in names:
-                    self.assertEqual((base / name / 'references/guide.md').read_text(), 'snapshot content')
-            data = json.loads((self.home / '.agents/.skill-lock.json').read_text())
-            self.assertEqual(set(data['skills']), set(names))
-            self.assertEqual(data['skills']['new-upstream-skill']['sourceType'], 'github')
-            self.assertEqual((target / 'SKILL.md').read_text(), 'PRIVATE-SENTINEL')
-        finally:
-            shutil.rmtree(stage)
+    def test_ownership_rejects_linked_shared_root_and_malformed_settings_before_removal(self):
+        for profile in (self.default_pi, self.custom_pi):
+            self.put(profile / 'skills/pr/SKILL.md', 'matching')
+        self.put(self.shared / 'pr/SKILL.md', 'matching')
+        settings = self.put(self.custom_pi / 'settings.json', 'PRIVATE-SENTINEL malformed')
+        self.policy('ownership', success=False)
+        self.assertTrue((self.default_pi / 'skills/pr/SKILL.md').exists())
+        settings.write_text('{}')
+        target = self.home / 'linked-shared'
+        self.shared.rename(target)
+        self.shared.symlink_to(target, target_is_directory=True)
+        self.policy('ownership', success=False)
+        self.assertTrue((self.default_pi / 'skills/pr/SKILL.md').exists())
 
     @unittest.skipUnless(os.environ.get('PI_SKILLS_DOTFILES_SOURCE'), 'Set PI_SKILLS_DOTFILES_SOURCE for render/setup coverage')
-    def test_dotfiles_render_preserves_future_skill_exclusions(self):
+    def test_dotfiles_render_agrees_with_setup_ownership(self):
         source = Path(os.environ['PI_SKILLS_DOTFILES_SOURCE'])
         template = source / 'private_dot_pi/agent/private_settings.json.tmpl'
         empty_source = self.home / 'empty-source'
         empty_source.mkdir()
         config = self.put(self.home / 'chezmoi.json', '{}')
+        self.put(self.home / '.agents/.setup-matt-pocock-skills.json', json.dumps({'version': 1, 'skills': ['tdd']}))
+        self.put(self.shared / 'pr/SKILL.md', 'dotfiles pr')
+        self.env.pop('PI_CODING_AGENT_DIR')
         for platform in ('linux', 'darwin', 'windows'):
             for _ in range(2):
                 self.wrapper('mac.sh')
@@ -1137,110 +605,12 @@ require('node:module').syncBuiltinESMExports();
                     'execute-template', '--file', str(template),
                 ], env=self.env, capture_output=True, text=True, check=True, timeout=30)
                 settings = json.loads(result.stdout)
-                self.assertEqual(settings['skills'].count('!' + str(self.default_pi / 'skills/new-upstream-skill') + '/**'), 1)
-                self.assertNotIn('pr-lens', result.stdout)
-                self.assertNotIn('simple-english', result.stdout)
-                self.assertNotIn('show-me', result.stdout)
+                self.assertEqual(settings['skills'].count('!' + str(self.default_pi / 'skills/pr') + '/**'), 1)
+                for retired in ('/tdd/', 'pr-lens', 'simple-english', 'show-me'):
+                    self.assertNotIn(retired, result.stdout)
                 self.assertIn('npm:pi-claude-bridge', settings['packages'])
                 self.put(self.default_pi / 'settings.json', result.stdout)
-                self.assertTrue((self.shared / 'new-upstream-skill/SKILL.md').is_file())
-
-    def test_ownership_rejects_linked_shared_root_and_malformed_settings_before_removal(self):
-        for profile in (self.default_pi, self.custom_pi):
-            self.put(profile / 'skills/tdd/SKILL.md', 'matching')
-        self.put(self.shared / 'tdd/SKILL.md', 'matching')
-        settings = self.put(self.custom_pi / 'settings.json', 'PRIVATE-SENTINEL malformed')
-        self.policy('ownership', success=False)
-        self.assertTrue((self.default_pi / 'skills/tdd/SKILL.md').exists())
-        settings.write_text('{}')
-        target = self.home / 'linked-shared'
-        self.shared.rename(target)
-        self.shared.symlink_to(target, target_is_directory=True)
-        self.policy('ownership', success=False)
-        self.assertTrue((self.default_pi / 'skills/tdd/SKILL.md').exists())
-
-    def test_unrelated_live_and_dangling_links_survive_installation(self):
-        for script in SCRIPTS:
-            if script == 'win.ps1' and not PWSH:
-                continue
-            for live in (False, True):
-                with self.subTest(script=script, live=live):
-                    target = self.home / ('sentinel' if live else 'missing')
-                    if live:
-                        self.put(target / 'SKILL.md', 'PRIVATE-SENTINEL')
-                    links = []
-                    for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
-                        base.mkdir(parents=True, exist_ok=True)
-                        link = base / 'omarchy'
-                        link.unlink(missing_ok=True)
-                        link.symlink_to(target, target_is_directory=True)
-                        links.append((link, link.lstat().st_ino, os.readlink(link)))
-                    self.wrapper(script)
-                    for link, inode, value in links:
-                        self.assertTrue(link.is_symlink())
-                        self.assertEqual(link.lstat().st_ino, inode)
-                        self.assertEqual(os.readlink(link), value)
-                        link.unlink()
-                    if live:
-                        self.assertEqual((target / 'SKILL.md').read_text(), 'PRIVATE-SENTINEL')
-                    else:
-                        self.assertFalse(target.exists())
-                    self.assertTrue((self.shared / 'new-upstream-skill/SKILL.md').is_file())
-
-    def test_future_selected_name_links_block_before_destination_mutation(self):
-        target = self.put(self.home / 'sentinel/SKILL.md', 'PRIVATE-SENTINEL').parent
-        keep = self.put(self.shared / 'tdd/SKILL.md', 'previous installation')
-        for script in SCRIPTS:
-            if script == 'win.ps1' and not PWSH:
-                continue
-            for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
-                for live in (False, True):
-                    with self.subTest(script=script, base=base, live=live):
-                        base.mkdir(parents=True, exist_ok=True)
-                        link = base / 'new-upstream-skill'
-                        link.symlink_to(target if live else self.home / 'missing', target_is_directory=True)
-                        inode, value = link.lstat().st_ino, os.readlink(link)
-                        self.wrapper(script, success=False)
-                        self.assertEqual(link.lstat().st_ino, inode)
-                        self.assertEqual(os.readlink(link), value)
-                        self.assertEqual(keep.read_text(), 'previous installation')
-                        self.assertEqual((target / 'SKILL.md').read_text(), 'PRIVATE-SENTINEL')
-                        self.assertFalse((self.home / '.agents/.setup-matt-pocock-skills.json').exists())
-                        link.unlink()
-
-    def test_future_selected_name_nested_links_block_before_any_destination_mutation(self):
-        target = self.put(self.home / 'sentinel/keep', 'PRIVATE-SENTINEL').parent
-        self.put(self.shared / 'tdd/SKILL.md', 'previous installation')
-        for script in SCRIPTS:
-            if script == 'win.ps1' and not PWSH:
-                continue
-            for base in (self.shared, Path(self.env['CLAUDE_CONFIG_DIR']) / 'skills'):
-                for live in (False, True):
-                    with self.subTest(script=script, base=base, live=live):
-                        skill = base / 'new-upstream-skill'
-                        self.put(skill / 'SKILL.md', 'previous future skill')
-                        link = skill / 'references'
-                        link.unlink(missing_ok=True)
-                        link.symlink_to(target if live else self.home / 'missing', target_is_directory=True)
-                        before = self.snapshot()
-                        self.wrapper(script, success=False)
-                        self.assertEqual(self.snapshot(), before)
-                        link.unlink()
-
-    def test_install_preflight_stops_before_cli_on_unsafe_metadata_and_paths(self):
-        for script in ('mac.sh', 'win.ps1'):
-            if script == 'win.ps1' and not PWSH:
-                continue
-            lock = self.put(self.home / '.agents/.skill-lock.json', 'PRIVATE-SENTINEL malformed')
-            self.wrapper(script, success=False)
-            self.assertFalse(Path(self.env['SKILL_TEST_CALLS']).exists())
-            lock.unlink()
-            target = self.put(self.home / 'sentinel/SKILL.md', 'PRIVATE-SENTINEL').parent
-            self.shared.mkdir(exist_ok=True)
-            (self.shared / 'tdd').symlink_to(target, target_is_directory=True)
-            self.wrapper(script, success=False)
-            self.assertFalse(Path(self.env['SKILL_TEST_CALLS']).exists())
-            (self.shared / 'tdd').unlink()
+                self.assertTrue((self.shared / 'pr/SKILL.md').is_file())
 
 
 if __name__ == '__main__':

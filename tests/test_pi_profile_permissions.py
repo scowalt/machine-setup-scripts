@@ -511,7 +511,7 @@ if (Invoke-ImpeccableConvergence) { throw 'Blocked convergence reported success'
                         select = (lambda n: 'AttentionSpan' in n) if windows else (lambda n: n.startswith('attention_span_') or n == target)
                     elif kind.startswith('matt'):
                         artifact = home / '.agents/skills' / ('diagnose' if kind == 'matt-obsolete' else 'diagnosing-bugs') / 'SKILL.md'
-                        target = 'Remove-MattPocockSkills' if windows else ('remove_obsolete_matt_pocock_skills' if kind == 'matt-obsolete' else 'remove_matt_pocock_skills')
+                        target = 'Remove-MattPocockSkills' if windows else 'remove_matt_pocock_skills'
                         select = (lambda n: 'MattPocock' in n and not n.startswith('Setup-')) if windows else (lambda n: n.startswith('matt_pocock_') or n == target)
                     else:
                         artifact = home / '.agents/skills/lfg'
