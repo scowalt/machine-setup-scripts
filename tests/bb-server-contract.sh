@@ -37,13 +37,12 @@ HOME="/home/fixture" BB_TEST_HELPERS="${tmp}/helpers.sh" bash -c '
 BB_TEST_HELPERS="${tmp}/helpers.sh" bash -c '
     source "$BB_TEST_HELPERS"
     print_error() { :; }
-    systemctl() { printf "FragmentPath=%s\nDropInPaths=%s\n" "${BB_TEST_FRAGMENT:-}" "${BB_TEST_DROPINS:-}"; }
+    systemctl() { printf "FragmentPath=%s\n" "${BB_TEST_FRAGMENT:-}"; }
     bb_unit_preflight bb-app.service /home/fixture/.config/systemd/user/bb-app.service
     BB_TEST_FRAGMENT=/etc/systemd/user/bb-app.service
     ! bb_unit_preflight bb-app.service /home/fixture/.config/systemd/user/bb-app.service
-    unset BB_TEST_FRAGMENT
-    BB_TEST_DROPINS=/etc/systemd/user/bb-app.service.d/override.conf
-    ! bb_unit_preflight bb-app.service /home/fixture/.config/systemd/user/bb-app.service
+    BB_TEST_FRAGMENT=/home/fixture/.config/systemd/user/bb-app.service
+    bb_unit_preflight bb-app.service /home/fixture/.config/systemd/user/bb-app.service
 '
 BB_TEST_HELPERS="${tmp}/helpers.sh" bash -c '
     source "$BB_TEST_HELPERS"
@@ -373,14 +372,10 @@ systemctl() {
     case " $* " in
         *' show '*MainPID*) cat "$BB_TEST_ROOT/main-pid";;
         *' show '*)
-            if [[ "$3" == setup-bb-app.service && -n "${BB_TEST_REFERENCE_NAME:-}" ]]; then
-                selected="$HOME/.config/systemd/user/$3.d/${BB_TEST_REFERENCE_NAME}"
-                if [[ -f "$HOME/.config/systemd/user/$3.d/10-tmpdir.conf" ]]; then selected="$HOME/.config/systemd/user/$3.d/10-tmpdir.conf ${selected}"; fi
-                printf 'FragmentPath=%s\nDropInPaths=%s\n' "$HOME/.config/systemd/user/$3" "${selected}"
-            elif [[ "$3" == setup-bb-app.service && -f "$HOME/.config/systemd/user/$3.d/10-tmpdir.conf" ]]; then
-                printf 'FragmentPath=%s\nDropInPaths=%s\n' "$HOME/.config/systemd/user/$3" "$HOME/.config/systemd/user/$3.d/10-tmpdir.conf"
+            if [[ "$3" == setup-bb-app.service && ( -n "${BB_TEST_REFERENCE_NAME:-}" || -f "$HOME/.config/systemd/user/$3.d/10-tmpdir.conf" ) ]]; then
+                printf 'FragmentPath=%s\n' "$HOME/.config/systemd/user/$3"
             else
-                printf 'FragmentPath=\nDropInPaths=\n'
+                printf 'FragmentPath=\n'
             fi;;
         *' is-active '*setup-bb-app.service*) [[ -e "$BB_TEST_ROOT/app-active" ]];;
         *' is-active '*setup-bb-ingress.service*) [[ -e "$BB_TEST_ROOT/ingress-active" ]];;
@@ -650,7 +645,7 @@ tailscale() {
 systemctl() {
     case " $* " in
         *' show '*MainPID*) cat "$BB_TEST_ROOT/main-pid";;
-        *' show '*) printf 'FragmentPath=\nDropInPaths=\n';;
+        *' show '*) printf 'FragmentPath=\n';;
         *' is-active '*setup-bb-app.service*) [[ -e "$BB_TEST_ROOT/app-active" ]];;
         *' is-active '*setup-bb-ingress.service*) [[ -e "$BB_TEST_ROOT/ingress-active" ]];;
         *' stop setup-bb-ingress.service '*) rm -f "$BB_TEST_ROOT/ingress-active";;
