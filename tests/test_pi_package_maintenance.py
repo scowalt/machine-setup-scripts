@@ -627,8 +627,8 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
         return subprocess.run(['git', *args], cwd=cwd or self.root, env=env, text=True,
                               capture_output=True, check=True)
 
-    def seed_git_checkout(self, source='git:github.com/example/fixture@v1'):
-        checkout = self.agent / 'git/github.com/example/fixture'
+    def seed_git_checkout(self, source='git:github.com/example/fixture@v1', repo='example/fixture'):
+        checkout = self.agent / 'git/github.com' / repo
         checkout.mkdir(parents=True)
         self.run_git('init', '-q', cwd=checkout)
         (checkout / 'tracked.txt').write_text('clean\n')
@@ -808,6 +808,32 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                     result = self.run_helper(script, 'refresh')
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertEqual((checkout / 'tracked.txt').read_bytes(), before)
+
+    def test_refresh_allows_only_pstack_dependency_output_from_its_origin(self):
+        self.env.pop('PI_OFFLINE')
+        source = 'git:github.com/michael-denyer/pstack-claude'
+        for condition in ('lockfile', 'extra-file', 'wrong-origin', 'other-repository'):
+            for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+                with self.subTest(script=script, condition=condition):
+                    git_root = self.agent / 'git'
+                    if git_root.exists(): shutil.rmtree(git_root)
+                    if condition == 'other-repository':
+                        checkout = self.seed_git_checkout()
+                        self.run_git('remote', 'add', 'origin', 'https://github.com/example/fixture', cwd=checkout)
+                    else:
+                        checkout = self.seed_git_checkout(source, 'michael-denyer/pstack-claude')
+                        origin = 'https://github.com/example/fixture' if condition == 'wrong-origin' else 'https://github.com/michael-denyer/pstack-claude'
+                        self.run_git('remote', 'add', 'origin', origin, cwd=checkout)
+                    (checkout / 'package-lock.json').write_text('{"lockfileVersion":3}')
+                    if condition == 'extra-file': (checkout / 'new.txt').write_text('new\n')
+                    calls = self.statefile.with_suffix('.calls')
+                    if calls.exists(): calls.unlink()
+                    result = self.run_helper(script, 'refresh')
+                    if condition == 'lockfile':
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                        self.assertFalse(calls.exists())
 
     def test_embedded_refresh_policy_is_identical(self):
         policies = []
