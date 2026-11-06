@@ -53,10 +53,8 @@ for file in mac.sh ubuntu.sh wsl.sh pi.sh bazzite.sh; do
         unset BB_THREAD_ID BB_ENVIRONMENT_ID BB_TERMINAL_ID
         create_env_local
         assert_placeholders "${HOME}/.env.local"
-        count=$(grep -c '^# BAN_SCOWALT_ENGINEERING_SKILLS=1$' "${HOME}/.env.local" || true)
-        [[ ${count} == 1 ]] || fail "${file}: missing or duplicate commented engineering-skill exclusion"
-        if grep -Eq '^[[:space:]]*BAN_(SCOWALT_ENGINEERING|MATT_POCOCK|MATT_POCKOCK)_SKILLS=' "${HOME}/.env.local"; then
-            fail "${file}: active engineering-skill exclusion in template"
+        if grep -Eq 'BAN_(SCOWALT_ENGINEERING|MATT_POCOCK|MATT_POCKOCK)_SKILLS' "${HOME}/.env.local"; then
+            fail "${file}: template advertises a retired engineering-skill exclusion"
         fi
         count=$(grep -c '^# BAN_IMPECCABLE=1$' "${HOME}/.env.local" || true)
         [[ ${count} == 1 ]] || fail "${file}: missing or duplicate commented Impeccable exclusion"

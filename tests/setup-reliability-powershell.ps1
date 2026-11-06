@@ -424,46 +424,45 @@ try {
     }
 
     $canonicalCopyFixture = Join-Path $env:USERPROFILE ".agents\skills\tdd"
-    $defaultPiCopyFixture = Join-Path $env:USERPROFILE ".pi\agent\skills\tdd"
-    $customPiCopyFixture = Join-Path $env:PI_CODING_AGENT_DIR "skills\tdd"
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $defaultPiCopyFixture) | Out-Null
-    Copy-Item -LiteralPath $canonicalCopyFixture -Destination $defaultPiCopyFixture -Recurse
-    New-Item -ItemType Directory -Force -Path $customPiCopyFixture | Out-Null
-    Set-Content -LiteralPath (Join-Path $customPiCopyFixture "SKILL.md") -Value "user-modified"
+    $canonicalReferenceFixture = Join-Path $env:USERPROFILE ".agents\skills\code-review"
+    $retiredPiDuplicate = Join-Path $env:USERPROFILE ".pi\agent\skills\tdd"
+    Copy-Item -LiteralPath $canonicalCopyFixture -Destination $retiredPiDuplicate -Recurse
+    $canonicalPr = Join-Path $env:USERPROFILE ".agents\skills\pr"
+    $defaultPiPr = Join-Path $env:USERPROFILE ".pi\agent\skills\pr"
+    $customPiPr = Join-Path $env:PI_CODING_AGENT_DIR "skills\pr"
+    foreach ($relativeFile in @("SKILL.md", "agents/openai.yaml")) {
+        $prFile = Join-Path $canonicalPr $relativeFile
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $prFile) | Out-Null
+        Set-Content -LiteralPath $prFile -Value "dotfiles pr $relativeFile"
+    }
+    Copy-Item -LiteralPath $canonicalPr -Destination $defaultPiPr -Recurse
+    Copy-Item -LiteralPath $canonicalPr -Destination $customPiPr -Recurse
+    Set-Content -LiteralPath (Join-Path $customPiPr "agents/openai.yaml") -Value "user-modified pr"
     if (-not (Set-PiSkillOwnership) -or -not (Set-PiSkillOwnership)) {
         throw "Pi managed skill ownership setup failed"
     }
-    if (Test-Path -LiteralPath $defaultPiCopyFixture) {
-        throw "Pi ownership left an identical direct tdd duplicate"
+    if (Test-Path -LiteralPath $defaultPiPr) {
+        throw "Pi ownership left an identical direct pr duplicate"
     }
-    if ((Get-Content -LiteralPath (Join-Path $customPiCopyFixture "SKILL.md") -Raw).Trim() -ne "user-modified") {
-        throw "Pi ownership removed or changed a user-modified tdd copy"
+    if ((Get-Content -LiteralPath (Join-Path $customPiPr "agents/openai.yaml") -Raw).Trim() -ne "user-modified pr") {
+        throw "Pi ownership removed or changed a user-modified pr copy"
     }
-
-    $canonicalReferenceFixture = Join-Path $env:USERPROFILE ".agents\skills\code-review"
-    $defaultPiReferenceFixture = Join-Path $env:USERPROFILE ".pi\agent\skills\code-review"
-    $customPiReferenceFixture = Join-Path $env:PI_CODING_AGENT_DIR "skills\code-review"
-    Copy-Item -LiteralPath $canonicalReferenceFixture -Destination $defaultPiReferenceFixture -Recurse
-    Copy-Item -LiteralPath $canonicalReferenceFixture -Destination $customPiReferenceFixture -Recurse
-    Set-Content -LiteralPath (Join-Path $customPiReferenceFixture "references/config.md") -Value "user-modified reference"
-    if (-not (Set-PiSkillOwnership) -or -not (Set-PiSkillOwnership)) {
-        throw "Reference fixture ownership setup failed"
-    }
-    if (Test-Path -LiteralPath $defaultPiReferenceFixture) {
-        throw "Pi ownership left an identical direct Reference fixture duplicate"
-    }
-    if ((Get-Content -LiteralPath (Join-Path $customPiReferenceFixture "references/config.md") -Raw).Trim() -ne "user-modified reference") {
-        throw "Pi ownership removed or changed a user-modified Reference fixture reference"
+    if (-not (Test-Path -LiteralPath (Join-Path $retiredPiDuplicate "SKILL.md"))) {
+        throw "Pi ownership removed a retired-name copy that suite removal owns"
     }
     $piSettings = Get-Content -LiteralPath (Join-Path $env:PI_CODING_AGENT_DIR "settings.json") -Raw | ConvertFrom-Json
-    foreach ($directPi in @($defaultPiReferenceFixture, $customPiReferenceFixture)) {
+    foreach ($directPi in @($defaultPiPr, $customPiPr)) {
         if (@($piSettings.skills | Where-Object { $_ -eq "!$directPi/**" }).Count -ne 1) {
-            throw "Reference fixture direct-copy exclusion missing or repeated: $directPi"
+            throw "pr direct-copy exclusion missing or repeated: $directPi"
         }
     }
-    if ($piSettings.skills -contains "!$canonicalReferenceFixture/**" -or -not (Test-Path -LiteralPath $canonicalReferenceFixture)) {
-        throw "Pi ownership removed or excluded canonical Reference fixture"
+    if ($piSettings.skills -contains "!$canonicalPr/**" -or -not (Test-Path -LiteralPath $canonicalPr)) {
+        throw "Pi ownership removed or excluded canonical pr"
     }
+    if (@($piSettings.skills | Where-Object { $_ -like "*\tdd/**" -or $_ -like "*/tdd/**" -or $_ -like "*code-review*" }).Count -ne 0) {
+        throw "Pi ownership excluded a retired suite name"
+    }
+    Remove-Item -LiteralPath $retiredPiDuplicate -Recurse -Force
 
     function global:npx {
         $global:LASTEXITCODE = 1
