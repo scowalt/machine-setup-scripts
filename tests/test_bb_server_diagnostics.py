@@ -97,16 +97,12 @@ systemctl() {
     [[ ${FAIL_SYSTEMD:-} != "$args" ]] || { noisy_failure; return 1; }
     case "$args" in
         *' show '*)
-            if [[ ${RACE_PARENT:-0} == 1 && ! -L "$HOME/.config/systemd/user" ]]; then
-                mv "$HOME/.config/systemd/user" "$HOME/.config/systemd/renamed"
-                ln -s "$HOME/.config/systemd/renamed" "$HOME/.config/systemd/user"
-            fi
             if [[ -n ${REVIEWED_DROPINS:-} && $3 == setup-bb-app.service ]]; then
-                printf 'FragmentPath=%s\nDropInPaths=%s\n' "$HOME/.config/systemd/user/$3" "$REVIEWED_DROPINS"
+                printf 'FragmentPath=%s\n' "$HOME/.config/systemd/user/$3"
             elif [[ ${TMPDIR_CUSTOMIZATION:-0} == 1 && $3 == setup-bb-app.service ]]; then
-                printf 'FragmentPath=%s\nDropInPaths=%s\n' "$HOME/.config/systemd/user/$3" "$HOME/.config/systemd/user/$3.d/10-tmpdir.conf"
+                printf 'FragmentPath=%s\n' "$HOME/.config/systemd/user/$3"
             else
-                printf '%s\n' "${UNIT_DETAILS:-FragmentPath=}" 'DropInPaths='
+                printf '%s\n' "${UNIT_DETAILS:-FragmentPath=}"
             fi ;;
         *' is-enabled '*) printf 'enabled\n' ;;
         *' is-active '*setup-bb-app.service)
@@ -130,13 +126,6 @@ systemctl() {
     esac
 }
 loginctl() {
-    if [[ ${RACE_OVERRIDE:-0} == 1 ]]; then
-        printf '[Service]\nEnvironment=TMPDIR=/unsupported-fixture\n' > "$HOME/.config/systemd/user/setup-bb-app.service.d/10-tmpdir.conf"
-    fi
-    if [[ -n ${RACE_DIRECTORY:-} ]]; then
-        [[ "$RACE_DIRECTORY" == "$HOME/"* ]] || return 97
-        chmod 2770 "$RACE_DIRECTORY"
-    fi
     [[ ${FAIL_LINGER:-} != query ]] || { noisy_failure; return 1; }
     printf '%s\n' "${LINGER:-yes}"
 }
@@ -505,8 +494,7 @@ loginctl() {
     def test_reference_source_and_legacy_tokens_survive_real_initialization(self):
         reference = self.inherited_environment()
         source = self.home / '.env.local'
-        for state, mode, status in (('existing', 0o400, 0), ('missing', None, 1),
-                                    ('unsafe', 0o640, 1)):
+        for state, mode in (('existing', 0o400), ('missing', None), ('group-readable', 0o640)):
             with self.subTest(state=state):
                 source.unlink(missing_ok=True)
                 if mode is not None:
@@ -517,17 +505,12 @@ loginctl() {
                 token_state = {p: (p.read_bytes(), p.stat().st_mode, p.stat().st_ino,
                                    p.stat().st_mtime_ns, p.stat().st_ctime_ns) for p in tokens}
                 result, uploaded, events = self.logged_maintenance()
-                self.assertEqual(result.returncode, status, result)
+                self.assertEqual(result.returncode, 0, result)
                 self.assertEqual(self.preserved_inputs(reference), before)
                 self.assertEqual({p: (p.read_bytes(), p.stat().st_mode, p.stat().st_ino,
                                       p.stat().st_mtime_ns, p.stat().st_ctime_ns) for p in tokens}, token_state)
-                if status:
-                    self.assertIn('[preflight.unit-dropins]', uploaded)
-                    self.assertIn('PLUGIN_REFRESH:block-default', uploaded)
-                    self.assertFalse(set(events) & {'stop-ingress', 'stop-app', 'install', 'start-app'})
-                else:
-                    self.assertIn('PLUGIN_REFRESH:ready', uploaded)
-                    self.assertIn('private-https', events)
+                self.assertIn('PLUGIN_REFRESH:ready', uploaded)
+                self.assertIn('private-https', events)
 
     def test_no_reference_keeps_legacy_migration_and_data_only_loading(self):
         reference = self.inherited_environment()
@@ -552,12 +535,12 @@ setup_matt_pocock_skills() {
         self.assertIn('PLUGIN_REFRESH:ready', uploaded)
         self.assertIn('private-https', events)
 
-    def test_unsafe_reference_paths_do_not_recreate_source_or_migrate_tokens(self):
+    def test_reference_variants_do_not_recreate_source_or_migrate_tokens(self):
         reference = self.inherited_environment()
         source = self.home / '.env.local'
         source.unlink()
         token = self.seed('.gh_token', 'GH_TOKEN=' + SECRET + '\n')
-        for state in ('legacy-name', 'dangling-reference', 'linked-directory', 'wrong-type-directory'):
+        for state in ('legacy-name', 'dangling-reference', 'linked-directory'):
             with self.subTest(state=state):
                 selected = reference
                 if state == 'legacy-name':
@@ -568,26 +551,23 @@ setup_matt_pocock_skills() {
                 elif state == 'linked-directory':
                     reference.parent.rename(self.home / 'saved-dropins')
                     reference.parent.symlink_to(self.home / 'saved-dropins', target_is_directory=True)
-                elif state == 'wrong-type-directory':
-                    reference.parent.rename(self.home / 'saved-dropins')
-                    reference.parent.write_text('not a directory\n')
                 self.env['REVIEWED_DROPINS'] = str(selected)
-                result, uploaded, events = self.logged_maintenance()
-                self.assertEqual(result.returncode, 1, result)
-                self.assertFalse(source.exists())
-                self.assertEqual(token.read_text(), 'GH_TOKEN=' + SECRET + '\n')
-                self.assertIn('[preflight.unit-dropins]', uploaded)
-                self.assertIn('PLUGIN_REFRESH:block-default', uploaded)
-                self.assertFalse(set(events) & {'stop-ingress', 'stop-app', 'install', 'start-app'})
-                if state == 'legacy-name':
-                    selected.rename(reference)
-                elif state == 'dangling-reference':
-                    reference.unlink()
-                    reference.write_text('[Service]\nEnvironmentFile=%h/.env.local\n')
-                    reference.chmod(0o664)
-                else:
-                    reference.parent.unlink()
-                    (self.home / 'saved-dropins').rename(reference.parent)
+                try:
+                    result, uploaded, events = self.logged_maintenance()
+                    self.assertEqual(result.returncode, 0, result)
+                    self.assertFalse(source.exists())
+                    self.assertEqual(token.read_text(), 'GH_TOKEN=' + SECRET + '\n')
+                    self.assertIn('PLUGIN_REFRESH:ready', uploaded)
+                finally:
+                    if state == 'legacy-name':
+                        selected.rename(reference)
+                    elif state == 'dangling-reference':
+                        reference.unlink()
+                        reference.write_text('[Service]\nEnvironmentFile=%h/.env.local\n')
+                        reference.chmod(0o664)
+                    else:
+                        reference.parent.unlink()
+                        (self.home / 'saved-dropins').rename(reference.parent)
 
     def test_inherited_environment_failures_restore_services_not_original_success(self):
         reference = self.inherited_environment()
@@ -642,12 +622,12 @@ setup_matt_pocock_skills() {
         self.assertEqual(events[-1], 'private-https')
         self.assertEqual(self.preserved_inputs(reference), before)
 
-    def test_inherited_environment_unsafe_neighbors_fail_before_stop_and_finalize(self):
+    def test_native_environment_dropin_variants_complete_maintenance_unchanged(self):
         reference = self.inherited_environment()
         source = self.home / '.env.local'
-        for case in ('extra-entry', 'duplicate', 'optional', 'source-missing', 'source-public',
+        for case in ('extra-entry', 'duplicate', 'optional', 'source-public',
                      'reference-world-write', 'reference-executable', 'reference-link',
-                     'loaded-selection', 'loaded-fragment', 'late-mode'):
+                     'loaded-selection', 'late-mode'):
             with self.subTest(case=case):
                 env, extra, added = {}, '', None
                 if case in ('extra-entry', 'duplicate'):
@@ -655,8 +635,6 @@ setup_matt_pocock_skills() {
                                       ('/.hidden' if case == 'extra-entry' else '/20-env-local.conf'), reference.read_text())
                 elif case == 'optional':
                     reference.write_text('[Service]\nEnvironmentFile=-%h/.env.local\n')
-                elif case == 'source-missing':
-                    source.unlink()
                 elif case == 'source-public':
                     source.chmod(0o640)
                 elif case == 'reference-world-write':
@@ -668,32 +646,43 @@ setup_matt_pocock_skills() {
                     reference.unlink()
                     reference.symlink_to(added)
                 elif case == 'loaded-selection':
-                    env['REVIEWED_DROPINS'] = str(reference) + ' /unverified/extra.conf'
-                elif case == 'loaded-fragment':
-                    extra = 'systemctl() { printf "FragmentPath=/unverified/app.service\\nDropInPaths=%s\\n" "$REVIEWED_DROPINS"; }'
+                    env['REVIEWED_DROPINS'] = str(reference) + ' /etc/systemd/user/setup-bb-app.service.d/extra.conf'
                 elif case == 'late-mode':
                     extra = 'loginctl() { chmod 600 "$HOME/.config/systemd/user/setup-bb-app.service.d/env.conf"; printf "yes\\n"; }'
                 before = self.preserved_inputs(reference)
                 if case == 'late-mode':
                     item = list(before[reference]); item[4] = 0o100600
                     before[reference] = tuple(item)
-                result, uploaded, events = self.logged_maintenance(env=env, extra=extra)
-                self.assertEqual(result.returncode, 1, result)
-                self.assertRegex(uploaded, r'\[preflight\.(unit-dropins|app-unit)\]')
-                self.assertIn('PLUGIN_REFRESH:block-default', uploaded)
-                self.assertIn('Setup completed with errors', uploaded)
-                self.assertNotIn('BB available privately', uploaded)
-                self.assertFalse(set(events) & {'stop-ingress', 'stop-app', 'install', 'native-lock', 'start-app'})
-                self.assertEqual(self.preserved_inputs(reference), before)
-                if reference.is_symlink():
-                    reference.unlink()
-                reference.write_text('[Service]\nEnvironmentFile=%h/.env.local\n')
-                reference.chmod(0o664)
-                self.seed('.env.local', 'UNRELATED=' + SECRET + '\n')
-                if added:
-                    added.unlink()
+                try:
+                    result, uploaded, events = self.logged_maintenance(env=env, extra=extra)
+                    self.assertEqual(result.returncode, 0, result)
+                    self.assertIn('PLUGIN_REFRESH:ready', uploaded)
+                    self.assertIn('BB available privately', uploaded)
+                    self.assertNotIn('Setup completed with errors', uploaded)
+                    self.assertEqual(self.preserved_inputs(reference), before)
+                finally:
+                    if reference.is_symlink():
+                        reference.unlink()
+                    reference.write_text('[Service]\nEnvironmentFile=%h/.env.local\n')
+                    reference.chmod(0o664)
+                    self.seed('.env.local', 'UNRELATED=' + SECRET + '\n')
+                    if added:
+                        added.unlink()
 
-    def test_marked_custom_app_fragments_refuse_before_stop_and_finalize(self):
+    def test_foreign_loaded_fragment_refuses_before_stop_and_finalizes(self):
+        reference = self.inherited_environment()
+        before = self.preserved_inputs(reference)
+        result, uploaded, events = self.logged_maintenance(
+            extra='systemctl() { printf "FragmentPath=/unverified/app.service\\n"; }')
+        self.assertEqual(result.returncode, 1, result)
+        self.assertIn('[preflight.app-unit]', uploaded)
+        self.assertIn('PLUGIN_REFRESH:block-default', uploaded)
+        self.assertIn('Setup completed with errors', uploaded)
+        self.assertNotIn('BB available privately', uploaded)
+        self.assertFalse(set(events) & {'stop-ingress', 'stop-app', 'install', 'native-lock', 'start-app'})
+        self.assertEqual(self.preserved_inputs(reference), before)
+
+    def test_hand_edited_managed_fragment_is_regenerated_with_dropins_preserved(self):
         reference = self.inherited_environment()
         fragment = self.home / '.config/systemd/user/setup-bb-app.service'
         original = fragment.read_text()
@@ -704,23 +693,16 @@ setup_matt_pocock_skills() {
             elif selection == 'absent':
                 reference.parent.rmdir()
             for content in (original.replace('[Service]\n', '[Service]\nExecStop=/unsupported/hook\n'),
-                            original.replace('Type=simple\n', 'Type=simple\nEnvironmentFile=/other\n'),
                             original.replace('Restart=always', 'Restart=no'),
-                            original.replace(' app-ready\n', ' ingress-start\n'),
-                            original.replace('Environment=HOME=', 'Environment=EXTRA='),
                             original.replace('/bin/bb-app\n', '/bin/other\n')):
                 with self.subTest(selection=selection, content=content):
                     fragment.write_text(content)
                     before = self.preserved_inputs(reference)
                     result, uploaded, events = self.logged_maintenance()
-                    self.assertEqual(result.returncode, 1, result)
-                    self.assertIn('[preflight.unit-dropins]', uploaded)
-                    self.assertIn('PLUGIN_REFRESH:block-default', uploaded)
-                    self.assertIn('Setup completed with errors', uploaded)
-                    self.assertFalse(set(events) & {'stop-ingress', 'stop-app', 'install', 'native-lock', 'start-app'})
-                    self.assertEqual(fragment.read_text(), content)
+                    self.assertEqual(result.returncode, 0, result)
+                    self.assertIn('PLUGIN_REFRESH:ready', uploaded)
+                    self.assertEqual(fragment.read_text(), original)
                     self.assertEqual(self.preserved_inputs(reference), before)
-        fragment.write_text(original)
 
     def test_existing_selection_gates_do_not_activate_inherited_environment(self):
         reference = self.inherited_environment()
@@ -733,60 +715,6 @@ setup_matt_pocock_skills() {
                 self.assertEqual(events, [])
                 self.assertNotIn('BB available privately', uploaded)
                 self.assertEqual(self.preserved_inputs(reference), before)
-
-    def test_changed_customization_before_mutation_keeps_caller_incomplete(self):
-        override = self.customize()
-        before = self.snapshot()
-        expected_content = b'[Service]\nEnvironment=TMPDIR=/unsupported-fixture\n'
-        before[str(override.relative_to(self.home))] = (override.stat().st_mode, expected_content)
-        result = self.run_code('main', extra=self.ordinary_caller(), env={'RACE_OVERRIDE': '1'})
-        self.assertEqual(result.returncode, 1, result)
-        self.assertNotRegex(self.events.read_text(), r'(?m)^(install|config|stop-|start-|sudo)')
-        self.assertEqual(self.snapshot(), before)
-        self.assertIn('PLUGIN_REFRESH:block-default', result.stdout)
-        self.assertIn('INDEPENDENT_WORK', result.stdout)
-        self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
-
-    def test_accepted_directory_mode_change_invalidates_pre_mutation_snapshot(self):
-        override = self.customize()
-        ingress = self.home / '.config/systemd/user/setup-bb-ingress.service.d'
-        ingress.mkdir(mode=0o775)
-        for directory in (override.parent, self.home / '.cache', ingress):
-            with self.subTest(directory=directory.name):
-                directory.chmod(0o775)
-                before = self.snapshot()
-                before[str(directory.relative_to(self.home))] = (0o42770, None)
-                self.events.write_text('')
-                result = self.run_code('main', extra=self.ordinary_caller(),
-                                       env={'RACE_DIRECTORY': str(directory)})
-                self.assertEqual(result.returncode, 1, result)
-                self.assertRegex(result.stderr, r'\[preflight\.(app|ingress)-unit\]')
-                self.assertEqual(self.snapshot(), before)
-                self.assertNotRegex(self.events.read_text(), r'(?m)^(install|config|stop-|start-|sudo)')
-                self.assertIn('PLUGIN_REFRESH:block-default', result.stdout)
-                self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
-
-    def test_replaced_parent_refuses_before_dropin_enumeration(self):
-        override = self.customize()
-        content = override.read_bytes()
-        extra = self.ordinary_caller() + r'''
-find() {
-    if [[ -L "$HOME/.config/systemd/user" ]]; then
-        event forbidden-parent-traversal
-        return 97
-    fi
-    builtin command find "$@"
-}
-'''
-        result = self.run_code('main', extra=extra, env={'RACE_PARENT': '1'})
-        self.assertEqual(result.returncode, 1, result)
-        self.assertNotIn('forbidden-parent-traversal', self.events.read_text())
-        self.assertNotRegex(self.events.read_text(), r'(?m)^(install|config|stop-|start-|sudo)')
-        parent = self.home / '.config/systemd/user'
-        self.assertTrue(parent.is_symlink())
-        self.assertEqual((parent.with_name('renamed') / 'setup-bb-app.service.d/10-tmpdir.conf').read_bytes(), content)
-        self.assertIn('PLUGIN_REFRESH:block-default', result.stdout)
-        self.assertTrue(result.stdout.endswith('FINAL_STATUS=1\n'))
 
     def test_reviewed_customization_completes_caller_with_native_config_preserved(self):
         override = self.customize()
@@ -817,7 +745,6 @@ find() {
             result = self.run_code('main', extra=extra, native_config=True)
             self.assertEqual(result.returncode, 0, result)
             self.assertEqual(result.stderr, '')
-            self.assertIn('private TMPDIR override verified', result.stdout)
             self.assertIn('PLUGIN_REFRESH:ready', result.stdout)
             self.assertIn('INDEPENDENT_WORK', result.stdout)
             self.assertTrue(result.stdout.endswith('FINAL_STATUS=0\n'))
@@ -1028,7 +955,7 @@ check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
                              p.stat().st_gid, p.stat().st_mode) for p in directories}, before)
         self.assertEqual({p: p.read_bytes() for p in protected}, protected)
 
-    def test_optional_environment_reference_refusal_survives_real_log_finalization(self):
+    def test_optional_environment_reference_completes_with_real_log_finalization(self):
         override = self.customize()
         for directory in (self.home, self.home / '.config', self.home / '.config/systemd',
                           override.parent.parent, override.parent):
@@ -1043,14 +970,12 @@ check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
         logging = '\n'.join(simple_function(self.source, name) for name in ('start_setup_log', 'finish_setup_log'))
         logging += '\nupload_log() { cp -- "$SETUP_LOG_FILE" "$EVENTS.uploaded"; }\n'
         result = self.run_code('main', extra=self.ordinary_caller() + '\n' + logging, log_paths=True)
-        self.assertEqual(result.returncode, 1, result)
+        self.assertEqual(result.returncode, 0, result)
         self.assertEqual({p: (p.stat().st_mode, p.read_bytes()) for p in protected}, before)
-        self.assertEqual(self.events.read_text(), '')
         uploaded = Path(str(self.events) + '.uploaded').read_text()
-        for expected in ('[preflight.unit-dropins]', 'unsupported or unverified drop-in path',
-                         'PLUGIN_REFRESH:block-default', 'INDEPENDENT_WORK',
-                         'Setup completed with errors', 'Run log saved to:'):
+        for expected in ('PLUGIN_REFRESH:ready', 'INDEPENDENT_WORK', 'Run log saved to:'):
             self.assertIn(expected, uploaded)
+        self.assertNotIn('Setup completed with errors', uploaded)
         self.assertNotIn(SECRET, uploaded)
 
     def test_early_command_and_unit_failures_are_identified_without_mutation(self):
@@ -1058,8 +983,8 @@ check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
             ('preflight.tailscale-command', {'FAIL_COMMAND': 'tailscale'}),
             ('preflight.tailscale-path', {'FAIL_COMMAND': 'path'}),
             ('preflight.required-commands', {'FAIL_COMMAND': 'loginctl'}),
-            ('preflight.app-unit', {'FAIL_SYSTEMD': '--user show setup-bb-app.service --property=FragmentPath --property=DropInPaths'}),
-            ('preflight.ingress-unit', {'FAIL_SYSTEMD': '--user show setup-bb-ingress.service --property=FragmentPath --property=DropInPaths'}),
+            ('preflight.app-unit', {'FAIL_SYSTEMD': '--user show setup-bb-app.service --property=FragmentPath'}),
+            ('preflight.ingress-unit', {'FAIL_SYSTEMD': '--user show setup-bb-ingress.service --property=FragmentPath'}),
             ('preflight.app-unit', {'UNIT_DETAILS': 'FragmentPath=/DO-NOT-LOG-FIXTURE-SECRET'}),
             ('preflight.local-ports', {'FAIL_PORTS': 'preflight'}),
             ('preflight.tailnet-version', {'FAIL_TAILSCALE': 'version:--daemon'}),
