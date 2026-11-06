@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import os
 from pathlib import Path
 import shutil
@@ -11,7 +12,7 @@ SYSTEM_PATH = '/usr/bin:/bin'
 TOOLS = {'node': 'SETUP_TEST_NODE', 'pwsh': 'PWSH_BIN',
          'mise': 'SETUP_TEST_MISE', 'chezmoi': 'SETUP_TEST_CHEZMOI',
          'bun': 'SETUP_TEST_BUN'}
-DIRECT_SUITES = ('test_fixture_containment.py', 'test_pre_push_contracts.py',
+DIRECT_SUITES = ('test_fixture_containment.py', 'test_run_contracts.py',
                  'test_macos_clt.py', 'test_homebrew_results.py',
                  'test_managed_skill_suite.py')
 
@@ -35,7 +36,7 @@ def native_tool(name, value):
 def suites():
     shell = sorted(ROOT.joinpath('tests').glob('*.sh'))
     if not shell:
-        raise ValueError('no shell contracts found; refusing an empty hook run')
+        raise ValueError('no shell contracts found; refusing an empty contract run')
     selected = [ROOT / 'tests' / name for name in DIRECT_SUITES] + shell
     if any(p.is_symlink() or not p.is_file() for p in selected):
         raise ValueError('contract inventory contains a missing or linked entry')
@@ -43,18 +44,30 @@ def suites():
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Version 2: run the expanded pre-push contracts with bounded 900-second suite deadlines through mandatory containment.\n\nInvoked by lefthook under env -i and Python isolated mode. Tool arguments select\nexisting native executables only; never invoke a shim/package manager to find or\ninstall them. See --help for explicit selections when system tools are absent.\n')
+    parser = argparse.ArgumentParser(description='Version 3: run the contract inventory, or selected suites from it, with bounded 900-second suite deadlines through mandatory containment.\n\nInvoked by the Contracts workflow under env -i and Python isolated mode. Tool arguments\nselect existing native executables only; never invoke a shim/package manager to find or\ninstall them. See --help for explicit selections when system tools are absent.\n')
     for name, variable in TOOLS.items():
-        parser.add_argument('--' + name, default='', help=f'native {name}; hook override: {variable}; default: {SYSTEM_PATH}')
+        parser.add_argument('--' + name, default='', help=f'native {name}; override: {variable}; default: {SYSTEM_PATH}')
+    parser.add_argument('--list', action='store_true', help='print the full inventory as a JSON array and exit')
+    parser.add_argument('suite', nargs='*', help='inventory entries to run; default: all')
     args = parser.parse_args(argv)
+    try:
+        inventory = suites()
+    except ValueError as error:
+        parser.error(str(error))
+    if args.list:
+        print(json.dumps(inventory))
+        return 0
+    unknown = [suite for suite in args.suite if suite not in inventory]
+    if unknown:
+        parser.error('not in the contract inventory: ' + ', '.join(unknown))
+    selected = args.suite or inventory
     if os.uname().sysname != 'Linux':
         parser.error('Linux kernel containment required; use a Linux validation host, never run fixtures directly')
     try:
         tools = {name: native_tool(name, getattr(args, name)) for name in TOOLS}
-        selected = suites()
     except ValueError as error:
         parser.error(str(error))
-    with tempfile.TemporaryDirectory(prefix='setup-hook-tools-', dir='/tmp') as directory:
+    with tempfile.TemporaryDirectory(prefix='setup-contract-tools-', dir='/tmp') as directory:
         tool_dir = Path(directory)
         for name in ('mise', 'chezmoi', 'bun'):
             (tool_dir / name).symlink_to(tools[name])

@@ -576,7 +576,7 @@ This repository uses automated tools to maintain code quality:
 - **Markdownlint**: Ensures consistent markdown formatting
   - Configuration: `.markdownlint.json`
   - MD013 (line length) is disabled to allow long lines in documentation
-- **Lefthook**: Manages git hooks for pre-commit and pre-push validation
+- **Lefthook**: Manages pre-commit hooks
   - Runs via `bunx` (preferred over `npx`)
 
 #### ShellCheck Configuration
@@ -594,7 +594,7 @@ This repository is configured for maximum error detection with shellcheck:
 **Automated Validation**:
 
 - **Pre-commit hook**: Validates staged shell scripts before commit
-- **Pre-push hook**: Validates all shell scripts before push
+- **CI**: Validates all shell scripts on pull requests and `main`
 - **Manual validation**: Simply run `shellcheck script.sh` - the `.shellcheckrc` handles all settings automatically
 
 **Shell Script Standards**:
@@ -605,9 +605,11 @@ This repository is configured for maximum error detection with shellcheck:
 - Separate command substitution for complex pipelines to avoid masking return values
 - Quote all variable expansions to prevent word splitting
 
-### Contained pre-push contracts
+### Contract CI
 
-The contract hook uses `tools/run-pre-push-contracts.py` and the audited fixture runner above. It requires Linux, `/usr/bin/python3`, a C compiler and existing native Node, PowerShell, mise, Chezmoi and Bun executables. Discovery is limited to `/usr/bin:/bin`; when needed, supply absolute native paths through `SETUP_TEST_NODE`, `PWSH_BIN`, `SETUP_TEST_MISE`, `SETUP_TEST_CHEZMOI` and `SETUP_TEST_BUN` to `git push`. Shims and missing tools fail closed; no tools are installed. The hook runs every `tests/*.sh` contract plus direct containment, hook-dispatch, CLT, Homebrew-result and managed-skill regressions. Optional live integrations remain disabled. Use `env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tools/run-pre-push-contracts.py --help` for the equivalent explicit-tool invocation.
+Pushes to `main` and pull requests run [the Contracts workflow](.github/workflows/contracts.yml) in GitHub Actions; there is no pre-push hook. It lints every script and Markdown file, then runs each entry of `tools/run-contracts.py --list` as its own parallel job through the audited fixture runner above. The inventory is every `tests/*.sh` contract plus direct containment, dispatch, CLT, Homebrew-result and managed-skill regressions. Optional live integrations remain disabled.
+
+To run contracts locally, use Linux with `/usr/bin/python3`, a C compiler and existing native Node, PowerShell, mise, Chezmoi and Bun executables. Discovery is limited to `/usr/bin:/bin`; otherwise pass absolute native paths with `--node`, `--pwsh`, `--mise`, `--chezmoi` and `--bun`. Shims and missing tools fail closed; no tools are installed. Name inventory entries to run a subset, or none for the whole suite: `env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tools/run-contracts.py --help`.
 
 ### Commit Guidelines
 
