@@ -812,7 +812,8 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
     def test_refresh_allows_only_pstack_dependency_output_from_its_origin(self):
         self.env.pop('PI_OFFLINE')
         source = 'git:github.com/michael-denyer/pstack-claude'
-        for condition in ('lockfile', 'extra-file', 'wrong-origin', 'other-repository'):
+        for condition in ('lockfile', 'tool-dependencies', 'linked-tool-dependencies', 'extra-file',
+                          'wrong-origin', 'other-repository'):
             for script in (*BASH, *(['win.ps1'] if PWSH else [])):
                 with self.subTest(script=script, condition=condition):
                     git_root = self.agent / 'git'
@@ -826,10 +827,25 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                         self.run_git('remote', 'add', 'origin', origin, cwd=checkout)
                     (checkout / 'package-lock.json').write_text('{"lockfileVersion":3}')
                     if condition == 'extra-file': (checkout / 'new.txt').write_text('new\n')
+                    if condition.endswith('tool-dependencies'):
+                        scripts = checkout / 'plugins/pstack/skills/poteto-mode/scripts'
+                        scripts.mkdir(parents=True)
+                        (scripts / 'package.json').write_text('{}\n')
+                        (checkout / '.gitignore').write_text('plugins/pstack/skills/poteto-mode/scripts/node_modules/\n')
+                        self.run_git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                                     'add', '.gitignore', 'plugins', cwd=checkout)
+                        self.run_git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                                     'commit', '-qm', 'tools', cwd=checkout)
+                        if condition == 'tool-dependencies':
+                            (scripts / 'node_modules/commander').mkdir(parents=True)
+                        else:
+                            outside = self.root / ('outside-tools-' + script)
+                            outside.mkdir(exist_ok=True)
+                            (scripts / 'node_modules').symlink_to(outside, target_is_directory=True)
                     calls = self.statefile.with_suffix('.calls')
                     if calls.exists(): calls.unlink()
                     result = self.run_helper(script, 'refresh')
-                    if condition == 'lockfile':
+                    if condition in ('lockfile', 'tool-dependencies'):
                         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     else:
                         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)

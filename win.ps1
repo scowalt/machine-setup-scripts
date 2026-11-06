@@ -6893,7 +6893,7 @@ try {
         const pstack = parsed.host === 'github.com' && parsed.repoPath === 'michael-denyer/pstack-claude';
         const dependencyOutput = ['?? node_modules/', '!! node_modules/', '?? package-lock.json', '!! package-lock.json'];
         const allowed = visual ? [...dependencyOutput, '?? plugins/visual-explainer/node_modules/', '!! plugins/visual-explainer/node_modules/']
-            : pstack ? dependencyOutput : [];
+            : pstack ? [...dependencyOutput, '?? plugins/pstack/skills/poteto-mode/scripts/node_modules/', '!! plugins/pstack/skills/poteto-mode/scripts/node_modules/'] : [];
         const status = inspect(['status', '--porcelain=v1', '-z', visual || pstack ? '--untracked-files=normal' : '--untracked-files=all', '--ignored=matching']);
         if (status.error || status.status !== 0 || status.signal || status.stdout.length > 1024 * 1024) throw new Error('unverified checkout');
         const records = status.stdout.split('\0').filter(Boolean);
@@ -9138,7 +9138,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 208 | Last changed: Accept Pi 1.5 Go catalog endpoint"
+    Write-Host "Version 209 | Last changed: Allow pstack tool dependencies in Pi package refresh"
 
     Assert-HeadlessUnsupported
 
