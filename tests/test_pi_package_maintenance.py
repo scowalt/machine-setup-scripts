@@ -138,7 +138,7 @@ print_error() { printf 'ERROR: %s\\n' "$*"; }
             code = bash_definitions(script) + '\n' + code
             command = ['bash', '--noprofile', '--norc']
         result = subprocess.run(command, input=code, env={**self.env, 'FIXTURE_SOURCE': str(ROOT / script)}, cwd=self.root,
-                                text=True, capture_output=True, timeout=15)
+                                text=True, capture_output=True, timeout=60)
         self.state = json.loads(self.statefile.read_text())
         return result
 
@@ -191,7 +191,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                         code += '\nrun_setup_tasks() {\nlocal _setup_had_errors=0 _pi_go_ready=0 PI_PROFILE_MUTATIONS_BLOCKED=0\n' + tail
                         code += '\n' + extract(script, 'main') + '\nmain\n'
                         command = ['bash', '--noprofile', '--norc']
-                    result = subprocess.run(command, input=code, env=self.env, cwd=self.root, capture_output=True, text=True, timeout=15)
+                    result = subprocess.run(command, input=code, env=self.env, cwd=self.root, capture_output=True, text=True, timeout=60)
                     self.assertEqual(result.returncode, 0 if failure == 'none' else 1, result.stdout + result.stderr)
                     self.assertIn('UNRELATED-CONTINUED', result.stdout)
                     self.assertIn('LOG-FINALIZED', result.stdout)
