@@ -10,31 +10,33 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-PREFIX = 'env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tools/run-pre-push-contracts.py'
+PREFIX = 'env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tools/run-contracts.py'
+SUITE = 'tests/test_macos_clt.py'
 
 
-def hook_command():
-    config = (ROOT / 'lefthook.yml').read_text()
-    return re.search(r'    contract-tests:\n      run: (.*)', config).group(1)
+def workflow_command():
+    workflow = (ROOT / '.github/workflows/contracts.yml').read_text()
+    return re.search(r'      - name: Run contract\n        env:\n          SUITE: \$\{\{ matrix.suite \}\}\n        run: (.*)', workflow).group(1)
 
 
-class HookWiringTests(unittest.TestCase):
-    def test_contract_hook_uses_sanitized_dispatcher(self):
-        command = hook_command()
+class WorkflowWiringTests(unittest.TestCase):
+    def test_contract_job_uses_sanitized_dispatcher(self):
+        command = workflow_command()
         self.assertTrue(command.startswith(PREFIX), command)
         self.assertNotIn('for test', command)
         self.assertNotIn('bash "$test"', command)
+        self.assertNotIn('pre-push', (ROOT / 'lefthook.yml').read_text())
 
 
 class DispatchTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='hook-dispatch-')
+        self.temp = tempfile.TemporaryDirectory(prefix='contract-dispatch-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / 'tools').mkdir()
         (self.root / 'tests').mkdir()
-        shutil.copyfile(ROOT / 'tools/run-pre-push-contracts.py', self.root / 'tools/run-pre-push-contracts.py')
-        spec = importlib.util.spec_from_file_location('hook_dispatch', self.root / 'tools/run-pre-push-contracts.py')
+        shutil.copyfile(ROOT / 'tools/run-contracts.py', self.root / 'tools/run-contracts.py')
+        spec = importlib.util.spec_from_file_location('contract_dispatch', self.root / 'tools/run-contracts.py')
         self.module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.module)
         self.shell_names = sorted(p.name for p in (ROOT / 'tests').glob('*.sh')) + ['future-contract.sh']
@@ -45,7 +47,8 @@ class DispatchTests(unittest.TestCase):
                     'PYTHONPATH': str(self.root / 'untrusted'), 'BASH_ENV': str(self.root / 'startup'),
                     'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'core.hooksPath',
                     'GIT_CONFIG_VALUE_0': '/untrusted', 'PI_CODING_AGENT_DIR': '/untrusted',
-                    'MANAGED_SKILLS_CLI': '/untrusted', 'PI_GO_LOCK_MODULE': '/untrusted'}
+                    'MANAGED_SKILLS_CLI': '/untrusted', 'PI_GO_LOCK_MODULE': '/untrusted',
+                    'SUITE': SUITE}
         (self.root / 'startup').write_text('exit 99\n')
         for name, variable in self.module.TOOLS.items():
             tool = self.root / ('native ' + name)
@@ -66,13 +69,16 @@ class DispatchTests(unittest.TestCase):
             '(root / "record.json").write_text(json.dumps(record))\n'
             f'sys.exit({status})\n')
 
-    def dispatch(self):
-        command = hook_command()
+    def dispatch(self, command=None):
+        command = command or workflow_command()
         self.assertTrue(command.startswith(PREFIX), command)
         return subprocess.run(['/bin/sh', '-c', command], cwd=self.root, env=self.env,
                               stdin=subprocess.DEVNULL, capture_output=True, text=True)
 
-    def test_actual_hook_dispatch_sanitizes_and_selects_full_suite(self):
+    def inventory(self):
+        return ['tests/' + name for name in self.module.DIRECT_SUITES] + ['tests/' + name for name in sorted(self.shell_names)]
+
+    def test_actual_workflow_dispatch_sanitizes_and_selects_matrix_suite(self):
         result = self.dispatch()
         self.assertEqual(result.returncode, 0, result.stderr)
         record = json.loads(self.record.read_text())
@@ -81,13 +87,32 @@ class DispatchTests(unittest.TestCase):
         argv = record['argv']
         self.assertEqual(argv[:4], ['--node', self.env['SETUP_TEST_NODE'], '--pwsh', self.env['PWSH_BIN']])
         self.assertEqual(argv[4], '--tool-path')
-        self.assertTrue(argv[5].startswith('/usr/bin:/bin:/tmp/setup-hook-tools-'))
-        expected = ['tests/' + name for name in self.module.DIRECT_SUITES] + ['tests/' + name for name in sorted(self.shell_names)]
+        self.assertTrue(argv[5].startswith('/usr/bin:/bin:/tmp/setup-contract-tools-'))
         self.assertEqual(argv[6:8], ['--timeout', '900'])
-        self.assertEqual(argv[8:], expected)
+        self.assertEqual(argv[8:], [SUITE])
         self.assertEqual(record['mode'], 0o700)
         self.assertEqual(record['tools'], {name: self.env[self.module.TOOLS[name]] for name in ('mise', 'chezmoi', 'bun')})
         self.assertFalse(Path(argv[5].split(':')[-1]).exists(), 'private dispatch tool links must be cleaned')
+
+    def test_no_selection_runs_full_inventory(self):
+        result = self.dispatch(workflow_command().replace(' "${SUITE}"', ''))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(self.record.read_text())['argv'][8:], self.inventory())
+
+    def test_list_prints_inventory_without_tools(self):
+        result = self.dispatch(PREFIX + ' --list')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), self.inventory())
+        self.assertFalse(self.record.exists())
+
+    def test_unknown_suite_is_rejected_before_runner(self):
+        for suite in ('tests/run-fixture-matrix.py', 'tests/missing-contract.sh', '../ubuntu.sh'):
+            with self.subTest(suite=suite):
+                self.env['SUITE'] = suite
+                result = self.dispatch()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('not in the contract inventory', result.stderr)
+                self.assertFalse(self.record.exists())
 
     def test_simulated_runner_failures_propagate_without_retry(self):
         for status in (1, 2, 125):
@@ -146,7 +171,7 @@ class DispatchTests(unittest.TestCase):
             path.unlink()
         result = self.dispatch()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('empty hook run', result.stderr)
+        self.assertIn('empty contract run', result.stderr)
         self.assertFalse(self.record.exists())
 
 

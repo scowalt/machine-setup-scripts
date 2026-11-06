@@ -1,5 +1,15 @@
 # CI
 
+## Contract workflow
+
+[.github/workflows/contracts.yml](.github/workflows/contracts.yml) replaces the
+former pre-push hook. It runs on pull requests and pushes to `main` in GitHub
+Actions, which is free for this public repository: ShellCheck and Markdownlint
+over every script and Markdown file, then one parallel job per entry of
+`tools/run-contracts.py --list`, each through the audited contained runner.
+GitHub Actions is enabled for this; the Woodpecker comment-policy pipeline below
+is unchanged.
+
 ## Native Linux routing
 
 The workflow selects `ci_os: linux`, matching the supported Woodpecker 3.19
@@ -14,8 +24,8 @@ pins and status layout stay unchanged; actual AMD64 acceptance is separate.
 
 ## Authored contract
 
-[.woodpecker.yaml](.woodpecker.yaml) ports the sole authored GitHub Actions job,
-`no-comments`, from [.github/workflows/no-comments.yml](.github/workflows/no-comments.yml).
+[.woodpecker.yaml](.woodpecker.yaml) ports the authored GitHub Actions job
+`no-comments` from [.github/workflows/no-comments.yml](.github/workflows/no-comments.yml).
 Both run these commands, in order, failing on a nonzero result:
 
 ```sh
@@ -53,11 +63,11 @@ for comparison and rollback.
 Run the same two commands above for policy validation; stage only intended files
 and run the first command with `--staged` to check the complete proposed snapshot.
 Install the existing hooks with `lefthook install` and make an ordinary hooked
-commit. Keep [lefthook.yml](lefthook.yml) unchanged: pre-commit retains staged
-Gitleaks, ShellCheck, Markdownlint and policy checks; pre-push retains all-script
-lint and the contained contract dispatcher. `.mise.toml` pins local Gitleaks
-8.30.1; use process-local `mise exec`, not a global version change.
-These local suites are not additional authored hosted jobs.
+commit. [lefthook.yml](lefthook.yml) has only pre-commit: staged Gitleaks,
+ShellCheck, Markdownlint and policy checks. There is no pre-push hook; all-script
+lint and the contained contracts run in the Contract workflow above.
+`.mise.toml` pins local Gitleaks 8.30.1; use process-local `mise exec`, not a
+global version change.
 
 Never validate this port by running or sourcing setup scripts, applying dotfiles,
 updating managed tools, or contacting production services. Behavioral fixtures
