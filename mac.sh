@@ -6998,12 +6998,15 @@ try {
         if (identityLines.length !== 3 || path.resolve(identityLines[0]) !== checkout ||
             path.resolve(identityLines[1]) !== dotGit || path.resolve(checkout, identityLines[2]) !== dotGit) throw new Error('unexpected repository identity');
         const visual = parsed.host === 'github.com' && parsed.repoPath === 'nicobailon/visual-explainer';
-        const status = inspect(['status', '--porcelain=v1', '-z', visual ? '--untracked-files=normal' : '--untracked-files=all', '--ignored=matching']);
+        const pstack = parsed.host === 'github.com' && parsed.repoPath === 'michael-denyer/pstack-claude';
+        const dependencyOutput = ['?? node_modules/', '!! node_modules/', '?? package-lock.json', '!! package-lock.json'];
+        const allowed = visual ? [...dependencyOutput, '?? plugins/visual-explainer/node_modules/', '!! plugins/visual-explainer/node_modules/']
+            : pstack ? dependencyOutput : [];
+        const status = inspect(['status', '--porcelain=v1', '-z', visual || pstack ? '--untracked-files=normal' : '--untracked-files=all', '--ignored=matching']);
         if (status.error || status.status !== 0 || status.signal || status.stdout.length > 1024 * 1024) throw new Error('unverified checkout');
         const records = status.stdout.split('\0').filter(Boolean);
-        if (records.some(record => !visual || !['?? node_modules/', '!! node_modules/', '?? package-lock.json', '!! package-lock.json',
-            '?? plugins/visual-explainer/node_modules/', '!! plugins/visual-explainer/node_modules/'].includes(record))) throw new Error('modified checkout');
-        if (visual) {
+        if (records.some(record => !allowed.includes(record))) throw new Error('modified checkout');
+        if (visual || pstack) {
             const origin = inspect(['remote', 'get-url', 'origin']);
             const remote = origin.status === 0 && !origin.error && parseGit(origin.stdout.trim().replace(/^git@/, 'git:git@'));
             if (!remote || remote.host !== parsed.host || remote.repoPath !== parsed.repoPath) throw new Error('unverified origin');
@@ -8058,6 +8061,7 @@ setup_pi_companion_packages() {
     local _legacy_package="npm:pi-ask-user"
     local -a _packages=(
         "npm:pi-web-access"
+        "git:github.com/michael-denyer/pstack-claude"
     )
     local _package=""
     local _output=""
