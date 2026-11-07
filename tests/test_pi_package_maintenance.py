@@ -18,6 +18,7 @@ PWSH = os.environ.get('PWSH_BIN') or shutil.which('pwsh')
 NODE = subprocess.check_output(['node', '-p', 'process.execPath'], text=True).strip()
 ADAPTER = 'npm:pi-mcp-adapter'
 LATEST_VERSION = '5.3.0'
+REAL_CALLER_PARTS = 3
 FUNCTIONS = {
     'adapter': ('setup_pi_mcp_adapter', 'Setup-PiMcpAdapter'),
     'bridge': ('setup_pi_claude_bridge', 'Setup-PiClaudeBridge'),
@@ -271,110 +272,121 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
         return run_with_file_stdin(command, code, env={**self.env, 'FIXTURE_SOURCE': str(ROOT / script)}, cwd=self.root,
                               capture_output=True, text=True, timeout=30)
 
-    @unittest.skipIf(os.name == 'nt', 'POSIX metadata with portable PowerShell adapters')
-    def test_real_caller_converges_private_pi_through_group_writable_ancestors(self):
+    def check_real_caller(self, part):
         from test_pi_opencode_go_setup import GoSetupTests, KEY
         go = GoSetupTests()
         go.setUp()
         self.addCleanup(go.doCleanups)
-        for script in (*BASH, *(['win.ps1'] if PWSH else [])):
-            for selected in (False, True):
-                with self.subTest(script=script, selected=selected):
-                    case = PackageMaintenance()
-                    case.setUp()
-                    self.addCleanup(case.doCleanups)
-                    default = case.agent
+        cases = [(script, selected) for script in (*BASH, *(['win.ps1'] if PWSH else [])) for selected in (False, True)]
+        for script, selected in cases[part::REAL_CALLER_PARTS]:
+            with self.subTest(script=script, selected=selected):
+                case = PackageMaintenance()
+                case.setUp()
+                self.addCleanup(case.doCleanups)
+                default = case.agent
+                if selected:
+                    case.agent = case.home / 'profiles/team/active'
+                    case.agent.mkdir(parents=True)
+                    case.env['PI_CODING_AGENT_DIR'] = str(case.agent)
+                case.env.pop('PI_OFFLINE')
+                shutil.copytree(go.home / '.local', case.home / '.local')
+                shutil.copy2(go.envfile, case.home / '.env.local')
+                settings, _ = case.seed_affected_store()
+                settings['packages'].append('npm:pi-prose')
+                (case.agent / 'settings.json').write_text(json.dumps(settings))
+                retired = case.agent / 'npm/node_modules/pi-prose'
+                retired.mkdir(parents=True)
+                (retired / 'package.json').write_text('{"name":"pi-prose","scripts":{"uninstall":"exit 99"}}')
+                (retired / 'index.js').write_text('throw Error("must not execute")')
+                (case.agent / 'prose').mkdir()
+                sentinel = case.agent / 'prose/config.json'
+                sentinel.write_text('{custom malformed prose is preserved')
+                auth = case.agent / 'auth.json'
+                auth.write_text('{"keep":{"type":"api_key","key":"fixture-unrelated"}}')
+                ordinary = [case.home, case.agent / 'npm', case.agent / 'npm/node_modules']
+                if selected:
+                    ordinary += [case.agent.parent, case.agent.parent.parent]
+                    (default / 'auth.json').write_text('inactive fixture credential')
+                    (default / 'settings.json').write_text('{"packages":["npm:pi-prose"]}')
+                for directory in ordinary:
+                    directory.chmod(0o2775)
+                metadata = lambda p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode, p.stat().st_dev, p.stat().st_ino)
+                before = {p: metadata(p) for p in ordinary}
+                for repeat in range(2):
+                    result = case.run_real_trust_caller(script)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn('LOG-FINALIZED', result.stdout)
+                    self.assertIn('UNRELATED-CONTINUED', result.stdout)
+                    self.assertNotIn(KEY, result.stdout + result.stderr)
+                    self.assertEqual(json.loads(auth.read_text()), {
+                        'keep': {'type': 'api_key', 'key': 'fixture-unrelated'},
+                        'opencode-go': {'type': 'api_key', 'key': KEY}})
+                    self.assertFalse(retired.exists())
+                    self.assertEqual(sentinel.read_text(), '{custom malformed prose is preserved')
+                    self.assertEqual(json.loads((case.agent / 'npm/package.json').read_text())['dependencies']['pi-mcp-adapter'], '^' + LATEST_VERSION)
+                    self.assertEqual(json.loads((case.agent / 'settings.json').read_text())['packages'], [
+                        {'source': ADAPTER, 'extensions': ['index.ts'], 'skills': []}, 'npm:unrelated'])
+                    self.assertEqual({p: metadata(p) for p in ordinary}, before)
+                    self.assertEqual(case.agent.stat().st_mode & 0o7777, 0o700)
+                    trust = case.agent / 'trust.json'
+                    self.assertTrue(json.loads(trust.read_text())[str(case.home / '.bb/plugins/environment-git-worktree/host-data/worktrees')])
+                    self.assertEqual(auth.stat().st_mode & 0o7777, 0o600)
                     if selected:
-                        case.agent = case.home / 'profiles/team/active'
-                        case.agent.mkdir(parents=True)
-                        case.env['PI_CODING_AGENT_DIR'] = str(case.agent)
-                    case.env.pop('PI_OFFLINE')
-                    shutil.copytree(go.home / '.local', case.home / '.local')
-                    shutil.copy2(go.envfile, case.home / '.env.local')
-                    settings, _ = case.seed_affected_store()
-                    settings['packages'].append('npm:pi-prose')
-                    (case.agent / 'settings.json').write_text(json.dumps(settings))
-                    retired = case.agent / 'npm/node_modules/pi-prose'
-                    retired.mkdir(parents=True)
-                    (retired / 'package.json').write_text('{"name":"pi-prose","scripts":{"uninstall":"exit 99"}}')
-                    (retired / 'index.js').write_text('throw Error("must not execute")')
-                    (case.agent / 'prose').mkdir()
-                    sentinel = case.agent / 'prose/config.json'
-                    sentinel.write_text('{custom malformed prose is preserved')
-                    auth = case.agent / 'auth.json'
-                    auth.write_text('{"keep":{"type":"api_key","key":"fixture-unrelated"}}')
-                    ordinary = [case.home, case.agent / 'npm', case.agent / 'npm/node_modules']
-                    if selected:
-                        ordinary += [case.agent.parent, case.agent.parent.parent]
-                        (default / 'auth.json').write_text('inactive fixture credential')
-                        (default / 'settings.json').write_text('{"packages":["npm:pi-prose"]}')
-                    for directory in ordinary:
-                        directory.chmod(0o2775)
-                    metadata = lambda p: (p.stat().st_uid, p.stat().st_gid, p.stat().st_mode, p.stat().st_dev, p.stat().st_ino)
-                    before = {p: metadata(p) for p in ordinary}
-                    for repeat in range(2):
-                        result = case.run_real_trust_caller(script)
-                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                        self.assertIn('LOG-FINALIZED', result.stdout)
-                        self.assertIn('UNRELATED-CONTINUED', result.stdout)
-                        self.assertNotIn(KEY, result.stdout + result.stderr)
-                        self.assertEqual(json.loads(auth.read_text()), {
-                            'keep': {'type': 'api_key', 'key': 'fixture-unrelated'},
-                            'opencode-go': {'type': 'api_key', 'key': KEY}})
-                        self.assertFalse(retired.exists())
-                        self.assertEqual(sentinel.read_text(), '{custom malformed prose is preserved')
-                        self.assertEqual(json.loads((case.agent / 'npm/package.json').read_text())['dependencies']['pi-mcp-adapter'], '^' + LATEST_VERSION)
-                        self.assertEqual(json.loads((case.agent / 'settings.json').read_text())['packages'], [
-                            {'source': ADAPTER, 'extensions': ['index.ts'], 'skills': []}, 'npm:unrelated'])
-                        self.assertEqual({p: metadata(p) for p in ordinary}, before)
-                        self.assertEqual(case.agent.stat().st_mode & 0o7777, 0o700)
-                        trust = case.agent / 'trust.json'
-                        self.assertTrue(json.loads(trust.read_text())[str(case.home / '.bb/plugins/environment-git-worktree/host-data/worktrees')])
-                        self.assertEqual(auth.stat().st_mode & 0o7777, 0o600)
-                        if selected:
-                            self.assertEqual((default / 'auth.json').read_text(), 'inactive fixture credential')
-                            self.assertEqual(json.loads((default / 'settings.json').read_text()), {'packages': []})
-                        calls = [json.loads(line) for line in case.statefile.with_suffix('.calls').read_text().splitlines()]
-                        self.assertIn(['update', '--extensions', '--no-approve'], calls)
-                        self.assertFalse(any('pi-prose' in str(call) for call in calls))
-                    if script not in ('ubuntu.sh', 'win.ps1'):
-                        continue
-                    for failure in ('earlier', 'permissions', 'credential', 'prose', 'workspace-trust', 'adapter', 'install', 'resource', 'refresh'):
-                        with self.subTest(failure=failure):
-                            callsfile = case.statefile.with_suffix('.calls')
-                            callsfile.unlink(missing_ok=True)
-                            target = case.agent / ('npm/package.json' if failure == 'adapter' else 'trust.json' if failure == 'workspace-trust' else 'settings.json')
-                            original = target.read_bytes()
-                            credential = auth.read_bytes()
-                            if failure == 'permissions':
-                                case.home.chmod(0o2777)
-                            elif failure == 'credential':
-                                auth.chmod(0o644)
-                            elif failure in ('prose', 'workspace-trust', 'adapter'):
-                                target.write_text('{malformed-fixture-do-not-log')
-                            elif failure in ('install', 'refresh'):
-                                case.state['fail'] = 'install' if failure == 'install' else 'update'
-                            elif failure == 'resource':
-                                case.state['bad_resource'] = 'empty'
-                            try:
-                                result = case.run_real_trust_caller(script, prior_failure=failure == 'earlier')
-                                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                                self.assertIn('UNRELATED-CONTINUED', result.stdout)
-                                self.assertIn('REBOOT-CHECKED', result.stdout)
-                                self.assertIn('LOG-FINALIZED', result.stdout)
-                                self.assertNotIn(KEY, result.stdout + result.stderr)
-                                self.assertNotIn('malformed-fixture-do-not-log', result.stdout + result.stderr)
-                                self.assertEqual(auth.read_bytes(), credential)
-                                calls = [json.loads(line) for line in callsfile.read_text().splitlines()] if callsfile.exists() else []
-                                if failure in ('permissions', 'credential', 'prose', 'workspace-trust', 'adapter'):
-                                    self.assertEqual(calls, [])
-                                self.assertEqual(['update', '--extensions', '--no-approve'] in calls, failure in ('earlier', 'refresh'))
-                            finally:
-                                case.home.chmod(0o2775)
-                                auth.chmod(0o600)
-                                target.write_bytes(original)
-                                case.state.pop('fail', None)
-                                case.state.pop('bad_resource', None)
+                        self.assertEqual((default / 'auth.json').read_text(), 'inactive fixture credential')
+                        self.assertEqual(json.loads((default / 'settings.json').read_text()), {'packages': []})
+                    calls = [json.loads(line) for line in case.statefile.with_suffix('.calls').read_text().splitlines()]
+                    self.assertIn(['update', '--extensions', '--no-approve'], calls)
+                    self.assertFalse(any('pi-prose' in str(call) for call in calls))
+                if script not in ('ubuntu.sh', 'win.ps1'):
+                    continue
+                for failure in ('earlier', 'permissions', 'credential', 'prose', 'workspace-trust', 'adapter', 'install', 'resource', 'refresh'):
+                    with self.subTest(failure=failure):
+                        callsfile = case.statefile.with_suffix('.calls')
+                        callsfile.unlink(missing_ok=True)
+                        target = case.agent / ('npm/package.json' if failure == 'adapter' else 'trust.json' if failure == 'workspace-trust' else 'settings.json')
+                        original = target.read_bytes()
+                        credential = auth.read_bytes()
+                        if failure == 'permissions':
+                            case.home.chmod(0o2777)
+                        elif failure == 'credential':
+                            auth.chmod(0o644)
+                        elif failure in ('prose', 'workspace-trust', 'adapter'):
+                            target.write_text('{malformed-fixture-do-not-log')
+                        elif failure in ('install', 'refresh'):
+                            case.state['fail'] = 'install' if failure == 'install' else 'update'
+                        elif failure == 'resource':
+                            case.state['bad_resource'] = 'empty'
+                        try:
+                            result = case.run_real_trust_caller(script, prior_failure=failure == 'earlier')
+                            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                            self.assertIn('UNRELATED-CONTINUED', result.stdout)
+                            self.assertIn('REBOOT-CHECKED', result.stdout)
+                            self.assertIn('LOG-FINALIZED', result.stdout)
+                            self.assertNotIn(KEY, result.stdout + result.stderr)
+                            self.assertNotIn('malformed-fixture-do-not-log', result.stdout + result.stderr)
+                            self.assertEqual(auth.read_bytes(), credential)
+                            calls = [json.loads(line) for line in callsfile.read_text().splitlines()] if callsfile.exists() else []
+                            if failure in ('permissions', 'credential', 'prose', 'workspace-trust', 'adapter'):
+                                self.assertEqual(calls, [])
+                            self.assertEqual(['update', '--extensions', '--no-approve'] in calls, failure in ('earlier', 'refresh'))
+                        finally:
+                            case.home.chmod(0o2775)
+                            auth.chmod(0o600)
+                            target.write_bytes(original)
+                            case.state.pop('fail', None)
+                            case.state.pop('bad_resource', None)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX metadata with portable PowerShell adapters')
+    def test_real_caller_converges_private_pi_through_group_writable_ancestors_1(self):
+        self.check_real_caller(0)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX metadata with portable PowerShell adapters')
+    def test_real_caller_converges_private_pi_through_group_writable_ancestors_2(self):
+        self.check_real_caller(1)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX metadata with portable PowerShell adapters')
+    def test_real_caller_converges_private_pi_through_group_writable_ancestors_3(self):
+        self.check_real_caller(2)
 
     def seed_affected_store(self):
         store = self.agent / 'npm'; store.mkdir(exist_ok=True)

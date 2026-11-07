@@ -17,12 +17,23 @@ DIRECT_SUITES = ('test_fixture_containment.py', 'test_run_contracts.py',
                  'test_managed_skill_suite.py')
 DEDICATED_JOBS = {'tests/impeccable-skill-contract.sh': 5, 'tests/pi-package-maintenance-contract.sh': 3,
                   'tests/bb-server-contract.sh': 4, 'tests/opencode-cli-contract.sh': 2,
-                  'tests/pi-visual-explainer-contract.sh': 2, 'tests/impeccable-callers-contract.sh': 2,
+                  'tests/pi-visual-explainer-contract.sh': 2, 'tests/impeccable-callers-contract.sh': 3,
                   'tests/bb-machine-preparation-contract.sh': 3, 'tests/shared-node-runtime-contract.sh': 1,
                   'tests/setup-reliability-contract.sh': 1, 'tests/pi-opencode-go-contract.sh': 1,
                   'tests/weekly-log-audit-regressions.sh': 1, 'tests/bb-desktop-contract.sh': 1,
                   'tests/test_managed_skill_suite.py': 1}
 BATCHES = 4
+BATCH_SECONDS = {'tests/backlog-mcp-retirement-contract.sh': 30, 'tests/pi-profile-permissions-contract.sh': 28,
+                 'tests/test_fixture_containment.py': 23, 'tests/headless-contract.sh': 22,
+                 'tests/infisical-non-management-contract.sh': 21, 'tests/bb-pi-trust-contract.sh': 19,
+                 'tests/simple-english-skill-contract.sh': 16, 'tests/attention-span-removal-contract.sh': 13,
+                 'tests/directory-trust-integration-contract.sh': 13, 'tests/bb-plugin-refresh-contract.sh': 9,
+                 'tests/opencode-go-wiring-contract.sh': 9, 'tests/ai-coding-agent-contract.sh': 8,
+                 'tests/bash-compatibility-contract.sh': 8, 'tests/pi-prose-contract.sh': 7,
+                 'tests/rtk-removal-contract.sh': 7, 'tests/windows-log-upload-contract.sh': 7,
+                 'tests/gitea-client-installation-contract.sh': 6, 'tests/pi-model-defaults-contract.sh': 6,
+                 'tests/pi-rpiv-removal-contract.sh': 6, 'tests/pi-skill-ownership-contract.sh': 6}
+UNMEASURED_SECONDS = 2
 
 
 def native_tool(name, value):
@@ -51,12 +62,20 @@ def suites():
     inventory = [str(p.relative_to(ROOT)) for p in selected]
     if not set(DEDICATED_JOBS) <= set(inventory):
         raise ValueError('dedicated job suite missing from the contract inventory')
+    if not set(BATCH_SECONDS) <= set(inventory) - set(DEDICATED_JOBS):
+        raise ValueError('measured batch suite missing from the batched inventory')
     return inventory
 
 
 def batches(inventory):
     batched = [suite for suite in inventory if suite not in DEDICATED_JOBS]
-    return {f'batch:{index}/{BATCHES}': batched[index - 1::BATCHES] for index in range(1, BATCHES + 1)}
+    groups = [[] for _ in range(BATCHES)]
+    seconds = [0] * BATCHES
+    for suite in sorted(batched, key=lambda suite: -BATCH_SECONDS.get(suite, UNMEASURED_SECONDS)):
+        index = seconds.index(min(seconds))
+        groups[index].append(suite)
+        seconds[index] += BATCH_SECONDS.get(suite, UNMEASURED_SECONDS)
+    return {f'batch:{index}/{BATCHES}': sorted(group, key=batched.index) for index, group in enumerate(groups, 1)}
 
 
 def jobs(inventory):
@@ -66,7 +85,7 @@ def jobs(inventory):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Version 5: run the contract inventory, or selected suites, suite:i/n shards or batch:i/n groups from it, with bounded 900-second suite deadlines through mandatory containment.\n\nInvoked by the Contracts workflow under env -i and Python isolated mode. Tool arguments\nselect existing native executables only; never invoke a shim/package manager to find or\ninstall them. See --help for explicit selections when system tools are absent.\n')
+    parser = argparse.ArgumentParser(description='Version 6: run the contract inventory, or selected suites, suite:i/n shards or batch:i/n groups from it, with bounded 900-second suite deadlines through mandatory containment.\n\nInvoked by the Contracts workflow under env -i and Python isolated mode. Tool arguments\nselect existing native executables only; never invoke a shim/package manager to find or\ninstall them. See --help for explicit selections when system tools are absent.\n')
     for name, variable in TOOLS.items():
         parser.add_argument('--' + name, default='', help=f'native {name}; override: {variable}; default: {SYSTEM_PATH}')
     parser.add_argument('--list', action='store_true', help='print the CI jobs as a JSON array and exit: slow suites alone or split into shards, the rest in batches')
