@@ -21,7 +21,7 @@ SCRIPTS = ('ubuntu', 'mac', 'pi', 'bazzite', 'wsl')
 def definitions_only(text=None):
     path = ROOT / 'lib/bb-plugin-refresh.py'
     tree = ast.parse(path.read_text() if text is None else text)
-    modules = {'ctypes', 'http.client', 'json', 'os', 'signal', 'subprocess', 'sys', 'time'}
+    modules = {'ctypes', 'http.client', 'json', 'os', 're', 'signal', 'subprocess', 'sys', 'time'}
 
     def check_function(node):
         args = node.args
@@ -89,6 +89,8 @@ class Fixture:
         self.records = []
         self.requests = []
         self.commands = []
+        self.listings = []
+        self.plugins = {}
         self.health = {}
         self.safe = {}
         self.errors = {}
@@ -146,14 +148,22 @@ class Fixture:
                         f'102 {self.node} --use-system-ca {self.entry}\n'
                         '103 /other/node /other/host-daemon/dist/daemon-bundle.mjs\n')
             return types.SimpleNamespace(stdout=text)
-        assert args[:2] == [str(self.node), str(self.cli)]
-        assert args[2:] == ['plugin', 'update', '--all', '--yes']
-        assert kwargs['stdin'] == kwargs['stdout'] == kwargs['stderr'] == subprocess.DEVNULL
+        assert args[:3] == [str(self.node), str(self.cli), 'plugin']
+        assert kwargs['stdin'] == kwargs['stderr'] == subprocess.DEVNULL
         assert kwargs['check'] and 0 < kwargs['timeout'] <= 1800
         port = int(kwargs['env']['BB_SERVER_URL'].rsplit(':', 1)[1])
         assert kwargs['env']['BB_SERVER_URL'] == f'http://127.0.0.1:{port}'
         assert kwargs['env']['BB_CLI_REEXEC'] == '1'
         assert kwargs['env']['BB_DATA_DIR'] == str(kwargs['cwd'])
+        if args[3:] == ['list', '--json']:
+            assert kwargs['stdout'] == subprocess.PIPE
+            self.listings.append((args, kwargs))
+            value = self.plugins.get(port, {'plugins': []})
+            if isinstance(value, BaseException):
+                raise value
+            return types.SimpleNamespace(returncode=0, stdout=value if isinstance(value, bytes) else json.dumps(value).encode())
+        assert args[3:] == ['update', '--all', '--yes']
+        assert kwargs['stdout'] == subprocess.DEVNULL
         self.commands.append((args, kwargs))
         if port in self.errors:
             raise self.errors[port]
@@ -394,6 +404,59 @@ class Refresh(unittest.TestCase):
             self.assertNotIn('sentinel', text)
         self.assertFalse(self.f.commands or self.f.requests)
 
+    def test_path_installed_plugins_warn_without_failing_the_update(self):
+        self.f.server()
+        self.f.plugins[39001] = {'plugins': [
+            {'id': 'claude-accounts', 'source': 'path:/home/secret-sentinel/claude-accounts', 'enabled': True},
+            {'id': 'old-sidebar', 'source': 'path:/home/secret-sentinel/old-sidebar', 'enabled': False},
+            {'id': 'git-plugin', 'source': 'git:github.com/example/git-plugin', 'enabled': True},
+            {'id': 'npm-plugin', 'source': 'npm:npm-plugin', 'enabled': True},
+            {'id': 'builtin-plugin', 'enabled': True}]}
+        self.assertEqual(self.f.run(), (0, 'BB_PLUGIN_REFRESH completed\n'
+                                           'BB_PLUGIN_REFRESH path-pinned claude-accounts\n'
+                                           'BB_PLUGIN_REFRESH path-pinned old-sidebar\n'))
+        self.assertEqual(len(self.f.commands), 1)
+        (update, update_kwargs), (listing, listing_kwargs) = self.f.commands[0], self.f.listings[0]
+        self.assertEqual(listing[:3], update[:3])
+        self.assertEqual((listing_kwargs['cwd'], listing_kwargs['env']), (update_kwargs['cwd'], update_kwargs['env']))
+
+    def test_plugins_without_path_sources_produce_no_warning(self):
+        self.f.server()
+        self.f.plugins[39001] = {'plugins': [{'id': 'git-plugin', 'source': 'git:github.com/example/git-plugin', 'enabled': True}]}
+        self.assertEqual(self.f.run(), (0, 'BB_PLUGIN_REFRESH completed\n'))
+        self.assertEqual(len(self.f.listings), 1)
+
+    def test_unavailable_plugin_listing_keeps_the_completed_update_successful(self):
+        self.f.server()
+        for listing in (subprocess.CalledProcessError(1, ['inert'], stderr=b'secret-sentinel'),
+                        subprocess.TimeoutExpired('secret-sentinel', 1), b'not-json-secret-sentinel',
+                        [], {}, {'plugins': {'id': 'secret-sentinel'}}, {'plugins': ['secret-sentinel']}):
+            with self.subTest(listing=listing):
+                self.f.plugins[39001] = listing
+                self.assertEqual(self.f.run(), (0, 'BB_PLUGIN_REFRESH completed\nBB_PLUGIN_REFRESH path-check-unavailable\n'))
+
+    def test_failed_or_deferred_updates_do_not_list_plugins(self):
+        self.f.server()
+        self.f.server(39002, self.f.home / 'second')
+        self.f.errors[39001] = subprocess.CalledProcessError(1, ['inert'])
+        self.f.safe[39002] = {'enabled': True}
+        self.assertEqual(self.f.run(), (1, 'BB_PLUGIN_REFRESH failed update native-command-failed\nBB_PLUGIN_REFRESH safe-mode\n'))
+        self.assertFalse(self.f.listings)
+
+    def test_invalid_plugin_ids_are_skipped_and_warnings_are_bounded(self):
+        self.f.server()
+        invalid = ['Claude-Accounts', '../secret-sentinel', '-secret-sentinel', '', 'a' * 65,
+                   'secret-sentinel\nBB_PLUGIN_REFRESH completed', 'secret sentinel', None, 7, ['secret-sentinel']]
+        plugins = [{'id': value, 'source': 'path:/secret-sentinel'} for value in invalid]
+        plugins.append({'source': 'path:/secret-sentinel'})
+        plugins += [{'id': f'plugin-{index}.v2_x', 'source': 'path:/secret-sentinel'} for index in range(40)]
+        self.f.plugins[39001] = {'plugins': plugins}
+        status, text = self.f.run()
+        self.assertEqual(status, 0)
+        self.assertEqual(text.splitlines(), ['BB_PLUGIN_REFRESH completed'] +
+                         [f'BB_PLUGIN_REFRESH path-pinned plugin-{index}.v2_x' for index in range(32)])
+        self.assertNotIn('sentinel', text)
+
     def test_whole_operation_deadline_and_expired_request_budget(self):
         with patch.object(P.time, 'monotonic', return_value=10), self.assertRaises(TimeoutError):
             P.remaining(10)
@@ -507,6 +570,8 @@ DOTFILES_ACCESS_METHOD=none
             code += '\nmain\n'
             cases = [(0, 'BB_PLUGIN_REFRESH completed'), (0, 'BB_PLUGIN_REFRESH stopped'),
                      (0, 'BB_PLUGIN_REFRESH safe-mode'), (1, 'BB_PLUGIN_REFRESH completed'),
+                     (0, 'BB_PLUGIN_REFRESH completed\nBB_PLUGIN_REFRESH path-pinned claude-accounts'),
+                     (0, 'BB_PLUGIN_REFRESH completed\nBB_PLUGIN_REFRESH path-check-unavailable'),
                      (0, 'secret-sentinel'), *outcomes]
             for status, text in cases:
                 for earlier in (0, 1):
@@ -597,6 +662,31 @@ upload_log() { cp -- "$SETUP_LOG_FILE" "$HOME/completed-upload.log"; }
             self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
             self.assertNotIn('sentinel', result.stdout + result.stderr)
             self.assertLess(len(result.stdout + result.stderr), 500)
+
+    def test_wrapper_warns_about_path_pinned_plugins_without_failing(self):
+        source = (ROOT / 'lib/bb-plugin-refresh.bash').read_text().split('\nbb_plugin_refresh_payload()', 1)[0]
+        code = source + '\n' + '\n'.join(f'{name}() {{ printf "{name}:%s\\n" "$1"; }}' for name in
+                                         ('print_section', 'print_message', 'print_error', 'print_warning', 'print_debug'))
+        code += '\nbb_plugin_refresh_payload() { printf "%s\\n" "$FIXTURE_OUTPUT"; return "$FIXTURE_STATUS"; }\nrefresh_bb_plugins\n'
+        warning = ('print_warning:BB plugin {} is installed from a local path, so bb plugin update skips it; '
+                   'reinstall it from its git URL to keep it updated.')
+        unavailable = 'print_warning:Could not list BB plugins to find local-path installs that bb plugin update skips.'
+        cases = [('BB_PLUGIN_REFRESH completed\nBB_PLUGIN_REFRESH path-pinned claude-accounts\nBB_PLUGIN_REFRESH path-pinned old.sidebar_2',
+                  0, 0, [warning.format('claude-accounts'), warning.format('old.sidebar_2')]),
+                 ('BB_PLUGIN_REFRESH completed\nBB_PLUGIN_REFRESH path-check-unavailable', 0, 0, [unavailable]),
+                 ('BB_PLUGIN_REFRESH completed\nBB_PLUGIN_REFRESH path-pinned claude-accounts', 1, 1, [warning.format('claude-accounts')])]
+        for invalid in ('Secret-Sentinel', '/secret-sentinel', 'secret-sentinel extra', 'a' * 65, ''):
+            cases.append((f'BB_PLUGIN_REFRESH completed\nBB_PLUGIN_REFRESH path-pinned {invalid}', 0, 1,
+                          ['print_error:BB plugin refresh failed: helper-result / unverified-result.']))
+        for text, status, expected, messages in cases:
+            with self.subTest(text=text, status=status), tempfile.TemporaryDirectory(prefix='bb-refresh-wrapper-') as home:
+                result = subprocess.run(['/bin/bash', '-c', code], cwd=home,
+                                        env={'HOME': home, 'PATH': '/usr/bin:/bin', 'FIXTURE_OUTPUT': text, 'FIXTURE_STATUS': str(status)},
+                                        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                for message in messages:
+                    self.assertIn(message, result.stdout.splitlines())
+                self.assertNotIn('sentinel', result.stdout + result.stderr)
 
 
 if __name__ == '__main__':
