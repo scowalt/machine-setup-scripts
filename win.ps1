@@ -6906,7 +6906,7 @@ try {
             path.resolve(identityLines[1]) !== dotGit || path.resolve(checkout, identityLines[2]) !== dotGit) throw new Error('unexpected repository identity');
         const npmOutput = new Map([
             ['nicobailon/visual-explainer', ['plugins/visual-explainer/node_modules/']],
-            ['michael-denyer/pstack-claude', ['plugins/pstack/skills/poteto-mode/scripts/node_modules/']],
+            ['scowalt/pstack-claude', ['plugins/pstack/skills/poteto-mode/scripts/node_modules/']],
             ['scowalt/skills', []],
         ]).get(parsed.host === 'github.com' ? parsed.repoPath : '');
         const allowed = npmOutput ? ['node_modules/', 'package-lock.json', ...npmOutput].flatMap(entry => ['?? ' + entry, '!! ' + entry]) : [];
@@ -7998,10 +7998,13 @@ function Setup-PiVisualExplainer {
 $null = 'END_GENERATED_PI_VISUAL_EXPLAINER'
 function Setup-PiCompanionPackages {
     $hadFailure = $false
-    $legacyPackage = "npm:pi-ask-user"
+    $legacyPackages = @(
+        "npm:pi-ask-user"
+        "git:github.com/michael-denyer/pstack-claude"
+    )
     $packages = @(
         "npm:pi-web-access"
-        "git:github.com/michael-denyer/pstack-claude"
+        "git:github.com/scowalt/pstack-claude"
         "git:github.com/scowalt/skills"
     )
 
@@ -8020,14 +8023,15 @@ function Setup-PiCompanionPackages {
     $listExitCode = $LASTEXITCODE
     $listText = ($listOutput | Out-String)
     if ($listExitCode -eq 0) {
-        if ($listText.Contains($legacyPackage)) {
-            Write-Message "Removing legacy Pi Ask User package..."
+        foreach ($legacyPackage in $legacyPackages) {
+            if (-not $listText.Contains($legacyPackage)) { continue }
+            Write-Message "Removing legacy Pi package $legacyPackage..."
             $output = & pi remove $legacyPackage 2>&1
             if ($LASTEXITCODE -eq 0) {
-                Write-Success "Legacy Pi Ask User package removed."
+                Write-Success "Legacy Pi package $legacyPackage removed."
             }
             else {
-                Write-Warning "Failed to remove legacy Pi Ask User package: $output"
+                Write-Warning "Failed to remove legacy Pi package ${legacyPackage}: $output"
                 $hadFailure = $true
             }
         }
@@ -9155,7 +9159,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 211 | Last changed: Install scowalt/skills as a Pi companion package"
+    Write-Host "Version 212 | Last changed: Install scowalt's pstack fork with bb subagents"
 
     Assert-HeadlessUnsupported
 

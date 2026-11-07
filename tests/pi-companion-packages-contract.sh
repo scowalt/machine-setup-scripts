@@ -17,7 +17,7 @@ for file in "${bash_setup_scripts[@]}"; do
     package_state="${test_root}/packages"
     command_log="${test_root}/commands"
     mkdir -p "${mock_bin}" "${test_root}/home"
-    printf 'npm:pi-ask-user\n' > "${package_state}"
+    printf '%s\n' 'npm:pi-ask-user' 'git:github.com/michael-denyer/pstack-claude' > "${package_state}"
     : > "${command_log}"
 
     printf '#!/usr/bin/env bash\nexit 0\n' > "${mock_bin}/npm"
@@ -72,11 +72,13 @@ MOCK_PI
             setup_pi_companion_packages > /dev/null
         '
 
-    if grep -Fxq 'npm:pi-ask-user' "${package_state}"; then
-        fail "${file}: legacy Pi Ask User package remains installed"
-    fi
+    for legacy in 'npm:pi-ask-user' 'git:github.com/michael-denyer/pstack-claude'; do
+        if grep -Fxq -- "${legacy}" "${package_state}"; then
+            fail "${file}: legacy Pi package ${legacy} remains installed"
+        fi
+    done
 
-    for package in 'npm:pi-web-access' 'git:github.com/michael-denyer/pstack-claude' 'git:github.com/scowalt/skills'; do
+    for package in 'npm:pi-web-access' 'git:github.com/scowalt/pstack-claude' 'git:github.com/scowalt/skills'; do
         count=$(grep -Fxc -- "${package}" "${package_state}" || true)
         [[ "${count}" -eq 1 ]] || fail "${file}: expected one installed entry for ${package}, found ${count}"
 
@@ -96,12 +98,14 @@ MOCK_PI
         fi
     done
 
-    remove_count=$(grep -Fxc 'remove npm:pi-ask-user' "${command_log}" || true)
-    [[ "${remove_count}" -eq 1 ]] || fail "${file}: expected one legacy package removal, found ${remove_count}"
-
-    remove_line=$(grep -nFx 'remove npm:pi-ask-user' "${command_log}" | cut -d: -f1)
     install_line=$(grep -nFx 'install npm:pi-web-access' "${command_log}" | head -n 1 | cut -d: -f1)
-    [[ "${remove_line}" -lt "${install_line}" ]] || fail "${file}: installed the replacement before removing the legacy package"
+    for legacy in 'npm:pi-ask-user' 'git:github.com/michael-denyer/pstack-claude'; do
+        remove_count=$(grep -Fxc -- "remove ${legacy}" "${command_log}" || true)
+        [[ "${remove_count}" -eq 1 ]] || fail "${file}: expected one removal of ${legacy}, found ${remove_count}"
+
+        remove_line=$(grep -nFx -- "remove ${legacy}" "${command_log}" | cut -d: -f1)
+        [[ "${remove_line}" -lt "${install_line}" ]] || fail "${file}: installed packages before removing ${legacy}"
+    done
 
     rm -rf "${test_root}"
 done

@@ -6608,7 +6608,7 @@ try {
             path.resolve(identityLines[1]) !== dotGit || path.resolve(checkout, identityLines[2]) !== dotGit) throw new Error('unexpected repository identity');
         const npmOutput = new Map([
             ['nicobailon/visual-explainer', ['plugins/visual-explainer/node_modules/']],
-            ['michael-denyer/pstack-claude', ['plugins/pstack/skills/poteto-mode/scripts/node_modules/']],
+            ['scowalt/pstack-claude', ['plugins/pstack/skills/poteto-mode/scripts/node_modules/']],
             ['scowalt/skills', []],
         ]).get(parsed.host === 'github.com' ? parsed.repoPath : '');
         const allowed = npmOutput ? ['node_modules/', 'package-lock.json', ...npmOutput].flatMap(entry => ['?? ' + entry, '!! ' + entry]) : [];
@@ -7668,10 +7668,14 @@ setup_pi_visual_explainer() {
 : 'END_GENERATED_PI_VISUAL_EXPLAINER'
 setup_pi_companion_packages() {
     local _had_failure=0
-    local _legacy_package="npm:pi-ask-user"
+    local -a _legacy_packages=(
+        "npm:pi-ask-user"
+        "git:github.com/michael-denyer/pstack-claude"
+    )
+    local _legacy_package=""
     local -a _packages=(
         "npm:pi-web-access"
-        "git:github.com/michael-denyer/pstack-claude"
+        "git:github.com/scowalt/pstack-claude"
         "git:github.com/scowalt/skills"
     )
     local _package=""
@@ -7690,15 +7694,16 @@ setup_pi_companion_packages() {
     fi
 
     if _list_output=$(pi list 2>&1); then
-        if grep -Fq -- "${_legacy_package}" <<< "${_list_output}"; then
-            print_message "Removing legacy Pi Ask User package..."
+        for _legacy_package in "${_legacy_packages[@]}"; do
+            grep -Fq -- "${_legacy_package}" <<< "${_list_output}" || continue
+            print_message "Removing legacy Pi package ${_legacy_package}..."
             if _output=$(pi remove "${_legacy_package}" 2>&1); then
-                print_success "Legacy Pi Ask User package removed."
+                print_success "Legacy Pi package ${_legacy_package} removed."
             else
-                print_warning "Failed to remove legacy Pi Ask User package: ${_output}"
+                print_warning "Failed to remove legacy Pi package ${_legacy_package}: ${_output}"
                 _had_failure=1
             fi
-        fi
+        done
     else
         print_warning "Cannot inspect Pi packages before legacy cleanup: ${_list_output}"
         _had_failure=1
@@ -9394,7 +9399,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 201 | Last changed: Install scowalt/skills as a Pi companion package"
+    echo -e "${GRAY}Version 202 | Last changed: Install scowalt's pstack fork with bb subagents"
 
     if ! acquire_setup_lock; then
         return 1
