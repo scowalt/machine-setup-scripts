@@ -3325,7 +3325,13 @@ function absolute(file) {
     if (resolved === path.parse(resolved).root) fail('unsafe-path');
     return resolved;
 }
+let walkVerifiedDirectories = null;
+function verifyAncestorsOncePerWalk(walk) {
+    walkVerifiedDirectories = new Set();
+    try { return walk(); } finally { walkVerifiedDirectories = null; }
+}
 function directory(file) {
+    if (walkVerifiedDirectories?.has(file)) return;
     const parent = path.dirname(file);
     if (parent !== file) directory(parent);
     const st = stat(file);
@@ -3342,6 +3348,7 @@ function directory(file) {
             if (homeInput && path.isAbsolute(homeInput) && (file === path.resolve(homeInput) || file.startsWith(path.resolve(homeInput) + path.sep)) && st.uid !== uid) fail('unsafe-owner-or-mode');
         }
     }
+    walkVerifiedDirectories?.add(file);
 }
 function owned(file, privateDirectory = false) {
     const st = stat(file);
@@ -3377,6 +3384,7 @@ function readRegular(file) {
     } finally { fs.closeSync(fd); }
 }
 function fingerprint(file) {
+    if (!walkVerifiedDirectories) return verifyAncestorsOncePerWalk(() => fingerprint(file));
     directory(path.dirname(file));
     const st = stat(file);
     if (!st) return null;
@@ -3389,6 +3397,7 @@ function fingerprint(file) {
     return JSON.stringify(identity);
 }
 function copySnapshot(source, target) {
+    if (!walkVerifiedDirectories) return verifyAncestorsOncePerWalk(() => copySnapshot(source, target));
     copiedTree(source);
     const st = stat(source);
     if (st.isDirectory()) {
@@ -3510,6 +3519,7 @@ function jsonChange(file, value) {
     return stat(file) && readRegular(file).equals(bytes) ? [] : [{file, bytes}];
 }
 function removable(file) {
+    if (!walkVerifiedDirectories) return verifyAncestorsOncePerWalk(() => removable(file));
     directory(path.dirname(file));
     const st = stat(file);
     if (!st) return;
@@ -3520,6 +3530,7 @@ function removable(file) {
     } else if (!st.isFile()) fail('unsupported-file');
 }
 function remove(file) {
+    if (!walkVerifiedDirectories) return verifyAncestorsOncePerWalk(() => remove(file));
     removable(file);
     const st = stat(file);
     if (!st) return;
@@ -3530,6 +3541,7 @@ function remove(file) {
     if (stat(file)) fail('removal-failed');
 }
 function copiedTree(file) {
+    if (!walkVerifiedDirectories) return verifyAncestorsOncePerWalk(() => copiedTree(file));
     directory(path.dirname(file));
     const st = stat(file);
     if (!st || st.isSymbolicLink()) fail('invalid-skill-copy');
@@ -3539,6 +3551,7 @@ function copiedTree(file) {
     } else if (!st.isFile() || st.nlink !== 1) fail('invalid-skill-copy');
 }
 function sameTree(left, right) {
+    if (!walkVerifiedDirectories) return verifyAncestorsOncePerWalk(() => sameTree(left, right));
     const a = stat(left), b = stat(right);
     if (!a || !b || a.isSymbolicLink() || b.isSymbolicLink()) return false;
     if (a.isFile() && b.isFile()) return readRegular(left).equals(readRegular(right));
@@ -3547,6 +3560,7 @@ function sameTree(left, right) {
     return JSON.stringify(names) === JSON.stringify(other) && names.every(name => sameTree(path.join(left, name), path.join(right, name)));
 }
 function payloadDigest(file) {
+    if (!walkVerifiedDirectories) return verifyAncestorsOncePerWalk(() => payloadDigest(file));
     copiedTree(file);
     windowsTrust();
     const hash = crypto.createHash('sha256');
@@ -3645,6 +3659,7 @@ function skillIdentity(md) {
     return version;
 }
 function validateSkill(skill, target, provider) {
+    if (!walkVerifiedDirectories) return verifyAncestorsOncePerWalk(() => validateSkill(skill, target, provider));
     copiedTree(skill);
     windowsTrust();
     const binary = 'scripts/bin/' + target + '/impeccable' + (process.platform === 'win32' ? '.exe' : '');
@@ -9138,7 +9153,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 209 | Last changed: Allow pstack tool dependencies in Pi package refresh"
+    Write-Host "Version 210 | Last changed: Verify Impeccable ancestors once per tree walk"
 
     Assert-HeadlessUnsupported
 
