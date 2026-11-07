@@ -21,6 +21,7 @@ python3 tests/test_bb_ingress_watchdog.py
 python3 tests/test_bb_directory_preflight.py
 python3 tests/test_bb_service_preflight.py
 PYTHONDONTWRITEBYTECODE=1 python3 tests/test_bb_dotfiles_umask.py
+[[ "${SETUP_TEST_SHARD:-1/1}" == 1/* ]] || exit 0
 
 for value in '' 0 1 invalid; do
     case "${value}" in ''|0) expected=1;; 1) expected=0;; *) expected=2;; esac

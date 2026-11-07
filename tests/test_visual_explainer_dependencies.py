@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import unittest
+from contract_shard import load_tests
 
 import test_pi_visual_explainer as fixtures
 

@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import unittest
+from contract_shard import load_tests
 
 import test_impeccable_convergence as convergence
 

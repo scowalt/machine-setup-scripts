@@ -8,6 +8,7 @@ import shlex
 import subprocess
 import tempfile
 import unittest
+from contract_shard import load_tests
 
 from test_pi_visual_explainer import bash_definitions, run_with_file_stdin
 

@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contract_shard import load_tests
 
 from extract_setup_fixture import definitions
 from native_runtime_fixture import copy_node_runtime

@@ -5,6 +5,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+from contract_shard import load_tests
 
 from bb_managed_unit_fixture import managed_app_unit, managed_ingress_unit
 from extract_setup_fixture import definitions, validate_function

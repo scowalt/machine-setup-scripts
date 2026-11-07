@@ -3,6 +3,7 @@ import re
 import subprocess
 import sys
 import unittest
+from contract_shard import load_tests
 
 from test_bb_dotfiles_umask import CHEZMOI, CHEZMOI_FIXTURE, GIT_FIXTURE, function
 import test_bb_machine_preparation as preparation

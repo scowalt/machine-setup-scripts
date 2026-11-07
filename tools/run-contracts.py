@@ -15,6 +15,10 @@ TOOLS = {'node': 'SETUP_TEST_NODE', 'pwsh': 'PWSH_BIN',
 DIRECT_SUITES = ('test_fixture_containment.py', 'test_run_contracts.py',
                  'test_macos_clt.py', 'test_homebrew_results.py',
                  'test_managed_skill_suite.py')
+SHARDS = {'tests/impeccable-skill-contract.sh': 4, 'tests/pi-package-maintenance-contract.sh': 3,
+          'tests/bb-server-contract.sh': 3, 'tests/opencode-cli-contract.sh': 2,
+          'tests/pi-visual-explainer-contract.sh': 2, 'tests/impeccable-callers-contract.sh': 2,
+          'tests/bb-machine-preparation-contract.sh': 2}
 
 
 def native_tool(name, value):
@@ -40,14 +44,22 @@ def suites():
     selected = [ROOT / 'tests' / name for name in DIRECT_SUITES] + shell
     if any(p.is_symlink() or not p.is_file() for p in selected):
         raise ValueError('contract inventory contains a missing or linked entry')
-    return [str(p.relative_to(ROOT)) for p in selected]
+    inventory = [str(p.relative_to(ROOT)) for p in selected]
+    if not set(SHARDS) <= set(inventory):
+        raise ValueError('sharded suite missing from the contract inventory')
+    return inventory
+
+
+def jobs(inventory):
+    return [f'{suite}:{index}/{SHARDS[suite]}' if suite in SHARDS else suite
+            for suite in inventory for index in range(1, SHARDS.get(suite, 1) + 1)]
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Version 3: run the contract inventory, or selected suites from it, with bounded 900-second suite deadlines through mandatory containment.\n\nInvoked by the Contracts workflow under env -i and Python isolated mode. Tool arguments\nselect existing native executables only; never invoke a shim/package manager to find or\ninstall them. See --help for explicit selections when system tools are absent.\n')
+    parser = argparse.ArgumentParser(description='Version 4: run the contract inventory, or selected suites or suite:i/n shards from it, with bounded 900-second suite deadlines through mandatory containment.\n\nInvoked by the Contracts workflow under env -i and Python isolated mode. Tool arguments\nselect existing native executables only; never invoke a shim/package manager to find or\ninstall them. See --help for explicit selections when system tools are absent.\n')
     for name, variable in TOOLS.items():
         parser.add_argument('--' + name, default='', help=f'native {name}; override: {variable}; default: {SYSTEM_PATH}')
-    parser.add_argument('--list', action='store_true', help='print the full inventory as a JSON array and exit')
+    parser.add_argument('--list', action='store_true', help='print the CI jobs, with slow suites split into shards, as a JSON array and exit')
     parser.add_argument('suite', nargs='*', help='inventory entries to run; default: all')
     args = parser.parse_args(argv)
     try:
@@ -55,9 +67,9 @@ def main(argv=None):
     except ValueError as error:
         parser.error(str(error))
     if args.list:
-        print(json.dumps(inventory))
+        print(json.dumps(jobs(inventory)))
         return 0
-    unknown = [suite for suite in args.suite if suite not in inventory]
+    unknown = [suite for suite in args.suite if suite not in inventory + jobs(inventory)]
     if unknown:
         parser.error('not in the contract inventory: ' + ', '.join(unknown))
     selected = args.suite or inventory

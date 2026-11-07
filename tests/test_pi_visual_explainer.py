@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from contract_shard import load_tests
 
 from extract_setup_fixture import definitions
 

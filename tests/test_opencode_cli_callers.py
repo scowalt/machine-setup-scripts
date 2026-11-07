@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from contract_shard import load_tests
 
 ROOT = Path(__file__).resolve().parents[1]
 BASH = ('mac.sh', 'ubuntu.sh', 'wsl.sh', 'pi.sh', 'bazzite.sh')

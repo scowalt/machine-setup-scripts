@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import time
@@ -10,7 +11,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def environment(home, path, sandbox=None, pwsh=None):
+def environment(home, path, sandbox=None, pwsh=None, shard=None):
     env = {
         'PATH': path, 'HOME': str(home), 'USERPROFILE': str(home),
         'USER': 'scowalt', 'LOGNAME': 'scowalt', 'USERNAME': 'scowalt',
@@ -33,6 +34,8 @@ def environment(home, path, sandbox=None, pwsh=None):
         env['FIXTURE_NETWORK_SANDBOX'] = str(sandbox)
     if pwsh:
         env['PWSH_BIN'] = str(pwsh)
+    if shard:
+        env['SETUP_TEST_SHARD'] = shard
     return env
 
 
@@ -51,7 +54,7 @@ def main():
     parser.add_argument('--tool-path', default='/usr/bin:/bin', help='Explicit audited executable directories; no inherited PATH')
     parser.add_argument('--timeout', type=int, default=300)
     parser.add_argument('--artifact-parent', type=Path, default=Path('/tmp'))
-    parser.add_argument('tests', nargs='+', help='Explicit tests/*.sh or tests/test_*.py paths; no arbitrary command')
+    parser.add_argument('tests', nargs='+', help='Explicit tests/*.sh or tests/test_*.py paths, optionally suffixed :i/n to run shard i of n; no arbitrary command')
     args = parser.parse_args()
     os.umask(0o077)
     if os.uname().sysname != 'Linux':
@@ -60,12 +63,16 @@ def main():
     pwsh = args.pwsh.resolve(strict=True) if args.pwsh else None
     scripts = []
     for name in args.tests:
+        name, _, shard = name.partition(':')
+        bounds = re.fullmatch(r'([1-9][0-9]*)/([1-9][0-9]*)', shard)
+        if shard and (not bounds or int(bounds[1]) > int(bounds[2])):
+            parser.error('shard must be i/n with 1 <= i <= n')
         script = (ROOT / name).resolve(strict=True)
         if script.parent != ROOT / 'tests' or script.suffix not in ('.sh', '.py'):
             parser.error('only repository fixture scripts are allowed')
         if script.name in ('run-fixture-matrix.py', 'extract_setup_fixture.py'):
             parser.error('helper is not a behavioral suite')
-        scripts.append(script)
+        scripts.append((script, shard))
     tool_paths = args.tool_path.split(os.pathsep)
     if any(not p or not Path(p).is_absolute() for p in tool_paths):
         parser.error('tool directories must be explicit absolute paths')
@@ -97,12 +104,13 @@ def main():
             print(f'Fixture preflight refused: {stage}; exit {result.returncode}; diagnostics: {diagnostic}', flush=True)
             return 125
     results = []
-    for script in scripts:
-        home = prepare_home(root / (script.stem + '-home'))
-        env = environment(home, path, sandbox, pwsh)
+    for script, shard in scripts:
+        label = script.stem + ('-shard-' + shard.replace('/', '-of-') if shard else '')
+        home = prepare_home(root / (label + '-home'))
+        env = environment(home, path, sandbox, pwsh, shard)
         command = ['/bin/bash', str(script)] if script.suffix == '.sh' else ['/usr/bin/python3', str(script)]
         started = time.monotonic()
-        logfile = root / (script.stem + '.log')
+        logfile = root / (label + '.log')
         with logfile.open('x') as output:
             logfile.chmod(0o600)
             child = subprocess.Popen([str(sandbox), '--', *command], env=env, cwd=ROOT,
@@ -115,7 +123,7 @@ def main():
                 os.killpg(child.pid, signal.SIGKILL)
                 child.wait()
                 status = 124
-        result = {'test': str(script.relative_to(ROOT)), 'status': status,
+        result = {'test': str(script.relative_to(ROOT)) + (':' + shard if shard else ''), 'status': status,
                   'seconds': round(time.monotonic() - started, 1)}
         results.append(result)
         record = root / 'results.json'
