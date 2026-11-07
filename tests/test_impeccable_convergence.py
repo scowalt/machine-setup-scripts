@@ -27,6 +27,8 @@ SCRIPTS = ['impeccable', 'impeccable.cmd', 'VERSION', 'command-metadata.json', '
            'live-browser-session.js', 'live-browser-ignores.js', 'live-browser-dom.js', 'modern-screenshot.umd.js',
            'data/font-index.json', 'data/font-index-failures.json']
 AGENTS = ['manual-edit-applier', 'asset-producer', 'documenter', 'finish-reviewer']
+CAPTURED_LAYOUT_PARTS = 2
+GLOBSTAR_PARTS = 3
 CAPTURED_DIRECTORIES = ['.agents', '.claude/skills', '.agents/skills', '.cursor', '.cursor/skills',
                         '.gemini', '.gemini/skills', '.pi/agent/skills', '.cursor/agents']
 
@@ -479,8 +481,9 @@ if (-not $result) { exit 1 }
         self.assertEqual((self.home / 'user.npmrc').read_text(), 'ignore-scripts=true\n')
         self.assertEqual((self.home / 'global.npmrc').read_text(), 'allow-remote=false\n')
 
-    def test_each_captured_directory_and_combined_layout_install_update_repeat_exclude_and_reinstall(self):
-        for writable in [[name] for name in CAPTURED_DIRECTORIES] + [CAPTURED_DIRECTORIES]:
+    def check_captured_layouts(self, part):
+        layouts = [[name] for name in CAPTURED_DIRECTORIES] + [CAPTURED_DIRECTORIES]
+        for writable in layouts[part::CAPTURED_LAYOUT_PARTS]:
             with self.subTest(writable=writable):
                 paths = self.captured_directories(writable)
                 before = directory_metadata(paths)
@@ -508,6 +511,12 @@ if (-not $result) { exit 1 }
                 self.env['BAN_IMPECCABLE'] = '1'
                 self.adapter()
                 self.env.pop('BAN_IMPECCABLE')
+
+    def test_each_captured_directory_and_combined_layout_install_update_repeat_exclude_and_reinstall_1(self):
+        self.check_captured_layouts(0)
+
+    def test_each_captured_directory_and_combined_layout_install_update_repeat_exclude_and_reinstall_2(self):
+        self.check_captured_layouts(1)
 
     def test_readable_private_group_writable_and_setgid_containers_keep_metadata_at_selected_destinations(self):
         paths = self.captured_directories()
@@ -618,35 +627,40 @@ if (-not $result) { exit 1 }
         self.adapter(success=False)
         self.assertEqual(self.snapshot(), before)
 
-    def test_runtime_installer_blocked_profile_and_payload_failures_never_accept_an_old_install(self):
+    def check_runtime_failures(self, shell):
         self.adapter()
         target = self.put(self.home / 'foreign/keep', 'PRIVATE-SENTINEL')
-        for shell in ('bash', 'powershell'):
-            for mode in ('bad-runtime', 'failed-npm-config', 'failed-command', 'missing-provider',
-                         'missing-descriptor', 'empty-descriptor', 'directory-descriptor', 'linked-reference'):
-                with self.subTest(shell=shell, mode=mode):
-                    self.env['IMPECCABLE_TEST_MODE'] = mode
-                    before = self.snapshot()
-                    result = self.adapter(shell, success=False)
-                    self.assertNotIn('verified', result.stdout)
-                    self.assertEqual(self.snapshot(), before)
-                    self.assertEqual(target.read_text(), 'PRIVATE-SENTINEL')
-            self.env.pop('IMPECCABLE_TEST_MODE')
-            before = self.snapshot()
-            for ban in ('0', '1'):
-                self.env['BAN_IMPECCABLE'] = ban
-                self.adapter(shell, success=False, blocked=True)
+        for mode in ('bad-runtime', 'failed-npm-config', 'failed-command', 'missing-provider',
+                     'missing-descriptor', 'empty-descriptor', 'directory-descriptor', 'linked-reference'):
+            with self.subTest(shell=shell, mode=mode):
+                self.env['IMPECCABLE_TEST_MODE'] = mode
+                before = self.snapshot()
+                result = self.adapter(shell, success=False)
+                self.assertNotIn('verified', result.stdout)
                 self.assertEqual(self.snapshot(), before)
-            self.env.pop('BAN_IMPECCABLE')
-            calls = (self.root / 'calls').read_bytes()
-            self.env['IMPECCABLE_TEST_ARCH'] = 'arm'
-            self.adapter(shell, success=False)
+                self.assertEqual(target.read_text(), 'PRIVATE-SENTINEL')
+        self.env.pop('IMPECCABLE_TEST_MODE')
+        before = self.snapshot()
+        for ban in ('0', '1'):
+            self.env['BAN_IMPECCABLE'] = ban
+            self.adapter(shell, success=False, blocked=True)
             self.assertEqual(self.snapshot(), before)
-            self.assertEqual((self.root / 'calls').read_bytes(), calls)
-            self.env.pop('IMPECCABLE_TEST_ARCH')
+        self.env.pop('BAN_IMPECCABLE')
+        calls = (self.root / 'calls').read_bytes()
+        self.env['IMPECCABLE_TEST_ARCH'] = 'arm'
+        self.adapter(shell, success=False)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual((self.root / 'calls').read_bytes(), calls)
+        self.env.pop('IMPECCABLE_TEST_ARCH')
         self.env['IMPECCABLE_TEST_MODE'] = 'stage-leaf-link'
         self.adapter()
         self.assertEqual(target.read_text(), 'PRIVATE-SENTINEL')
+
+    def test_runtime_installer_blocked_profile_and_payload_failures_never_accept_an_old_install_bash(self):
+        self.check_runtime_failures('bash')
+
+    def test_runtime_installer_blocked_profile_and_payload_failures_never_accept_an_old_install_powershell(self):
+        self.check_runtime_failures('powershell')
 
     def test_work_and_native_headless_contexts_preserve_the_full_independent_managed_suite(self):
         names = json.loads((ROOT / 'tests/fixtures/matt-pocock-skills.json').read_text())['skills']
@@ -1203,7 +1217,7 @@ if (-not $result) { exit 1 }
                         self.assertEqual(self.snapshot(), before)
                         self.assertEqual((self.root / 'calls').read_bytes(), calls)
 
-    def test_native_pi_terminal_globstar_requires_a_suffix_but_middle_globstar_can_match_zero_directories(self):
+    def check_terminal_globstar(self, part):
         cases = [
             ('!impeccable/**', True),
             ('!impeccable/**/**', True),
@@ -1217,7 +1231,7 @@ if (-not $result) { exit 1 }
         for profile in (self.home / '.pi/agent', self.home / 'selected pi'):
             self.env['PI_CODING_AGENT_DIR'] = str(profile)
             settings = profile / 'settings.json'
-            for entry, success in cases:
+            for entry, success in cases[part::GLOBSTAR_PARTS]:
                 self.put(settings, json.dumps({'skills': [entry, 'custom'], 'theme': 'keep'}))
                 for shell in ('bash', 'powershell'):
                     with self.subTest(profile=profile.name, entry=entry, shell=shell):
@@ -1233,6 +1247,15 @@ if (-not $result) { exit 1 }
                             self.assertNotIn('verified', result.stdout)
                             self.assertEqual(self.snapshot(), before)
                             self.assertEqual((self.root / 'calls').read_bytes(), calls)
+
+    def test_native_pi_terminal_globstar_requires_a_suffix_but_middle_globstar_can_match_zero_directories_1(self):
+        self.check_terminal_globstar(0)
+
+    def test_native_pi_terminal_globstar_requires_a_suffix_but_middle_globstar_can_match_zero_directories_2(self):
+        self.check_terminal_globstar(1)
+
+    def test_native_pi_terminal_globstar_requires_a_suffix_but_middle_globstar_can_match_zero_directories_3(self):
+        self.check_terminal_globstar(2)
 
     def test_native_pi_resource_paths_and_override_precedence_use_each_discovery_source(self):
         self.adapter()

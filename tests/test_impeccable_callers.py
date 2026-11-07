@@ -251,29 +251,34 @@ class ImpeccableCallers(unittest.TestCase):
                         self.assertIn('reboot', events)
                 self.env.pop(gate)
 
-    def test_personal_work_and_native_headless_contexts_converge_without_bypassing_windows_wsl_early_rejection(self):
+    def check_machine_contexts(self, work):
         for entry in ENTRIES:
-            for work in ('0', '1'):
-                for headless in ('0', 'true', '1'):
-                    self.env.update(WORK_MACHINE=work, HEADLESS=headless)
-                    rejected = headless == '1' and entry in ('wsl.sh', 'win.ps1')
-                    with self.subTest(entry=entry, work=work, headless=headless):
-                        before = self.snapshot()
-                        calls = len(self.installer_calls())
-                        result, events = self.run_entry(entry, success=not rejected)
-                        if rejected:
-                            self.assertEqual(self.snapshot(), before)
-                            self.assertEqual(len(self.installer_calls()), calls)
-                            self.assertNotIn('environment-template', events)
-                            self.assertNotIn('permissions', events)
-                            self.assertNotIn('matt', events)
-                            self.assertNotIn('reboot', events)
-                            self.assertNotIn('verified', result.stdout)
-                        else:
-                            self.assertIn('verified', result.stdout)
-                            self.assertEqual(len(self.installer_calls()), calls + 1)
-                            self.assertIn('permissions', events)
-                            self.assertIn('matt', events)
+            for headless in ('0', 'true', '1'):
+                self.env.update(WORK_MACHINE=work, HEADLESS=headless)
+                rejected = headless == '1' and entry in ('wsl.sh', 'win.ps1')
+                with self.subTest(entry=entry, work=work, headless=headless):
+                    before = self.snapshot()
+                    calls = len(self.installer_calls())
+                    result, events = self.run_entry(entry, success=not rejected)
+                    if rejected:
+                        self.assertEqual(self.snapshot(), before)
+                        self.assertEqual(len(self.installer_calls()), calls)
+                        self.assertNotIn('environment-template', events)
+                        self.assertNotIn('permissions', events)
+                        self.assertNotIn('matt', events)
+                        self.assertNotIn('reboot', events)
+                        self.assertNotIn('verified', result.stdout)
+                    else:
+                        self.assertIn('verified', result.stdout)
+                        self.assertEqual(len(self.installer_calls()), calls + 1)
+                        self.assertIn('permissions', events)
+                        self.assertIn('matt', events)
+
+    def test_personal_contexts_converge_without_bypassing_windows_wsl_early_rejection(self):
+        self.check_machine_contexts('0')
+
+    def test_work_contexts_converge_without_bypassing_windows_wsl_early_rejection(self):
+        self.check_machine_contexts('1')
 
 
 if __name__ == '__main__':
