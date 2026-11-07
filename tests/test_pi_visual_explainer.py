@@ -53,6 +53,13 @@ def bash_definitions(script):
     return definitions((ROOT / script).read_text())
 
 
+def run_with_file_stdin(command, script, **kwargs):
+    with tempfile.TemporaryFile() as stdin:
+        stdin.write(script.encode())
+        stdin.seek(0)
+        return subprocess.run(command, stdin=stdin, **kwargs)
+
+
 class VisualExplainerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='pi-visual-explainer-')
@@ -167,7 +174,7 @@ print_warning() { printf 'WARNING: %s\n' "$*"; }
 '''
             code += '\n' + ('refresh_pi_packages' if refresh else 'setup_pi_visual_explainer') + '\n'
             command = ['bash', '--noprofile', '--norc']
-        result = subprocess.run(command, input=code, env=env, cwd=self.root, text=True, capture_output=True, timeout=40)
+        result = run_with_file_stdin(command, code, env=env, cwd=self.root, text=True, capture_output=True, timeout=40)
         self.assertNotIn('SECRET-SENTINEL', result.stdout + result.stderr)
         self.assertNotIn(str(self.home), result.stdout + result.stderr)
         for file, data in self.sentinels.items():

@@ -9,6 +9,8 @@ import subprocess
 import tempfile
 import unittest
 
+from test_pi_visual_explainer import bash_definitions, run_with_file_stdin
+
 ROOT = Path(__file__).resolve().parents[1]
 BASH = ('mac.sh', 'ubuntu.sh', 'wsl.sh', 'pi.sh', 'bazzite.sh')
 PWSH = os.environ.get('PWSH_BIN') or shutil.which('pwsh')
@@ -134,10 +136,9 @@ print_success() { printf 'SUCCESS: %s\\n' "$*"; }
 print_warning() { printf 'WARNING: %s\\n' "$*"; }
 print_error() { printf 'ERROR: %s\\n' "$*"; }
 ''' + '\n'.join(extract(script, name) for name in names) + '\n' + FUNCTIONS[helper][0] + '\n'
-            from test_pi_visual_explainer import bash_definitions
             code = bash_definitions(script) + '\n' + code
             command = ['bash', '--noprofile', '--norc']
-        result = subprocess.run(command, input=code, env={**self.env, 'FIXTURE_SOURCE': str(ROOT / script)}, cwd=self.root,
+        result = run_with_file_stdin(command, code, env={**self.env, 'FIXTURE_SOURCE': str(ROOT / script)}, cwd=self.root,
                                 text=True, capture_output=True, timeout=60)
         self.state = json.loads(self.statefile.read_text())
         return result
@@ -191,7 +192,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                         code += '\nrun_setup_tasks() {\nlocal _setup_had_errors=0 _pi_go_ready=0 PI_PROFILE_MUTATIONS_BLOCKED=0\n' + tail
                         code += '\n' + extract(script, 'main') + '\nmain\n'
                         command = ['bash', '--noprofile', '--norc']
-                    result = subprocess.run(command, input=code, env=self.env, cwd=self.root, capture_output=True, text=True, timeout=60)
+                    result = run_with_file_stdin(command, code, env=self.env, cwd=self.root, capture_output=True, text=True, timeout=60)
                     self.assertEqual(result.returncode, 0 if failure == 'none' else 1, result.stdout + result.stderr)
                     self.assertIn('UNRELATED-CONTINUED', result.stdout)
                     self.assertIn('LOG-FINALIZED', result.stdout)
@@ -248,11 +249,10 @@ function Complete-SetupLog { Write-Host 'LOG-FINALIZED' }
             command = [PWSH, '-NoProfile', '-NonInteractive', '-File', str(fixture)]
         else:
             names = re.findall(r'^(\w+)\(\) \{', text, re.M)
-            from extract_setup_fixture import definitions
             real = ('prepare_pi_profile_permissions', 'disable_pi_askclaude', 'remove_pi_prose',
                     'configure_bb_pi_trust', 'bb_pi_trust_policy',
                     'configure_pi_opencode_go', 'prepare_pi_mcp_adapter', 'setup_pi_mcp_adapter', 'refresh_pi_packages', 'pi_visual_explainer_policy')
-            code = definitions(text) + '\n'
+            code = bash_definitions(script) + '\n'
             code += '\n'.join(n + '() { return 0; }' for n in names if n not in real)
             code += '''
 print_warning() { printf '%s\\n' "$*"; }
@@ -267,7 +267,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
             code += '\n' + extract(script, 'main') + '\nmain\n'
             command = ['bash', '--noprofile', '--norc']
         self.statefile.write_text(json.dumps(self.state))
-        return subprocess.run(command, input=code, env={**self.env, 'FIXTURE_SOURCE': str(ROOT / script)}, cwd=self.root,
+        return run_with_file_stdin(command, code, env={**self.env, 'FIXTURE_SOURCE': str(ROOT / script)}, cwd=self.root,
                               capture_output=True, text=True, timeout=30)
 
     @unittest.skipIf(os.name == 'nt', 'POSIX metadata with portable PowerShell adapters')
