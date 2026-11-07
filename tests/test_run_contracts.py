@@ -106,7 +106,7 @@ class DispatchTests(unittest.TestCase):
         result = self.dispatch(PREFIX + ' --list')
         self.assertEqual(result.returncode, 0, result.stderr)
         listed = json.loads(result.stdout)
-        self.assertLess(len(listed), 40, 'GitHub queues contract jobs beyond the account concurrency limit')
+        self.assertLessEqual(len(listed), 32, 'GitHub queues jobs beyond the 40 concurrent jobs shared by every workflow on the account')
         covered = []
         for entry in listed:
             if entry.startswith('batch:'):

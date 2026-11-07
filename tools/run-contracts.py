@@ -15,10 +15,10 @@ TOOLS = {'node': 'SETUP_TEST_NODE', 'pwsh': 'PWSH_BIN',
 DIRECT_SUITES = ('test_fixture_containment.py', 'test_run_contracts.py',
                  'test_macos_clt.py', 'test_homebrew_results.py',
                  'test_managed_skill_suite.py')
-DEDICATED_JOBS = {'tests/impeccable-skill-contract.sh': 4, 'tests/pi-package-maintenance-contract.sh': 3,
-                  'tests/bb-server-contract.sh': 3, 'tests/opencode-cli-contract.sh': 2,
+DEDICATED_JOBS = {'tests/impeccable-skill-contract.sh': 5, 'tests/pi-package-maintenance-contract.sh': 3,
+                  'tests/bb-server-contract.sh': 4, 'tests/opencode-cli-contract.sh': 2,
                   'tests/pi-visual-explainer-contract.sh': 2, 'tests/impeccable-callers-contract.sh': 2,
-                  'tests/bb-machine-preparation-contract.sh': 2, 'tests/shared-node-runtime-contract.sh': 1,
+                  'tests/bb-machine-preparation-contract.sh': 3, 'tests/shared-node-runtime-contract.sh': 1,
                   'tests/setup-reliability-contract.sh': 1, 'tests/pi-opencode-go-contract.sh': 1,
                   'tests/weekly-log-audit-regressions.sh': 1, 'tests/bb-desktop-contract.sh': 1,
                   'tests/test_managed_skill_suite.py': 1}
