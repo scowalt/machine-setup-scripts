@@ -51,8 +51,8 @@ def suites():
 
 
 def jobs(inventory):
-    return [f'{suite}:{index}/{SHARDS[suite]}' if suite in SHARDS else suite
-            for suite in inventory for index in range(1, SHARDS.get(suite, 1) + 1)]
+    shards = [f'{suite}:{index}/{count}' for suite, count in SHARDS.items() for index in range(1, count + 1)]
+    return shards + [suite for suite in inventory if suite not in SHARDS]
 
 
 def main(argv=None):

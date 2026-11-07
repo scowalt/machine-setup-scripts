@@ -105,9 +105,11 @@ class DispatchTests(unittest.TestCase):
     def test_list_prints_inventory_without_tools(self):
         result = self.dispatch(PREFIX + ' --list')
         self.assertEqual(result.returncode, 0, result.stderr)
-        expected = [suite + (f':{index}/{self.module.SHARDS[suite]}' if suite in self.module.SHARDS else '')
-                    for suite in self.inventory() for index in range(1, self.module.SHARDS.get(suite, 1) + 1)]
-        self.assertEqual(json.loads(result.stdout), expected)
+        listed = json.loads(result.stdout)
+        shards = [f'{suite}:{index}/{count}' for suite, count in self.module.SHARDS.items()
+                  for index in range(1, count + 1)]
+        self.assertEqual(listed[:len(shards)], shards)
+        self.assertEqual(listed[len(shards):], [suite for suite in self.inventory() if suite not in self.module.SHARDS])
         self.assertFalse(self.record.exists())
 
     def test_listed_shard_reaches_runner_and_invalid_shards_are_rejected(self):
