@@ -124,7 +124,7 @@ if args[:5]==base+['config','get']:
         value='better-sqlite3,node-pty,@parcel/watcher' if rest==[allow] else os.environ.get('STRICT','true')
     else: value=values[key]
     print(value); sys.exit(0)
-install=['install']+base+['--engine-strict','--strict-allow-scripts',allow,'https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz']
+install=['install']+base+['--engine-strict','--strict-allow-scripts',allow,'--allow-remote=root','https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz']
 rebuild=['rebuild']+base+['--strict-allow-scripts',allow,'better-sqlite3','node-pty','@parcel/watcher']
 assert args in [install,rebuild], args
 if os.environ.get('NATIVE')=='1':
@@ -673,7 +673,7 @@ process.exit(fakeProcess.exitCode);
             self.assertEqual(item['userconfig'], str(selected_user if index >= 4 else self.userconfig))
             self.assertIs(item['ignore-scripts'], False)
             self.assertEqual(item['allow-git'], 'none')
-            self.assertEqual(item['allow-remote'], 'none')
+            self.assertEqual(item['allow-remote'], 'root' if item['operation'] == 'install' else 'none')
             self.assertTrue(item['authPreserved'])
         self.assertNotIn('inert-fixture-token', self.log())
         selected_global = self.root / 'selected global.npmrc'

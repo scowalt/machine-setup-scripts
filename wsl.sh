@@ -9310,7 +9310,7 @@ setup_bb_machine() {
     [[ "${_found}" == better-sqlite3,node-pty,@parcel/watcher ]] || return 1
     bb_machine_package_state reserve || return 1
     print_message 'Installing stable BB preparation software (no enrollment or service startup)...'
-    if ! ( umask 077; npm install --global --prefix "${_prefix}" "${_npm_context[@]}" --engine-strict --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz < /dev/null >/dev/null 2>&1 ); then
+    if ! ( umask 077; npm install --global --prefix "${_prefix}" "${_npm_context[@]}" --engine-strict --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher --allow-remote=root https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz < /dev/null >/dev/null 2>&1 ); then
         print_error 'BB preparation npm install failed; the owned partial copy can be retried.'; return 1
     fi
     if ! ( umask 077; npm rebuild --global --prefix "${_prefix}" "${_npm_context[@]}" --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher better-sqlite3 node-pty @parcel/watcher < /dev/null >/dev/null 2>&1 ); then
@@ -9329,7 +9329,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 276 | Last changed: Allow pstack tool dependencies in Pi package refresh${NC}"
+    echo -e "${GRAY}Version 277 | Last changed: Allow npm 12 to fetch the bb-app release archive${NC}"
 
     if ! acquire_setup_lock; then
         return 1

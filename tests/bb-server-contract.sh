@@ -776,7 +776,7 @@ npm() {
             esac;;
         prefix) [[ "${2:-}" == -g ]] && printf '%s\n' "${BB_TEST_PREFIX:-$prefix}";;
         install)
-            [[ "$*" == *'--strict-allow-scripts'* && "$*" == *'--allow-scripts=better-sqlite3,node-pty,@parcel/watcher'* && "$*" == *'https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz'* ]] || return 1
+            [[ "$*" == *'--strict-allow-scripts'* && "$*" == *'--allow-scripts=better-sqlite3,node-pty,@parcel/watcher'* && "$*" == *'--allow-remote=root'* && "$*" == *'https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz'* ]] || return 1
             printf 'install\n' >> "$BB_TEST_ROOT/npm-events"
             [[ "${BB_TEST_NPM_FAIL:-0}" != 1 ]] || return 1
             [[ "${BB_TEST_SKIP_PACKAGE:-0}" == 1 ]] || { ( umask 077; make_package ); return 0; };;

@@ -6,6 +6,8 @@ The fork publishes `bb-app` from its `Fork Release` workflow on every push to `m
 
 Fork versions are `<next upstream patch>-fork.<run number>`, which the stable-version checks rejected as a prerelease. Setup's package checks now accept exactly `X.Y.Z` and `X.Y.Z-fork.N`; other prereleases such as release candidates and nightlies are still refused.
 
+npm 12 defaults `allow-remote` to `none`, which refuses any package named by URL, including this archive. The install passes `--allow-remote=root`, which permits only the archive named on the command line; URL dependencies anywhere in its tree are still refused. npm 11 defaults to `all` and accepts the flag unchanged.
+
 ## Considered options
 
 - Keep npm. Servers then run upstream's package, and bb's updater replaces any hand-installed fork with upstream's next release.
