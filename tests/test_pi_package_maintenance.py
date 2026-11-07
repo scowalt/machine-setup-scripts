@@ -852,6 +852,32 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                         self.assertFalse(calls.exists())
 
+    def test_refresh_allows_only_scowalt_skills_npm_output_from_its_origin(self):
+        self.env.pop('PI_OFFLINE')
+        source = 'git:github.com/scowalt/skills'
+        for condition in ('lockfile', 'extra-file', 'pstack-tool-dependencies', 'wrong-origin'):
+            for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+                with self.subTest(script=script, condition=condition):
+                    git_root = self.agent / 'git'
+                    if git_root.exists(): shutil.rmtree(git_root)
+                    checkout = self.seed_git_checkout(source, 'scowalt/skills')
+                    origin = 'https://github.com/example/fixture' if condition == 'wrong-origin' else 'https://github.com/scowalt/skills'
+                    self.run_git('remote', 'add', 'origin', origin, cwd=checkout)
+                    (checkout / 'package-lock.json').write_text('{"lockfileVersion":3}')
+                    if condition == 'extra-file': (checkout / 'new.txt').write_text('new\n')
+                    if condition == 'pstack-tool-dependencies':
+                        modules = checkout / 'plugins/pstack/skills/poteto-mode/scripts/node_modules/commander'
+                        modules.mkdir(parents=True)
+                        (modules / 'package.json').write_text('{}\n')
+                    calls = self.statefile.with_suffix('.calls')
+                    if calls.exists(): calls.unlink()
+                    result = self.run_helper(script, 'refresh')
+                    if condition == 'lockfile':
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                        self.assertFalse(calls.exists())
+
     def test_embedded_refresh_policy_is_identical(self):
         policies = []
         for script in (*BASH, 'win.ps1'):

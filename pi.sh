@@ -6971,16 +6971,17 @@ try {
         const identityLines = identity.stdout.trim().split(/\r?\n/);
         if (identityLines.length !== 3 || path.resolve(identityLines[0]) !== checkout ||
             path.resolve(identityLines[1]) !== dotGit || path.resolve(checkout, identityLines[2]) !== dotGit) throw new Error('unexpected repository identity');
-        const visual = parsed.host === 'github.com' && parsed.repoPath === 'nicobailon/visual-explainer';
-        const pstack = parsed.host === 'github.com' && parsed.repoPath === 'michael-denyer/pstack-claude';
-        const dependencyOutput = ['?? node_modules/', '!! node_modules/', '?? package-lock.json', '!! package-lock.json'];
-        const allowed = visual ? [...dependencyOutput, '?? plugins/visual-explainer/node_modules/', '!! plugins/visual-explainer/node_modules/']
-            : pstack ? [...dependencyOutput, '?? plugins/pstack/skills/poteto-mode/scripts/node_modules/', '!! plugins/pstack/skills/poteto-mode/scripts/node_modules/'] : [];
-        const status = inspect(['status', '--porcelain=v1', '-z', visual || pstack ? '--untracked-files=normal' : '--untracked-files=all', '--ignored=matching']);
+        const npmOutput = new Map([
+            ['nicobailon/visual-explainer', ['plugins/visual-explainer/node_modules/']],
+            ['michael-denyer/pstack-claude', ['plugins/pstack/skills/poteto-mode/scripts/node_modules/']],
+            ['scowalt/skills', []],
+        ]).get(parsed.host === 'github.com' ? parsed.repoPath : '');
+        const allowed = npmOutput ? ['node_modules/', 'package-lock.json', ...npmOutput].flatMap(entry => ['?? ' + entry, '!! ' + entry]) : [];
+        const status = inspect(['status', '--porcelain=v1', '-z', npmOutput ? '--untracked-files=normal' : '--untracked-files=all', '--ignored=matching']);
         if (status.error || status.status !== 0 || status.signal || status.stdout.length > 1024 * 1024) throw new Error('unverified checkout');
         const records = status.stdout.split('\0').filter(Boolean);
         if (records.some(record => !allowed.includes(record))) throw new Error('modified checkout');
-        if (visual || pstack) {
+        if (npmOutput) {
             const origin = inspect(['remote', 'get-url', 'origin']);
             const remote = origin.status === 0 && !origin.error && parseGit(origin.stdout.trim().replace(/^git@/, 'git:git@'));
             if (!remote || remote.host !== parsed.host || remote.repoPath !== parsed.repoPath) throw new Error('unverified origin');
@@ -8036,6 +8037,7 @@ setup_pi_companion_packages() {
     local -a _packages=(
         "npm:pi-web-access"
         "git:github.com/michael-denyer/pstack-claude"
+        "git:github.com/scowalt/skills"
     )
     local _package=""
     local _output=""
@@ -9867,7 +9869,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 296 | Last changed: Warn about path-installed BB plugins"
+    echo -e "${GRAY}Version 297 | Last changed: Install scowalt/skills as a Pi companion package"
 
     if ! acquire_setup_lock; then
         return 1

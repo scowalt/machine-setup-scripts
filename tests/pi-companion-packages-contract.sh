@@ -76,7 +76,7 @@ MOCK_PI
         fail "${file}: legacy Pi Ask User package remains installed"
     fi
 
-    for package in 'npm:pi-web-access' 'git:github.com/michael-denyer/pstack-claude'; do
+    for package in 'npm:pi-web-access' 'git:github.com/michael-denyer/pstack-claude' 'git:github.com/scowalt/skills'; do
         count=$(grep -Fxc -- "${package}" "${package_state}" || true)
         [[ "${count}" -eq 1 ]] || fail "${file}: expected one installed entry for ${package}, found ${count}"
 
