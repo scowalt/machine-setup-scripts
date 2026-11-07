@@ -3,6 +3,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -122,14 +123,29 @@ def request(port, path, deadline):
         connection.close()
 
 
-def update(server, home, deadline):
+def plugin_command(server, home, deadline, arguments, stdout):
     env = dict(os.environ, HOME=str(home), BB_DATA_DIR=str(server['data']),
                BB_SERVER_URL=f"http://127.0.0.1:{server['port']}", BB_CLI_REEXEC='1',
                ELECTRON_RUN_AS_NODE='1', NO_COLOR='1')
-    subprocess.run([server['node'], str(server['cli']), 'plugin', 'update', '--all', '--yes'],
-                   cwd=server['data'], env=env, stdin=subprocess.DEVNULL,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                   timeout=remaining(deadline), check=True)
+    return subprocess.run([server['node'], str(server['cli']), 'plugin', *arguments],
+                          cwd=server['data'], env=env, stdin=subprocess.DEVNULL,
+                          stdout=stdout, stderr=subprocess.DEVNULL,
+                          timeout=remaining(deadline), check=True)
+
+
+def report_path_pinned(server, home, deadline):
+    try:
+        listing = plugin_command(server, home, deadline, ['list', '--json'], subprocess.PIPE)
+        plugins = json.loads(listing.stdout)['plugins']
+        pinned = [plugin.get('id') for plugin in plugins
+                  if isinstance(plugin.get('source'), str) and plugin['source'].startswith('path:')]
+    except Exception:
+        print('BB_PLUGIN_REFRESH path-check-unavailable')
+        return
+    valid = [plugin for plugin in pinned
+             if isinstance(plugin, str) and re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', plugin)]
+    for plugin in valid[:32]:
+        print(f'BB_PLUGIN_REFRESH path-pinned {plugin}')
 
 
 def report(operation, error):
@@ -180,8 +196,9 @@ def run():
                     print('BB_PLUGIN_REFRESH safe-mode')
                     continue
                 operation = 'update'
-                update(server, home, deadline)
+                plugin_command(server, home, deadline, ['update', '--all', '--yes'], subprocess.DEVNULL)
                 print('BB_PLUGIN_REFRESH completed')
+                report_path_pinned(server, home, deadline)
             except Exception as error:
                 failed = True
                 report(operation, error)

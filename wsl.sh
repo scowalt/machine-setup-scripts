@@ -8572,6 +8572,14 @@ refresh_bb_plugins() {
             'BB_PLUGIN_REFRESH stopped') print_warning 'Stopped local BB main-server plugin refresh deferred; no server was started.' ;;
             'BB_PLUGIN_REFRESH safe-mode') print_warning 'BB plugin refresh deliberately deferred: native safe mode remains enabled.' ;;
             'BB_PLUGIN_REFRESH completed') print_message 'BB native plugin update command completed; BB determines update outcomes.' ;;
+            'BB_PLUGIN_REFRESH path-check-unavailable') print_warning 'Could not list BB plugins to find local-path installs that bb plugin update skips.' ;;
+            'BB_PLUGIN_REFRESH path-pinned '*)
+                if [[ ! "${_bb_refresh_line}" =~ ^BB_PLUGIN_REFRESH\ path-pinned\ ([a-z0-9][a-z0-9._-]{0,63})$ ]]; then
+                    print_error 'BB plugin refresh failed: helper-result / unverified-result.'
+                    return 1
+                fi
+                print_warning "BB plugin ${BASH_REMATCH[1]} is installed from a local path, so bb plugin update skips it; reinstall it from its git URL to keep it updated."
+                ;;
             'BB_PLUGIN_REFRESH failed') print_error 'BB plugin refresh failed: helper-result / unverified-result.'; _bb_refresh_status=1; _bb_refresh_diagnostic=1 ;;
             'BB_PLUGIN_REFRESH failed '*)
                 if [[ ! "${_bb_refresh_line}" =~ ^BB_PLUGIN_REFRESH\ failed\ (preflight|discovery|readiness|update)\ ([a-z-]+)$ ]]; then
@@ -8608,6 +8616,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -8727,14 +8736,29 @@ def request(port, path, deadline):
         connection.close()
 
 
-def update(server, home, deadline):
+def plugin_command(server, home, deadline, arguments, stdout):
     env = dict(os.environ, HOME=str(home), BB_DATA_DIR=str(server['data']),
                BB_SERVER_URL=f"http://127.0.0.1:{server['port']}", BB_CLI_REEXEC='1',
                ELECTRON_RUN_AS_NODE='1', NO_COLOR='1')
-    subprocess.run([server['node'], str(server['cli']), 'plugin', 'update', '--all', '--yes'],
-                   cwd=server['data'], env=env, stdin=subprocess.DEVNULL,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                   timeout=remaining(deadline), check=True)
+    return subprocess.run([server['node'], str(server['cli']), 'plugin', *arguments],
+                          cwd=server['data'], env=env, stdin=subprocess.DEVNULL,
+                          stdout=stdout, stderr=subprocess.DEVNULL,
+                          timeout=remaining(deadline), check=True)
+
+
+def report_path_pinned(server, home, deadline):
+    try:
+        listing = plugin_command(server, home, deadline, ['list', '--json'], subprocess.PIPE)
+        plugins = json.loads(listing.stdout)['plugins']
+        pinned = [plugin.get('id') for plugin in plugins
+                  if isinstance(plugin.get('source'), str) and plugin['source'].startswith('path:')]
+    except Exception:
+        print('BB_PLUGIN_REFRESH path-check-unavailable')
+        return
+    valid = [plugin for plugin in pinned
+             if isinstance(plugin, str) and re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', plugin)]
+    for plugin in valid[:32]:
+        print(f'BB_PLUGIN_REFRESH path-pinned {plugin}')
 
 
 def report(operation, error):
@@ -8785,8 +8809,9 @@ def run():
                     print('BB_PLUGIN_REFRESH safe-mode')
                     continue
                 operation = 'update'
-                update(server, home, deadline)
+                plugin_command(server, home, deadline, ['update', '--all', '--yes'], subprocess.DEVNULL)
                 print('BB_PLUGIN_REFRESH completed')
+                report_path_pinned(server, home, deadline)
             except Exception as error:
                 failed = True
                 report(operation, error)
@@ -9344,7 +9369,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 278 | Last changed: Verify Impeccable ancestors once per tree walk${NC}"
+    echo -e "${GRAY}Version 279 | Last changed: Warn about path-installed BB plugins${NC}"
 
     if ! acquire_setup_lock; then
         return 1

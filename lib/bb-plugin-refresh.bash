@@ -18,6 +18,14 @@ refresh_bb_plugins() {
             'BB_PLUGIN_REFRESH stopped') print_warning 'Stopped local BB main-server plugin refresh deferred; no server was started.' ;;
             'BB_PLUGIN_REFRESH safe-mode') print_warning 'BB plugin refresh deliberately deferred: native safe mode remains enabled.' ;;
             'BB_PLUGIN_REFRESH completed') print_message 'BB native plugin update command completed; BB determines update outcomes.' ;;
+            'BB_PLUGIN_REFRESH path-check-unavailable') print_warning 'Could not list BB plugins to find local-path installs that bb plugin update skips.' ;;
+            'BB_PLUGIN_REFRESH path-pinned '*)
+                if [[ ! "${_bb_refresh_line}" =~ ^BB_PLUGIN_REFRESH\ path-pinned\ ([a-z0-9][a-z0-9._-]{0,63})$ ]]; then
+                    print_error 'BB plugin refresh failed: helper-result / unverified-result.'
+                    return 1
+                fi
+                print_warning "BB plugin ${BASH_REMATCH[1]} is installed from a local path, so bb plugin update skips it; reinstall it from its git URL to keep it updated."
+                ;;
             'BB_PLUGIN_REFRESH failed') print_error 'BB plugin refresh failed: helper-result / unverified-result.'; _bb_refresh_status=1; _bb_refresh_diagnostic=1 ;;
             'BB_PLUGIN_REFRESH failed '*)
                 if [[ ! "${_bb_refresh_line}" =~ ^BB_PLUGIN_REFRESH\ failed\ (preflight|discovery|readiness|update)\ ([a-z-]+)$ ]]; then
