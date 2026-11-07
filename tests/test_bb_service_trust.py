@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contract_shard import load_tests
 
 import test_bb_machine_preparation as preparation
 

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contract_shard import load_tests
 
 from test_bb_directory_preflight import RUN_PREFLIGHT
 from test_bb_machine_preparation import BLOCK, NODE, SCRIPTS

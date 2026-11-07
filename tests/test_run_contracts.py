@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -8,6 +9,8 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+
+import contract_shard
 
 ROOT = Path(__file__).resolve().parents[1]
 PREFIX = 'env -i PATH=/usr/bin:/bin /usr/bin/python3 -I tools/run-contracts.py'
@@ -99,11 +102,41 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(self.record.read_text())['argv'][8:], self.inventory())
 
-    def test_list_prints_inventory_without_tools(self):
+    def test_list_covers_every_suite_once_within_the_concurrency_limit(self):
         result = self.dispatch(PREFIX + ' --list')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), self.inventory())
+        listed = json.loads(result.stdout)
+        self.assertLessEqual(len(listed), 32, 'GitHub queues jobs beyond the 40 concurrent jobs shared by every workflow on the account')
+        covered = []
+        for entry in listed:
+            if entry.startswith('batch:'):
+                self.env['SUITE'] = entry
+                self.assertEqual(self.dispatch().returncode, 0)
+                covered += json.loads(self.record.read_text())['argv'][8:]
+                self.record.unlink()
+            else:
+                suite, _, shard = entry.partition(':')
+                if shard.split('/')[0] in ('', '1'):
+                    covered.append(suite)
+        self.assertEqual(sorted(covered), sorted(self.inventory()))
         self.assertFalse(self.record.exists())
+
+    def test_listed_shard_reaches_runner_and_invalid_shards_are_rejected(self):
+        suite, count = next(iter(self.module.DEDICATED_JOBS.items()))
+        self.env['SUITE'] = f'{suite}:{count}/{count}'
+        result = self.dispatch()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(self.record.read_text())['argv'][8:], [self.env['SUITE']])
+        self.record.unlink()
+        for entry in (f'{suite}:0/{count}', f'{suite}:{count + 1}/{count}', f'{suite}:1/{count + 1}',
+                      f'{suite}:1', SUITE + ':1/2', '../ubuntu.sh:1/1', 'batch:0/4', f'batch:1/{self.module.BATCHES + 1}',
+                      f'batch:{self.module.BATCHES + 1}/{self.module.BATCHES}'):
+            with self.subTest(entry=entry):
+                self.env['SUITE'] = entry
+                result = self.dispatch()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('not in the contract inventory', result.stderr)
+                self.assertFalse(self.record.exists())
 
     def test_unknown_suite_is_rejected_before_runner(self):
         for suite in ('tests/run-fixture-matrix.py', 'tests/missing-contract.sh', '../ubuntu.sh'):
@@ -173,6 +206,37 @@ class DispatchTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('empty contract run', result.stderr)
         self.assertFalse(self.record.exists())
+
+
+class ShardTests(unittest.TestCase):
+    def test_shards_partition_every_test_exactly_once(self):
+        case = type('Case', (unittest.TestCase,), {f'test_{n}': lambda self: None for n in range(7)})
+        tests = unittest.defaultTestLoader.loadTestsFromTestCase(case)
+        selected = []
+        for index in (1, 2, 3):
+            with patch.dict(os.environ, {'SETUP_TEST_SHARD': f'{index}/3'}):
+                shard = [test.id() for test in contract_shard.load_tests(None, tests, None)]
+            self.assertTrue(shard)
+            selected += shard
+        self.assertEqual(sorted(selected), sorted(test.id() for test in tests))
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(contract_shard.load_tests(None, tests, None).countTestCases(), 7)
+
+    def test_invalid_shard_selection_fails(self):
+        for value in ('0/3', '4/3', '1', 'a/b', '1/3 ', ''):
+            with self.subTest(value=value), patch.dict(os.environ, {'SETUP_TEST_SHARD': value}):
+                with self.assertRaises(ValueError):
+                    contract_shard.selected_shard()
+
+    def test_every_sharded_contract_runs_a_sharded_module(self):
+        spec = importlib.util.spec_from_file_location('contract_inventory', ROOT / 'tools/run-contracts.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for suite in [suite for suite, count in module.DEDICATED_JOBS.items() if count > 1]:
+            with self.subTest(suite=suite):
+                modules = re.findall(r'tests/(test_\w+\.py)', (ROOT / suite).read_text())
+                self.assertTrue(any('from contract_shard import load_tests' in (ROOT / 'tests' / name).read_text()
+                                    for name in modules))
 
 
 if __name__ == '__main__':

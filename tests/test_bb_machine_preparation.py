@@ -11,6 +11,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from contract_shard import load_tests
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = ["ubuntu", "mac", "pi", "bazzite", "wsl"]

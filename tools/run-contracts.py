@@ -15,6 +15,14 @@ TOOLS = {'node': 'SETUP_TEST_NODE', 'pwsh': 'PWSH_BIN',
 DIRECT_SUITES = ('test_fixture_containment.py', 'test_run_contracts.py',
                  'test_macos_clt.py', 'test_homebrew_results.py',
                  'test_managed_skill_suite.py')
+DEDICATED_JOBS = {'tests/impeccable-skill-contract.sh': 5, 'tests/pi-package-maintenance-contract.sh': 3,
+                  'tests/bb-server-contract.sh': 4, 'tests/opencode-cli-contract.sh': 2,
+                  'tests/pi-visual-explainer-contract.sh': 2, 'tests/impeccable-callers-contract.sh': 2,
+                  'tests/bb-machine-preparation-contract.sh': 3, 'tests/shared-node-runtime-contract.sh': 1,
+                  'tests/setup-reliability-contract.sh': 1, 'tests/pi-opencode-go-contract.sh': 1,
+                  'tests/weekly-log-audit-regressions.sh': 1, 'tests/bb-desktop-contract.sh': 1,
+                  'tests/test_managed_skill_suite.py': 1}
+BATCHES = 4
 
 
 def native_tool(name, value):
@@ -40,14 +48,28 @@ def suites():
     selected = [ROOT / 'tests' / name for name in DIRECT_SUITES] + shell
     if any(p.is_symlink() or not p.is_file() for p in selected):
         raise ValueError('contract inventory contains a missing or linked entry')
-    return [str(p.relative_to(ROOT)) for p in selected]
+    inventory = [str(p.relative_to(ROOT)) for p in selected]
+    if not set(DEDICATED_JOBS) <= set(inventory):
+        raise ValueError('dedicated job suite missing from the contract inventory')
+    return inventory
+
+
+def batches(inventory):
+    batched = [suite for suite in inventory if suite not in DEDICATED_JOBS]
+    return {f'batch:{index}/{BATCHES}': batched[index - 1::BATCHES] for index in range(1, BATCHES + 1)}
+
+
+def jobs(inventory):
+    dedicated = [suite if count == 1 else f'{suite}:{index}/{count}'
+                 for suite, count in DEDICATED_JOBS.items() for index in range(1, count + 1)]
+    return dedicated + list(batches(inventory))
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Version 3: run the contract inventory, or selected suites from it, with bounded 900-second suite deadlines through mandatory containment.\n\nInvoked by the Contracts workflow under env -i and Python isolated mode. Tool arguments\nselect existing native executables only; never invoke a shim/package manager to find or\ninstall them. See --help for explicit selections when system tools are absent.\n')
+    parser = argparse.ArgumentParser(description='Version 5: run the contract inventory, or selected suites, suite:i/n shards or batch:i/n groups from it, with bounded 900-second suite deadlines through mandatory containment.\n\nInvoked by the Contracts workflow under env -i and Python isolated mode. Tool arguments\nselect existing native executables only; never invoke a shim/package manager to find or\ninstall them. See --help for explicit selections when system tools are absent.\n')
     for name, variable in TOOLS.items():
         parser.add_argument('--' + name, default='', help=f'native {name}; override: {variable}; default: {SYSTEM_PATH}')
-    parser.add_argument('--list', action='store_true', help='print the full inventory as a JSON array and exit')
+    parser.add_argument('--list', action='store_true', help='print the CI jobs as a JSON array and exit: slow suites alone or split into shards, the rest in batches')
     parser.add_argument('suite', nargs='*', help='inventory entries to run; default: all')
     args = parser.parse_args(argv)
     try:
@@ -55,12 +77,12 @@ def main(argv=None):
     except ValueError as error:
         parser.error(str(error))
     if args.list:
-        print(json.dumps(inventory))
+        print(json.dumps(jobs(inventory)))
         return 0
-    unknown = [suite for suite in args.suite if suite not in inventory]
+    unknown = [suite for suite in args.suite if suite not in inventory + jobs(inventory)]
     if unknown:
         parser.error('not in the contract inventory: ' + ', '.join(unknown))
-    selected = args.suite or inventory
+    selected = [suite for entry in args.suite for suite in batches(inventory).get(entry, [entry])] or inventory
     if os.uname().sysname != 'Linux':
         parser.error('Linux kernel containment required; use a Linux validation host, never run fixtures directly')
     try:
