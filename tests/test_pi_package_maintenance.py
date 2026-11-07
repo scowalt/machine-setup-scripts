@@ -564,7 +564,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                 result = self.run_helper(script, 'companions')
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn('npm:pi-web-access installed/updated', result.stdout)
-                self.assertIn('Failed to remove legacy Pi Ask User', result.stdout)
+                self.assertIn('Failed to remove legacy Pi package npm:pi-ask-user', result.stdout)
 
     def test_absent_legacy_packages_and_goal_opt_out_are_successful(self):
         self.env['BAN_PI_GOAL_AUTORESEARCH'] = '1'
@@ -812,7 +812,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
 
     def test_refresh_allows_only_pstack_dependency_output_from_its_origin(self):
         self.env.pop('PI_OFFLINE')
-        source = 'git:github.com/michael-denyer/pstack-claude'
+        source = 'git:github.com/scowalt/pstack-claude'
         for condition in ('lockfile', 'tool-dependencies', 'linked-tool-dependencies', 'extra-file',
                           'wrong-origin', 'other-repository'):
             for script in (*BASH, *(['win.ps1'] if PWSH else [])):
@@ -823,8 +823,8 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                         checkout = self.seed_git_checkout()
                         self.run_git('remote', 'add', 'origin', 'https://github.com/example/fixture', cwd=checkout)
                     else:
-                        checkout = self.seed_git_checkout(source, 'michael-denyer/pstack-claude')
-                        origin = 'https://github.com/example/fixture' if condition == 'wrong-origin' else 'https://github.com/michael-denyer/pstack-claude'
+                        checkout = self.seed_git_checkout(source, 'scowalt/pstack-claude')
+                        origin = 'https://github.com/example/fixture' if condition == 'wrong-origin' else 'https://github.com/scowalt/pstack-claude'
                         self.run_git('remote', 'add', 'origin', origin, cwd=checkout)
                     (checkout / 'package-lock.json').write_text('{"lockfileVersion":3}')
                     if condition == 'extra-file': (checkout / 'new.txt').write_text('new\n')
