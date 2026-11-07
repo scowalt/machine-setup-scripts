@@ -9877,7 +9877,7 @@ setup_bb_machine() {
     [[ "${_found}" == better-sqlite3,node-pty,@parcel/watcher ]] || return 1
     bb_machine_package_state reserve || return 1
     print_message 'Installing stable BB preparation software (no enrollment or service startup)...'
-    if ! ( umask 077; npm install --global --prefix "${_prefix}" "${_npm_context[@]}" --engine-strict --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz < /dev/null >/dev/null 2>&1 ); then
+    if ! ( umask 077; npm install --global --prefix "${_prefix}" "${_npm_context[@]}" --engine-strict --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher --allow-remote=root https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz < /dev/null >/dev/null 2>&1 ); then
         print_error 'BB preparation npm install failed; the owned partial copy can be retried.'; return 1
     fi
     if ! ( umask 077; npm rebuild --global --prefix "${_prefix}" "${_npm_context[@]}" --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher better-sqlite3 node-pty @parcel/watcher < /dev/null >/dev/null 2>&1 ); then
@@ -10149,7 +10149,7 @@ bb_install_package() {
     if [[ "${BB_PACKAGE_OWNER}" != "${BB_PACKAGE_PATH}" && ! -e "${_pending}" ]]; then
         ( umask 077; set -C; printf '%s\n' "${BB_PACKAGE_PATH}" > "${_pending}" ) 2>/dev/null || { bb_server_failure npm.pending-write; return 1; }
     fi
-    ( umask 077; npm install -g --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz < /dev/null >/dev/null 2>&1 ) || { bb_server_failure npm.install; return 1; }
+    ( umask 077; npm install -g --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher --allow-remote=root https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz < /dev/null >/dev/null 2>&1 ) || { bb_server_failure npm.install; return 1; }
     bb_package_artifacts_ready "${BB_PACKAGE_PREFIX}" "${BB_PACKAGE_PATH}" || { bb_server_failure npm.artifacts; return 1; }
 }
 
@@ -10826,7 +10826,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 354 | Last changed: Allow pstack tool dependencies in Pi package refresh"
+    echo -e "${GRAY}Version 355 | Last changed: Allow npm 12 to fetch the bb-app release archive"
 
     if ! acquire_setup_lock; then
         return 1
