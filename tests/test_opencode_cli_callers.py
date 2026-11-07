@@ -13,6 +13,7 @@ from contract_shard import load_tests
 ROOT = Path(__file__).resolve().parents[1]
 BASH = ('mac.sh', 'ubuntu.sh', 'wsl.sh', 'pi.sh', 'bazzite.sh')
 PWSH = os.environ.get('PWSH_BIN') or shutil.which('pwsh')
+POWERSHELL_WRAPPER_PARTS = 4
 
 DIAGNOSTICS = [(f'opencode-cli:download-failed:{operation}:http-{status}', 1,
                 f'OpenCode CLI download failed (operation={operation}, HTTP={status}).')
@@ -416,8 +417,7 @@ opencode_apt_upgrade_safe() { return 1; }
         self.assertLess(win.index('Assert-HeadlessUnsupported'), win.index('New-TokenPlaceholders'))
         self.assertLess(win.index('New-TokenPlaceholders'), win.index('Install-OpenCodeCli'))
 
-    @unittest.skipUnless(PWSH, 'No existing PWSH_BIN/pwsh: PowerShell wrapper execution not claimed')
-    def test_powershell_wrapper_result_validation_and_environment_restoration(self):
+    def check_powershell_wrapper(self, part):
         block = (ROOT / 'win.ps1').read_text().split("$null = 'BEGIN_GENERATED_OPENCODE_CLI'\n")[1].split("$null = 'END_GENERATED_OPENCODE_CLI'")[0]
         wrapper = 'function Install-OpenCodeCli {' + block.split('function Install-OpenCodeCli {', 1)[1]
         with tempfile.TemporaryDirectory() as home:
@@ -454,7 +454,7 @@ if ($result) { exit 0 } else { exit 1 }
             cases = [('opencode-cli:installed', '0', 0, None), ('opencode-cli:newer', '0', 0, None),
                      ('opencode-cli:failed', '1', 1, None), ('unexpected-secret-output', '0', 1, None)]
             cases += [(result, str(status), 1, diagnostic) for result, status, diagnostic in DIAGNOSTICS]
-            for result, status, expected, diagnostic in cases:
+            for result, status, expected, diagnostic in cases[part::POWERSHELL_WRAPPER_PARTS]:
                 run = subprocess.run([PWSH, '-NoProfile', '-NonInteractive', '-File', str(harness)], cwd=home,
                                      env={'PATH': os.environ['PATH'], 'HOME': home, 'USERPROFILE': home, 'MOCK_NODE': str(fake),
                                           'MOCK_RESULT': result, 'MOCK_STATUS': status,
@@ -468,6 +468,22 @@ if ($result) { exit 0 } else { exit 1 }
                     self.assertNotIn('OpenCode CLI download failed (', run.stdout)
                     self.assertNotIn('OpenCode CLI blocked (', run.stdout)
                 self.assertEqual('rollback needs manual recovery' in run.stdout, result in RECOVERY_RESULTS)
+
+    @unittest.skipUnless(PWSH, 'No existing PWSH_BIN/pwsh: PowerShell wrapper execution not claimed')
+    def test_powershell_wrapper_result_validation_and_environment_restoration_1(self):
+        self.check_powershell_wrapper(0)
+
+    @unittest.skipUnless(PWSH, 'No existing PWSH_BIN/pwsh: PowerShell wrapper execution not claimed')
+    def test_powershell_wrapper_result_validation_and_environment_restoration_2(self):
+        self.check_powershell_wrapper(1)
+
+    @unittest.skipUnless(PWSH, 'No existing PWSH_BIN/pwsh: PowerShell wrapper execution not claimed')
+    def test_powershell_wrapper_result_validation_and_environment_restoration_3(self):
+        self.check_powershell_wrapper(2)
+
+    @unittest.skipUnless(PWSH, 'No existing PWSH_BIN/pwsh: PowerShell wrapper execution not claimed')
+    def test_powershell_wrapper_result_validation_and_environment_restoration_4(self):
+        self.check_powershell_wrapper(3)
 
     @unittest.skipUnless(PWSH, 'No existing PWSH_BIN/pwsh: native Windows/PowerShell execution not claimed')
     def test_real_powershell_installer_caller_and_finalization(self):
