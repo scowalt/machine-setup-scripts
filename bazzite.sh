@@ -7677,6 +7677,7 @@ setup_pi_companion_packages() {
         "npm:pi-web-access"
         "git:github.com/scowalt/pstack-claude"
         "git:github.com/scowalt/skills"
+        "git:github.com/janestreet/agent_skills"
     )
     local _package=""
     local _output=""
@@ -9399,7 +9400,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 202 | Last changed: Install scowalt's pstack fork with bb subagents"
+    echo -e "${GRAY}Version 203 | Last changed: Install Jane Street's socratic-tutor skill for Pi"
 
     if ! acquire_setup_lock; then
         return 1

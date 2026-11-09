@@ -7202,6 +7202,7 @@ setup_pi_companion_packages() {
         "npm:pi-web-access"
         "git:github.com/scowalt/pstack-claude"
         "git:github.com/scowalt/skills"
+        "git:github.com/janestreet/agent_skills"
     )
     local _package=""
     local _output=""
@@ -9376,7 +9377,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 281 | Last changed: Install scowalt's pstack fork with bb subagents${NC}"
+    echo -e "${GRAY}Version 282 | Last changed: Install Jane Street's socratic-tutor skill for Pi${NC}"
 
     if ! acquire_setup_lock; then
         return 1

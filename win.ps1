@@ -8006,6 +8006,7 @@ function Setup-PiCompanionPackages {
         "npm:pi-web-access"
         "git:github.com/scowalt/pstack-claude"
         "git:github.com/scowalt/skills"
+        "git:github.com/janestreet/agent_skills"
     )
 
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
@@ -9159,7 +9160,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 212 | Last changed: Install scowalt's pstack fork with bb subagents"
+    Write-Host "Version 213 | Last changed: Install Jane Street's socratic-tutor skill for Pi"
 
     Assert-HeadlessUnsupported
 

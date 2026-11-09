@@ -78,7 +78,7 @@ MOCK_PI
         fi
     done
 
-    for package in 'npm:pi-web-access' 'git:github.com/scowalt/pstack-claude' 'git:github.com/scowalt/skills'; do
+    for package in 'npm:pi-web-access' 'git:github.com/scowalt/pstack-claude' 'git:github.com/scowalt/skills' 'git:github.com/janestreet/agent_skills'; do
         count=$(grep -Fxc -- "${package}" "${package_state}" || true)
         [[ "${count}" -eq 1 ]] || fail "${file}: expected one installed entry for ${package}, found ${count}"
 
