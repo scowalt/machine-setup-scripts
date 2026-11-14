@@ -9954,7 +9954,7 @@ bb_server_platform_ready() {
 }
 
 bb_server_failure() {
-    local _check="$1" _reason
+    local _check="$1" _npm_code="${2:-}" _reason
     case "${_check}" in
         preflight.tailscale-command|preflight.required-commands) _reason='required command unavailable' ;;
         preflight.tailscale-path|update.tailscale-path) _reason='unsupported Tailscale command location' ;;
@@ -10001,6 +10001,7 @@ bb_server_failure() {
         restore.app-unit|restore.ingress-unit|restore.guard|restore.guard-remove) _reason='prior service files could not be restored' ;;
         *) _check='diagnostic.unknown'; _reason='failure detail unavailable' ;;
     esac
+    [[ ! "${_npm_code}" =~ ^[A-Za-z0-9_]{1,32}$ ]] || _reason+=" (npm error code ${_npm_code})"
     print_error "BB server [${_check}]: ${_reason}." >&2
     return 0
 }
@@ -10192,12 +10193,21 @@ bb_package_artifacts_ready() {
 }
 
 bb_install_package() {
-    local _pending="${HOME}/.config/setup-bb-server/package-owner.next"
+    local _pending="${HOME}/.config/setup-bb-server/package-owner.next" _npm_stderr _line _npm_code=''
     bb_package_preflight || return 1
     if [[ "${BB_PACKAGE_OWNER}" != "${BB_PACKAGE_PATH}" && ! -e "${_pending}" ]]; then
         ( umask 077; set -C; printf '%s\n' "${BB_PACKAGE_PATH}" > "${_pending}" ) 2>/dev/null || { bb_server_failure npm.pending-write; return 1; }
     fi
-    ( umask 077; npm install -g --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher --allow-remote=root https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz < /dev/null >/dev/null 2>&1 ) || { bb_server_failure npm.install; return 1; }
+    if ! _npm_stderr=$( umask 077; npm install -g --strict-allow-scripts --allow-scripts=better-sqlite3,node-pty,@parcel/watcher --allow-remote=root https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app.tgz < /dev/null 2>&1 >/dev/null ); then
+        while IFS= read -r _line; do
+            if [[ "${_line}" =~ ^npm\ (error|ERR!)\ code\ (.*)$ ]]; then
+                _npm_code="${BASH_REMATCH[2]}"
+                break
+            fi
+        done <<< "${_npm_stderr}"
+        bb_server_failure npm.install "${_npm_code}"
+        return 1
+    fi
     bb_package_artifacts_ready "${BB_PACKAGE_PREFIX}" "${BB_PACKAGE_PATH}" || { bb_server_failure npm.artifacts; return 1; }
 }
 
@@ -10874,7 +10884,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 360 | Last changed: Install Jane Street's socratic-tutor skill for Pi"
+    echo -e "${GRAY}Version 361 | Last changed: Report npm's error code when the BB server package install fails"
 
     if ! acquire_setup_lock; then
         return 1
