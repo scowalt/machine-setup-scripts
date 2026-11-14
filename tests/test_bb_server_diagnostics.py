@@ -49,7 +49,13 @@ npm() {
             esac ;;
         prefix)
             if [[ ${FAIL_NPM:-} == changed-prefix && $installed == 1 ]]; then printf '/DO-NOT-LOG-FIXTURE-SECRET\n'; else printf '%s\n' "${NPM_PREFIX:-$HOME/.local/share/mise/installs/node/24.20.0}"; fi ;;
-        install) event npm-install; [[ ${FAIL_INSTALL:-0} != 1 ]] || noisy_failure ;;
+        install)
+            event npm-install
+            if [[ -n ${NPM_ERROR_CODE+x} ]]; then
+                printf 'npm warn DO-NOT-LOG-FIXTURE-SECRET\nnpm error code %s\nnpm error path /DO-NOT-LOG-FIXTURE-SECRET\n' "$NPM_ERROR_CODE" >&2
+                return 1
+            fi
+            [[ ${FAIL_INSTALL:-0} != 1 ]] || noisy_failure ;;
         *) return 97 ;;
     esac
 }
@@ -1069,6 +1075,20 @@ check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
                 self.assertTrue((self.home / '.config/setup-bb-server/package-owner.next').is_file())
                 self.assertFalse((self.home / '.config/setup-bb-server/package-owner').exists())
 
+    def test_actual_installer_reports_only_a_well_formed_npm_error_code(self):
+        helper = simple_function(self.source, 'bb_install_package')
+        for code, expected in (
+            ('ENOTEMPTY', 'stable npm installation failed (npm error code ENOTEMPTY).'),
+            ('E404', 'stable npm installation failed (npm error code E404).'),
+            (SECRET, 'stable npm installation failed.'),
+            ('ECONNRESET ' + SECRET, 'stable npm installation failed.'),
+        ):
+            with self.subTest(code=code):
+                result = self.run_code('bb_install_package', extra=helper, env={'NPM_ERROR_CODE': code})
+                self.assertEqual(result.returncode, 1, result)
+                self.assertEqual(result.stdout, '')
+                self.assertEqual(result.stderr, 'ERROR: BB server [npm.install]: ' + expected + '\n')
+
     def test_restoration_failures_keep_existing_status_and_attempt_order(self):
         call = '''bb_restore_bb_services "$HOME/app-unit" "$HOME/ingress-unit" "$HOME/guard" 'old-app' 'old-ingress' 'old-guard' 1 1 "$HOME/.local/share/mise/installs/node/24.20.0/lib/node_modules/bb-app" 0'''
         cases = [
@@ -1165,6 +1185,10 @@ mv() {
         self.assertEqual(result.returncode, 0, result)
         self.assertEqual(result.stdout, '')
         self.assertIn('[diagnostic.unknown]', result.stderr)
+        for detail in (SECRET, 'ENOTEMPTY\n' + SECRET, 'E' * 33, ''):
+            with self.subTest(detail=detail):
+                result = self.run_code('bb_server_failure npm.install "$UNTRUSTED"', env={'UNTRUSTED': detail})
+                self.assertEqual(result.stderr, 'ERROR: BB server [npm.install]: stable npm installation failed.\n')
 
     def test_real_native_readiness_remembers_failure_without_printing_probe_data(self):
         helper = simple_function(self.source, 'bb_native_app_ready')
