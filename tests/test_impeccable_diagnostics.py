@@ -52,7 +52,7 @@ class ImpeccableDiagnostics(unittest.TestCase):
             self.assertEqual(self.snapshot(), before)
             self.env.pop('BAN_IMPECCABLE')
             settings.unlink()
-            self.env['IMPECCABLE_TEST_MODE'] = 'missing-engine'
+            self.env['IMPECCABLE_TEST_MODE'] = 'missing-engine-manifest'
             result = self.adapter(shell, success=False)
             self.assertIn('phase=promotion reason=incomplete-payload exit=1', result.stderr)
             self.env.pop('IMPECCABLE_TEST_MODE')

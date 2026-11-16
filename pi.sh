@@ -1484,6 +1484,9 @@ install_gitea_client() {
 }
 
 install_bun() {
+    if [[ -x "${HOME}/.bun/bin/bun" ]]; then
+        export PATH="${HOME}/.bun/bin:${PATH}"
+    fi
     if command -v bun &> /dev/null; then
         print_debug "Bun is already installed."
         return
@@ -4106,6 +4109,7 @@ function payloadDigest(file) {
     return hash.digest('hex');
 }
 const officialHelperNames = ['manual-edit-applier', 'asset-producer', 'documenter', 'finish-reviewer'];
+const optionalHelperNames = ['motion-reviewer'];
 function helperPath(profile, name) {
     return path.join(profile, 'agents', 'impeccable-' + name + '.md');
 }
@@ -4117,11 +4121,15 @@ const references = ['routing', 'init', 'craft', 'critique', 'layout', 'typeset',
     ...officialHelperNames.map(name => 'degraded/' + name)];
 const resources = ['scripts/impeccable', 'scripts/impeccable.cmd', 'scripts/VERSION', 'scripts/command-metadata.json',
     'scripts/live-browser.js', 'scripts/live-browser-session.js', 'scripts/live-browser-ignores.js',
-    'scripts/live-browser-dom.js', 'scripts/modern-screenshot.umd.js', 'scripts/data/font-index.json', 'scripts/data/font-index-failures.json'];
+    'scripts/live-browser-dom.js', 'scripts/modern-screenshot.umd.js', 'scripts/data/font-index.json', 'scripts/data/font-index-failures.json',
+    'scripts/engine-checksums.txt'];
 function nativeTarget() {
     if (!['linux', 'darwin', 'win32'].includes(process.platform) || !['x64', 'arm64'].includes(process.arch) ||
         process.platform === 'win32' && process.arch !== 'x64') fail('unsupported-artifact');
     return (process.platform === 'win32' ? 'windows' : process.platform) + '-' + process.arch;
+}
+function engineAsset(target) {
+    return 'impeccable-' + target + (process.platform === 'win32' ? '.exe' : '');
 }
 function skillIdentity(md) {
     const normalized = md.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
@@ -4191,12 +4199,14 @@ function validateSkill(skill, target, provider) {
     if (!walkVerifiedDirectories) return verifyAncestorsOncePerWalk(() => validateSkill(skill, target, provider));
     copiedTree(skill);
     windowsTrust();
-    const binary = 'scripts/bin/' + target + '/impeccable' + (process.platform === 'win32' ? '.exe' : '');
+    const binary = path.join(skill, 'scripts/bin', target, 'impeccable' + (process.platform === 'win32' ? '.exe' : ''));
+    const bundled = stat(binary) !== null;
     const agentFiles = provider === 'codex' ? ['agents/openai.yaml', ...officialHelperNames
         .map(name => 'agents/impeccable_' + name.replaceAll('-', '_') + '.toml')] : [];
-    const files = ['SKILL.md', ...references.map(name => 'reference/' + name + '.md'), ...resources, ...agentFiles, binary];
+    const files = ['SKILL.md', ...references.map(name => 'reference/' + name + '.md'), ...resources, ...agentFiles]
+        .map(file => path.join(skill, file)).concat(bundled ? [binary] : []);
     for (const file of files) {
-        const item = stat(path.join(skill, file));
+        const item = stat(file);
         if (!item?.isFile() || item.size === 0 || item.nlink !== 1) fail('incomplete-payload');
     }
     const md = readRegular(path.join(skill, 'SKILL.md')).toString('utf8');
@@ -4207,13 +4217,17 @@ function validateSkill(skill, target, provider) {
         try { JSON.parse(readRegular(path.join(skill, resource)).toString('utf8')); }
         catch { fail('invalid-resource-json'); }
     }
-    if (process.platform !== 'win32' && [path.join(skill, 'scripts/impeccable'), path.join(skill, 'scripts/bin', target, 'impeccable')]
+    if (process.platform !== 'win32' && [path.join(skill, 'scripts/impeccable')].concat(bundled ? [binary] : [])
         .some(file => !(stat(file).mode & 0o100))) fail('nonexecutable-payload');
-    return {engine, version,
-        checksum: crypto.createHash('sha256').update(readRegular(path.join(skill, binary))).digest('hex')};
+    const asset = engineAsset(target);
+    const checksum = readRegular(path.join(skill, 'scripts/engine-checksums.txt')).toString('utf8').split(/\r?\n/)
+        .map(line => line.trim().split(/\s+/)).find(([pinned, name]) => pinned === engine && name === asset)?.[2]?.toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(checksum || '') ||
+        bundled && crypto.createHash('sha256').update(readRegular(binary)).digest('hex') !== checksum) fail('engine-checksum-mismatch');
+    return {engine, version, checksum};
 }
 function engineChecksum(version, target) {
-    const asset = 'impeccable-' + target + (process.platform === 'win32' ? '.exe' : '');
+    const asset = engineAsset(target);
     const original = 'https://github.com/pbakaus/impeccable/releases/download/engine-v' + version + '/' + asset + '.sha256';
     const fetch = (url, redirects = 0) => new Promise((resolve, reject) => {
         const parsed = new URL(url);
@@ -4367,11 +4381,12 @@ function context(excluded = false) {
         {provider: 'pi', source: '.pi/agent/skills/impeccable', destination: path.join(pi.at(-1), 'skills/impeccable')},
     ];
     const helperBindings = [{source: '.claude', destination: claude}, {source: '.cursor', destination: path.join(home, '.cursor')}]
-        .flatMap(binding => officialHelperNames.map(name => ({source: helperPath(binding.source, name), destination: helperPath(binding.destination, name)})));
+        .flatMap(binding => [...officialHelperNames, ...optionalHelperNames].map(name => ({source: helperPath(binding.source, name),
+            destination: helperPath(binding.destination, name), optional: optionalHelperNames.includes(name)})));
     const removalDirs = unique([...bindings.map(binding => path.dirname(binding.destination)), path.join(home, '.claude/skills'), path.join(home, '.codex/skills'),
         path.join(profile(process.env.CODEX_HOME, '.codex'), 'skills'), ...pi.map(dir => path.join(dir, 'skills'))]);
     const removalHelpers = unique([path.join(home, '.claude'), claude, path.join(home, '.cursor')])
-        .flatMap(dir => officialHelperNames.map(name => helperPath(dir, name)));
+        .flatMap(dir => [...officialHelperNames, ...optionalHelperNames].map(name => helperPath(dir, name)));
     const removals = removalDirs.map(dir => path.join(dir, 'impeccable'))
         .concat(pi.map(dir => path.join(dir, 'skills/impeccable.md')), removalHelpers);
     if (excluded) removals.forEach(removable);
@@ -4464,21 +4479,25 @@ async function run() {
             !(stat(sharedPi) && sameTree(directPi, sharedPi)) && !skills.some(binding => sameTree(directPi, binding.source))) fail('unverified-pi-copy');
         const {engine, version} = piSkill.payload;
         if (skills.some(({payload}) => payload.engine !== engine || payload.version !== version)) fail('inconsistent-snapshot');
-        const helpers = helperBindings.map(binding => ({...binding, source: path.join(stage, binding.source)}));
+        const staged = helperBindings.map(binding => ({...binding, source: path.join(stage, binding.source)}));
+        const helpers = staged.filter(({source, optional}) => !optional || stat(source));
+        const absentHelpers = staged.filter(binding => !helpers.includes(binding)).map(({destination}) => destination);
         for (const {source} of helpers) {
             copiedTree(source);
             if (!stat(source)?.isFile() || stat(source).size === 0) fail('incomplete-payload');
         }
         const artifacts = [...skills, ...helpers];
         const sourceSnapshots = new Map(artifacts.map(({source}) => [source, fingerprint(source)]));
-        const destinationFiles = artifacts.map(binding => binding.destination).concat(settings.map(record => record.file), manifestFile);
+        const destinationFiles = artifacts.map(binding => binding.destination)
+            .concat(absentHelpers, settings.map(record => record.file), manifestFile);
         const destinationSnapshots = new Map(destinationFiles.map(file => [file, fingerprint(file)]));
         const parentSnapshots = snapshotDirectories([...sourceSnapshots.keys(), ...destinationSnapshots.keys()]);
         const checksum = await engineChecksum(engine, target);
         if (skills.some(({payload}) => payload.checksum !== checksum)) fail('engine-checksum-mismatch');
         unchangedDirectories(parentSnapshots);
         for (const [file, before] of [...sourceSnapshots, ...destinationSnapshots]) if (fingerprint(file) !== before) fail('changed-copy');
-        const changes = artifacts.map(({source, destination}) => ({file: destination, source}));
+        const changes = artifacts.map(({source, destination}) => ({file: destination, source}))
+            .concat(absentHelpers.filter(file => destinationSnapshots.get(file) !== null).map(file => ({file})));
         const selected = settings.at(-1);
         const exclusion = discoveryIntent(home, selected, piSkill.source);
         if (!(selected.data.skills || []).includes(exclusion)) {
@@ -4501,6 +4520,7 @@ async function run() {
                 copiedTree(destination);
                 if (!sameTree(source, destination)) fail('changed-copy');
             }
+            if (absentHelpers.some(file => stat(file))) fail('changed-copy');
             discoveryIntent(home, {...selected, data: jsonFile(selected.file)});
         });
     } else fail('unknown-operation');
@@ -9875,7 +9895,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 299 | Last changed: Install Jane Street's socratic-tutor skill for Pi"
+    echo -e "${GRAY}Version 300 | Last changed: Verify Impeccable engines from the skill's checksum manifest and stop reinstalling Bun"
 
     if ! acquire_setup_lock; then
         return 1
