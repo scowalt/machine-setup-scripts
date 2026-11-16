@@ -6624,8 +6624,9 @@ try {
         const identity = inspect(['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir']);
         if (identity.error || identity.status !== 0 || identity.signal || identity.stdout.length > 4096) throw new Error('unverified repository');
         const identityLines = identity.stdout.trim().split(/\r?\n/);
-        if (identityLines.length !== 3 || path.resolve(identityLines[0]) !== checkout ||
-            path.resolve(identityLines[1]) !== dotGit || path.resolve(checkout, identityLines[2]) !== dotGit) throw new Error('unexpected repository identity');
+        const real = file => fs.realpathSync(path.resolve(checkout, file));
+        if (identityLines.length !== 3 || real(identityLines[0]) !== real(checkout) ||
+            real(identityLines[1]) !== real(dotGit) || real(identityLines[2]) !== real(dotGit)) throw new Error('unexpected repository identity');
         const npmOutput = new Map([
             ['nicobailon/visual-explainer', ['plugins/visual-explainer/node_modules/']],
             ['scowalt/pstack-claude', ['plugins/pstack/skills/poteto-mode/scripts/node_modules/']],
@@ -9420,7 +9421,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 204 | Last changed: Verify Impeccable engines from the skill's checksum manifest and stop reinstalling Bun"
+    echo -e "${GRAY}Version 205 | Last changed: Refresh Pi packages when HOME sits under a linked directory"
 
     if ! acquire_setup_lock; then
         return 1
