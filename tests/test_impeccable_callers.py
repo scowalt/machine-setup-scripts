@@ -135,7 +135,8 @@ class ImpeccableCallers(unittest.TestCase):
                     self.assertEqual(len(self.installer_calls()), calls + 1)
                     direct = self.home / '.pi/agent/skills/impeccable'
                     self.assertEqual((direct / 'SKILL.md').read_text(), convergence.descriptor('.pi/agent/skills') + revision)
-                    self.assertEqual((direct / 'scripts/bin/linux-x64/impeccable').read_bytes(), convergence.native_engine())
+                    self.assertEqual((direct / 'scripts/engine-checksums.txt').read_text(), convergence.engine_manifest())
+                    self.assertFalse((direct / 'scripts/bin').exists())
                     for resource in convergence.SCRIPTS:
                         self.assertGreater((direct / 'scripts' / resource).stat().st_size, 0)
                     for provider in convergence.PROVIDERS:
@@ -211,7 +212,7 @@ class ImpeccableCallers(unittest.TestCase):
             with self.subTest(entry=entry):
                 self.run_entry(entry)
                 before = self.snapshot()
-                for mode in ('missing-engine', 'fail-skill-promotion', 'bad-runtime'):
+                for mode in ('missing-engine-manifest', 'fail-skill-promotion', 'bad-runtime'):
                     self.env['IMPECCABLE_TEST_MODE'] = mode
                     result, events = self.run_entry(entry, success=False)
                     self.assertNotIn('verified', result.stdout)

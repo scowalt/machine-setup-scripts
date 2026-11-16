@@ -25,8 +25,10 @@ REFERENCES = ['routing', 'init', 'craft', 'critique', 'layout', 'typeset', 'colo
               'component-review', 'region-map', 'mode-operate', 'mode-persuade', 'mode-read', 'ios', 'android', 'hooks']
 SCRIPTS = ['impeccable', 'impeccable.cmd', 'VERSION', 'command-metadata.json', 'live-browser.js',
            'live-browser-session.js', 'live-browser-ignores.js', 'live-browser-dom.js', 'modern-screenshot.umd.js',
-           'data/font-index.json', 'data/font-index-failures.json']
+           'data/font-index.json', 'data/font-index-failures.json', 'engine-checksums.txt']
 AGENTS = ['manual-edit-applier', 'asset-producer', 'documenter', 'finish-reviewer']
+OPTIONAL_AGENTS = ['motion-reviewer']
+BUNDLED_ENGINE_MODES = ('bundled-engine', 'corrupt-engine', 'nonexecutable-engine', 'unsafe-bundled-engine', 'group-bundled-engine')
 CAPTURED_LAYOUT_PARTS = 2
 GLOBSTAR_PARTS = 3
 CAPTURED_DIRECTORIES = ['.agents', '.claude/skills', '.agents/skills', '.cursor', '.cursor/skills',
@@ -44,6 +46,13 @@ def fixture_definitions(source):
 
 def native_engine():
     return b'\x7fELF\x02\x01\x01' + bytes(11) + b'\x02\x00\x3e\x00' + bytes(64)
+
+
+def engine_manifest(digest=None):
+    digest = digest or hashlib.sha256(native_engine()).hexdigest()
+    return ('# Engine binary digests for the pinned ENGINE_VERSION: <engine-version> <asset> <sha256>.\n'
+            '0.1.10 impeccable-linux-x64 ' + '0' * 64 + '\n0.1.11 impeccable-darwin-arm64 ' + '1' * 64 +
+            '\n0.1.11 impeccable-linux-x64 ' + digest + '\n')
 
 
 class ImpeccableConvergence(unittest.TestCase):
@@ -185,7 +194,7 @@ require('node:https').get = (url, options, callback) => {
         }
         if (mode === 'change-stage-after-verification') {
             const stages = fs.readFileSync(process.env.IMPECCABLE_TEST_ROOT + '/stages', 'utf8').trim().split('\n');
-            fs.writeFileSync(stages.at(-1) + '/.pi/agent/skills/impeccable/scripts/bin/linux-x64/impeccable', Buffer.concat([bytes, Buffer.from('corrupt')]));
+            fs.appendFileSync(stages.at(-1) + '/.pi/agent/skills/impeccable/scripts/engine-checksums.txt', 'changed after verification\n');
         }
         const response = Readable.from([expected + '  impeccable-linux-x64\n']);
         response.statusCode = process.env.IMPECCABLE_TEST_MODE === 'unavailable-checksum' ? 503 : 200;
@@ -456,6 +465,44 @@ if (-not $result) { exit 1 }
         self.adapter()
         self.assertFalse(files[-1].exists())
 
+    def test_launcher_cache_layout_replaces_bundled_engines_without_touching_engine_cache(self):
+        cache = self.put(self.home / '.impeccable/bin/0.1.11/keep', 'PRIVATE-SENTINEL')
+        for shell in ('bash', 'powershell'):
+            with self.subTest(shell=shell):
+                self.env['IMPECCABLE_TEST_MODE'] = 'bundled-engine'
+                self.assertIn('verified', self.adapter(shell).stdout)
+                for provider in PROVIDERS:
+                    self.assertEqual((self.home / provider / 'impeccable/scripts/bin/linux-x64/impeccable').read_bytes(), native_engine())
+                self.env.pop('IMPECCABLE_TEST_MODE')
+                self.assertIn('verified', self.adapter(shell).stdout)
+                for provider in PROVIDERS:
+                    self.assertFalse((self.home / provider / 'impeccable/scripts/bin').exists())
+                self.assertEqual(sorted(path.name for path in (self.home / '.impeccable').rglob('*')), ['0.1.11', 'bin', 'keep'])
+                self.assertEqual(cache.read_text(), 'PRIVATE-SENTINEL')
+
+    def test_optional_helpers_install_when_shipped_and_retire_when_dropped(self):
+        self.captured_directories()
+        helpers = [self.home / profile / 'agents' / ('impeccable-' + agent + '.md')
+                   for profile in ('.claude', '.cursor') for agent in OPTIONAL_AGENTS]
+        for shell in ('bash', 'powershell'):
+            with self.subTest(shell=shell):
+                self.assertIn('verified', self.adapter(shell).stdout)
+                self.assertFalse(any(helper.exists() for helper in helpers))
+                self.env['IMPECCABLE_TEST_OPTIONAL_HELPERS'] = '1'
+                self.assertIn('verified', self.adapter(shell).stdout)
+                for helper in helpers:
+                    self.assertEqual(helper.read_text(), 'Inert official helper.\n')
+                self.env.pop('IMPECCABLE_TEST_OPTIONAL_HELPERS')
+                self.assertIn('verified', self.adapter(shell).stdout)
+                self.assertFalse(any(helper.exists() for helper in helpers))
+                self.env['IMPECCABLE_TEST_OPTIONAL_HELPERS'] = '1'
+                self.adapter(shell)
+                self.env.pop('IMPECCABLE_TEST_OPTIONAL_HELPERS')
+                self.env['BAN_IMPECCABLE'] = '1'
+                self.adapter(shell)
+                self.env.pop('BAN_IMPECCABLE')
+                self.assertFalse(any(helper.exists() for helper in helpers))
+
     def test_fresh_convergence_installs_complete_pi_payload_without_hooks_or_user_state_changes(self):
         settings = self.put(self.home / '.pi/agent/settings.json', '{"theme":"keep","packages":["npm:keep"],"skills":["custom"]}')
         sentinels = [self.put(self.home / file, 'PRIVATE-SENTINEL') for file in (
@@ -472,7 +519,8 @@ if (-not $result) { exit 1 }
                 self.assertEqual((skill / ('reference/' + reference + '.md')).read_text(), 'Inert upstream reference.\n')
             for resource in SCRIPTS:
                 self.assertGreater((skill / 'scripts' / resource).stat().st_size, 0)
-            self.assertEqual((skill / 'scripts/bin/linux-x64/impeccable').read_bytes(), native_engine())
+            self.assertEqual((skill / 'scripts/engine-checksums.txt').read_text(), engine_manifest())
+            self.assertFalse((skill / 'scripts/bin').exists())
         self.assertEqual(json.loads(settings.read_text())['theme'], 'keep')
         self.assertEqual(json.loads(settings.read_text())['packages'], ['npm:keep'])
         self.assertIn('custom', json.loads(settings.read_text())['skills'])
@@ -1173,7 +1221,8 @@ if (-not $result) { exit 1 }
     def test_zero_exit_with_an_unverified_native_engine_or_malformed_required_resource_preserves_previous_payload(self):
         self.adapter()
         for shell in ('bash', 'powershell'):
-            for mode in ('corrupt-engine', 'unavailable-checksum', 'invalid-resource-json', 'missing-engine', 'missing-codex-agent'):
+            for mode in ('corrupt-engine', 'nonexecutable-engine', 'unavailable-checksum', 'invalid-resource-json',
+                         'missing-engine-manifest', 'unpinned-engine', 'mismatched-engine-manifest', 'missing-codex-agent'):
                 with self.subTest(shell=shell, mode=mode):
                     self.env['IMPECCABLE_TEST_MODE'] = mode
                     before = self.snapshot()
@@ -1369,14 +1418,19 @@ def installer_fixture():
         for resource in SCRIPTS:
             file = skill / 'scripts' / resource
             file.parent.mkdir(parents=True, exist_ok=True)
-            file.write_text('0.1.11\n' if resource == 'VERSION' else '{}\n' if resource.endswith('.json') else 'Inert bundled resource; never execute.\n')
+            file.write_text('0.1.11\n' if resource == 'VERSION' else '{}\n' if resource.endswith('.json') else
+                            engine_manifest() if resource == 'engine-checksums.txt' else 'Inert bundled resource; never execute.\n')
         binary = skill / 'scripts/bin/linux-x64/impeccable'
-        binary.parent.mkdir(parents=True)
-        binary.write_bytes(native_engine())
-        binary.chmod((binary.stat().st_mode & 0o777) | 0o755 if native_modes else 0o700)
+        if os.environ.get('IMPECCABLE_TEST_MODE') in BUNDLED_ENGINE_MODES:
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(native_engine())
+            binary.chmod((binary.stat().st_mode & 0o777) | 0o755 if native_modes else 0o700)
         (skill / 'scripts/impeccable').chmod(0o755 if native_modes else 0o700)
+        helpers = AGENTS + (OPTIONAL_AGENTS if os.environ.get('IMPECCABLE_TEST_OPTIONAL_HELPERS') else [])
+        for agent in helpers[len(AGENTS):]:
+            (skill / ('reference/degraded/' + agent + '.md')).write_text('Inert upstream reference.\n')
         if provider == '.agents/skills':
-            for name in ['openai.yaml'] + ['impeccable_' + agent.replace('-', '_') + '.toml' for agent in AGENTS]:
+            for name in ['openai.yaml'] + ['impeccable_' + agent.replace('-', '_') + '.toml' for agent in helpers]:
                 file = skill / 'agents' / name
                 file.parent.mkdir(exist_ok=True)
                 file.write_text('Inert native agent metadata.\n')
@@ -1414,8 +1468,14 @@ def installer_fixture():
         (pi / 'SKILL.md').write_text('---\nname: impeccable\ndescription: ' + 'x' * 1025 + '\nversion: 4.5.0\n---\nInert.\n')
     elif mode == 'corrupt-engine':
         (pi / 'scripts/bin/linux-x64/impeccable').write_bytes(native_engine() + b'corrupt')
-    elif mode == 'missing-engine':
-        (pi / 'scripts/bin/linux-x64/impeccable').unlink()
+    elif mode == 'nonexecutable-engine':
+        (pi / 'scripts/bin/linux-x64/impeccable').chmod(0o600)
+    elif mode == 'missing-engine-manifest':
+        (pi / 'scripts/engine-checksums.txt').unlink()
+    elif mode == 'unpinned-engine':
+        (pi / 'scripts/engine-checksums.txt').write_text(engine_manifest().replace('0.1.11 impeccable-linux-x64', '0.1.12 impeccable-linux-x64'))
+    elif mode == 'mismatched-engine-manifest':
+        (pi / 'scripts/engine-checksums.txt').write_text(engine_manifest('2' * 64))
     elif mode == 'invalid-resource-json':
         (pi / 'scripts/command-metadata.json').write_text('PRIVATE-SENTINEL malformed JSON')
     elif mode == 'missing-codex-agent':
@@ -1423,7 +1483,7 @@ def installer_fixture():
     for provider in ('.claude', '.cursor'):
         directory = home / provider / 'agents'
         directory.mkdir()
-        for agent in AGENTS:
+        for agent in helpers:
             (directory / ('impeccable-' + agent + '.md')).write_text('Inert official helper.\n')
     if mode == 'missing-helper':
         (home / '.cursor/agents/impeccable-documenter.md').unlink()
@@ -1434,7 +1494,7 @@ def installer_fixture():
     if mode in ('unsafe-npm-cache', 'group-npm-cache'):
         (home / '.npm/_cacache/content/blob').chmod(0o666 if mode == 'unsafe-npm-cache' else 0o664)
     if native_modes:
-        paths = ['.claude/skills/impeccable/scripts/bin/linux-x64/impeccable',
+        paths = ['.claude/skills/impeccable/scripts/impeccable',
                  '.claude/agents/impeccable-documenter.md', '.npm/_cacache/content/blob']
         (root / 'installer-modes.json').write_text(json.dumps({name: (home / name).stat().st_mode & 0o777 for name in paths}))
     if os.environ.get('IMPECCABLE_TEST_SUCCESS_NOISE'):

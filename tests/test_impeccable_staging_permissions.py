@@ -44,13 +44,13 @@ class ImpeccableStagingPermissions(unittest.TestCase):
 
     def assert_safe_created_files(self, caller_mask=0o002):
         self.assertEqual(json.loads((self.root / 'installer-modes.json').read_text()), {
-            '.claude/skills/impeccable/scripts/bin/linux-x64/impeccable': 0o755,
+            '.claude/skills/impeccable/scripts/impeccable': 0o755,
             '.claude/agents/impeccable-documenter.md': 0o600,
             '.npm/_cacache/content/blob': 0o600,
         })
         for provider in convergence.PROVIDERS:
             skill = self.home / provider / 'impeccable'
-            self.assertEqual((skill / 'scripts/bin/linux-x64/impeccable').stat().st_mode & 0o777,
+            self.assertEqual((skill / 'scripts/impeccable').stat().st_mode & 0o777,
                              0o755 & ~caller_mask)
             self.assertEqual((skill / 'SKILL.md').stat().st_mode & 0o777, 0o600)
         for profile in ('.claude', '.cursor'):
