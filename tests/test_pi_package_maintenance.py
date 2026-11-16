@@ -901,6 +901,55 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                         self.assertFalse(calls.exists())
 
+    def test_refresh_accepts_only_ignored_python_cache_directories(self):
+        self.env.pop('PI_OFFLINE')
+        cases = {
+            'skills-ignored-cache': (True, 'scowalt/skills', '__pycache__/\n', 'cache'),
+            'any-checkout-ignored-cache': (True, 'example/fixture', '__pycache__/\n*.py[cod]\n', 'cache'),
+            'root-ignored-cache': (True, 'example/fixture', '__pycache__/\n', 'root-cache'),
+            'unignored-cache': (False, 'example/fixture', None, 'cache'),
+            'ignored-bytecode-files': (False, 'example/fixture', '*.pyc\n', 'cache'),
+            'linked-cache': (False, 'example/fixture', '__pycache__\n', 'linked-cache'),
+            'ignored-cache-file': (False, 'example/fixture', '__pycache__\n', 'cache-file'),
+            'cache-beside-ignored-file': (False, 'example/fixture', '__pycache__/\nnotes.txt\n', 'cache-and-notes'),
+        }
+        for condition, (accepted, repo, ignore, shape) in cases.items():
+            for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+                with self.subTest(script=script, condition=condition):
+                    git_root = self.agent / 'git'
+                    if git_root.exists(): shutil.rmtree(git_root)
+                    checkout = self.seed_git_checkout('git:github.com/' + repo, repo)
+                    if repo == 'scowalt/skills':
+                        self.run_git('remote', 'add', 'origin', 'https://github.com/scowalt/skills', cwd=checkout)
+                    if ignore is not None:
+                        (checkout / '.gitignore').write_text(ignore)
+                        self.run_git('add', '.gitignore', cwd=checkout)
+                        self.run_git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                                     'commit', '-qm', 'ignore', cwd=checkout)
+                    scripts = checkout / 'skills/fixture/scripts'
+                    scripts.mkdir(parents=True)
+                    if shape == 'cache-file':
+                        (scripts / '__pycache__').write_text('not a cache directory\n')
+                    elif shape == 'linked-cache':
+                        outside = self.root / ('outside-cache-' + script)
+                        outside.mkdir(exist_ok=True)
+                        (scripts / '__pycache__').symlink_to(outside, target_is_directory=True)
+                    else:
+                        cache = (checkout if shape == 'root-cache' else scripts) / '__pycache__'
+                        cache.mkdir()
+                        (cache / 'attach.cpython-314.pyc').write_bytes(b'\x00bytecode')
+                    if shape == 'cache-and-notes': (checkout / 'notes.txt').write_text('user notes\n')
+                    calls = self.statefile.with_suffix('.calls')
+                    if calls.exists(): calls.unlink()
+                    result = self.run_helper(script, 'refresh')
+                    if accepted:
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertEqual(json.loads(calls.read_text().strip()), ['update', '--extensions', '--no-approve'])
+                    else:
+                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                        self.assertIn('safety preflight failed', result.stdout)
+                        self.assertFalse(calls.exists())
+
     def test_embedded_refresh_policy_is_identical(self):
         policies = []
         for script in (*BASH, 'win.ps1'):
