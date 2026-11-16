@@ -6957,7 +6957,8 @@ try {
         const status = inspect(['status', '--porcelain=v1', '-z', npmOutput ? '--untracked-files=normal' : '--untracked-files=all', '--ignored=matching']);
         if (status.error || status.status !== 0 || status.signal || status.stdout.length > 1024 * 1024) throw new Error('unverified checkout');
         const records = status.stdout.split('\0').filter(Boolean);
-        if (records.some(record => !allowed.includes(record))) throw new Error('modified checkout');
+        const pythonCache = record => /^!! (?:.+\/)?__pycache__\/$/.test(record);
+        if (records.some(record => !allowed.includes(record) && !pythonCache(record))) throw new Error('modified checkout');
         if (npmOutput) {
             const origin = inspect(['remote', 'get-url', 'origin']);
             const remote = origin.status === 0 && !origin.error && parseGit(origin.stdout.trim().replace(/^git@/, 'git:git@'));
@@ -10094,7 +10095,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 331 | Last changed: Refresh Pi packages when HOME sits under a linked directory${NC}"
+    echo -e "${GRAY}Version 332 | Last changed: Refresh Pi packages when a checkout holds an ignored Python cache${NC}"
 
     if ! acquire_setup_lock; then
         return 1
