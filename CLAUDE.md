@@ -140,6 +140,7 @@ All scripts follow a consistent pattern:
 - **Idempotency**: Scripts check for existing installations before proceeding
 - **Error Handling**: Failed installations are logged but don't stop execution
 - **Homebrew results**: macOS command failures, failed verification, unresolved unpinned updates and trust-skipped work must reach the final nonzero result without bypassing log finalization. Preserve user pins; tmux cleanup owns only setup's temporary pin. Run `bash tests/setup-reliability-contract.sh` and `python3 tests/test_homebrew_results.py` for changes.
+- **Inbound SSH**: Tailscale SSH is the only inbound login path. Do not enable macOS Remote Login or distribute `authorized_keys`. On macOS, keep an installed Tailscale formula daemon, because the GUI app cannot serve Tailscale SSH.
 - **User Feedback**: Color-coded output for status messages
 - **Platform-Specific**: Each script optimized for its target OS
 - **Dotfile Management**: Shell configurations are managed by chezmoi - scripts should only install tools, not configure shells. For installer profile edits or activation repairs, read [the shell-ownership decision](docs/adr/0002-let-chezmoi-own-shell-configuration.md).
