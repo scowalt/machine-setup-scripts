@@ -6931,7 +6931,8 @@ try {
         const status = inspect(['status', '--porcelain=v1', '-z', npmOutput ? '--untracked-files=normal' : '--untracked-files=all', '--ignored=matching']);
         if (status.error || status.status !== 0 || status.signal || status.stdout.length > 1024 * 1024) throw new Error('unverified checkout');
         const records = status.stdout.split('\0').filter(Boolean);
-        if (records.some(record => !allowed.includes(record))) throw new Error('modified checkout');
+        const pythonCache = record => /^!! (?:.+\/)?__pycache__\/$/.test(record);
+        if (records.some(record => !allowed.includes(record) && !pythonCache(record))) throw new Error('modified checkout');
         if (npmOutput) {
             const origin = inspect(['remote', 'get-url', 'origin']);
             const remote = origin.status === 0 && !origin.error && parseGit(origin.stdout.trim().replace(/^git@/, 'git:git@'));
@@ -9178,7 +9179,7 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 215 | Last changed: Refresh Pi packages when HOME sits under a linked directory"
+    Write-Host "Version 216 | Last changed: Refresh Pi packages when a checkout holds an ignored Python cache"
 
     Assert-HeadlessUnsupported
 
