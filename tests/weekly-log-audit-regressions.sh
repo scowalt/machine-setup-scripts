@@ -34,30 +34,38 @@ assert_not_contains() {
     fi
 }
 
+run_setup_tailscale_twice() {
+    SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" \
+        CALL_LOG="$1" FORMULA_INSTALLED="$2" bash -c '
+            source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+            cask_installed=0
+            brew() {
+                printf "%s\n" "$*" >> "${CALL_LOG}"
+                case "$*" in
+                    "list --formula tailscale") [[ "${FORMULA_INSTALLED}" -eq 1 ]] ;;
+                    "list --cask tailscale-app") [[ "${cask_installed}" -eq 1 ]] ;;
+                    "install --cask tailscale-app") cask_installed=1 ;;
+                    *) return 90 ;;
+                esac
+            }
+            pgrep() { return 0; }
+            open() { return 90; }
+            { setup_tailscale && setup_tailscale; } || printf "%s\n" "setup_tailscale failed" >> "${CALL_LOG}"
+        '
+}
+
 tailscale_tmp=$(mktemp -d)
-tailscale_output=$(SETUP_SCRIPT="${repo_root}/mac.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" \
-    CALL_LOG="${tailscale_tmp}/calls" bash -c '
-        source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
-        formula_installed=1
-        cask_installed=0
-        brew() {
-            printf "%s\n" "$*" >> "${CALL_LOG}"
-            case "$*" in
-                "list --formula tailscale") [[ "${formula_installed}" -eq 1 ]] ;;
-                "services stop tailscale") return 0 ;;
-                "uninstall --formula --force tailscale") formula_installed=0 ;;
-                "list --cask tailscale-app") [[ "${cask_installed}" -eq 1 ]] ;;
-                "install --cask tailscale-app") cask_installed=1 ;;
-                *) return 90 ;;
-            esac
-        }
-        pgrep() { return 0; }
-        setup_tailscale
-        setup_tailscale
-    ')
-[[ "$(grep -c '^uninstall --formula --force tailscale$' "${tailscale_tmp}/calls" || true)" -eq 1 ]] || fail 'mac.sh: Tailscale formula migration was not one-time and forceful'
-[[ "$(grep -c '^install --cask tailscale-app$' "${tailscale_tmp}/calls" || true)" -eq 1 ]] || fail 'mac.sh: canonical Tailscale cask installation was not idempotent'
+tailscale_output=$(run_setup_tailscale_twice "${tailscale_tmp}/cask-calls" 0)
+[[ "$(grep -c '^install --cask tailscale-app$' "${tailscale_tmp}/cask-calls" || true)" -eq 1 ]] || fail 'mac.sh: canonical Tailscale cask installation was not idempotent'
 grep -q 'Tailscale cask installed' <<< "${tailscale_output}" || fail 'mac.sh: successful canonical Tailscale cask install was not reported'
+
+run_setup_tailscale_twice "${tailscale_tmp}/formula-calls" 1 >/dev/null
+if grep -q '^setup_tailscale failed$' "${tailscale_tmp}/formula-calls"; then
+    fail 'mac.sh: Tailscale setup failed while a Tailscale formula daemon was installed'
+fi
+if grep -Eq '^(uninstall|services stop|install --cask)' "${tailscale_tmp}/formula-calls"; then
+    fail 'mac.sh: Tailscale formula daemon that serves Tailscale SSH was replaced'
+fi
 rm -rf "${tailscale_tmp}"
 
 for file in "${bash_setup_scripts[@]}"; do

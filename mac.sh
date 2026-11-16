@@ -919,16 +919,8 @@ install_core_packages() {
 
 setup_tailscale() {
     if brew list --formula tailscale &>/dev/null 2>&1; then
-        print_message "Replacing Tailscale formula with cask (GUI app)..."
-        brew services stop tailscale 2>/dev/null || true
-        if ! brew uninstall --formula --force tailscale; then
-            print_error "Failed to remove the Tailscale formula."
-            return 1
-        fi
-        if brew list --formula tailscale &>/dev/null 2>&1; then
-            print_error "Tailscale formula versions remain installed after migration."
-            return 1
-        fi
+        print_debug "Keeping the Tailscale formula daemon because it serves Tailscale SSH."
+        return 0
     fi
 
     if ! brew list --cask tailscale-app &>/dev/null 2>&1; then
@@ -1208,78 +1200,6 @@ EOF
     sudo killall -HUP mDNSResponder 2>/dev/null
 
     print_success "Blocked ${marker##*: } on this work machine."
-}
-
-enable_ssh() {
-    local sshd_config="/etc/ssh/sshd_config"
-    local ssh_enabled=false
-    local ssh_configured=false
-
-    if launchctl print system/com.openssh.sshd &>/dev/null; then
-        ssh_enabled=true
-    fi
-
-    if grep -q "^PasswordAuthentication no" "${sshd_config}" 2>/dev/null \
-        && grep -q "^KbdInteractiveAuthentication no" "${sshd_config}" 2>/dev/null \
-        && grep -q "^ChallengeResponseAuthentication no" "${sshd_config}" 2>/dev/null; then
-        ssh_configured=true
-    fi
-
-    if [[ "${ssh_enabled}" == true && "${ssh_configured}" == true ]]; then
-        print_debug "SSH (Remote Login) is enabled and configured for key-only auth."
-        return
-    fi
-
-    if ! can_sudo; then
-        print_warning "No sudo access — cannot enable SSH."
-        return
-    fi
-
-    if [[ "${ssh_enabled}" != true ]] && sudo launchctl print system/com.openssh.sshd &>/dev/null; then
-        ssh_enabled=true
-    fi
-
-    if [[ "${ssh_enabled}" == true ]]; then
-        print_debug "SSH (Remote Login) is already enabled."
-    else
-        print_message "Enabling SSH (Remote Login)..."
-        if sudo systemsetup -setremotelogin on 2>/dev/null; then
-            print_success "SSH enabled via systemsetup."
-        elif sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist 2>/dev/null; then
-            print_success "SSH enabled via launchctl."
-        else
-            print_warning "Could not enable SSH. Enable manually: System Settings → General → Sharing → Remote Login"
-        fi
-    fi
-
-    local needs_restart=false
-
-    if ! grep -q "^PasswordAuthentication no" "${sshd_config}" 2>/dev/null; then
-        print_message "Disabling SSH password authentication (key-only)..."
-        sudo sed -i '' '/^#*PasswordAuthentication/d' "${sshd_config}"
-        echo "PasswordAuthentication no" | sudo tee -a "${sshd_config}" > /dev/null
-        needs_restart=true
-    fi
-
-    if ! grep -q "^KbdInteractiveAuthentication no" "${sshd_config}" 2>/dev/null; then
-        sudo sed -i '' '/^#*KbdInteractiveAuthentication/d' "${sshd_config}"
-        echo "KbdInteractiveAuthentication no" | sudo tee -a "${sshd_config}" > /dev/null
-        needs_restart=true
-    fi
-
-    if ! grep -q "^ChallengeResponseAuthentication no" "${sshd_config}" 2>/dev/null; then
-        sudo sed -i '' '/^#*ChallengeResponseAuthentication/d' "${sshd_config}"
-        echo "ChallengeResponseAuthentication no" | sudo tee -a "${sshd_config}" > /dev/null
-        needs_restart=true
-    fi
-
-    if [[ "${needs_restart}" == true ]]; then
-        sudo launchctl stop com.openssh.sshd 2>/dev/null || true
-        sudo launchctl start com.openssh.sshd 2>/dev/null || true
-        print_success "SSH configured for key-only authentication."
-    else
-        print_debug "SSH already configured for key-only auth."
-    fi
 }
 
 install_nerd_font() {
@@ -10185,8 +10105,6 @@ run_setup_tasks() {
         install_gcloud_cli || _setup_had_errors=1
 
         block_public_upload_services
-
-        enable_ssh
 
         setup_tailscale || _setup_had_errors=1
         install_nerd_font || _setup_had_errors=1
