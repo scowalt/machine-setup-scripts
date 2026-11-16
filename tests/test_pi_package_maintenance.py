@@ -822,6 +822,17 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertEqual((checkout / 'tracked.txt').read_bytes(), before)
 
+    def test_checkout_preflight_accepts_linked_home_ancestor(self):
+        self.env.pop('PI_OFFLINE')
+        alias = self.root / 'home-alias'
+        alias.symlink_to(self.home, target_is_directory=True)
+        self.env.update(HOME=str(alias), USERPROFILE=str(alias), PI_CODING_AGENT_DIR=str(alias / '.pi/agent'))
+        self.seed_git_checkout()
+        for script in (*BASH, *(['win.ps1'] if PWSH else [])):
+            with self.subTest(script=script):
+                result = self.run_helper(script, 'refresh')
+                self.assertNotIn('safety preflight', result.stdout, 'git reports real paths under a linked HOME ancestor')
+
     def test_refresh_allows_only_pstack_dependency_output_from_its_origin(self):
         self.env.pop('PI_OFFLINE')
         source = 'git:github.com/scowalt/pstack-claude'
