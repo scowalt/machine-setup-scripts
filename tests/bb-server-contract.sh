@@ -409,15 +409,15 @@ systemctl() {
                 : > "${BB_TEST_CURL_FAIL_ONCE_FILE}"
                 unset BB_TEST_ARM_START_FAILURE
             fi
-            "$BB_TEST_RUNNER" app ExecStart & app_pid=$!
+            diag_start=$EPOCHREALTIME; "$BB_TEST_RUNNER" app ExecStart 2>> "$BB_TEST_EVENTS" & app_pid=$!
             printf '%s\n' "$app_pid" > "$BB_TEST_ROOT/main-pid"
-            for _ in {1..100}; do
-                [[ -r "/proc/${app_pid}/cmdline" ]] || return 1
+            for diag_i in {1..100}; do
+                [[ -r "/proc/${app_pid}/cmdline" ]] || { printf 'start-wait gone after %s iterations %s\n' "$diag_i" "$(bc <<< "$EPOCHREALTIME - $diag_start" 2>/dev/null || echo "$EPOCHREALTIME $diag_start")" >> "$BB_TEST_EVENTS"; return 1; }
                 process_args=$(tr '\0' ' ' < "/proc/${app_pid}/cmdline")
                 [[ "${process_args}" == *"$HOME/.local/share/mise/installs/node/24.20.0/bin/bb-app"* ]] && break
                 /bin/sleep 0.01
             done
-            [[ "${process_args}" == *"$HOME/.local/share/mise/installs/node/24.20.0/bin/bb-app"* ]] || return 1
+            [[ "${process_args}" == *"$HOME/.local/share/mise/installs/node/24.20.0/bin/bb-app"* ]] || { printf 'start-wait timeout args=[%s] start=%s now=%s\n' "$process_args" "$diag_start" "$EPOCHREALTIME" >> "$BB_TEST_EVENTS"; return 1; }
             touch "$BB_TEST_ROOT/app-active"
             "$BB_TEST_RUNNER" app ExecStartPost;;
         *) return 0;;
@@ -673,15 +673,15 @@ systemctl() {
         *' stop setup-bb-ingress.service '*) rm -f "$BB_TEST_ROOT/ingress-active";;
         *' stop setup-bb-app.service '*) rm -f "$BB_TEST_ROOT/app-active"; if [[ -s "$BB_TEST_ROOT/main-pid" ]]; then app_pid=$(<"$BB_TEST_ROOT/main-pid"); kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi; rm -f "$BB_TEST_ROOT/main-pid";;
         *' start setup-bb-app.service '*)
-            "$BB_TEST_RUNNER" app ExecStart & app_pid=$!
+            diag_start=$EPOCHREALTIME; "$BB_TEST_RUNNER" app ExecStart 2>> "$BB_TEST_EVENTS" & app_pid=$!
             printf '%s\n' "$app_pid" > "$BB_TEST_ROOT/main-pid"
-            for _ in {1..100}; do
-                [[ -r "/proc/${app_pid}/cmdline" ]] || return 1
+            for diag_i in {1..100}; do
+                [[ -r "/proc/${app_pid}/cmdline" ]] || { printf 'start-wait gone after %s iterations %s\n' "$diag_i" "$(bc <<< "$EPOCHREALTIME - $diag_start" 2>/dev/null || echo "$EPOCHREALTIME $diag_start")" >> "$BB_TEST_EVENTS"; return 1; }
                 process_args=$(tr '\0' ' ' < "/proc/${app_pid}/cmdline")
                 [[ "${process_args}" == *"$HOME/.local/share/mise/installs/node/24.20.0/bin/bb-app"* ]] && break
                 /bin/sleep 0.01
             done
-            [[ "${process_args}" == *"$HOME/.local/share/mise/installs/node/24.20.0/bin/bb-app"* ]] || return 1
+            [[ "${process_args}" == *"$HOME/.local/share/mise/installs/node/24.20.0/bin/bb-app"* ]] || { printf 'start-wait timeout args=[%s] start=%s now=%s\n' "$process_args" "$diag_start" "$EPOCHREALTIME" >> "$BB_TEST_EVENTS"; return 1; }
             touch "$BB_TEST_ROOT/app-active"
             "$BB_TEST_RUNNER" app ExecStartPost;;
         *' stop setup-bb-app.service '*) return 0;;
