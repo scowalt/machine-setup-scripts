@@ -81,7 +81,7 @@ case "$1 $2" in
     'version --daemon') printf '{"short":"%s","daemonLong":"%s-fixture"}\n' "${BB_TEST_VERSION:-1.102.4}" "${BB_TEST_VERSION:-1.102.4}";;
     'status --json') dns="$(<"${BB_TEST_DNS_FILE:-/dev/null}")"; printf '{"BackendState":"%s","Self":{"DNSName":"%s."}}\n' "${BB_TEST_BACKEND:-Running}" "${dns:-test.example.ts.net}";;
     'debug prefs') printf '{"OperatorUser":"%s"}\n' "$(id -un)";;
-    serve\ *) shift; printf 'serve %s\n' "$*" >> "${BB_TEST_SERVE_LOG}"; if [[ "${BB_TEST_LONG_SERVE:-0}" == 1 ]]; then trap 'printf "killed\n" >> "${BB_TEST_SERVE_LOG}"; exit 0' TERM INT; while :; do /bin/sleep 1; done; fi;;
+    serve\ *) shift; trap 'printf "killed\n" >> "${BB_TEST_SERVE_LOG}"; exit 0' TERM INT; printf 'serve %s\n' "$*" >> "${BB_TEST_SERVE_LOG}"; if [[ "${BB_TEST_LONG_SERVE:-0}" == 1 ]]; then while :; do /bin/sleep 1; done; fi;;
     *) exit 1;;
 esac
 MOCK
@@ -298,12 +298,12 @@ run_guard ingress-start
 [[ "$(<"$BB_TEST_ROOT/serve.log")" == 'serve --https=38443 http://127.0.0.1:38886' ]]
 # The foreground watcher rechecks identity after reconnect and terminates its
 # old Serve session instead of publishing a changed origin.
-: > "$BB_TEST_ROOT/serve.log"
-touch "$BB_TEST_ROOT/reconnect-change"
+rm -f -- "$BB_TEST_ROOT/serve.log" "$BB_TEST_ROOT/reconnect-change"
 export BB_TEST_LONG_SERVE=1 BB_TEST_RECONNECT_CHANGE="$BB_TEST_ROOT/reconnect-change"
 run_guard ingress-start & guard_pid=$!
-for _ in {1..100}; do [[ -e "$BB_TEST_ROOT/serve.log" ]] && break; /bin/sleep 0.02; done
-[[ -e "$BB_TEST_ROOT/serve.log" ]]
+for _ in {1..500}; do grep -q '^serve ' "$BB_TEST_ROOT/serve.log" 2>/dev/null && break; /bin/sleep 0.02; done
+grep -q '^serve ' "$BB_TEST_ROOT/serve.log" || { kill "$guard_pid"; exit 1; }
+touch "$BB_TEST_ROOT/reconnect-change"
 result=0; wait "$guard_pid" || result=$?
 [[ "$result" -ne 0 ]]
 grep -qx 'killed' "$BB_TEST_ROOT/serve.log"
