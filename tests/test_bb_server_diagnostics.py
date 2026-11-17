@@ -21,6 +21,7 @@ print_warning() { printf 'WARNING: %s\n' "$1"; }
 event() { printf '%s\n' "$*" >> "$EVENTS"; }
 noisy_failure() { printf '%s\n' 'DO-NOT-LOG-FIXTURE-SECRET' >&2; return 1; }
 installed=0
+tailscale_operator=${TAILSCALE_OPERATOR-$(id -un)}
 app_active=${ACTIVE:-0}
 ingress_active=${ACTIVE:-0}
 command() {
@@ -84,6 +85,8 @@ tailscale() {
     case "$1 $2" in
         'version --daemon') printf '{"short":"1.102.4","daemonLong":"1.102.4"}\n' ;;
         'status --json') printf '{"BackendState":"Running","Self":{"DNSName":"fixture.example.ts.net."}}\n' ;;
+        'debug prefs')
+            if [[ -n $tailscale_operator ]]; then printf '{"RunSSH":true,"OperatorUser":"%s"}\n' "$tailscale_operator"; else printf '{"RunSSH":true}\n'; fi ;;
         'serve status')
             if [[ ${READINESS_EVIDENCE:-0} == 1 ]]; then
                 event route-inspection
@@ -999,10 +1002,35 @@ check_pending_reboot() { printf 'REBOOT_CHECK\n'; }
             ('preflight.https-port-selection', {'FAIL_ROUTE': 'occupied'}),
             ('preflight.linger-query', {'FAIL_LINGER': 'query'}),
             ('preflight.linger-enable', {'LINGER': 'no'}),
+            ('preflight.tailscale-operator-query', {'FAIL_TAILSCALE': 'debug:prefs'}),
+            ('preflight.tailscale-operator-set', {'TAILSCALE_OPERATOR': ''}),
+            ('preflight.tailscale-operator-state', {'TAILSCALE_OPERATOR': 'other-account'}),
         ]
         for label, env in cases:
             with self.subTest(label=label, env=env):
                 self.failure(label, env=env, unchanged=True)
+
+    def test_empty_tailscale_operator_is_set_to_this_account_before_install(self):
+        sudo = r'''
+sudo() {
+    event "sudo $*"
+    [[ $* == "/usr/bin/tailscale set --operator=$(id -un)" ]] || return 97
+    tailscale_operator=$(id -un)
+}
+'''
+        result = self.run_code(extra=sudo, env={'TAILSCALE_OPERATOR': '', 'CAN_SUDO': '1'})
+        self.assertEqual(result.returncode, 0, result)
+        events = self.events.read_text().splitlines()
+        operator = 'sudo /usr/bin/tailscale set --operator=' + subprocess.run(
+            ['id', '-un'], capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(events.count(operator), 1, events)
+        self.assertLess(events.index(operator), events.index('install'))
+
+    def test_existing_tailscale_operator_is_never_replaced(self):
+        result = self.failure('preflight.tailscale-operator-state',
+                              env={'TAILSCALE_OPERATOR': 'other-account', 'CAN_SUDO': '1'})
+        self.assertNotIn('sudo', self.events.read_text())
+        self.assertNotIn('other-account', result.stdout + result.stderr)
 
     def test_file_and_endpoint_failures_are_identified_without_values(self):
         cases = [
