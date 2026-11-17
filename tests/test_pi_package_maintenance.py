@@ -637,7 +637,7 @@ finish_setup_log() { printf 'LOG-FINALIZED:%s\\n' "$1"; return "$1"; }
         for key in list(env):
             if key.startswith('GIT_'):
                 del env[key]
-        return subprocess.run(['git', *args], cwd=cwd or self.root, env=env, text=True,
+        return subprocess.run(['git', '-c', 'maintenance.auto=false', *args], cwd=cwd or self.root, env=env, text=True,
                               capture_output=True, check=True)
 
     def seed_git_checkout(self, source='git:github.com/example/fixture@v1', repo='example/fixture'):
