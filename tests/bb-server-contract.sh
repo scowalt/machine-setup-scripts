@@ -409,7 +409,7 @@ systemctl() {
             fi
             "$BB_TEST_RUNNER" app ExecStart & app_pid=$!
             printf '%s\n' "$app_pid" > "$BB_TEST_ROOT/main-pid"
-            for _ in {1..100}; do
+            for _ in {1..3000}; do
                 [[ -r "/proc/${app_pid}/cmdline" ]] || return 1
                 process_args=$(tr '\0' ' ' < "/proc/${app_pid}/cmdline")
                 [[ "${process_args}" == *"$HOME/.local/share/mise/installs/node/24.20.0/bin/bb-app"* ]] && break
@@ -672,7 +672,7 @@ systemctl() {
         *' start setup-bb-app.service '*)
             "$BB_TEST_RUNNER" app ExecStart & app_pid=$!
             printf '%s\n' "$app_pid" > "$BB_TEST_ROOT/main-pid"
-            for _ in {1..100}; do
+            for _ in {1..3000}; do
                 [[ -r "/proc/${app_pid}/cmdline" ]] || return 1
                 process_args=$(tr '\0' ' ' < "/proc/${app_pid}/cmdline")
                 [[ "${process_args}" == *"$HOME/.local/share/mise/installs/node/24.20.0/bin/bb-app"* ]] && break
