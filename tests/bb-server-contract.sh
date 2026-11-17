@@ -80,6 +80,7 @@ cat > "${tmp}/bin/tailscale" <<'MOCK'
 case "$1 $2" in
     'version --daemon') printf '{"short":"%s","daemonLong":"%s-fixture"}\n' "${BB_TEST_VERSION:-1.102.4}" "${BB_TEST_VERSION:-1.102.4}";;
     'status --json') dns="$(<"${BB_TEST_DNS_FILE:-/dev/null}")"; printf '{"BackendState":"%s","Self":{"DNSName":"%s."}}\n' "${BB_TEST_BACKEND:-Running}" "${dns:-test.example.ts.net}";;
+    'debug prefs') printf '{"OperatorUser":"%s"}\n' "$(id -un)";;
     serve\ *) shift; printf 'serve %s\n' "$*" >> "${BB_TEST_SERVE_LOG}"; if [[ "${BB_TEST_LONG_SERVE:-0}" == 1 ]]; then trap 'printf "killed\n" >> "${BB_TEST_SERVE_LOG}"; exit 0' TERM INT; while :; do /bin/sleep 1; done; fi;;
     *) exit 1;;
 esac
@@ -364,6 +365,7 @@ tailscale() {
     case "$1 $2" in
         'version --daemon') printf '{"short":"1.102.4","daemonLong":"1.102.4-fixture"}\n';;
         'status --json') printf '{"BackendState":"Running","Self":{"DNSName":"%s."}}\n' "$(<"$BB_TEST_DNS_FILE")";;
+        'debug prefs') printf '{"OperatorUser":"%s"}\n' "$(id -un)";;
         'serve status')
             if [[ -e "$BB_TEST_ROOT/route-occupied" ]]; then printf '{"TCP":{"443":{"HTTPS":true},"38443":{"HTTPS":true},"38444":{"HTTPS":true},"38445":{"HTTPS":true}}}\n'
             elif [[ -e "$BB_TEST_ROOT/occupy-443" ]]; then printf '{"TCP":{"443":{"HTTPS":true}}}\n'
@@ -641,6 +643,7 @@ tailscale() {
     case "$1 $2" in
         'version --daemon') printf '{"short":"1.102.4","daemonLong":"1.102.4-fixture"}\n';;
         'status --json') printf '{"BackendState":"Running","Self":{"DNSName":"%s."}}\n' "$(<"$BB_TEST_DNS_FILE")";;
+        'debug prefs') printf '{"OperatorUser":"%s"}\n' "$(id -un)";;
         'serve status')
             if [[ -e "$BB_TEST_ROOT/ingress-active" ]]; then read -r dns port _ < "$HOME/.config/setup-bb-server/endpoint"; node -e 'const p=process.argv[1],d=process.argv[2];console.log(JSON.stringify({Foreground:{managed:{TCP:{[p]:{HTTPS:true}},Web:{[d+":"+p]:{Handlers:{"/":{"Proxy":"http://127.0.0.1:38886"}}}}}}}))' "$port" "$dns"
             else printf '{}\n'; fi;;

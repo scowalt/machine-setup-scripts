@@ -9999,6 +9999,9 @@ bb_server_failure() {
         preflight.account-name|preflight.linger-query|preflight.linger-recheck) _reason='account or lingering query failed' ;;
         preflight.linger-enable) _reason='lingering authorization or enable operation failed' ;;
         preflight.linger-state) _reason='lingering was not verified enabled' ;;
+        preflight.tailscale-operator-query) _reason='Tailscale operator preference could not be read' ;;
+        preflight.tailscale-operator-set) _reason='Tailscale operator authorization or set operation failed; HTTPS ingress requires this account as operator' ;;
+        preflight.tailscale-operator-state) _reason='Tailscale operator is not this account; an existing operator is never replaced and HTTPS ingress requires this account' ;;
         npm.shared-runtime) _reason='shared Node runtime prerequisite failed' ;;
         npm.version-query|npm.ignore-scripts-query|npm.dangerous-scripts-query|npm.allow-scripts-query|npm.strict-policy-query|npm.scoped-policy-query|npm.prefix-query|update.prefix-query|update.tailscale-command) _reason='required command query failed' ;;
         npm.version-format|npm.version-floor) _reason='npm >=11.19 with a supported version format is required' ;;
@@ -10243,6 +10246,22 @@ bb_tailnet_identity() {
     local _status
     _status=$(tailscale status --json 2>/dev/null) || return 1
     node -e 'const s=JSON.parse(process.argv[1]);const n=s.Self?.DNSName?.replace(/\.$/,"");if(s.BackendState!=="Running" || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(n||""))process.exit(1); console.log(n)' "${_status}" 2>/dev/null
+}
+
+bb_tailnet_operator() {
+    local _prefs
+    _prefs=$(tailscale debug prefs 2>/dev/null) || return 1
+    node -e 'const p=JSON.parse(process.argv[1]),o=p.OperatorUser??"";if(typeof o!=="string")process.exit(1);console.log(o)' "${_prefs}" 2>/dev/null
+}
+
+bb_tailnet_operator_preflight() {
+    local _tailscale_bin="$1" _user="$2" _operator
+    _operator=$(bb_tailnet_operator) || { bb_server_failure preflight.tailscale-operator-query; return 1; }
+    if [[ -z "${_operator}" ]]; then
+        { can_sudo && sudo "${_tailscale_bin}" set --operator="${_user}" >/dev/null 2>&1; } || { bb_server_failure preflight.tailscale-operator-set; return 1; }
+        _operator=$(bb_tailnet_operator) || { bb_server_failure preflight.tailscale-operator-query; return 1; }
+    fi
+    [[ "${_operator}" == "${_user}" ]] || { bb_server_failure preflight.tailscale-operator-state; return 1; }
 }
 
 bb_route_port_free() {
@@ -10798,6 +10817,7 @@ if not isinstance(obj,dict): raise ValueError("invalid metadata")' "${_root}" >/
         _linger=$(loginctl show-user "${_user}" --property=Linger --value 2>/dev/null) || { bb_server_failure preflight.linger-recheck; return 1; }
         [[ "${_linger}" == yes ]] || { bb_server_failure preflight.linger-state; return 1; }
     fi
+    bb_tailnet_operator_preflight "${_tailscale_bin}" "${_user}" || return 1
     ( umask 077; mkdir -p -- "${_dir}" "${_units}" "${HOME}/.bb" ) 2>/dev/null || { bb_server_failure update.directories; return 1; }
     if [[ ! -e "${_state}" ]]; then
         ( umask 077; set -C; printf '%s %s %s\n' "${_dns}" "${_port}" "${_origin}" > "${_state}" ) 2>/dev/null || { bb_server_failure update.endpoint-write; return 1; }
@@ -10906,7 +10926,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 364 | Last changed: Refresh Pi packages when a checkout holds an ignored Python cache"
+    echo -e "${GRAY}Version 365 | Last changed: Make the BB server account the Tailscale operator so ingress can serve"
 
     if ! acquire_setup_lock; then
         return 1
