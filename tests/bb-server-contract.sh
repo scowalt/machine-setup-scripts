@@ -79,7 +79,9 @@ cat > "${tmp}/bin/tailscale" <<'MOCK'
 #!/usr/bin/env bash
 case "$1 $2" in
     'version --daemon') printf '{"short":"%s","daemonLong":"%s-fixture"}\n' "${BB_TEST_VERSION:-1.102.4}" "${BB_TEST_VERSION:-1.102.4}";;
-    'status --json') dns="$(<"${BB_TEST_DNS_FILE:-/dev/null}")"; printf '{"BackendState":"%s","Self":{"DNSName":"%s."}}\n' "${BB_TEST_BACKEND:-Running}" "${dns:-test.example.ts.net}";;
+    'status --json') dns="$(<"${BB_TEST_DNS_FILE:-/dev/null}")"; backend="${BB_TEST_BACKEND:-Running}"; starting="${BB_TEST_ROOT:-/nonexistent}/starting-checks"
+        if [[ -s "${starting}" ]] && (( $(<"${starting}") > 0 )); then backend=Starting; printf '%s\n' "$(( $(<"${starting}") - 1 ))" > "${starting}"; fi
+        printf '{"BackendState":"%s","Self":{"DNSName":"%s."}}\n' "${backend}" "${dns:-test.example.ts.net}";;
     'debug prefs') printf '{"OperatorUser":"%s"}\n' "$(id -un)";;
     serve\ *) shift; trap 'printf "killed\n" >> "${BB_TEST_SERVE_LOG}"; exit 0' TERM INT; printf 'serve %s\n' "$*" >> "${BB_TEST_SERVE_LOG}"; if [[ "${BB_TEST_LONG_SERVE:-0}" == 1 ]]; then while :; do /bin/sleep 1; done; fi;;
     *) exit 1;;
@@ -253,6 +255,7 @@ trap 'kill "$managed_pid" 2>/dev/null || true; wait "$managed_pid" 2>/dev/null |
 bb_write_bb_guard "$HOME/.config/setup-bb-server/bb-guard"
 guard="$HOME/.config/setup-bb-server/bb-guard"
 run_guard() { env HOME="$HOME" PATH="$PATH" BB_TEST_ROOT="$BB_TEST_ROOT" BB_TEST_DNS_FILE="$BB_TEST_DNS_FILE" BB_TEST_APP_LOG="$BB_TEST_APP_LOG" BB_TEST_SERVE_LOG="$BB_TEST_SERVE_LOG" BB_TEST_EVENTS="$BB_TEST_EVENTS" BB_TEST_MAIN_PID_FILE="$BB_TEST_MAIN_PID_FILE" BB_PROC_NET_ROOT="$BB_TEST_ROOT/proc" BB_PACKAGE_BINARY="$BB_TEST_ROOT/bin/bb-app" BB_TAILSCALE_BIN="$BB_TEST_ROOT/bin/tailscale" "$guard" "$@"; }
+export BB_TAILNET_ATTEMPTS=1 BB_READY_INTERVAL=0
 run_guard app-start
 [[ "$(grep -c '^bb-app start --bundled --data-dir ' "$BB_TEST_APP_LOG")" == 1 ]]
 [[ "$(grep -c -- '--server-bind-host 127.0.0.1 --server-port 38886 --host-daemon-port 38887' "$BB_TEST_APP_LOG")" == 1 ]]
@@ -266,6 +269,14 @@ printf 'sl\n  0: 0100007F:97E6 00000000:0000 0A 00000000:00000000 00:00000000 00
 if run_guard app-start; then exit 1; fi
 [[ "$(grep -c '^bb-app start --bundled' "$BB_TEST_APP_LOG")" == 1 ]]
 printf 'sl\n' > "$BB_TEST_ROOT/proc/tcp"
+printf '2\n' > "$BB_TEST_ROOT/starting-checks"
+BB_TAILNET_ATTEMPTS=3 run_guard app-start
+[[ "$(<"$BB_TEST_ROOT/starting-checks")" == 0 && "$(grep -c '^bb-app start --bundled' "$BB_TEST_APP_LOG")" == 2 ]]
+printf '3\n' > "$BB_TEST_ROOT/starting-checks"
+if BB_TAILNET_ATTEMPTS=3 run_guard app-start 2>"$BB_TEST_ROOT/tailnet-wait.err"; then exit 1; fi
+grep -qx 'bb app: tailnet was not running at the expected name and version' "$BB_TEST_ROOT/tailnet-wait.err"
+[[ "$(grep -c '^bb-app start --bundled' "$BB_TEST_APP_LOG")" == 2 ]]
+rm -f "$BB_TEST_ROOT/starting-checks"
 # No ingress activation until both native BB readiness checks pass.
 export BB_TEST_CURL_FAIL=1 BB_READY_ATTEMPTS=2 BB_READY_INTERVAL=0
 if run_guard app-ready; then exit 1; fi
