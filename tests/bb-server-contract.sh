@@ -240,6 +240,7 @@ chmod +x "${tmp}/bin/"*
 
 BB_TEST_ROOT="${tmp}" BB_TEST_HELPERS="${tmp}/helpers.sh" PATH="${tmp}/bin:${PATH}" bash <<'GUARD_FIXTURE'
 set -euo pipefail
+trap 'diag_status=$?; printf "DIAG GUARD_FIXTURE line %s status %s: %s\n" "$LINENO" "$diag_status" "$BASH_COMMAND" >&2; for diag_file in "${BB_TEST_EVENTS:-}" "${BB_TEST_SERVE_LOG:-}" "${BB_TEST_APP_LOG:-}"; do [[ -f "$diag_file" ]] && sed "s|^|DIAG ${diag_file##*/}: |" "$diag_file" >&2; done; true' ERR
 source "$BB_TEST_HELPERS"
 export HOME="$BB_TEST_ROOT/guard-home" BB_TEST_ROOT
 mkdir -p "$HOME/.bb" "$HOME/.config/setup-bb-server" "$BB_TEST_ROOT/proc"
@@ -322,6 +323,7 @@ GUARD_FIXTURE
 
 BB_TEST_ROOT="${tmp}" BB_TEST_HELPERS="${tmp}/helpers.sh" PATH="${tmp}/bin:${PATH}" bash <<'SETUP_FIXTURE'
 set -euo pipefail
+trap 'diag_status=$?; printf "DIAG SETUP_FIXTURE line %s status %s: %s\n" "$LINENO" "$diag_status" "$BASH_COMMAND" >&2; for diag_file in "${BB_TEST_EVENTS:-}" "${BB_TEST_SERVE_LOG:-}" "${BB_TEST_APP_LOG:-}"; do [[ -f "$diag_file" ]] && sed "s|^|DIAG ${diag_file##*/}: |" "$diag_file" >&2; done; true' ERR
 source "$BB_TEST_HELPERS"
 export BB_TEST_ROOT HOME="$BB_TEST_ROOT/setup-home" BB_TEST_EVENTS="$BB_TEST_ROOT/events" BB_TEST_APP_LOG="$BB_TEST_ROOT/app.log" BB_TEST_SERVE_LOG="$BB_TEST_ROOT/serve.log" BB_TEST_DNS_FILE="$BB_TEST_ROOT/dns"
 export BB_TEST_RUNNER="${BB_TEST_RUNNER:-$BB_TEST_ROOT/bin/run-systemd-unit}"
@@ -624,6 +626,7 @@ SETUP_FIXTURE
 
 BB_TEST_ROOT="${tmp}/fresh-setup" BB_TEST_TOOLS_DIR="${tmp}/bin" BB_TEST_RUNNER="${tmp}/bin/run-systemd-unit" BB_TEST_HELPERS="${tmp}/helpers.sh" PATH="${tmp}/bin:${PATH}" BB_READY_ATTEMPTS=5 BB_READY_INTERVAL=0 bash <<'FRESH_SETUP_FIXTURE'
 set -euo pipefail
+trap 'diag_status=$?; printf "DIAG FRESH_SETUP_FIXTURE line %s status %s: %s\n" "$LINENO" "$diag_status" "$BASH_COMMAND" >&2; for diag_file in "${BB_TEST_EVENTS:-}" "${BB_TEST_SERVE_LOG:-}" "${BB_TEST_APP_LOG:-}"; do [[ -f "$diag_file" ]] && sed "s|^|DIAG ${diag_file##*/}: |" "$diag_file" >&2; done; true' ERR
 source "$BB_TEST_HELPERS"
 export BB_TEST_ROOT HOME="$BB_TEST_ROOT/home" BB_TEST_EVENTS="$BB_TEST_ROOT/events" BB_TEST_APP_LOG="$BB_TEST_ROOT/app.log" BB_TEST_SERVE_LOG="$BB_TEST_ROOT/serve.log" BB_TEST_DNS_FILE="$BB_TEST_ROOT/dns" BB_TEST_GENERATE_ID=1
 export BB_TEST_RUNNER="${BB_TEST_RUNNER:-$BB_TEST_ROOT/bin/run-systemd-unit}"
@@ -719,6 +722,7 @@ FRESH_SETUP_FIXTURE
 
 BB_TEST_ROOT="${tmp}" BB_TEST_HELPERS="${tmp}/helpers.sh" PATH="${tmp}/bin:${PATH}" bash <<'NATIVE_CONFIG_FIXTURE'
 set -euo pipefail
+trap 'diag_status=$?; printf "DIAG NATIVE_CONFIG_FIXTURE line %s status %s: %s\n" "$LINENO" "$diag_status" "$BASH_COMMAND" >&2; for diag_file in "${BB_TEST_EVENTS:-}" "${BB_TEST_SERVE_LOG:-}" "${BB_TEST_APP_LOG:-}"; do [[ -f "$diag_file" ]] && sed "s|^|DIAG ${diag_file##*/}: |" "$diag_file" >&2; done; true' ERR
 source "$BB_TEST_HELPERS"
 print_error() { printf 'ERROR: %s\n' "$1"; }
 export HOME="$BB_TEST_ROOT/native-home"
@@ -760,6 +764,7 @@ NATIVE_CONFIG_FIXTURE
 
 BB_TEST_ROOT="${tmp}" BB_TEST_HELPERS="${tmp}/helpers.sh" PATH="${tmp}/bin:${PATH}" bash <<'PACKAGE_FIXTURE'
 set -euo pipefail
+trap 'diag_status=$?; printf "DIAG PACKAGE_FIXTURE line %s status %s: %s\n" "$LINENO" "$diag_status" "$BASH_COMMAND" >&2; for diag_file in "${BB_TEST_EVENTS:-}" "${BB_TEST_SERVE_LOG:-}" "${BB_TEST_APP_LOG:-}"; do [[ -f "$diag_file" ]] && sed "s|^|DIAG ${diag_file##*/}: |" "$diag_file" >&2; done; true' ERR
 source "$BB_TEST_HELPERS"
 print_error() { printf 'ERROR: %s\n' "$1"; }
 export HOME="$BB_TEST_ROOT/package-home"
