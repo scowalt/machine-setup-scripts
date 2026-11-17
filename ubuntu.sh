@@ -925,14 +925,22 @@ add_github_to_known_hosts() {
 }
 
 install_starship() {
-    if ! command -v starship &> /dev/null; then
-        print_message "Installing Starship prompt..."
-        local starship_install
-        starship_install=$(curl -fsSL https://starship.rs/install.sh)
-        sh -c "${starship_install}" -- -y
+    if command -v starship &> /dev/null; then
+        print_debug "Starship is already installed."
+        return 0
+    fi
+
+    print_message "Installing Starship prompt..."
+    local bin_dir="${HOME}/.local/bin" starship_install
+    mkdir -p "${bin_dir}"
+    if starship_install=$(curl -fsSL https://starship.rs/install.sh) &&
+        sh -c "${starship_install}" -- -y -b "${bin_dir}" < /dev/null &&
+        [[ -x "${bin_dir}/starship" ]]; then
+        export PATH="${bin_dir}:${PATH}"
         print_success "Starship installed."
     else
-        print_debug "Starship is already installed."
+        print_error "Failed to install Starship into ${bin_dir}."
+        return 1
     fi
 }
 
@@ -10537,8 +10545,16 @@ try {
 } catch { process.exit(1); }
 BB_APP_CHECK
 }
+bb_wait_tailnet() {
+    local i attempts="${BB_TAILNET_ATTEMPTS:-30}" interval="${BB_READY_INTERVAL:-2}"
+    for ((i=1; ; i++)); do
+        if bb_check_tailnet; then return 0; fi
+        (( i < attempts )) || return 1
+        sleep "${interval}"
+    done
+}
 bb_wait_app() {
-    local i attempts="${BB_READY_ATTEMPTS:-30}" interval="${BB_READY_INTERVAL:-2}"
+    local i attempts="${BB_READY_ATTEMPTS:-60}" interval="${BB_READY_INTERVAL:-2}"
     for ((i=0; i<attempts; i++)); do
         if bb_check_app; then return 0; fi
         sleep "${interval}"
@@ -10547,7 +10563,10 @@ bb_wait_app() {
 }
 case "${mode}" in
     app-start)
-        bb_check_tailnet || exit 1
+        if ! bb_wait_tailnet; then
+            printf 'bb app: tailnet was not running at the expected name and version\n' >&2
+            exit 1
+        fi
         bb_check_ports || exit 1
         exec "${BB_PACKAGE_BINARY}" start --bundled --data-dir "${HOME}/.bb" --server-bind-host 127.0.0.1 --server-port 38886 --host-daemon-port 38887
         ;;
@@ -10926,7 +10945,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 365 | Last changed: Make the BB server account the Tailscale operator so ingress can serve"
+    echo -e "${GRAY}Version 366 | Last changed: Install Starship per user and wait for tailscaled before starting BB"
 
     if ! acquire_setup_lock; then
         return 1
@@ -10972,7 +10991,7 @@ run_setup_tasks() {
     install_homebrew
     install_gitea_client || return 1
     install_brew_packages
-    install_starship
+    install_starship || _setup_had_errors=1
     install_lefthook
     install_mise
     install_uv
