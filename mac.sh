@@ -9046,6 +9046,41 @@ install_betterdisplay() {
     fi
 }
 
+install_fluidvoice() {
+    if [[ "${HEADLESS:-}" == "1" ]]; then
+        print_debug "Headless machine; skipping FluidVoice."
+        return 0
+    fi
+
+    if brew list --cask fluidvoice &>/dev/null; then
+        print_debug "FluidVoice is already installed."
+        return 0
+    fi
+
+    if [[ -e /Applications/FluidVoice.app || -L /Applications/FluidVoice.app ]]; then
+        print_debug "FluidVoice is already installed outside Homebrew; leaving it untouched."
+        return 0
+    fi
+
+    local _macos_version
+    _macos_version=$(sw_vers -productVersion 2>/dev/null || true)
+    if [[ ! "${_macos_version}" =~ ^[0-9]+ ]]; then
+        print_error "Could not read the macOS version; skipping FluidVoice."
+        return 1
+    fi
+    if (( BASH_REMATCH[0] < 15 )); then
+        print_debug "FluidVoice requires macOS 15 or later; skipping on macOS ${_macos_version}."
+        return 0
+    fi
+
+    print_message "Installing FluidVoice..."
+    if ! brew install --cask fluidvoice; then
+        print_error "Failed to install FluidVoice."
+        return 1
+    fi
+    print_success "FluidVoice installed."
+}
+
 configure_power_settings() {
     if [[ "${HEADLESS:-}" != "1" ]]; then
         return
@@ -10095,7 +10130,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 332 | Last changed: Refresh Pi packages when a checkout holds an ignored Python cache${NC}"
+    echo -e "${GRAY}Version 333 | Last changed: Install FluidVoice on non-headless Macs${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -10128,6 +10163,7 @@ run_setup_tasks() {
         setup_tailscale || _setup_had_errors=1
         install_nerd_font || _setup_had_errors=1
         install_betterdisplay || _setup_had_errors=1
+        install_fluidvoice || _setup_had_errors=1
 
         configure_power_settings
 
