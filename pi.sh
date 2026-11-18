@@ -688,35 +688,22 @@ add_github_to_known_hosts() {
 }
 
 install_starship() {
-    if ! command -v starship &> /dev/null; then
-        print_message "Installing Starship prompt (this may take a while on Raspberry Pi)..."
-        
-        local arch
-        arch=$(uname -m)
-        if [[ "${arch}" == "armv"* || "${arch}" == "aarch64" ]]; then
-            print_message "Detected ARM architecture: ${arch}"
-            local starship_install
-            starship_install=$(curl -sS https://starship.rs/install.sh)
-            if echo "${starship_install}" | sh -s -- -y; then
-                print_success "Starship installed."
-            else
-                print_error "Failed to install Starship."
-                return 1
-            fi
-        else
-            print_error "Unsupported architecture: ${arch}. Starship might not work correctly."
-            print_message "Attempting installation anyway..."
-            local starship_install
-            starship_install=$(curl -sS https://starship.rs/install.sh)
-            if echo "${starship_install}" | sh -s -- -y; then
-                print_success "Starship installed despite architecture warning."
-            else
-                print_error "Failed to install Starship."
-                return 1
-            fi
-        fi
-    else
+    if command -v starship &> /dev/null; then
         print_debug "Starship is already installed."
+        return 0
+    fi
+
+    print_message "Installing Starship prompt..."
+    local bin_dir="${HOME}/.local/bin" starship_install
+    mkdir -p "${bin_dir}"
+    if starship_install=$(curl -fsSL https://starship.rs/install.sh) &&
+        sh -c "${starship_install}" -- -y -b "${bin_dir}" < /dev/null &&
+        [[ -x "${bin_dir}/starship" ]]; then
+        export PATH="${bin_dir}:${PATH}"
+        print_success "Starship installed."
+    else
+        print_error "Failed to install Starship into ${bin_dir}."
+        return 1
     fi
 }
 
@@ -9897,7 +9884,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 302 | Last changed: Refresh Pi packages when a checkout holds an ignored Python cache"
+    echo -e "${GRAY}Version 303 | Last changed: Install Starship per user without sudo"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9961,7 +9948,7 @@ run_setup_tasks() {
     print_debug "bb desktop is owner-managed; existing applications and forks are untouched."
 
     print_section "Terminal & Shell"
-    install_starship
+    install_starship || _setup_had_errors=1
 
     print_section "Shared Directories"
     print_section "Dotfiles Management"
