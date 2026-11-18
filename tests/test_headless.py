@@ -80,7 +80,8 @@ sudo() { echo "sudo:$*" >&2; if [[ "$1" == tee ]]; then while IFS= read -r line;
 
     def test_macos_and_bb_keep_exact_headless_effects(self):
         mac = (ROOT / 'mac.sh').read_text()
-        for name in ('configure_power_settings', 'enable_screen_sharing', 'install_desktop_forks'):
+        for name in ('configure_power_settings', 'enable_screen_sharing', 'install_desktop_forks',
+                     'install_fluidvoice'):
             self.assertIn('${HEADLESS:-}', function(mac, name))
             self.assertIn('"1"', function(mac, name))
         for name in BASH:

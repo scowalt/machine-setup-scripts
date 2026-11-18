@@ -154,7 +154,8 @@ class CLT(unittest.TestCase):
                 result, calls = self.run_case({'PERSONA': persona, 'DOCTOR_STATUS': doctor,
                     'SELECTED': '/Applications/Xcode-27.0.0.app/Contents/Developer'}, caller=True)
                 for name in common + (() if persona == 'secondary' else
-                        ('install_core_packages', 'install_gcloud_cli', 'setup_tailscale', 'update_brew')):
+                        ('install_core_packages', 'install_gcloud_cli', 'setup_tailscale',
+                         'install_fluidvoice', 'update_brew')):
                     self.assertIn('work:' + name, calls)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(calls.count('final:0'), 1)
@@ -166,7 +167,7 @@ class CLT(unittest.TestCase):
     def test_actual_failures_continue_later_work_and_finalize_nonzero(self):
         for task in ('install_homebrew', 'install_core_packages',
                      'install_secrets_manager', 'install_gcloud_cli', 'setup_tailscale',
-                     'install_nerd_font', 'install_betterdisplay', 'initialize_chezmoi',
+                     'install_nerd_font', 'install_betterdisplay', 'install_fluidvoice', 'initialize_chezmoi',
                      'install_opencode_cli', 'install_gitea_client',
                      'install_codex_cli', 'install_bun', 'install_sfw', 'install_gemini_cli',
                      'install_portless_cli', 'setup_bb_machine', 'refresh_bb_plugins',
