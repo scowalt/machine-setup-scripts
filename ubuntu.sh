@@ -10931,6 +10931,33 @@ bb_server_restore_process_override() {
     [[ -z "$1" ]] || BB_SERVER="$1"
 }
 
+check_setup_log_watcher() {
+    local _share="${HOME}/.local/share/machine-setup-log-watch"
+    local _state="${HOME}/.local/state/machine-setup-log-watch/state.sqlite3"
+    local _bb="${HOME}/.bb/bin/bb" _missing=() _item
+    [[ -f "${_share}/watcher.py" && -f "${_share}/config.json" ]] || _missing+=(watcher-files)
+    [[ -f "${_state}" ]] || _missing+=(dedupe-state)
+    if [[ -f "${_share}/config.json" ]]; then
+        /usr/bin/python3 -I - "${_share}/config.json" 2> /dev/null <<'SETUP_LOG_WATCH_CONFIG_PY' || _missing+=(config-paths)
+import json, os, sys
+config = json.load(open(sys.argv[1]))
+sys.exit(not (os.access(config['doppler'], os.X_OK) and os.access(config['bb_fallback'], os.X_OK)
+              and os.path.isfile(config['skill'])))
+SETUP_LOG_WATCH_CONFIG_PY
+    fi
+    command -v doppler &> /dev/null && doppler me &> /dev/null < /dev/null || _missing+=(doppler-login)
+    "${_bb}" automation show auto_kskfy0--uso --project proj_cb6sbrbmxg --json < /dev/null 2> /dev/null |
+        /usr/bin/python3 -I -c 'import json, sys; sys.exit(json.load(sys.stdin).get("enabled") is not True)' 2> /dev/null ||
+        _missing+=(automation)
+    if [[ ${#_missing[@]} -eq 0 ]]; then
+        print_debug 'Setup log watcher is installed and its automation is enabled.'
+        return 0
+    fi
+    for _item in "${_missing[@]}"; do
+        print_warning "Setup log watcher check: ${_item} is missing or stale on this bb server host; see \"Setup log watcher\" in machine-setup-scripts CLAUDE.md."
+    done
+}
+
 bb_server_selection() {
     case "${BB_SERVER:-}" in
         ''|0) return 1 ;;
@@ -11100,6 +11127,7 @@ HELPER_EOF
             refresh_bb_plugins block-default || _setup_had_errors=1
         else
             refresh_bb_plugins ready || _setup_had_errors=1
+            [[ "${HEADLESS:-}" != "1" ]] || check_setup_log_watcher
         fi
     elif [[ "${_bb_selection_status}" -eq 1 ]]; then
         setup_bb_machine ubuntu || { print_error 'BB machine preparation incomplete; existing BB state was preserved.'; _setup_had_errors=1; }
