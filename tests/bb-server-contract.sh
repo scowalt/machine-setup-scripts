@@ -888,4 +888,37 @@ assert node.claim(443, 'rival', 0) == 'etag-conflict'
 assert node.ports[443] == 'bb'
 RACE_FIXTURE
 
+watch_home="${tmp}/watch-home"
+mkdir -p "${watch_home}/.local/share/machine-setup-log-watch" "${watch_home}/.local/state/machine-setup-log-watch" \
+    "${watch_home}/.bb/bin" "${watch_home}/skill" "${tmp}/watch-bin"
+touch "${watch_home}/.local/share/machine-setup-log-watch/watcher.py" \
+    "${watch_home}/.local/state/machine-setup-log-watch/state.sqlite3" "${watch_home}/skill/SKILL.md"
+cat > "${watch_home}/.bb/bin/bb" <<'FAKE_BB'
+#!/bin/sh
+printf %s "${WATCH_AUTOMATION}"
+FAKE_BB
+watch_enabled='{"enabled": true}'
+cat > "${tmp}/watch-bin/doppler" <<'FAKE_DOPPLER'
+#!/bin/sh
+exit "${WATCH_DOPPLER_STATUS:-0}"
+FAKE_DOPPLER
+chmod +x "${watch_home}/.bb/bin/bb" "${tmp}/watch-bin/doppler"
+printf '{"doppler": "%s", "bb_fallback": "%s", "skill": "%s"}\n' "${tmp}/watch-bin/doppler" \
+    "${watch_home}/.bb/bin/bb" "${watch_home}/skill/SKILL.md" > "${watch_home}/.local/share/machine-setup-log-watch/config.json"
+watch_check() {
+    WATCH_AUTOMATION="${WATCH_AUTOMATION:-${watch_enabled}}" HOME="${watch_home}" PATH="${tmp}/watch-bin:${PATH}" BB_TEST_HELPERS="${tmp}/helpers.sh" \
+        bash -c 'source "$BB_TEST_HELPERS"; check_setup_log_watcher'
+}
+watch_output=$(watch_check)
+[[ "${watch_output}" == *'Setup log watcher is installed'* && "${watch_output}" != *'check:'* ]] || exit 1
+watch_output=$(WATCH_AUTOMATION='{"enabled": false}' WATCH_DOPPLER_STATUS=1 watch_check)
+[[ "${watch_output}" == *'check: doppler-login is missing'* && "${watch_output}" == *'check: automation is missing'* ]] || exit 1
+rm "${watch_home}/skill/SKILL.md" "${watch_home}/.local/state/machine-setup-log-watch/state.sqlite3"
+watch_output=$(watch_check)
+[[ "${watch_output}" == *'check: config-paths is missing'* && "${watch_output}" == *'check: dedupe-state is missing'* ]] || exit 1
+[[ "${watch_output}" != *'watcher-files'* && "${watch_output}" != *'doppler-login'* ]] || exit 1
+rm -r "${watch_home}/.local/share/machine-setup-log-watch"
+watch_output=$(watch_check)
+[[ "${watch_output}" == *'check: watcher-files is missing'* ]] || exit 1
+
 echo 'bb-server generated-command, lifecycle, npm and native-lock fixtures passed'
