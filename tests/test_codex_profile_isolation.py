@@ -52,7 +52,7 @@ printf '#!/bin/sh\\necho codex-cli 9.9.9\\n' > "$bin/codex"
 chmod 700 "$bin/codex"
 case "${TEST_BINARY:-working}" in
     missing) rm "$bin/codex" ;;
-    broken) printf '#!/bin/sh\\nexit 17\\n' > "$bin/codex" ;;
+    broken) printf '#!/bin/sh\\necho codex: probe failure >&2\\nexit 17\\n' > "$bin/codex" ;;
 esac
 ''')
 
@@ -177,6 +177,14 @@ claude_code_run_safely() {
                     self.assertIn(error, result.stderr)
                     self.assertNotIn('Codex CLI installed/updated', result.stdout)
                     self.assertFalse(Path((self.root / 'installer-home').read_text().strip()).exists())
+
+    def test_failed_smoke_test_reports_exit_code_and_stderr(self):
+        for script in SCRIPTS:
+            with self.subTest(script=script):
+                result = self.invoke(script, binary='broken')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('codex: probe failure\n', result.stderr)
+                self.assertIn('smoke test failed without Node.js on PATH (exit code 17).', result.stderr)
 
     def test_failed_installer_preserves_profiles_and_cleans_temporary_home(self):
         for script in SCRIPTS:
