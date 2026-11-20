@@ -379,6 +379,12 @@ report_unmanaged_untrusted_brew_items
                 self.assertNotIn('untap dopplerhq/cli\n', calls)
                 self.assertTrue(legacy)
 
+    def test_referenced_legacy_tap_warning_names_the_replacement_commands(self):
+        result, _, _ = self.doppler(legacy=True, referenced=True)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('Replace them with: brew uninstall --cask dopplerhq/cli/doppler && '
+                      'brew install --cask dopplerhq/doppler/doppler, then rerun setup.', result.stdout)
+
     def test_install_trust_inventory_and_untap_failures_remain_failures(self):
         for options in ({'installed': False, 'failure': 'install --cask dopplerhq/doppler/doppler'},
                         {'failure': 'trust --cask dopplerhq/doppler/doppler'}, {'failure': 'tap'},
