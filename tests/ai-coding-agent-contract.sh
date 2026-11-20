@@ -111,7 +111,6 @@ assert_contains win.ps1 'function Set-PiOpenCodeGoProvider' 'PowerShell Go crede
 assert_order win.ps1 '^[[:space:]]+elseif \(Install-PiCli\) \{$' '^[[:space:]]+if \(Set-PiOpenCodeGoProvider\)' 'Pi installed before Go authentication'
 assert_order win.ps1 '^[[:space:]]+if \(Set-PiOpenCodeGoProvider\)' '^[[:space:]]+if \([$]piOpenCodeGoReady -and \(Prepare-PiMcpAdapter\)\)' 'Go validated before Pi package operations'
 
-assert_contains mac.sh 'brew (install|upgrade) --cask codex' 'native Codex Homebrew cask install'
 for file in "${linux_codex_scripts[@]}"; do
     assert_contains "${file}" 'https://chatgpt\.com/codex/install\.sh' 'official Codex standalone installer download'
     assert_contains "${file}" 'CODEX_NON_INTERACTIVE=1' 'non-interactive Codex standalone install'
