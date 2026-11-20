@@ -999,7 +999,7 @@ DOPPLER_TAP_SNAPSHOT
 }
 
 retire_legacy_doppler_tap() {
-    local taps tap_info tap_path inventory before after status head upstream extra final_head
+    local taps tap_info tap_path inventory legacy_items before after status head upstream extra final_head
     if ! taps=$(brew tap); then
         print_warning "Could not inspect the legacy Doppler tap; no tap was removed."
         return 1
@@ -1035,10 +1035,17 @@ retire_legacy_doppler_tap() {
         return 1
     fi
     if ! inventory=$(HOMEBREW_NO_AUTO_UPDATE=1 brew info --json=v2 --installed 2>/dev/null) ||
-        ! printf '%s' "${inventory}" | jq -e '
-            type == "object" and (.formulae | type == "array") and (.casks | type == "array") and
-            all(.formulae[], .casks[]; (.tap | type == "string") and .tap != "dopplerhq/cli")' >/dev/null 2>&1; then
-        print_warning "Legacy Doppler tap may still own installed packages; preserving it without uninstalling anything."
+        ! legacy_items=$(printf '%s' "${inventory}" | jq -er '
+            select(type == "object" and (.formulae | type == "array") and (.casks | type == "array") and
+                   all(.formulae[], .casks[]; .tap | type == "string")) |
+            [(.formulae[] | select(.tap == "dopplerhq/cli") | "brew uninstall --formula " + (.full_name // (.tap + "/" + .name))),
+             (.casks[] | select(.tap == "dopplerhq/cli") | "brew uninstall --cask " + (.full_token // (.tap + "/" + .token)))] |
+            join(" && ")' 2>/dev/null); then
+        print_warning "Could not list installed Homebrew packages; preserving the legacy Doppler tap."
+        return 1
+    fi
+    if [[ -n "${legacy_items}" ]]; then
+        print_warning "Legacy Doppler tap still provides installed packages; preserving it. Replace them with: ${legacy_items} && brew install --cask dopplerhq/doppler/doppler, then rerun setup."
         return 1
     fi
     if ! after=$(doppler_tap_snapshot "${tap_path}" 2>/dev/null) || [[ "${before}" != "${after}" ]] ||
@@ -10130,7 +10137,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 333 | Last changed: Install FluidVoice on non-headless Macs${NC}"
+    echo -e "${GRAY}Version 334 | Last changed: Name the packages that keep the legacy Doppler tap${NC}"
 
     if ! acquire_setup_lock; then
         return 1
