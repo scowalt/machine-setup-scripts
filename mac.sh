@@ -1055,7 +1055,7 @@ retire_legacy_doppler_tap() {
         print_warning "Legacy Doppler tap changed during verification; preserving it."
         return 1
     fi
-    if ! (unset HOMEBREW_DEVELOPER; NONINTERACTIVE=1 brew untap dopplerhq/cli < /dev/null) ||
+    if ! (unset HOMEBREW_DEVELOPER; HOMEBREW_NO_REQUIRE_TAP_TRUST=1 NONINTERACTIVE=1 brew untap dopplerhq/cli < /dev/null) ||
         ! taps=$(brew tap) || grep -Fxq 'dopplerhq/cli' <<< "${taps}"; then
         print_warning "Could not retire the unused legacy Doppler tap; manual review is required."
         return 1
@@ -2447,6 +2447,8 @@ install_codex_cli() {
     local brew_codex=""
     local resolved_codex=""
     local version_output=""
+    local version_status=0
+    local version_timeout=30
     local safe_path=""
     local installed_casks=""
 
@@ -2494,7 +2496,14 @@ install_codex_cli() {
     fi
 
     safe_path="/nonexistent"
-    if ! version_output=$(env -u NODE_PATH -u NODE_OPTIONS HOME="${HOME}" PATH="${safe_path}" "${brew_codex}" --version 2>/dev/null) || [[ -z "${version_output}" ]]; then
+    version_output=$(env -u NODE_PATH -u NODE_OPTIONS HOME="${HOME}" PATH="${safe_path}" \
+        /usr/bin/perl -e 'alarm shift; exec @ARGV or exit 127' "${version_timeout}" "${brew_codex}" --version 2>/dev/null) ||
+        version_status=$?
+    if [[ "${version_status}" -eq 142 ]]; then
+        print_error "Native Codex CLI did not report its version within ${version_timeout} seconds."
+        return 1
+    fi
+    if [[ "${version_status}" -ne 0 || -z "${version_output}" ]]; then
         print_error "Native Codex CLI smoke test failed without Node.js on PATH."
         return 1
     fi
@@ -10137,7 +10146,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 334 | Last changed: Name the packages that keep the legacy Doppler tap${NC}"
+    echo -e "${GRAY}Version 335 | Last changed: Untap the legacy Doppler tap without trust and time-limit the Codex version check${NC}"
 
     if ! acquire_setup_lock; then
         return 1
