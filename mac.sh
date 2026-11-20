@@ -863,7 +863,7 @@ install_core_packages() {
     ensure_brew_item_trusted formula "libsql/sqld/sqld" "libsql/sqld" || true
     ensure_brew_item_trusted formula "tursodatabase/tap/turso" "tursodatabase/tap" || true
 
-    local packages=("git" "curl" "jq" "fish" "tmux" "1password" "1password-cli" "gh" "chezmoi" "starship" "mise" "act" "terminal-notifier" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook" "poppler" "ffmpeg" "kubernetes-cli")
+    local packages=("git" "curl" "jq" "fish" "tmux" "1password" "1password-cli" "gh" "chezmoi" "starship" "mise" "act" "terminal-notifier" "switchaudio-osx" "opentofu" "uv" "go" "cloudflared" "tursodatabase/tap/turso" "fswatch" "shellcheck" "gitleaks" "lefthook" "poppler" "ffmpeg" "kubernetes-cli" "pnpm")
     local to_install=() failed=()
     local app_status
 
@@ -8843,6 +8843,50 @@ install_bun() {
     fi
 }
 
+install_rust_toolchain() {
+    local _inventory
+    if ! command -v mise &> /dev/null || ! command -v jq &> /dev/null; then
+        print_warning "mise and jq are required to install Rust."
+        return 1
+    fi
+    if ! _inventory=$(MISE_AUTO_INSTALL=false mise ls -C / --global --json rust < /dev/null) ||
+        ! _inventory=$(jq -ce 'if type == "array" then . elif type == "object" then (.rust // []) else error("Invalid mise inventory") end' <<< "${_inventory}"); then
+        print_warning "Cannot read the global mise Rust selection."
+        return 1
+    fi
+    if jq -e 'length > 0 and all(.[]; .installed == true)' <<< "${_inventory}" > /dev/null; then
+        print_debug "Rust is already installed."
+        return 0
+    fi
+    if jq -e 'length > 0' <<< "${_inventory}" > /dev/null; then
+        print_message "Installing the configured global Rust toolchain..."
+        MISE_AUTO_INSTALL=false mise install -C "${HOME}" rust < /dev/null || { print_warning "Failed to install the configured Rust toolchain."; return 1; }
+    else
+        print_message "Installing stable Rust with mise..."
+        MISE_AUTO_INSTALL=false mise use -g -y -C "${HOME}" rust@stable < /dev/null || { print_warning "Failed to install stable Rust."; return 1; }
+    fi
+    print_success "Rust installed."
+}
+
+install_metal_toolchain() {
+    local _developer_dir
+    _developer_dir=$(xcode-select -p 2> /dev/null) || _developer_dir=""
+    if [[ "${_developer_dir}" != *.app/Contents/Developer ]]; then
+        print_debug "Xcode is not selected; skipping the Metal Toolchain."
+        return 0
+    fi
+    if xcrun metal --version < /dev/null > /dev/null 2>&1; then
+        print_debug "The Metal Toolchain is already installed."
+        return 0
+    fi
+    print_message "Downloading the Xcode Metal Toolchain..."
+    if ! xcodebuild -downloadComponent MetalToolchain < /dev/null; then
+        print_warning "Failed to download the Metal Toolchain."
+        return 1
+    fi
+    print_success "Metal Toolchain installed."
+}
+
 install_sfw() {
     if [[ "${WORK_MACHINE:-}" != "1" ]]; then
         print_debug "Skipping Socket Firewall (not a work machine)."
@@ -10146,7 +10190,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 335 | Last changed: Untap the legacy Doppler tap without trust and time-limit the Codex version check${NC}"
+    echo -e "${GRAY}Version 336 | Last changed: Install pnpm, stable Rust and the Xcode Metal Toolchain for macOS app builds${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -10290,6 +10334,8 @@ HELPER_EOF
     install_sfw || _setup_had_errors=1
     install_gemini_cli || _setup_had_errors=1
     install_portless_cli || _setup_had_errors=1
+    install_rust_toolchain || _setup_had_errors=1
+    install_metal_toolchain || _setup_had_errors=1
     setup_bb_machine mac || { print_error 'BB machine preparation incomplete; existing BB state was preserved.'; _setup_had_errors=1; }
     refresh_bb_plugins ready || _setup_had_errors=1
     install_claude_code || _setup_had_errors=1
