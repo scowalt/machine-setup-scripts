@@ -10977,6 +10977,11 @@ dry_run=0
 mkdir -p "${STATE_DIR}"
 exec 9>"${STATE_DIR}/lock"
 flock -n 9 || { echo "skip: another setup-autorun holds the lock"; exit 0; }
+setup_lock="${XDG_RUNTIME_DIR:-${HOME}/.local/state}/machine-setup.lock"
+if [[ -e "${setup_lock}" ]] && ! flock -n "${setup_lock}" true; then
+    echo "skip: another machine setup run is in progress"
+    exit 0
+fi
 
 script_file="${STATE_DIR}/ubuntu.sh.next"
 if ! curl --fail --silent --show-error --location --max-time 60 -o "${script_file}" "${SETUP_URL}"; then
@@ -11079,11 +11084,15 @@ install_setup_autorun() {
             _changed=1
         fi
     done
-    if [[ "${_changed}" -eq 1 ]]; then
-        systemctl --user daemon-reload || return 1
+    if [[ "${_changed}" -eq 1 ]] && ! systemctl --user daemon-reload; then
+        rm -f -- "${_units}/setup-autorun.timer"
+        return 1
     fi
     if [[ "${_new_timer}" -eq 1 ]]; then
-        systemctl --user enable --now setup-autorun.timer || return 1
+        if ! systemctl --user enable --now setup-autorun.timer; then
+            rm -f -- "${_units}/setup-autorun.timer"
+            return 1
+        fi
         print_success 'Setup now reruns itself whenever no bb threads are running.'
     elif [[ "${_changed}" -eq 1 ]]; then
         print_success 'Updated the idle-bb setup rerun.'
@@ -11256,7 +11265,10 @@ HELPER_EOF
             print_error "BB_SERVER requires a non-root native Ubuntu account."
             _setup_had_errors=1
         else
-            install_setup_autorun || { print_error 'Could not install the idle-bb setup rerun.'; _setup_had_errors=1; }
+            if [[ "${HEADLESS:-}" == "1" ]] && ! install_setup_autorun; then
+                print_error 'Could not install the idle-bb setup rerun.'
+                _setup_had_errors=1
+            fi
             if ! setup_bb_server; then
                 print_error "BB server setup incomplete; review the BB server diagnostics above."
                 _setup_had_errors=1

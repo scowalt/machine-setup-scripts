@@ -26,7 +26,7 @@ mkdir -p "${tmp}/bin" "${home}"
 cat > "${tmp}/bin/systemctl" <<'MOCK'
 #!/bin/sh
 printf '%s\n' "$*" >> "${SETUP_AUTORUN_TEST_ROOT}/systemctl.log"
-exit "${SYSTEMCTL_STATUS:-0}"
+case "$*" in *"${SYSTEMCTL_FAIL_ON:-no such command}"*) exit 1 ;; esac
 MOCK
 cat > "${tmp}/install" <<'MOCK'
 #!/usr/bin/env bash
@@ -66,10 +66,15 @@ chmod 664 "${units}/setup-autorun.timer"
 mode=$(stat -c %a "${units}/setup-autorun.timer")
 [[ "${mode}" == 644 ]] || fail 'mode drift is repaired'
 
-rm "${units}/setup-autorun.timer"
-status=0
-SYSTEMCTL_STATUS=1 "${tmp}/install" > /dev/null 2>&1 || status=$?
-[[ "${status}" -ne 0 ]] || fail 'systemctl failure is reported'
+for failing in daemon-reload enable; do
+    rm "${units}/setup-autorun.timer"
+    status=0
+    SYSTEMCTL_FAIL_ON="${failing}" "${tmp}/install" > /dev/null 2>&1 || status=$?
+    [[ "${status}" -ne 0 ]] || fail "failed ${failing} is reported"
+    "${tmp}/install" > /dev/null
+    calls=$(<"${tmp}/systemctl.log")
+    [[ "${calls}" == *'enable --now setup-autorun.timer'* ]] || fail "failed ${failing} is retried on the next run"
+done
 
 cat > "${tmp}/caller" <<'MOCK'
 #!/usr/bin/env bash
@@ -87,6 +92,7 @@ bb_caller
 echo "ERRORS=${_setup_had_errors}"
 MOCK
 chmod +x "${tmp}/caller"
+export HEADLESS=1
 out=$("${tmp}/caller" 0)
 [[ "${out}" == *INSTALL*SERVER*ERRORS=0* ]] || fail 'BB_SERVER=1 installs the rerun before the server'
 out=$(INSTALL_STATUS=1 "${tmp}/caller" 0)
@@ -95,6 +101,9 @@ out=$(PLATFORM_STATUS=1 "${tmp}/caller" 0)
 [[ "${out}" != *INSTALL* && "${out}" == *ERRORS=1* ]] || fail 'unready platform skips the rerun'
 out=$("${tmp}/caller" 1)
 [[ "${out}" != *INSTALL* && "${out}" == *MACHINE* ]] || fail 'BB_SERVER=0 skips the rerun'
+out=$(HEADLESS=0 "${tmp}/caller" 0)
+[[ "${out}" != *INSTALL* && "${out}" == *SERVER*ERRORS=0* ]] || fail 'BB_SERVER=1 without HEADLESS=1 skips the rerun'
+unset HEADLESS
 
 cat > "${tmp}/bin/curl" <<'MOCK'
 #!/bin/sh
@@ -122,7 +131,7 @@ cat > "${tmp}/autorun" <<'MOCK'
 root="${SETUP_AUTORUN_TEST_ROOT}"
 idle='[{"status":"idle"},{"status":"error"}]'
 CURL_BODY="${CURL_BODY:-${root}/setup-v1.sh}" BB_THREADS="${BB_THREADS:-${idle}}" \
-    SETUP_AUTORUN_STATE_DIR="${root}/state" PATH="${root}/bin:${PATH}" "${root}/home/.local/bin/setup-autorun" "$@"
+    XDG_RUNTIME_DIR="${root}/runtime" SETUP_AUTORUN_STATE_DIR="${root}/state" PATH="${root}/bin:${PATH}" "${root}/home/.local/bin/setup-autorun" "$@"
 MOCK
 chmod +x "${tmp}/bin/curl" "${tmp}/bin/bb" "${tmp}/autorun"
 state="${tmp}/state"
@@ -139,6 +148,12 @@ out=$(CURL_BODY="${tmp}/html" "${tmp}/autorun")
 out=$("${tmp}/autorun" --dry-run)
 [[ "${out}" == 'would run: new version'* ]] || fail 'dry run reports a new version'
 [[ ! -e "${tmp}/ran" ]] || fail 'nothing ran before an idle real check'
+mkdir -p "${tmp}/runtime"
+exec 8> "${tmp}/runtime/machine-setup.lock"
+flock -n 8
+out=$("${tmp}/autorun")
+exec 8>&-
+[[ "${out}" == 'skip: another machine setup run is in progress' && ! -s "${state}/seen-hashes" ]] || fail 'a running setup is not interrupted or recorded'
 
 status=0
 out=$(SETUP_FIXTURE_STATUS=3 "${tmp}/autorun") || status=$?
