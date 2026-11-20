@@ -10958,6 +10958,149 @@ SETUP_LOG_WATCH_CONFIG_PY
     done
 }
 
+setup_autorun_file() {
+    case "$1" in
+        setup-autorun) cat <<'SETUP_AUTORUN_RUNNER'
+#!/usr/bin/env bash
+# Runs the machine setup script when bb is idle. Installed by ubuntu.sh for BB_SERVER=1;
+# see docs/adr/0027-rerun-setup-when-bb-is-idle.md in scowalt/machine-setup-scripts.
+set -euo pipefail
+
+SETUP_URL="${SETUP_AUTORUN_URL:-https://scripts.scowalt.com/setup/ubuntu.sh}"
+STATE_DIR="${SETUP_AUTORUN_STATE_DIR:-${HOME}/.local/state/setup-autorun}"
+MIN_INTERVAL_SECONDS=3600
+BUSY_STATUSES='["pending","starting","active","stopping"]'
+
+dry_run=0
+[[ "${1:-}" == "--dry-run" ]] && dry_run=1
+
+mkdir -p "${STATE_DIR}"
+exec 9>"${STATE_DIR}/lock"
+flock -n 9 || { echo "skip: another setup-autorun holds the lock"; exit 0; }
+setup_lock="${XDG_RUNTIME_DIR:-${HOME}/.local/state}/machine-setup.lock"
+if [[ -e "${setup_lock}" ]] && ! flock -n "${setup_lock}" true; then
+    echo "skip: another machine setup run is in progress"
+    exit 0
+fi
+
+script_file="${STATE_DIR}/ubuntu.sh.next"
+if ! curl --fail --silent --show-error --location --max-time 60 -o "${script_file}" "${SETUP_URL}"; then
+    echo "skip: could not download ${SETUP_URL}"
+    exit 0
+fi
+if ! head -n 1 "${script_file}" | grep -q '^#!'; then
+    echo "skip: download is not a script"
+    exit 0
+fi
+hash=$(sha256sum "${script_file}" | cut -d' ' -f1)
+
+if ! busy=$(bb thread list --json --include-hidden \
+        | jq -r --argjson busy "${BUSY_STATUSES}" '[.[] | select(.status as $s | $busy | index($s))] | length'); then
+    echo "skip: could not list bb threads"
+    exit 0
+fi
+if [[ "${busy}" != 0 ]]; then
+    echo "skip: ${busy} bb thread(s) running"
+    exit 0
+fi
+
+touch "${STATE_DIR}/seen-hashes"
+now=$(date +%s)
+last_run=$(cat "${STATE_DIR}/last-run" 2>/dev/null || echo 0)
+if grep -qx "${hash}" "${STATE_DIR}/seen-hashes"; then
+    if (( now - last_run < MIN_INTERVAL_SECONDS )); then
+        echo "skip: version ${hash:0:12} already ran and last run was $(( (now - last_run) / 60 ))m ago"
+        exit 0
+    fi
+    reason="hourly rerun"
+else
+    reason="new version"
+fi
+
+if (( dry_run )); then
+    echo "would run: ${reason} (${hash:0:12})"
+    exit 0
+fi
+
+# Record the attempt before running, so a failing or hanging run still waits its turn.
+[[ "${reason}" == "new version" ]] && echo "${hash}" >> "${STATE_DIR}/seen-hashes"
+echo "${now}" > "${STATE_DIR}/last-run"
+cp "${script_file}" "${STATE_DIR}/ubuntu.sh.last"
+
+echo "run: ${reason} (${hash:0:12})"
+status=0
+bash "${STATE_DIR}/ubuntu.sh.last" < /dev/null || status=$?
+printf '%s\t%s\t%s\t%s\n' "$(date -d "@${now}" --iso-8601=seconds)" "${hash}" "${reason}" "${status}" >> "${STATE_DIR}/runs.tsv"
+echo "done: exit ${status}"
+exit "${status}"
+SETUP_AUTORUN_RUNNER
+            ;;
+        setup-autorun.service) cat <<'SETUP_AUTORUN_SERVICE'
+[Unit]
+Description=Run the machine setup script when no bb threads are running
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -lc 'exec %h/.local/bin/setup-autorun'
+TimeoutStartSec=45min
+Nice=10
+SETUP_AUTORUN_SERVICE
+            ;;
+        setup-autorun.timer) cat <<'SETUP_AUTORUN_TIMER'
+[Unit]
+Description=Check every ten minutes whether to run the machine setup script
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=10min
+RandomizedDelaySec=1min
+Unit=setup-autorun.service
+
+[Install]
+WantedBy=timers.target
+SETUP_AUTORUN_TIMER
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+install_setup_autorun() {
+    local _units="${HOME}/.config/systemd/user" _changed=0 _new_timer=0 _target _mode _current_mode
+    [[ -e "${_units}/setup-autorun.timer" ]] || _new_timer=1
+    mkdir -p "${HOME}/.local/bin" "${_units}" || return 1
+    for _target in "${HOME}/.local/bin/setup-autorun" "${_units}/setup-autorun.service" "${_units}/setup-autorun.timer"; do
+        _mode=644
+        [[ "${_target}" != */bin/* ]] || _mode=755
+        if ! setup_autorun_file "${_target##*/}" > "${_target}.setup-new" || ! chmod "${_mode}" "${_target}.setup-new"; then
+            rm -f -- "${_target}.setup-new"
+            return 1
+        fi
+        _current_mode=$(stat -c %a "${_target}" 2> /dev/null) || _current_mode=''
+        if [[ "${_current_mode}" == "${_mode}" ]] && cmp -s "${_target}.setup-new" "${_target}"; then
+            rm -f -- "${_target}.setup-new"
+        else
+            mv -f -- "${_target}.setup-new" "${_target}" || return 1
+            _changed=1
+        fi
+    done
+    if [[ "${_changed}" -eq 1 ]] && ! systemctl --user daemon-reload; then
+        rm -f -- "${_units}/setup-autorun.timer"
+        return 1
+    fi
+    if [[ "${_new_timer}" -eq 1 ]]; then
+        if ! systemctl --user enable --now setup-autorun.timer; then
+            rm -f -- "${_units}/setup-autorun.timer"
+            return 1
+        fi
+        print_success 'Setup now reruns itself whenever no bb threads are running.'
+    elif [[ "${_changed}" -eq 1 ]]; then
+        print_success 'Updated the idle-bb setup rerun.'
+    else
+        print_debug 'Idle-bb setup rerun is already installed.'
+    fi
+}
+
 bb_server_selection() {
     case "${BB_SERVER:-}" in
         ''|0) return 1 ;;
@@ -10972,7 +11115,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 366 | Last changed: Install Starship per user and wait for tailscaled before starting BB"
+    echo -e "${GRAY}Version 367 | Last changed: Rerun setup whenever no bb threads are running (BB_SERVER=1)"
 
     if ! acquire_setup_lock; then
         return 1
@@ -11121,13 +11264,19 @@ HELPER_EOF
         if ! bb_server_platform_ready; then
             print_error "BB_SERVER requires a non-root native Ubuntu account."
             _setup_had_errors=1
-        elif ! setup_bb_server; then
-            print_error "BB server setup incomplete; review the BB server diagnostics above."
-            _setup_had_errors=1
-            refresh_bb_plugins block-default || _setup_had_errors=1
         else
-            refresh_bb_plugins ready || _setup_had_errors=1
-            [[ "${HEADLESS:-}" != "1" ]] || check_setup_log_watcher
+            if [[ "${HEADLESS:-}" == "1" ]] && ! install_setup_autorun; then
+                print_error 'Could not install the idle-bb setup rerun.'
+                _setup_had_errors=1
+            fi
+            if ! setup_bb_server; then
+                print_error "BB server setup incomplete; review the BB server diagnostics above."
+                _setup_had_errors=1
+                refresh_bb_plugins block-default || _setup_had_errors=1
+            else
+                refresh_bb_plugins ready || _setup_had_errors=1
+                [[ "${HEADLESS:-}" != "1" ]] || check_setup_log_watcher
+            fi
         fi
     elif [[ "${_bb_selection_status}" -eq 1 ]]; then
         setup_bb_machine ubuntu || { print_error 'BB machine preparation incomplete; existing BB state was preserved.'; _setup_had_errors=1; }
