@@ -2178,6 +2178,8 @@ install_codex_cli() {
     local native_path="${HOME}/.local/bin/codex"
     local resolved_codex=""
     local version_output=""
+    local probe_stderr=""
+    local probe_status=0
     local safe_path=""
 
     print_message "Installing/updating Codex CLI..."
@@ -2249,10 +2251,22 @@ install_codex_cli() {
     fi
 
     safe_path="/nonexistent"
-    if ! version_output=$(/usr/bin/env -u NODE_PATH -u NODE_OPTIONS HOME="${HOME}" PATH="${safe_path}" "${native_path}" --version 2>/dev/null) || [[ -z "${version_output}" ]]; then
-        print_error "Native Codex CLI smoke test failed without Node.js on PATH."
+    if ! probe_stderr=$(mktemp); then
+        print_error "Failed to prepare Codex smoke-test diagnostics."
         return 1
     fi
+    if version_output=$(/usr/bin/env -u NODE_PATH -u NODE_OPTIONS HOME="${HOME}" PATH="${safe_path}" "${native_path}" --version 2> "${probe_stderr}"); then
+        probe_status=0
+    else
+        probe_status=$?
+    fi
+    if [[ "${probe_status}" -ne 0 || -z "${version_output}" ]]; then
+        tail -n 20 "${probe_stderr}" >&2
+        rm -f -- "${probe_stderr}"
+        print_error "Native Codex CLI smoke test failed without Node.js on PATH (exit code ${probe_status})."
+        return 1
+    fi
+    rm -f -- "${probe_stderr}"
 
     print_success "Codex CLI installed/updated (${version_output})."
 }
@@ -11115,7 +11129,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 367 | Last changed: Rerun setup whenever no bb threads are running (BB_SERVER=1)"
+    echo -e "${GRAY}Version 368 | Last changed: Show the Codex smoke test exit code and error output"
 
     if ! acquire_setup_lock; then
         return 1

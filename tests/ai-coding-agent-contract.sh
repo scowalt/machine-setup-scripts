@@ -67,7 +67,7 @@ for file in "${bash_setup_scripts[@]}"; do
         assert_contains "${file}" '^install_codex_cli\(\)' 'Codex CLI installer function'
         assert_contains "${file}" "${codex_call}" 'Codex CLI main wiring'
         assert_contains "${file}" 'bun remove -g @openai/codex' 'legacy Bun Codex cleanup'
-        assert_contains "${file}" '(codex|native_path).* --version 2>/dev/null' 'Codex CLI no-Node smoke test'
+        assert_contains "${file}" '(codex|native_path).* --version 2> "\$\{probe_stderr\}"' 'Codex CLI no-Node smoke test'
         assert_order "${file}" "${codex_call}" '^[[:space:]]+remove_rtk_resources[[:space:]]+\|\|[[:space:]]+return 1$' 'Codex CLI installed before retired RTK cleanup'
     fi
     assert_contains "${file}" '^setup_pi_claude_bridge\(\)' 'Pi Claude bridge setup function'
