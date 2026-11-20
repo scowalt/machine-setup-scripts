@@ -237,7 +237,8 @@ finish_setup_log() { echo "final:$1"; return "$1"; }
                 (home / 'legacy').touch()
             tap_info = [{'name': 'dopplerhq/cli', 'installed': True, 'path': str(tap),
                          'remote': 'https://github.com/DopplerHQ/homebrew-cli' if remote == 'official' else 'https://example.invalid/custom'}]
-            inventory = {'formulae': [], 'casks': [{'tap': 'dopplerhq/cli' if referenced else 'dopplerhq/doppler', 'token': 'doppler'}]}
+            cask_tap = 'dopplerhq/cli' if referenced else 'dopplerhq/doppler'
+            inventory = {'formulae': [], 'casks': [{'tap': cask_tap, 'token': 'doppler', 'full_token': f'{cask_tap}/doppler'}]}
             (home / 'tap.json').write_text(json.dumps(tap_info))
             (home / 'inventory.json').write_text('{' if state == 'malformed-inventory' else json.dumps(inventory))
             code = helpers('doppler_tap_git', 'doppler_tap_snapshot', 'retire_legacy_doppler_tap', 'ensure_brew_item_trusted',
@@ -384,6 +385,12 @@ report_unmanaged_untrusted_brew_items
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn('Replace them with: brew uninstall --cask dopplerhq/cli/doppler && '
                       'brew install --cask dopplerhq/doppler/doppler, then rerun setup.', result.stdout)
+
+    def test_unreadable_inventory_warning_is_distinct(self):
+        result, _, _ = self.doppler(legacy=True, failure='info --json=v2 --installed')
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn('Could not list installed Homebrew packages; preserving the legacy Doppler tap.', result.stdout)
+        self.assertNotIn('still provides installed packages', result.stdout)
 
     def test_install_trust_inventory_and_untap_failures_remain_failures(self):
         for options in ({'installed': False, 'failure': 'install --cask dopplerhq/doppler/doppler'},
