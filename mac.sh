@@ -2441,76 +2441,6 @@ opencode_apt_upgrade_safe() {
 }
 : 'END_GENERATED_OPENCODE_CLI'
 
-install_codex_cli() {
-    local bun_packages=""
-    local brew_prefix=""
-    local brew_codex=""
-    local resolved_codex=""
-    local version_output=""
-    local version_status=0
-    local version_timeout=30
-    local safe_path=""
-    local installed_casks=""
-
-    print_message "Installing/updating Codex CLI..."
-
-    if ! command -v brew &> /dev/null; then
-        print_error "Homebrew not found. Cannot install the native Codex CLI."
-        return 1
-    fi
-
-    if command -v bun &> /dev/null; then
-        bun_packages=$(bun pm ls -g 2>/dev/null || true)
-        if grep -Fq "@openai/codex" <<< "${bun_packages}"; then
-            print_message "Removing Node-dependent Bun Codex package..."
-            if ! bun remove -g @openai/codex > /dev/null; then
-                print_error "Failed to remove Bun's @openai/codex package."
-                return 1
-            fi
-        fi
-    fi
-    hash -r 2>/dev/null || true
-
-    installed_casks=$(brew list --cask -1 2>/dev/null || true)
-    if grep -Fxq codex <<< "${installed_casks}"; then
-        if ! brew upgrade --cask codex; then
-            print_error "Failed to upgrade the native Codex CLI cask."
-            return 1
-        fi
-    elif ! brew install --cask codex; then
-        print_error "Failed to install the native Codex CLI cask."
-        return 1
-    fi
-
-    hash -r 2>/dev/null || true
-    brew_prefix=$(brew --prefix 2>/dev/null || true)
-    brew_codex="${brew_prefix}/bin/codex"
-    resolved_codex=$(command -v codex 2>/dev/null || true)
-    if [[ -z "${brew_prefix}" || ! -x "${brew_codex}" ]]; then
-        print_error "Homebrew completed, but its Codex binary is missing."
-        return 1
-    fi
-    if [[ -z "${resolved_codex}" || ! "${resolved_codex}" -ef "${brew_codex}" ]]; then
-        print_error "Codex is shadowed by ${resolved_codex:-<missing>}; expected ${brew_codex}."
-        return 1
-    fi
-
-    safe_path="/nonexistent"
-    version_output=$(env -u NODE_PATH -u NODE_OPTIONS HOME="${HOME}" PATH="${safe_path}" \
-        /usr/bin/perl -e 'alarm shift; exec @ARGV or exit 127' "${version_timeout}" "${brew_codex}" --version 2>/dev/null) ||
-        version_status=$?
-    if [[ "${version_status}" -eq 142 ]]; then
-        print_error "Native Codex CLI did not report its version within ${version_timeout} seconds."
-        return 1
-    fi
-    if [[ "${version_status}" -ne 0 || -z "${version_output}" ]]; then
-        print_error "Native Codex CLI smoke test failed without Node.js on PATH."
-        return 1
-    fi
-
-    print_success "Codex CLI installed/updated (${version_output})."
-}
-
 install_ntn_cli() {
     local os
     local arch
@@ -10190,7 +10120,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 336 | Last changed: Install pnpm, stable Rust and the Xcode Metal Toolchain for macOS app builds${NC}"
+    echo -e "${GRAY}Version 337 | Last changed: Stop installing Codex CLI on macOS${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -10330,7 +10260,6 @@ HELPER_EOF
     print_section "Development Tools"
     install_opencode_cli || _setup_had_errors=1
     install_gitea_client || _setup_had_errors=1
-    install_codex_cli || _setup_had_errors=1
     install_sfw || _setup_had_errors=1
     install_gemini_cli || _setup_had_errors=1
     install_portless_cli || _setup_had_errors=1

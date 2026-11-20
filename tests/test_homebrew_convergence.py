@@ -4,7 +4,6 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
-import time
 import unittest
 
 from extract_setup_fixture import definitions, validate_function
@@ -177,7 +176,7 @@ check_dotfiles_access() { return 1; }
 setup_dotfiles_deploy_key() { return 1; }
 install_bun() { echo bun-provisioned; BUN_READY=1; return "${BUN_STATUS}"; }
 retire_global_backlog_mcp() { echo retirement; [[ "${BUN_READY}" == 1 ]]; }
-install_codex_cli() { echo independent; }
+install_gemini_cli() { echo independent; }
 check_pending_reboot() { echo reboot; }
 finish_setup_log() { echo "final:$1"; return "$1"; }
 '''
@@ -409,47 +408,6 @@ report_unmanaged_untrusted_brew_items
                 result, _, _ = self.doppler(**options)
                 self.assertEqual(result.returncode, 1, result.stdout)
 
-    def codex(self, behavior):
-        with tempfile.TemporaryDirectory() as raw:
-            home = Path(raw); bin_dir = home / 'brew/bin'; bin_dir.mkdir(parents=True)
-            binary = bin_dir / 'codex'
-            binary.write_text({'ok': '#!/bin/sh\nprintf "codex-cli 9.9.9\\n"\n',
-                               'hang': '#!/bin/sh\nexec /bin/sleep 30\n',
-                               'fail': '#!/bin/sh\nexit 3\n'}[behavior])
-            binary.chmod(0o755)
-            code = helpers('install_codex_cli').replace('local version_timeout=30', 'local version_timeout=1')
-            code += '\n' + LOGGERS + r'''
-brew() {
-    case "$*" in
-        'list --cask -1') printf 'codex\n' ;;
-        'upgrade --cask codex') return 0 ;;
-        --prefix) printf '%s\n' "${HOME}/brew" ;;
-        *) return 90 ;;
-    esac
-}
-install_codex_cli
-'''
-            started = time.monotonic()
-            result = subprocess.run(['/bin/bash', '-u', '-c', code], text=True, capture_output=True, timeout=20,
-                                    env={'PATH': f'{bin_dir}:/usr/bin:/bin', 'HOME': raw})
-            return result, time.monotonic() - started
-
-    def test_codex_version_check_reports_the_installed_version(self):
-        result, _ = self.codex('ok')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('Codex CLI installed/updated (codex-cli 9.9.9).', result.stdout)
-
-    def test_hung_codex_version_check_times_out(self):
-        result, elapsed = self.codex('hang')
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn('Native Codex CLI did not report its version within 1 seconds.', result.stdout)
-        self.assertNotIn('smoke test failed', result.stdout)
-        self.assertLess(elapsed, 10)
-
-    def test_failed_codex_version_check_keeps_smoke_test_diagnosis(self):
-        result, _ = self.codex('fail')
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn('Native Codex CLI smoke test failed without Node.js on PATH.', result.stdout)
 
     def test_fresh_install_uses_cask_and_work_machine_is_untouched(self):
         result, calls, _ = self.doppler(installed=False)
