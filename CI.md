@@ -13,14 +13,11 @@ is unchanged.
 ## Native Linux routing
 
 The workflow selects `ci_os: linux`, matching the supported Woodpecker 3.19
-agent setting `WOODPECKER_AGENT_LABELS=ci_os=linux`. Before merging this change,
-the parent must configure and read back that label and actual Linux ARM64
-platform on the current agent, then verify the label and Linux AMD64 platform
-on its replacement. Include no other OS or unsupported CPU; retain native platform
-reporting. This routing label is not a security boundary or hardware attestation.
-The original image index supports both targets, without a matrix or emulation.
-ARM64 rollout guidance below is historical, not native AMD64 proof. Commands,
-pins and status layout stay unchanged; actual AMD64 acceptance is separate.
+agent setting `WOODPECKER_AGENT_LABELS=ci_os=linux`. The parent must configure
+and read back that label and the `linux/amd64` platform on the current agent, the
+x86-64 CX43 host `woodpecker`. Include no other OS or unsupported CPU; retain native
+platform reporting. This routing label is not a security boundary or hardware
+attestation. The image runs natively, without a matrix or emulation.
 
 ## Authored contract
 
@@ -42,7 +39,7 @@ hosting described in README is not a new CI deployment authorization.
 
 The image pins uv 0.11.32 and Python 3.14 on Debian trixie by digest
 `sha256:adafbab0c780d8bd995039e9dfd800f95a057867d283deee7d5eb1b3126551b2`.
-The `ci_os: linux` label selects the native Linux ARM64/AMD64 pool, not emulation.
+The `ci_os: linux` label selects the native `linux/amd64` agent, not emulation.
 [Requirements](.comment-policy/requirements.txt) remain tree-sitter 0.25.2,
 tree-sitter-language-pack 0.13.0, tree-sitter-c-sharp 0.23.5,
 tree-sitter-embedded-template 0.25.0 and tree-sitter-yaml 0.7.2.
@@ -80,8 +77,8 @@ they do not establish native macOS/Windows or fleet readiness.
 ## Parent-owned delivery and cutover
 
 Source preparation is not activation or acceptance. The parent serializes live
-operations on the existing single CAX11 agent (4 GiB host, capacity 1, 2 GiB job
-limit), without new capacity, spend, credentials or trust.
+operations on the single CX43 agent `woodpecker` (`linux/amd64`, 16 GiB host,
+capacity 1, 2 GiB job limit), without new capacity, spend, credentials or trust.
 
 1. Obtain separate integration review of the pinned source commit/tree and verify
    every original path, mode and blob, especially the Actions workflow, is
@@ -97,7 +94,7 @@ limit), without new capacity, spend, credentials or trust.
    jobs; use the standard native clone boundary only.
 3. Deliver ONE ordinary reviewed PR. Record its exact head SHA/tree and actual
    native PR clone/job logs: both original commands, 13 tests, policy file count
-   with zero violations and ARM64 agent identity. Require matching successful
+   with zero violations and `linux/amd64` agent identity. Require matching successful
    exact-SHA GitHub feedback. Configured tag/fork
    eligibility is not evidence of executing those events. MC PR29/#26 already
    supplied controlled RED-to-GREEN and same-PR post-disable proof once; do not
