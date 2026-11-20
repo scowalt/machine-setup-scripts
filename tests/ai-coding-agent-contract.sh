@@ -58,20 +58,21 @@ assert_order() {
 for file in "${bash_setup_scripts[@]}"; do
     bash -n "${file}"
     assert_contains "${file}" '^install_claude_code\(\)' 'Claude Code installer function'
-    assert_contains "${file}" '^install_codex_cli\(\)' 'Codex CLI installer function'
     assert_contains "${file}" '^[[:space:]]+install_claude_code([[:space:]]+\|\| _setup_had_errors=1)?$' 'Claude Code main wiring'
-    codex_call='^[[:space:]]+install_codex_cli([[:space:]]+\|\|[[:space:]]+return 1)?$'
-    if [[ "${file}" == mac.sh ]]; then
-        codex_call='^[[:space:]]+install_codex_cli \|\| _setup_had_errors=1$'
-    fi
-    assert_contains "${file}" "${codex_call}" 'Codex CLI main wiring'
     assert_contains "${file}" 'https://claude\.ai/install\.sh' 'Claude Code native installer download'
-    assert_contains "${file}" 'bun remove -g @openai/codex' 'legacy Bun Codex cleanup'
-    assert_contains "${file}" '(codex|native_path).* --version 2>/dev/null' 'Codex CLI no-Node smoke test'
+    if [[ "${file}" == mac.sh ]]; then
+        assert_not_contains "${file}" 'install_codex_cli|--cask codex' 'macOS Codex CLI installation'
+    else
+        codex_call='^[[:space:]]+install_codex_cli([[:space:]]+\|\|[[:space:]]+return 1)?$'
+        assert_contains "${file}" '^install_codex_cli\(\)' 'Codex CLI installer function'
+        assert_contains "${file}" "${codex_call}" 'Codex CLI main wiring'
+        assert_contains "${file}" 'bun remove -g @openai/codex' 'legacy Bun Codex cleanup'
+        assert_contains "${file}" '(codex|native_path).* --version 2>/dev/null' 'Codex CLI no-Node smoke test'
+        assert_order "${file}" "${codex_call}" '^[[:space:]]+remove_rtk_resources[[:space:]]+\|\|[[:space:]]+return 1$' 'Codex CLI installed before retired RTK cleanup'
+    fi
     assert_contains "${file}" '^setup_pi_claude_bridge\(\)' 'Pi Claude bridge setup function'
     assert_contains "${file}" 'npm:pi-claude-bridge' 'Pi Claude bridge package source'
     assert_contains "${file}" '^[[:space:]]+setup_pi_claude_bridge \|\| \{ _setup_had_errors=1; _pi_package_maintenance_ok=0; \}$' 'Pi Claude bridge main wiring'
-    assert_order "${file}" "${codex_call}" '^[[:space:]]+remove_rtk_resources[[:space:]]+\|\|[[:space:]]+return 1$' 'Codex CLI installed before retired RTK cleanup'
     assert_order "${file}" '^[[:space:]]+elif install_pi_cli; then$' '^[[:space:]]+setup_pi_claude_bridge \|\| \{ _setup_had_errors=1; _pi_package_maintenance_ok=0; \}$' 'Pi installed before Pi Claude bridge'
     assert_contains "${file}" '^configure_pi_opencode_go\(\)' 'Pi Go credential helper'
     assert_order "${file}" '^[[:space:]]+elif install_pi_cli; then$' '^[[:space:]]+if configure_pi_opencode_go; then$' 'Pi installed before Go authentication'

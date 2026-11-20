@@ -145,7 +145,7 @@ class CLT(unittest.TestCase):
         return [c for c in calls if 'softwareupdate --install' in c]
 
     def test_stale_sdk_does_not_gate_normal_work(self):
-        common = ('initialize_chezmoi', 'install_codex_cli', 'install_gitea_client',
+        common = ('initialize_chezmoi', 'install_gemini_cli', 'install_gitea_client',
                   'setup_bb_machine', 'refresh_bb_plugins', 'setup_matt_pocock_skills',
                   'install_pi_cli', 'refresh_pi_packages', 'retire_global_backlog_mcp',
                   'prepare_pi_profile_permissions', 'install_claude_code', 'install_ntn_cli')
@@ -169,7 +169,7 @@ class CLT(unittest.TestCase):
                      'install_secrets_manager', 'install_gcloud_cli', 'setup_tailscale',
                      'install_nerd_font', 'install_betterdisplay', 'install_fluidvoice', 'initialize_chezmoi',
                      'install_opencode_cli', 'install_gitea_client',
-                     'install_codex_cli', 'install_bun', 'install_sfw', 'install_gemini_cli',
+                     'install_bun', 'install_sfw', 'install_gemini_cli',
                      'install_portless_cli', 'setup_bb_machine', 'refresh_bb_plugins',
                      'install_claude_code', 'install_ntn_cli', 'setup_matt_pocock_skills', 'update_brew'):
             with self.subTest(task=task):
@@ -211,7 +211,7 @@ class CLT(unittest.TestCase):
             result, calls = self.run_case(values, caller=True, existing=False)
             self.assertEqual(result.returncode, int(bool(failure)), (failure, result.stdout, result.stderr))
             self.assertEqual(calls.count('final:' + str(int(bool(failure)))), 1)
-            self.assertIn('work:install_codex_cli', calls)
+            self.assertIn('work:install_gemini_cli', calls)
             self.assertIn('work:update_brew', calls)
             self.assertLess(calls.index('sentinel:create'), calls.index('brew-bootstrap'))
             self.assertLessEqual(len(self.installs(calls)), 1)
@@ -219,7 +219,7 @@ class CLT(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(self.installs(calls), [])
         self.assertNotIn('sentinel:create', calls)
-        self.assertIn('work:install_codex_cli', calls)
+        self.assertIn('work:install_gemini_cli', calls)
 
     def test_existing_tools_without_selection_never_bootstrap(self):
         result, calls = self.run_case({'SELECT_OK': '0'})
