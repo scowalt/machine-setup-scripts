@@ -719,28 +719,66 @@ install_brew_packages() {
 }
 
 
-install_gemini_cli() {
-    if command -v gemini &> /dev/null; then
-        print_debug "Gemini CLI is already installed."
-        return
-    fi
+retire_gemini_cli() {
+    local _bun _output _bin _shim _link _foreign _changed=0
+    local _listed_pattern='(^|[[:space:]])@google/gemini-cli@'
 
-    print_message "Installing Gemini CLI..."
-
-    if [[ -d "${HOME}/.bun" ]]; then
-        export PATH="${HOME}/.bun/bin:${PATH}"
-    fi
-
-    if ! command -v bun &> /dev/null; then
-        print_warning "Bun not found. Cannot install Gemini CLI."
-        print_debug "Install Bun first, then run: bun install -g @google/gemini-cli"
-        return
-    fi
-
-    if bun install -g @google/gemini-cli; then
-        print_success "Gemini CLI installed."
+    if [[ -x "${HOME}/.bun/bin/bun" ]]; then
+        _bun="${HOME}/.bun/bin/bun"
     else
-        print_error "Failed to install Gemini CLI."
+        _bun=$(command -v bun 2> /dev/null || true)
+        [[ "${_bun}" == /* ]] || _bun=""
+    fi
+
+    if [[ -n "${_bun}" ]]; then
+        if ! _output=$(FORCE_COLOR=0 "${_bun}" pm ls -g < /dev/null 2>&1); then
+            print_warning "Could not list Bun's global packages, so Gemini CLI was not retired."
+            print_debug "${_output}"
+            return 1
+        fi
+
+        if grep -Eq "${_listed_pattern}" <<< "${_output}"; then
+            print_message "Removing Gemini CLI installed by setup..."
+            if ! _output=$("${_bun}" remove -g @google/gemini-cli < /dev/null 2>&1); then
+                print_warning "Failed to remove Gemini CLI with Bun."
+                print_warning "${_output}"
+                return 1
+            fi
+            if ! _output=$(FORCE_COLOR=0 "${_bun}" pm ls -g < /dev/null 2>&1) || grep -Eq "${_listed_pattern}" <<< "${_output}"; then
+                print_warning "Could not confirm that Gemini CLI left Bun's global packages."
+                print_debug "${_output}"
+                return 1
+            fi
+            _changed=1
+        fi
+
+        if ! _bin=$(FORCE_COLOR=0 "${_bun}" pm bin -g < /dev/null 2> /dev/null) || [[ "${_bin}" != /* ]]; then
+            print_warning "Could not find Bun's global bin directory, so a leftover Gemini CLI link was not checked."
+            return 1
+        fi
+        _shim="${_bin}/gemini"
+        if [[ -L "${_shim}" && ! -e "${_shim}" ]]; then
+            _link=$(readlink -- "${_shim}" 2> /dev/null || true)
+            if [[ "${_link}" == *node_modules/@google/gemini-cli/* ]]; then
+                if ! rm -f -- "${_shim}"; then
+                    print_warning "Failed to remove the leftover Gemini CLI link at ${_shim}."
+                    return 1
+                fi
+                _changed=1
+            fi
+        fi
+    fi
+
+    if [[ "${_changed}" -eq 1 ]]; then
+        print_success "Gemini CLI removed."
+    else
+        print_debug "Gemini CLI was not installed by setup."
+    fi
+
+    hash -r
+    _foreign=$(command -v gemini 2> /dev/null || true)
+    if [[ -n "${_foreign}" ]]; then
+        print_warning "Preserving a Gemini CLI that setup did not install: ${_foreign}."
     fi
 }
 
@@ -3997,7 +4035,6 @@ install_managed_agent_skill() {
         --global \
         --agent claude-code \
         --agent codex \
-        --agent gemini-cli \
         --skill "${_skill_name}" \
         --copy \
         --yes < /dev/null 2>&1); then
@@ -4025,7 +4062,7 @@ install_managed_agent_skill() {
         done
     done
 
-    print_success "${_display_name} installed/updated for Claude Code, Codex, Gemini CLI, and Pi through the shared skill path."
+    print_success "${_display_name} installed/updated for Claude Code, Codex, and Pi through the shared skill path."
     print_debug "${_install_output}"
 }
 
@@ -9502,7 +9539,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 287 | Last changed: Install Antigravity CLI${NC}"
+    echo -e "${GRAY}Version 288 | Last changed: Retire Gemini CLI${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9584,7 +9621,7 @@ run_setup_tasks() {
 
     print_section "Additional Development Tools"
     install_claude_code
-    install_gemini_cli
+    retire_gemini_cli || _setup_had_errors=1
     install_agy_cli || _setup_had_errors=1
     install_opencode_cli || _setup_had_errors=1
     install_codex_cli
