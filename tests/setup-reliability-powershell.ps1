@@ -390,11 +390,11 @@ try {
         }
     }
 
-    $expectedCopyFixtureArguments = "--yes skills@latest add example/fixture --global --agent claude-code --agent codex --agent gemini-cli --skill tdd --copy --yes"
+    $expectedCopyFixtureArguments = "--yes skills@latest add example/fixture --global --agent claude-code --agent codex --skill tdd --copy --yes"
     if (@($script:ManagedSkillCalls | Where-Object { $_ -eq $expectedCopyFixtureArguments }).Count -ne 2) {
         throw "tdd installer did not update twice with the exact targets: $($script:ManagedSkillCalls -join '; ')"
     }
-    $expectedReferenceFixtureArguments = "--yes skills@latest add example/fixture --global --agent claude-code --agent codex --agent gemini-cli --skill code-review --copy --yes"
+    $expectedReferenceFixtureArguments = "--yes skills@latest add example/fixture --global --agent claude-code --agent codex --skill code-review --copy --yes"
     if (@($script:ManagedSkillCalls | Where-Object { $_ -eq $expectedReferenceFixtureArguments }).Count -ne 4) {
         throw "Reference fixture did not update twice on personal and work machines with the exact targets"
     }

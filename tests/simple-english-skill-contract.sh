@@ -122,7 +122,7 @@ for file in "${bash_setup_scripts[@]}"; do
     assert_function_contains "${file}" install_managed_agent_skill '^        --global [\\]$' 'global installation flag'
     assert_function_contains "${file}" install_managed_agent_skill '^        --agent claude-code [\\]$' 'Claude Code target'
     assert_function_contains "${file}" install_managed_agent_skill '^        --agent codex [\\]$' 'Codex target'
-    assert_function_contains "${file}" install_managed_agent_skill '^        --agent gemini-cli [\\]$' 'Gemini CLI target'
+    assert_function_not_contains "${file}" install_managed_agent_skill 'gemini-cli' 'retired Gemini CLI target'
     assert_function_not_contains "${file}" install_managed_agent_skill '^        --agent pi [\\]$' 'redundant direct Pi target'
     assert_function_not_contains "${file}" install_managed_agent_skill 'opencode' 'retired opencode target'
     assert_function_contains "${file}" install_managed_agent_skill '^        --skill "\$\{_skill_name\}" [\\]$' 'specific skill selection'
@@ -157,10 +157,10 @@ assert_contains win.ps1 '^function Install-ManagedAgentSkill' 'PowerShell reusab
 assert_contains win.ps1 '^function Remove-SimpleEnglishSkill' 'PowerShell Simple English wrapper'
 assert_contains win.ps1 '^function Remove-ShowMeSkill' 'PowerShell show-me wrapper'
 assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill '"skills@latest"' 'latest skills CLI package'
-for agent in claude-code codex gemini-cli; do
+for agent in claude-code codex; do
     assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill '"--agent", "'"${agent}"'"' "${agent} target"
 done
-assert_powershell_function_not_contains win.ps1 Install-ManagedAgentSkill '"--agent", "pi"|opencode' 'redundant or retired target'
+assert_powershell_function_not_contains win.ps1 Install-ManagedAgentSkill '"--agent", "pi"|opencode|gemini-cli' 'redundant or retired target'
 assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill '"--global"' 'global installation'
 # shellcheck disable=SC2016
 assert_powershell_function_contains win.ps1 Install-ManagedAgentSkill '"--skill", \$SkillName' 'specific skill selection'
@@ -228,7 +228,7 @@ for file in "${bash_setup_scripts[@]}"; do
             done
         '
 
-    copy_fixture_args='--yes skills@latest add example/fixture --global --agent claude-code --agent codex --agent gemini-cli --skill tdd --copy --yes'
+    copy_fixture_args='--yes skills@latest add example/fixture --global --agent claude-code --agent codex --skill tdd --copy --yes'
     copy_fixture_count=$(grep -Fxc -- "${copy_fixture_args}" "${test_root}/calls" || true)
     [[ "${copy_fixture_count}" -eq 2 ]] || fail "${file}: tdd did not update on both setup runs"
     call_count=$(wc -l < "${test_root}/calls")

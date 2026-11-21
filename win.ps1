@@ -4265,7 +4265,6 @@ function Install-ManagedAgentSkill {
         "--global",
         "--agent", "claude-code",
         "--agent", "codex",
-        "--agent", "gemini-cli",
         "--skill", $SkillName,
         "--copy",
         "--yes"
@@ -4308,7 +4307,7 @@ function Install-ManagedAgentSkill {
         }
     }
 
-    Write-Success "$DisplayName installed/updated for Claude Code, Codex, Gemini CLI, and Pi through the shared skill path."
+    Write-Success "$DisplayName installed/updated for Claude Code, Codex, and Pi through the shared skill path."
     if ($installOutput) { Write-Debug ($installOutput | Out-String) }
     return $true
 }
@@ -9285,7 +9284,7 @@ function Invoke-WindowsSetupTasks {
     $agySetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 217 | Last changed: Install Antigravity CLI"
+    Write-Host "Version 218 | Last changed: Retire Gemini CLI"
 
     Assert-HeadlessUnsupported
 

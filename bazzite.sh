@@ -4446,7 +4446,6 @@ install_managed_agent_skill() {
         --global \
         --agent claude-code \
         --agent codex \
-        --agent gemini-cli \
         --skill "${_skill_name}" \
         --copy \
         --yes < /dev/null 2>&1); then
@@ -4474,7 +4473,7 @@ install_managed_agent_skill() {
         done
     done
 
-    print_success "${_display_name} installed/updated for Claude Code, Codex, Gemini CLI, and Pi through the shared skill path."
+    print_success "${_display_name} installed/updated for Claude Code, Codex, and Pi through the shared skill path."
     print_debug "${_install_output}"
 }
 
@@ -9525,7 +9524,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 208 | Last changed: Install Antigravity CLI"
+    echo -e "${GRAY}Version 209 | Last changed: Retire Gemini CLI"
 
     if ! acquire_setup_lock; then
         return 1
