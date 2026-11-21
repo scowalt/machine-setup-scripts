@@ -22,7 +22,7 @@ function Write-Debug { param($Message) $script:Log += "DEBUG: $Message" }
 $fakeBun = Join-Path (Join-Path $PSScriptRoot 'fixtures') 'fake-bun-global.py'
 $package = '@google/gemini-cli'
 $savedEnvironment = @{}
-foreach ($name in 'USERPROFILE', 'HOME', 'PATH', 'TEST_CAPTURE', 'TEST_LS_FAILS', 'TEST_REMOVE_FAILS', 'TEST_REMOVE_NOOP', 'TEST_LEAVE_LINK', 'TEST_BIN_FAILS') {
+foreach ($name in 'USERPROFILE', 'HOME', 'PATH', 'TEST_CAPTURE', 'TEST_LS_FAILS', 'TEST_REMOVE_FAILS', 'TEST_REMOVE_NOOP', 'TEST_LEAVE_LINK', 'TEST_BIN_FAILS', 'FORCE_COLOR') {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "gemini retire fixture $([guid]::NewGuid())"
@@ -108,8 +108,9 @@ function New-Case {
 }
 
 function Invoke-Case {
-    param($Case, [hashtable]$Flags = @{})
+    param($Case, [hashtable]$Flags = @{}, $ForceColor = $null, [int]$CodePage = 0)
     $script:Log = @()
+    if ($null -eq $ForceColor) { Remove-Item -LiteralPath Env:FORCE_COLOR -ErrorAction SilentlyContinue } else { $env:FORCE_COLOR = $ForceColor }
     $env:USERPROFILE = $Case.Account
     $env:HOME = $Case.Account
     $env:TEST_CAPTURE = Join-Path $Case.Root 'capture'
@@ -117,11 +118,18 @@ function Invoke-Case {
     foreach ($name in 'TEST_LS_FAILS', 'TEST_REMOVE_FAILS', 'TEST_REMOVE_NOOP', 'TEST_LEAVE_LINK', 'TEST_BIN_FAILS') {
         [Environment]::SetEnvironmentVariable($name, $(if ($Flags.ContainsKey($name)) { '1' } else { $null }), 'Process')
     }
-    $result = @(Remove-GeminiCli)
+    $savedEncoding = [Console]::OutputEncoding
+    try {
+        if ($CodePage -ne 0) { [Console]::OutputEncoding = [Text.Encoding]::GetEncoding($CodePage) }
+        $result = @(Remove-GeminiCli)
+    }
+    finally {
+        [Console]::OutputEncoding = $savedEncoding
+    }
     $callsFile = "$($env:TEST_CAPTURE).calls"
     $calls = @()
     if (Test-Path -LiteralPath $callsFile) { $calls = @(Get-Content -LiteralPath $callsFile) }
-    return [pscustomobject]@{ Results = $result; Log = ($script:Log -join "`n"); Calls = $calls }
+    return [pscustomobject]@{ Results = $result; Log = ($script:Log -join "`n"); Calls = $calls; ForceColorAfter = [Environment]::GetEnvironmentVariable('FORCE_COLOR', 'Process') }
 }
 
 function Test-Gone {
@@ -164,6 +172,29 @@ try {
     Assert-That (-not ($run.Calls -match '^remove')) "second run must not call remove: $($run.Calls -join ';')"
     Assert-That ((Get-Snapshot $case.Account) -eq $whole) 'second run must change nothing'
     Assert-That ($run.Log -match 'DEBUG: Gemini CLI was not installed by setup\.') "second run says there was nothing to retire`n$($run.Log)"
+
+    $case = New-Case -WithBun -WithGemini
+    $before = Get-Snapshot $case.Account -Skip '.bun'
+    $run = Invoke-Case $case -CodePage 437
+    Assert-Result $run $true 'a listing decoded with the OEM code page 437'
+    Assert-That (Test-Gone $case) "package, manifest entry and shims must be gone under code page 437`n$($run.Log)"
+    Assert-That ($run.Log -match 'SUCCESS: Gemini CLI removed\.') "code page 437 must not hide the package`n$($run.Log)"
+    Assert-That ((Get-Snapshot $case.Account -Skip '.bun') -eq $before) '~/.gemini must survive under code page 437'
+
+    foreach ($caller in @($null, '1', 'true', '0')) {
+        $label = if ($null -eq $caller) { 'unset' } else { $caller }
+        $case = New-Case -WithBun -WithGemini
+        $run = Invoke-Case $case -ForceColor $caller
+        Assert-Result $run $true "FORCE_COLOR $label"
+        Assert-That (Test-Gone $case) "package must be gone when the caller's FORCE_COLOR is $label`n$($run.Log)"
+        Assert-That ($run.Log -match 'SUCCESS: Gemini CLI removed\.') "FORCE_COLOR $label must not hide the package`n$($run.Log)"
+        Assert-That ($run.ForceColorAfter -ceq $caller) "FORCE_COLOR must be '$label' after Remove-GeminiCli, got '$($run.ForceColorAfter)'"
+    }
+
+    $case = New-Case -WithBun -WithGemini
+    $run = Invoke-Case $case @{ TEST_REMOVE_FAILS = 1 } -ForceColor '1'
+    Assert-Result $run $false 'a failed removal with FORCE_COLOR set'
+    Assert-That ($run.ForceColorAfter -ceq '1') "FORCE_COLOR must survive a failed removal, got '$($run.ForceColorAfter)'"
 
     $case = New-Case -WithBun -WithGemini -WithBunOnPath
     $run = Invoke-Case $case
@@ -256,7 +287,7 @@ try {
 }
 finally {
     foreach ($name in $savedEnvironment.Keys) {
-        [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
+        if ($null -eq $savedEnvironment[$name]) { Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue } else { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process') }
     }
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

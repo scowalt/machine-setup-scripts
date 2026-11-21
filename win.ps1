@@ -1046,7 +1046,7 @@ function Install-ClaudeCode {
 
 function Remove-GeminiCli {
     $ErrorActionPreference = 'Continue'
-    $listedPattern = '(?m)^[^\w@]*@google/gemini-cli@'
+    $listedPattern = '(^|\s)@google/gemini-cli@'
     $changed = $false
 
     $bun = Join-Path (Join-Path (Join-Path $env:USERPROFILE '.bun') 'bin') 'bun.exe'
@@ -1055,61 +1055,73 @@ function Remove-GeminiCli {
         $bun = if ($found) { $found.Source } else { $null }
     }
 
-    if ($bun) {
-        $output = (& $bun pm ls -g 2>&1 | Out-String)
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Could not list Bun's global packages, so Gemini CLI was not retired."
-            Write-Debug $output
-            return $false
-        }
-
-        if ($output -match $listedPattern) {
-            Write-Message "Removing Gemini CLI installed by setup..."
-            $output = (& $bun remove -g '@google/gemini-cli' 2>&1 | Out-String)
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning "Failed to remove Gemini CLI with Bun."
-                Write-Warning $output
-                return $false
-            }
+    $previousForceColor = [Environment]::GetEnvironmentVariable('FORCE_COLOR', 'Process')
+    try {
+        $env:FORCE_COLOR = '0'
+        if ($bun) {
             $output = (& $bun pm ls -g 2>&1 | Out-String)
-            if ($LASTEXITCODE -ne 0 -or $output -match $listedPattern) {
-                Write-Warning "Could not confirm that Gemini CLI left Bun's global packages."
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Could not list Bun's global packages, so Gemini CLI was not retired."
                 Write-Debug $output
                 return $false
             }
-            $changed = $true
-        }
 
-        $binDir = (& $bun pm bin -g 2>$null | Out-String).Trim()
-        if ($LASTEXITCODE -ne 0 -or -not [IO.Path]::IsPathRooted($binDir)) {
-            Write-Warning "Could not find Bun's global bin directory, so leftover Gemini CLI shims were not checked."
-            return $false
-        }
-        $bunx = Join-Path $binDir 'gemini.bunx'
-        $shimExe = Join-Path $binDir 'gemini.exe'
-        if (Test-Path -LiteralPath $bunx -PathType Leaf) {
-            $text = [Text.Encoding]::Unicode.GetString([IO.File]::ReadAllBytes($bunx))
-            $quote = $text.IndexOf('"')
-            $target = if ($quote -ge 0) { $text.Substring(0, $quote) } else { '' }
-            if ($target -match '(^|[\\/])node_modules[\\/]@google[\\/]gemini-cli[\\/]') {
-                $target = $target -replace '[\\/]', [string][IO.Path]::DirectorySeparatorChar
-                if (-not [IO.Path]::IsPathRooted($target)) {
-                    $target = Join-Path (Split-Path -Parent $binDir) $target
+            if ($output -match $listedPattern) {
+                Write-Message "Removing Gemini CLI installed by setup..."
+                $output = (& $bun remove -g '@google/gemini-cli' 2>&1 | Out-String)
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warning "Failed to remove Gemini CLI with Bun."
+                    Write-Warning $output
+                    return $false
                 }
-                if (-not (Test-Path -LiteralPath $target)) {
-                    try {
-                        Remove-Item -LiteralPath $bunx -Force -ErrorAction Stop
-                        if (Test-Path -LiteralPath $shimExe) {
-                            Remove-Item -LiteralPath $shimExe -Force -ErrorAction Stop
+                $output = (& $bun pm ls -g 2>&1 | Out-String)
+                if ($LASTEXITCODE -ne 0 -or $output -match $listedPattern) {
+                    Write-Warning "Could not confirm that Gemini CLI left Bun's global packages."
+                    Write-Debug $output
+                    return $false
+                }
+                $changed = $true
+            }
+
+            $binDir = (& $bun pm bin -g 2>$null | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or -not [IO.Path]::IsPathRooted($binDir)) {
+                Write-Warning "Could not find Bun's global bin directory, so leftover Gemini CLI shims were not checked."
+                return $false
+            }
+            $bunx = Join-Path $binDir 'gemini.bunx'
+            $shimExe = Join-Path $binDir 'gemini.exe'
+            if (Test-Path -LiteralPath $bunx -PathType Leaf) {
+                $text = [Text.Encoding]::Unicode.GetString([IO.File]::ReadAllBytes($bunx))
+                $quote = $text.IndexOf('"')
+                $target = if ($quote -ge 0) { $text.Substring(0, $quote) } else { '' }
+                if ($target -match '(^|[\\/])node_modules[\\/]@google[\\/]gemini-cli[\\/]') {
+                    $target = $target -replace '[\\/]', [string][IO.Path]::DirectorySeparatorChar
+                    if (-not [IO.Path]::IsPathRooted($target)) {
+                        $target = Join-Path (Split-Path -Parent $binDir) $target
+                    }
+                    if (-not (Test-Path -LiteralPath $target)) {
+                        try {
+                            Remove-Item -LiteralPath $bunx -Force -ErrorAction Stop
+                            if (Test-Path -LiteralPath $shimExe) {
+                                Remove-Item -LiteralPath $shimExe -Force -ErrorAction Stop
+                            }
                         }
+                        catch {
+                            Write-Warning "Failed to remove the leftover Gemini CLI shim in ${binDir}: $($_.Exception.Message)"
+                            return $false
+                        }
+                        $changed = $true
                     }
-                    catch {
-                        Write-Warning "Failed to remove the leftover Gemini CLI shim in ${binDir}: $($_.Exception.Message)"
-                        return $false
-                    }
-                    $changed = $true
                 }
             }
+        }
+    }
+    finally {
+        if ($null -eq $previousForceColor) {
+            Remove-Item -LiteralPath Env:FORCE_COLOR -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:FORCE_COLOR = $previousForceColor
         }
     }
 

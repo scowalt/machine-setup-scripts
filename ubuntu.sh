@@ -1280,7 +1280,7 @@ install_brew_packages() {
 
 retire_gemini_cli() {
     local _bun _output _bin _shim _link _foreign _changed=0
-    local _listed_pattern='^[^[:alnum:]@]*@google/gemini-cli@'
+    local _listed_pattern='(^|[[:space:]])@google/gemini-cli@'
 
     if [[ -x "${HOME}/.bun/bin/bun" ]]; then
         _bun="${HOME}/.bun/bin/bun"
@@ -1290,7 +1290,7 @@ retire_gemini_cli() {
     fi
 
     if [[ -n "${_bun}" ]]; then
-        if ! _output=$("${_bun}" pm ls -g < /dev/null 2>&1); then
+        if ! _output=$(FORCE_COLOR=0 "${_bun}" pm ls -g < /dev/null 2>&1); then
             print_warning "Could not list Bun's global packages, so Gemini CLI was not retired."
             print_debug "${_output}"
             return 1
@@ -1303,7 +1303,7 @@ retire_gemini_cli() {
                 print_warning "${_output}"
                 return 1
             fi
-            if ! _output=$("${_bun}" pm ls -g < /dev/null 2>&1) || grep -Eq "${_listed_pattern}" <<< "${_output}"; then
+            if ! _output=$(FORCE_COLOR=0 "${_bun}" pm ls -g < /dev/null 2>&1) || grep -Eq "${_listed_pattern}" <<< "${_output}"; then
                 print_warning "Could not confirm that Gemini CLI left Bun's global packages."
                 print_debug "${_output}"
                 return 1
@@ -1311,7 +1311,7 @@ retire_gemini_cli() {
             _changed=1
         fi
 
-        if ! _bin=$("${_bun}" pm bin -g < /dev/null 2> /dev/null) || [[ "${_bin}" != /* ]]; then
+        if ! _bin=$(FORCE_COLOR=0 "${_bun}" pm bin -g < /dev/null 2> /dev/null) || [[ "${_bin}" != /* ]]; then
             print_warning "Could not find Bun's global bin directory, so a leftover Gemini CLI link was not checked."
             return 1
         fi

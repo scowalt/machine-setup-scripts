@@ -116,7 +116,7 @@ print_debug() { printf 'DEBUG: %s\\n' "$*"; }
 print_success() { printf 'SUCCESS: %s\\n' "$*"; }
 print_warning() { printf 'WARNING: %s\\n' "$*" >&2; }
 print_error() { printf 'ERROR: %s\\n' "$*" >&2; }
-''' + function(script) + f'\n{FUNCTION}\nexit $?\n'
+''' + function(script) + f'\n{FUNCTION}\n_status=$?\nprintf "FORCE_COLOR_AFTER=%s\\n" "${{FORCE_COLOR-unset}}"\nexit "${{_status}}"\n'
         return subprocess.run(['/bin/bash', '--noprofile', '--norc', '-c', code], env=env, cwd=self.root,
                               capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
 
@@ -147,13 +147,56 @@ print_error() { printf 'ERROR: %s\\n' "$*" >&2; }
             before = snapshot(self.home, skip=('.bun',))
             result = self.invoke(script)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertTrue(self.managed_gone())
+            self.assertTrue(self.managed_gone(), result.stdout + result.stderr)
             self.assert_other_global_untouched()
             self.assertIn('SUCCESS: Gemini CLI removed.', result.stdout)
             self.assertNotIn('WARNING', result.stderr)
             self.assertIn('remove -g @google/gemini-cli', self.calls())
             self.assertEqual(set(self.calls()), {'pm ls -g', 'remove -g @google/gemini-cli', 'pm bin -g'})
             self.assertEqual(snapshot(self.home, skip=('.bun',)), before)
+
+    def test_a_coloured_listing_still_finds_the_package(self):
+        for script in SCRIPTS:
+            for colour in ('1', 'true'):
+                with self.subTest(script=script, force_color=colour):
+                    self.reset()
+                    self.seed_bun()
+                    result = self.invoke(script, FORCE_COLOR=colour)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertTrue(self.managed_gone(), result.stdout + result.stderr)
+                    self.assertIn('SUCCESS: Gemini CLI removed.', result.stdout)
+                    self.assertNotIn('WARNING', result.stderr)
+                    self.assertIn(f'FORCE_COLOR_AFTER={colour}', result.stdout)
+
+    def test_force_color_is_left_unset_when_the_caller_did_not_set_it(self):
+        for script in SCRIPTS:
+            with self.subTest(script=script):
+                self.reset()
+                self.seed_bun()
+                result = self.invoke(script)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('FORCE_COLOR_AFTER=unset', result.stdout)
+
+    def test_a_listing_whose_tree_prefix_starts_with_word_characters_still_finds_the_package(self):
+        for script in SCRIPTS:
+            with self.subTest(script=script):
+                self.reset()
+                self.seed_bun()
+                result = self.invoke(script, TEST_LS_TREE='G0a3G7')
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue(self.managed_gone(), result.stdout + result.stderr)
+                self.assertIn('SUCCESS: Gemini CLI removed.', result.stdout)
+
+    def test_a_similarly_named_package_is_not_the_managed_install(self):
+        for script in SCRIPTS:
+            with self.subTest(script=script):
+                self.reset()
+                self.seed_bun(gemini=False)
+                self.install_package('@google/gemini-cli-core', {'gemini-core': 'core.js'})
+                result = self.invoke(script)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn('remove', ' '.join(self.calls()))
+                self.assertIn('DEBUG: Gemini CLI was not installed by setup.', result.stdout)
 
     def test_a_bun_found_on_path_is_used_when_there_is_no_home_bun(self):
         for script in self.each_script():
@@ -163,7 +206,7 @@ print_error() { printf 'ERROR: %s\\n' "$*" >&2; }
             shutil.move(self.home / '.bun/bin/bun', relocated / 'bun')
             result = self.invoke(script, path_extra=[relocated])
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertTrue(self.managed_gone())
+            self.assertTrue(self.managed_gone(), result.stdout + result.stderr)
             self.assertIn('SUCCESS: Gemini CLI removed.', result.stdout)
 
     def test_second_run_changes_nothing(self):
@@ -232,7 +275,7 @@ print_error() { printf 'ERROR: %s\\n' "$*" >&2; }
             self.seed_bun()
             result = self.invoke(script, TEST_LEAVE_LINK=1)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertTrue(self.managed_gone())
+            self.assertTrue(self.managed_gone(), result.stdout + result.stderr)
             self.assertIn('SUCCESS: Gemini CLI removed.', result.stdout)
 
     def test_unrelated_gemini_in_the_bun_bin_directory_is_preserved_and_reported(self):
@@ -296,8 +339,8 @@ print_error() { printf 'ERROR: %s\\n' "$*" >&2; }
 
     @unittest.skipUnless(BUN, 'Existing native Bun required; no runtime download')
     def test_real_bun_removes_its_own_install_and_keeps_the_rest(self):
-        for script in SCRIPTS:
-            with self.subTest(script=script):
+        for script, colour in ((script, colour) for script in SCRIPTS for colour in (None, '1')):
+            with self.subTest(script=script, force_color=colour):
                 self.reset()
                 bun = self.home / '.bun/bin/bun'
                 bun.parent.mkdir(parents=True)
@@ -318,7 +361,7 @@ print_error() { printf 'ERROR: %s\\n' "$*" >&2; }
                 self.assertTrue(os.path.lexists(self.home / '.bun/bin/gemini'))
                 self.seed_protected()
                 before = snapshot(self.home, skip=('.bun',))
-                result = self.invoke(script)
+                result = self.invoke(script, **({'FORCE_COLOR': colour} if colour else {}))
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn('SUCCESS: Gemini CLI removed.', result.stdout)
                 self.assertNotIn('WARNING', result.stderr)
