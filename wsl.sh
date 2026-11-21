@@ -9502,7 +9502,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 286 | Last changed: Show the Codex smoke test exit code and error output${NC}"
+    echo -e "${GRAY}Version 287 | Last changed: Install Antigravity CLI${NC}"
 
     if ! acquire_setup_lock; then
         return 1

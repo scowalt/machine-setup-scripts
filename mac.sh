@@ -10209,7 +10209,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 337 | Last changed: Stop installing Codex CLI on macOS${NC}"
+    echo -e "${GRAY}Version 338 | Last changed: Install Antigravity CLI${NC}"
 
     if ! acquire_setup_lock; then
         return 1

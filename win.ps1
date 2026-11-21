@@ -9285,7 +9285,7 @@ function Invoke-WindowsSetupTasks {
     $agySetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 216 | Last changed: Refresh Pi packages when a checkout holds an ignored Python cache"
+    Write-Host "Version 217 | Last changed: Install Antigravity CLI"
 
     Assert-HeadlessUnsupported
 
