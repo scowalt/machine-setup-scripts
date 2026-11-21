@@ -2208,6 +2208,95 @@ install_ntn_cli() {
     fi
 }
 
+install_agy_cli() {
+    local os
+    local arch
+    local user_bits=""
+    local curl_bin=""
+    local scratch=""
+    local installer=""
+    local installer_log=""
+    local install_status=0
+    local native_path="${HOME}/.local/bin/agy"
+    local version_output=""
+    local smoke_status=0
+    local version_line=""
+
+    os=$(uname -s 2>/dev/null || true)
+    arch=$(uname -m 2>/dev/null || true)
+
+    case "${os}:${arch}" in
+        Darwin:x86_64|Darwin:arm64|Linux:x86_64|Linux:aarch64) ;;
+        *)
+            print_warning "Antigravity CLI has no ${os:-unknown} ${arch:-unknown} build; skipping."
+            return 0
+            ;;
+    esac
+
+    if [[ "${os}:${arch}" == "Linux:aarch64" ]]; then
+        if user_bits=$(getconf LONG_BIT 2>/dev/null) && [[ "${user_bits}" == "32" ]]; then
+            print_warning "Antigravity CLI has no 32-bit ARM build; skipping."
+            return 0
+        fi
+    fi
+
+    if [[ ! -e "${native_path}" ]]; then
+        print_message "Installing Antigravity CLI..."
+
+        if ! curl_bin=$(claude_code_trusted_curl); then
+            print_warning "Trusted system curl not found. Cannot download the Antigravity CLI installer."
+            return 1
+        fi
+        if ! scratch=$(mktemp -d); then
+            print_warning "Failed to create a temporary home for the Antigravity CLI installer."
+            return 1
+        fi
+        installer="${scratch}/install.sh"
+        installer_log="${scratch}/installer.log"
+
+        if ! claude_code_run_safely "${curl_bin}" -fsSL --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 2 -o "${installer}" "https://antigravity.google/cli/install.sh"; then
+            rm -rf -- "${scratch}"
+            print_warning "Failed to download the Antigravity CLI installer."
+            return 1
+        fi
+
+        if claude_code_run_safely /usr/bin/env HOME="${scratch}" /bin/bash "${installer}" --dir "${HOME}/.local/bin" > "${installer_log}" 2>&1; then
+            install_status=0
+        else
+            install_status=$?
+        fi
+        if [[ "${install_status}" -ne 0 ]]; then
+            tail -n 20 "${installer_log}" >&2
+        fi
+        rm -rf -- "${scratch}"
+        if [[ "${install_status}" -ne 0 ]]; then
+            print_warning "Antigravity CLI installer failed with exit code ${install_status}."
+            return 1
+        fi
+    else
+        print_debug "Antigravity CLI is already installed; it updates itself."
+    fi
+
+    if [[ ! -x "${native_path}" ]]; then
+        print_warning "Antigravity CLI installer completed, but ${native_path} is missing."
+        return 1
+    fi
+
+    if version_output=$("${native_path}" --version < /dev/null 2>&1); then
+        smoke_status=0
+    else
+        smoke_status=$?
+    fi
+    if [[ "${smoke_status}" -ne 0 || -z "${version_output}" ]]; then
+        printf '%s\n' "${version_output}" >&2
+        print_warning "Antigravity CLI smoke test failed (exit code ${smoke_status})."
+        return 1
+    fi
+
+    IFS= read -r version_line <<< "${version_output}"
+    print_success "Antigravity CLI ready (${version_line})."
+}
+
 
 
 install_portless_cli() {
@@ -9436,7 +9525,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 207 | Last changed: Show the Codex smoke test exit code and error output"
+    echo -e "${GRAY}Version 208 | Last changed: Install Antigravity CLI"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9553,6 +9642,7 @@ HELPER_EOF
     install_sfw
     install_claude_code
     install_gemini_cli
+    install_agy_cli || _setup_had_errors=1
     install_codex_cli || return 1
     install_portless_cli
     install_ntn_cli

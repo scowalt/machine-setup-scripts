@@ -1077,6 +1077,111 @@ function Install-GeminiCli {
     }
 }
 
+function Install-AgyCli {
+    $arch = $env:PROCESSOR_ARCHITEW6432
+    if ([string]::IsNullOrWhiteSpace($arch)) {
+        $arch = $env:PROCESSOR_ARCHITECTURE
+    }
+    if ($arch -notin @('AMD64', 'ARM64')) {
+        Write-Warning "Antigravity CLI has no Windows $arch build; skipping."
+        return $true
+    }
+
+    $installDir = Join-Path (Join-Path $env:LOCALAPPDATA 'agy') 'bin'
+    $agyExe = Join-Path $installDir 'agy.exe'
+
+    if (-not (Test-Path -LiteralPath $agyExe)) {
+        Write-Message "Installing Antigravity CLI..."
+
+        $powerShellHost = Get-ClaudeCodePowerShellHost
+        if (-not (Test-ClaudeCodeTrustedPowerShellHost $powerShellHost)) {
+            Write-Warning "Trusted Microsoft-signed PowerShell executable not found for the Antigravity CLI installer."
+            return $false
+        }
+
+        $installerPath = Join-Path ([System.IO.Path]::GetTempPath()) "agy-install-$([guid]::NewGuid()).ps1"
+        try {
+            Invoke-WebRequest -Uri 'https://antigravity.google/cli/install.ps1' -OutFile $installerPath -UseBasicParsing -TimeoutSec 120 -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Failed to download the Antigravity CLI installer."
+            Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
+            return $false
+        }
+
+        $result = Invoke-ClaudeCodeCommandSafely -FilePath $powerShellHost -Arguments @(
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-File',
+            $installerPath,
+            '--skip-path',
+            '--skip-aliases'
+        )
+        Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
+
+        if ($result.ExitCode -ne 0) {
+            if ($result.Output) {
+                Write-Host $result.Output
+            }
+            Write-Warning "Antigravity CLI installer failed with exit code $($result.ExitCode)."
+            return $false
+        }
+    }
+    else {
+        Write-Debug "Antigravity CLI is already installed; it updates itself."
+    }
+
+    if (-not (Test-Path -LiteralPath $agyExe)) {
+        Write-Warning "Antigravity CLI installer completed, but $agyExe is missing."
+        return $false
+    }
+
+    $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+    $userEntries = @()
+    if ($userPath) {
+        $userEntries = @($userPath -split ';' | Where-Object { $_ })
+    }
+    if (-not ($userEntries | Where-Object { Test-ClaudeCodeSamePath $_ $installDir })) {
+        try {
+            if ($userPath) {
+                [Environment]::SetEnvironmentVariable('PATH', ($userPath.TrimEnd(';') + ';' + $installDir), 'User')
+            }
+            else {
+                [Environment]::SetEnvironmentVariable('PATH', $installDir, 'User')
+            }
+        }
+        catch {
+            Write-Warning "Failed to add Antigravity CLI to user PATH; use $agyExe directly or add it manually."
+        }
+    }
+    $processEntries = @($env:PATH -split ';' | Where-Object { $_ })
+    if (-not ($processEntries | Where-Object { Test-ClaudeCodeSamePath $_ $installDir })) {
+        $env:PATH = "$installDir;$env:PATH"
+    }
+
+    $versionOutput = ''
+    $agyExitCode = 1
+    try {
+        $versionOutput = (& $agyExe --version 2>&1 | Out-String).Trim()
+        $agyExitCode = $LASTEXITCODE
+    }
+    catch {
+        $versionOutput = $_.Exception.Message
+    }
+    if ($agyExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($versionOutput)) {
+        if ($versionOutput) {
+            Write-Host $versionOutput
+        }
+        Write-Warning "Antigravity CLI smoke test failed (exit code $agyExitCode)."
+        return $false
+    }
+
+    $versionLine = ($versionOutput -split '\r?\n' | Select-Object -First 1).Trim()
+    Write-Success "Antigravity CLI ready ($versionLine)."
+    return $true
+}
+
 $null = 'BEGIN_GENERATED_OPENCODE_CLI'
 function Test-OpenCodeCliAcl {
     param([string]$HomePath)
@@ -9177,9 +9282,10 @@ function Invoke-WindowsSetupTasks {
     $simpleEnglishSetupFailed = $false
     $showMeSetupFailed = $false
     $prLensSetupFailed = $false
+    $agySetupFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 216 | Last changed: Refresh Pi packages when a checkout holds an ignored Python cache"
+    Write-Host "Version 217 | Last changed: Install Antigravity CLI"
 
     Assert-HeadlessUnsupported
 
@@ -9218,6 +9324,7 @@ function Invoke-WindowsSetupTasks {
     Install-SocketFirewall
     Install-ClaudeCode
     Install-GeminiCli
+    if (-not (Install-AgyCli)) { $agySetupFailed = $true }
     Install-CodexCli
     Install-PortlessCli
     Write-Message 'BB installation is managed manually on non-headless machines. This script does not install BB or provision WSL; existing BB installations are left untouched.'
@@ -9329,6 +9436,9 @@ function Invoke-WindowsSetupTasks {
     }
     if ($prLensSetupFailed) {
         throw "Required PR Lens skill removal failed."
+    }
+    if ($agySetupFailed) {
+        throw 'Antigravity CLI installation failed.'
     }
 
     Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen
