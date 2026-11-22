@@ -176,7 +176,7 @@ check_dotfiles_access() { return 1; }
 setup_dotfiles_deploy_key() { return 1; }
 install_bun() { echo bun-provisioned; BUN_READY=1; return "${BUN_STATUS}"; }
 retire_global_backlog_mcp() { echo retirement; [[ "${BUN_READY}" == 1 ]]; }
-install_gemini_cli() { echo independent; }
+retire_gemini_cli() { echo independent; }
 check_pending_reboot() { echo reboot; }
 finish_setup_log() { echo "final:$1"; return "$1"; }
 '''

@@ -133,7 +133,7 @@ try {
 
     $runner = $definitions['Invoke-WindowsSetupTasks']
     Assert-That ($runner -match '(?m)^\s*\$agySetupFailed = \$false\s*$') 'caller initializes $agySetupFailed'
-    Assert-That ($runner -match '(?m)^\s*Install-GeminiCli\s*\r?\n\s*if \(-not \(Install-AgyCli\)\) \{ \$agySetupFailed = \$true \}\s*$') 'caller runs Install-AgyCli right after Install-GeminiCli and records failure'
+    Assert-That ($runner -match '(?m)^\s*if \(-not \(Remove-GeminiCli\)\) \{ \$geminiRetirementFailed = \$true \}\s*\r?\n\s*if \(-not \(Install-AgyCli\)\) \{ \$agySetupFailed = \$true \}\s*$') 'caller runs Install-AgyCli right after Remove-GeminiCli and records failure'
     Assert-That ($runner -match "(?s)if \(\`$agySetupFailed\) \{\s*throw 'Antigravity CLI installation failed\.'\s*\}") 'caller throws on $agySetupFailed'
 }
 finally {

@@ -1044,37 +1044,100 @@ function Install-ClaudeCode {
     }
 }
 
-function Install-GeminiCli {
-    if (Get-Command gemini -ErrorAction SilentlyContinue) {
-        Write-Debug "Gemini CLI is already installed."
-        return
+function Remove-GeminiCli {
+    $ErrorActionPreference = 'Continue'
+    $listedPattern = '(^|\s)@google/gemini-cli@'
+    $changed = $false
+
+    $bun = Join-Path (Join-Path (Join-Path $env:USERPROFILE '.bun') 'bin') 'bun.exe'
+    if (-not (Test-Path -LiteralPath $bun -PathType Leaf)) {
+        $found = Get-Command bun -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        $bun = if ($found) { $found.Source } else { $null }
     }
 
-    Write-Host "$arrow Installing Gemini CLI..." -ForegroundColor Cyan
-
-    $bunPath = "$env:USERPROFILE\.bun\bin"
-    if (Test-Path $bunPath) {
-        $env:PATH = "$bunPath;$env:PATH"
-    }
-
-    if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
-        Write-Host "$warnIcon Bun not found. Cannot install Gemini CLI." -ForegroundColor Yellow
-        Write-Host "  Install Bun first, then run: bun install -g @google/gemini-cli" -ForegroundColor DarkGray
-        return
-    }
-
+    $previousForceColor = [Environment]::GetEnvironmentVariable('FORCE_COLOR', 'Process')
     try {
-        bun install -g @google/gemini-cli
-        if ($?) {
-            Write-Host "$success Gemini CLI installed." -ForegroundColor Green
+        $env:FORCE_COLOR = '0'
+        if ($bun) {
+            $output = (& $bun pm ls -g 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Could not list Bun's global packages, so Gemini CLI was not retired."
+                Write-Debug $output
+                return $false
+            }
+
+            if ($output -match $listedPattern) {
+                Write-Message "Removing Gemini CLI installed by setup..."
+                $output = (& $bun remove -g '@google/gemini-cli' 2>&1 | Out-String)
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warning "Failed to remove Gemini CLI with Bun."
+                    Write-Warning $output
+                    return $false
+                }
+                $output = (& $bun pm ls -g 2>&1 | Out-String)
+                if ($LASTEXITCODE -ne 0 -or $output -match $listedPattern) {
+                    Write-Warning "Could not confirm that Gemini CLI left Bun's global packages."
+                    Write-Debug $output
+                    return $false
+                }
+                $changed = $true
+            }
+
+            $binDir = (& $bun pm bin -g 2>$null | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or -not [IO.Path]::IsPathRooted($binDir)) {
+                Write-Warning "Could not find Bun's global bin directory, so leftover Gemini CLI shims were not checked."
+                return $false
+            }
+            $bunx = Join-Path $binDir 'gemini.bunx'
+            $shimExe = Join-Path $binDir 'gemini.exe'
+            if (Test-Path -LiteralPath $bunx -PathType Leaf) {
+                $text = [Text.Encoding]::Unicode.GetString([IO.File]::ReadAllBytes($bunx))
+                $quote = $text.IndexOf('"')
+                $target = if ($quote -ge 0) { $text.Substring(0, $quote) } else { '' }
+                if ($target -match '(^|[\\/])node_modules[\\/]@google[\\/]gemini-cli[\\/]') {
+                    $target = $target -replace '[\\/]', [string][IO.Path]::DirectorySeparatorChar
+                    if (-not [IO.Path]::IsPathRooted($target)) {
+                        $target = Join-Path (Split-Path -Parent $binDir) $target
+                    }
+                    if (-not (Test-Path -LiteralPath $target)) {
+                        try {
+                            Remove-Item -LiteralPath $bunx -Force -ErrorAction Stop
+                            if (Test-Path -LiteralPath $shimExe) {
+                                Remove-Item -LiteralPath $shimExe -Force -ErrorAction Stop
+                            }
+                        }
+                        catch {
+                            Write-Warning "Failed to remove the leftover Gemini CLI shim in ${binDir}: $($_.Exception.Message)"
+                            return $false
+                        }
+                        $changed = $true
+                    }
+                }
+            }
+        }
+    }
+    finally {
+        if ($null -eq $previousForceColor) {
+            Remove-Item -LiteralPath Env:FORCE_COLOR -ErrorAction SilentlyContinue
         }
         else {
-            Write-Host "$failIcon Failed to install Gemini CLI." -ForegroundColor Red
+            $env:FORCE_COLOR = $previousForceColor
         }
     }
-    catch {
-        Write-Host "$failIcon Failed to install Gemini CLI: $($_.Exception.Message)" -ForegroundColor Red
+
+    if ($changed) {
+        Write-Success "Gemini CLI removed."
     }
+    else {
+        Write-Debug "Gemini CLI was not installed by setup."
+    }
+
+    $foreign = Get-Command gemini -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($foreign) {
+        $foreignPath = if ($foreign.Source) { $foreign.Source } else { $foreign.Definition }
+        Write-Warning "Preserving a Gemini CLI that setup did not install: $foreignPath."
+    }
+    return $true
 }
 
 function Install-AgyCli {
@@ -4265,7 +4328,6 @@ function Install-ManagedAgentSkill {
         "--global",
         "--agent", "claude-code",
         "--agent", "codex",
-        "--agent", "gemini-cli",
         "--skill", $SkillName,
         "--copy",
         "--yes"
@@ -4308,7 +4370,7 @@ function Install-ManagedAgentSkill {
         }
     }
 
-    Write-Success "$DisplayName installed/updated for Claude Code, Codex, Gemini CLI, and Pi through the shared skill path."
+    Write-Success "$DisplayName installed/updated for Claude Code, Codex, and Pi through the shared skill path."
     if ($installOutput) { Write-Debug ($installOutput | Out-String) }
     return $true
 }
@@ -9283,9 +9345,10 @@ function Invoke-WindowsSetupTasks {
     $showMeSetupFailed = $false
     $prLensSetupFailed = $false
     $agySetupFailed = $false
+    $geminiRetirementFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 217 | Last changed: Install Antigravity CLI"
+    Write-Host "Version 218 | Last changed: Retire Gemini CLI"
 
     Assert-HeadlessUnsupported
 
@@ -9323,7 +9386,7 @@ function Invoke-WindowsSetupTasks {
     Install-GiteaClient
     Install-SocketFirewall
     Install-ClaudeCode
-    Install-GeminiCli
+    if (-not (Remove-GeminiCli)) { $geminiRetirementFailed = $true }
     if (-not (Install-AgyCli)) { $agySetupFailed = $true }
     Install-CodexCli
     Install-PortlessCli
@@ -9436,6 +9499,9 @@ function Invoke-WindowsSetupTasks {
     }
     if ($prLensSetupFailed) {
         throw "Required PR Lens skill removal failed."
+    }
+    if ($geminiRetirementFailed) {
+        throw 'Gemini CLI retirement failed.'
     }
     if ($agySetupFailed) {
         throw 'Antigravity CLI installation failed.'

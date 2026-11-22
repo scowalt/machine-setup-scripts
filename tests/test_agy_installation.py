@@ -293,13 +293,13 @@ claude_code_run_safely() {
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn('WARNING: Antigravity CLI smoke test failed (exit code 0).', result.stderr)
 
-    def test_function_is_identical_and_called_right_after_gemini(self):
+    def test_function_is_identical_and_called_right_after_gemini_retirement(self):
         blocks = {script: function(script) for script in SCRIPTS}
         self.assertEqual(len(set(blocks.values())), 1)
         for script in SCRIPTS:
             with self.subTest(script=script):
                 lines = (ROOT / script).read_text().splitlines()
-                callers = [i for i, line in enumerate(lines) if re.fullmatch(r'\s+install_gemini_cli(?: \|\| _setup_had_errors=1)?', line)]
+                callers = [i for i, line in enumerate(lines) if re.fullmatch(r'    retire_gemini_cli \|\| _setup_had_errors=1', line)]
                 self.assertEqual(len(callers), 1)
                 self.assertEqual(lines[callers[0] + 1], '    install_agy_cli || _setup_had_errors=1')
 
