@@ -11110,6 +11110,7 @@ SETUP_URL="${SETUP_AUTORUN_URL:-https://scripts.scowalt.com/setup/ubuntu.sh}"
 STATE_DIR="${SETUP_AUTORUN_STATE_DIR:-${HOME}/.local/state/setup-autorun}"
 MIN_INTERVAL_SECONDS=3600
 BUSY_STATUSES='["pending","starting","active","stopping"]'
+THREAD_LIMIT=1000000
 
 dry_run=0
 [[ "${1:-}" == "--dry-run" ]] && dry_run=1
@@ -11134,8 +11135,9 @@ if ! head -n 1 "${script_file}" | grep -q '^#!'; then
 fi
 hash=$(sha256sum "${script_file}" | cut -d' ' -f1)
 
-if ! busy=$(bb thread list --json --include-hidden \
-        | jq -r --argjson busy "${BUSY_STATUSES}" '[.[] | select(.status as $s | $busy | index($s))] | length'); then
+if ! busy=$(bb thread list --json --include-hidden --limit "${THREAD_LIMIT}" \
+        | jq -r --argjson busy "${BUSY_STATUSES}" --argjson limit "${THREAD_LIMIT}" \
+            'if length >= $limit then error("truncated") else [.[] | select(.status as $s | $busy | index($s))] | length end'); then
     echo "skip: could not list bb threads"
     exit 0
 fi
@@ -11255,7 +11257,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 370 | Last changed: Retire Gemini CLI"
+    echo -e "${GRAY}Version 371 | Last changed: Count every bb thread before an idle rerun"
 
     if ! acquire_setup_lock; then
         return 1
