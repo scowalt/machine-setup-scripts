@@ -389,8 +389,10 @@ tailscale() {
 systemctl() {
     case " $* " in
         *' show '*MainPID*) cat "$BB_TEST_ROOT/main-pid";;
-        *' show '*NeedDaemonReload*) printf '%s\nno\n' "${BB_TEST_NEED_RELOAD:-no}";;
-        *' is-enabled '*setup-bb-app.service*) [[ "${BB_TEST_APP_ENABLED:-0}" == 1 ]] && printf 'enabled\n';;
+        *' show setup-bb-app.service '*NeedDaemonReload*) printf '%s\n' "${BB_TEST_APP_RELOAD:-no}";;
+        *' show setup-bb-ingress.service '*NeedDaemonReload*) printf '%s\n' "${BB_TEST_INGRESS_RELOAD:-no}";;
+        *' show '*NeedDaemonReload*) printf 'no\n\nno\n';;
+        *' is-enabled '*setup-bb-app.service*) [[ -n "${BB_TEST_APP_ENABLED:-}" ]] && printf '%s\n' "${BB_TEST_APP_ENABLED}";;
         *' show '*)
             if [[ "$3" == setup-bb-app.service && ( -n "${BB_TEST_REFERENCE_NAME:-}" || -f "$HOME/.config/systemd/user/$3.d/10-tmpdir.conf" ) ]]; then
                 printf 'FragmentPath=%s\n' "$HOME/.config/systemd/user/$3"
@@ -573,56 +575,60 @@ printf 'inherited generated-unit/child/readiness cases passed\n'
 
 # A server that is already current is left running: no stop, install or start.
 # Any difference in version, units, guard, systemd state or config updates it.
-export BB_TEST_APP_ENABLED=1 BB_TEST_LATEST=0.44.0
+export BB_TEST_APP_ENABLED=enabled BB_TEST_LATEST=0.44.0
 bb_latest_package_version() { [[ -n "${BB_TEST_LATEST}" ]] && printf '%s\n' "${BB_TEST_LATEST}"; }
+current_case_failed() { printf 'current-server case failed: %s\n' "$1" >&2; exit 1; }
 left_running() {
     : > "$BB_TEST_EVENTS"
-    setup_bb_server
-    ! grep -Eq '^(stop-|install$|start-app$|daemon-reload$)' "$BB_TEST_EVENTS"
-    grep -qx 'private-https' "$BB_TEST_EVENTS"
+    setup_bb_server || current_case_failed "$1: setup failed"
+    if grep -Eq '^(stop-|install$|start-app$|daemon-reload$|enable-app$)' "$BB_TEST_EVENTS"; then current_case_failed "$1: bb was restarted"; fi
+    grep -qx 'private-https' "$BB_TEST_EVENTS" || current_case_failed "$1: endpoint not checked"
+    [[ -e "$BB_TEST_ROOT/app-active" && -e "$BB_TEST_ROOT/ingress-active" ]] || current_case_failed "$1: bb not running"
 }
 updated() {
     : > "$BB_TEST_EVENTS"
-    setup_bb_server
-    grep -qx 'stop-app' "$BB_TEST_EVENTS"
-    grep -qx 'install' "$BB_TEST_EVENTS"
-    grep -qx 'start-app' "$BB_TEST_EVENTS"
-    [[ -e "$BB_TEST_ROOT/app-active" && -e "$BB_TEST_ROOT/ingress-active" ]]
+    setup_bb_server || current_case_failed "$1: setup failed"
+    for event in stop-app install start-app; do
+        grep -qx "${event}" "$BB_TEST_EVENTS" || current_case_failed "$1: no ${event}"
+    done
+    [[ -e "$BB_TEST_ROOT/app-active" && -e "$BB_TEST_ROOT/ingress-active" ]] || current_case_failed "$1: bb not running"
 }
-left_running
-left_running
-BB_TEST_LATEST=0.45.0 updated
-BB_TEST_LATEST='' updated
-BB_TEST_NEED_RELOAD=yes updated
-BB_TEST_APP_ENABLED=0 updated
-left_running
+left_running current
+left_running 'current again'
+BB_TEST_LATEST=0.45.0 updated 'new feed version'
+BB_TEST_LATEST='' updated 'unreadable feed'
+BB_TEST_APP_RELOAD=yes updated 'app unit needs daemon-reload'
+BB_TEST_INGRESS_RELOAD=yes updated 'ingress unit needs daemon-reload'
+BB_TEST_APP_ENABLED=enabled-runtime updated 'app enabled only at runtime'
+BB_TEST_APP_ENABLED='' updated 'app not enabled'
+left_running 'current after updates'
 printf 'Environment=DRIFT=1\n' >> "$HOME/.config/systemd/user/setup-bb-app.service"
-updated
-! grep -q DRIFT "$HOME/.config/systemd/user/setup-bb-app.service"
-left_running
+updated 'app unit drift'
+if grep -q DRIFT "$HOME/.config/systemd/user/setup-bb-app.service"; then current_case_failed 'app unit drift: not rewritten'; fi
+left_running 'current after app unit repair'
 printf '# drift\n' >> "$HOME/.config/systemd/user/setup-bb-ingress.service"
-updated
+updated 'ingress unit drift'
 chmod 644 "$HOME/.config/systemd/user/setup-bb-app.service"
-updated
-[[ "$(stat -c %a "$HOME/.config/systemd/user/setup-bb-app.service")" == 600 ]]
+updated 'app unit mode drift'
+[[ "$(stat -c %a "$HOME/.config/systemd/user/setup-bb-app.service")" == 600 ]] || current_case_failed 'app unit mode drift: not repaired'
 printf '# drift\n' >> "$HOME/.config/setup-bb-server/bb-guard"
-updated
-cmp <(bb_guard_content) "$HOME/.config/setup-bb-server/bb-guard"
-left_running
+updated 'guard drift'
+bb_guard_content | cmp -s - "$HOME/.config/setup-bb-server/bb-guard" || current_case_failed 'guard drift: not rewritten'
+left_running 'current after guard repair'
 node -e 'const fs=require("fs"),f=process.argv[1],c=JSON.parse(fs.readFileSync(f));c.config.BB_APP_URL="https://old.example.ts.net";fs.writeFileSync(f,JSON.stringify(c))' "$HOME/.bb/config.json"
-updated
+updated 'stale BB_APP_URL in config.json'
 node -e 'const fs=require("fs"),f=process.argv[1],e=JSON.parse(fs.readFileSync(f));e.env.BB_APP_URL="https://old.example.ts.net";fs.writeFileSync(f,JSON.stringify(e))' "$HOME/.bb/env.json"
-updated
-left_running
+updated 'BB_APP_URL in env.json'
+left_running 'current after config repair'
 printf '%s\n' "$HOME/.local/share/mise/installs/node/24.18.0/lib/node_modules/bb-app" > "$HOME/.config/setup-bb-server/package-owner"
-updated
-[[ "$(<"$HOME/.config/setup-bb-server/package-owner")" == "$HOME/.local/share/mise/installs/node/24.20.0/lib/node_modules/bb-app" ]]
-BB_TEST_HTTPS_FAIL_ONCE="$BB_TEST_ROOT/https-fail-once"
+updated 'different package owner'
+[[ "$(<"$HOME/.config/setup-bb-server/package-owner")" == "$HOME/.local/share/mise/installs/node/24.20.0/lib/node_modules/bb-app" ]] || current_case_failed 'different package owner: not promoted'
+export BB_TEST_HTTPS_FAIL_ONCE="$BB_TEST_ROOT/https-fail-once"
 : > "$BB_TEST_HTTPS_FAIL_ONCE"
-updated
-left_running
+updated 'endpoint check failed'
+left_running 'current after endpoint recovery'
 unset BB_TEST_APP_ENABLED BB_TEST_LATEST BB_TEST_HTTPS_FAIL_ONCE
-unset -f bb_latest_package_version left_running updated
+unset -f bb_latest_package_version current_case_failed left_running updated
 printf 'current-server cases passed\n'
 
 # A native-lock timeout during an update leaves metadata byte-for-byte intact,

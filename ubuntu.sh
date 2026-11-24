@@ -10399,14 +10399,17 @@ bb_config_current() {
 }
 
 bb_server_current() {
-    local _app="$1" _app_unit="$2" _serve="$3" _serve_unit="$4" _guard="$5" _origin="$6" _installed _latest _contents _modes _reload
+    local _app="$1" _app_unit="$2" _serve="$3" _serve_unit="$4" _guard="$5" _origin="$6" _installed _latest _contents _modes _unit _value
     [[ "${BB_PACKAGE_OWNER}" == "${BB_PACKAGE_PATH}" && ! -e "${HOME}/.config/setup-bb-server/package-owner.next" ]] || return 1
     _installed=$(bb_installed_package_version) && _latest=$(bb_latest_package_version) && [[ "${_installed}" == "${_latest}" ]] || return 1
     _modes=$(stat -c %a -- "${_app}" "${_serve}" 2>/dev/null) && [[ "${_modes}" == $'600\n600' ]] || return 1
     { _contents=$(<"${_app}"); } 2>/dev/null && [[ "${_contents}" == "${_app_unit}" ]] || return 1
     { _contents=$(<"${_serve}"); } 2>/dev/null && [[ "${_contents}" == "${_serve_unit}" ]] || return 1
     bb_guard_current "${_guard}" || return 1
-    _reload=$(systemctl --user show setup-bb-app.service setup-bb-ingress.service --property=NeedDaemonReload --value 2>/dev/null) && [[ "${_reload}" == $'no\nno' ]] || return 1
+    _value=$(systemctl --user is-enabled setup-bb-app.service 2>/dev/null) && [[ "${_value}" == enabled ]] || return 1
+    for _unit in setup-bb-app.service setup-bb-ingress.service; do
+        _value=$(systemctl --user show "${_unit}" --property=NeedDaemonReload --value 2>/dev/null) && [[ "${_value}" == no ]] || return 1
+    done
     bb_config_current "${_origin}" || return 1
     curl --noproxy '*' --fail --silent --max-time 3 "${_origin}/" -o /dev/null 2>/dev/null || return 1
     BB_CURRENT_VERSION="${_installed}"
@@ -11018,7 +11021,7 @@ if not isinstance(obj,dict): raise ValueError("invalid metadata")' "${_root}" >/
     local _path="${HOME}/.local/share/mise/shims:${BB_PACKAGE_PREFIX}/bin:${HOME}/.local/bin:${HOME}/.bun/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin"
     _app_unit=$(printf '%s\n' '# setup-managed bb app v1' '[Unit]' 'Description=Setup-managed bb main server and local execution daemon' 'StartLimitIntervalSec=0' '[Service]' 'Type=simple' 'TimeoutStartSec=180' "Environment=HOME=${HOME}" "Environment=PATH=${_path}" "Environment=BB_PACKAGE_BINARY=${BB_PACKAGE_PREFIX}/bin/bb-app" "Environment=BB_TAILSCALE_BIN=${_tailscale_bin}" "Environment=BB_APP_URL=${_origin}" "ExecStart=${_guard} app-start" "ExecStartPost=${_guard} app-ready" 'Restart=always' 'RestartSec=10' '[Install]' 'WantedBy=default.target') || { bb_server_failure update.app-unit-render; return 1; }
     _serve_unit=$(printf '%s\n' '# setup-managed bb ingress v1' '[Unit]' 'Description=Setup-managed bb private HTTPS ingress' 'BindsTo=setup-bb-app.service' 'After=setup-bb-app.service' 'StartLimitIntervalSec=0' '[Service]' 'Type=simple' "Environment=HOME=${HOME}" "Environment=PATH=${_path}" "Environment=BB_PACKAGE_BINARY=${BB_PACKAGE_PREFIX}/bin/bb-app" "Environment=BB_TAILSCALE_BIN=${_tailscale_bin}" "ExecStart=${_guard} ingress-start" 'Restart=always' 'RestartSec=15') || { bb_server_failure update.ingress-unit-render; return 1; }
-    if [[ "${_app_active}" -eq 1 && "${_ingress_active}" -eq 1 && "${_app_enabled}" -eq 1 && "${_new_state}" -eq 0 ]] &&
+    if [[ "${_app_active}" -eq 1 && "${_ingress_active}" -eq 1 && "${_new_state}" -eq 0 ]] &&
         bb_server_current "${_app}" "${_app_unit}" "${_serve}" "${_serve_unit}" "${_guard}" "${_origin}"; then
         print_success "BB ${BB_CURRENT_VERSION} is current at ${_origin}; left it running."
         return 0
