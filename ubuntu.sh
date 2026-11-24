@@ -10384,6 +10384,37 @@ bb_install_package() {
     bb_package_artifacts_ready "${BB_PACKAGE_PREFIX}" "${BB_PACKAGE_PATH}" || { bb_server_failure npm.artifacts; return 1; }
 }
 
+bb_installed_package_version() {
+    node -e 'const fs=require("node:fs");const v=JSON.parse(fs.readFileSync(process.argv[1],"utf8"))?.version;if(typeof v!=="string"||!/^[0-9]+\.[0-9]+\.[0-9]+(-fork\.[0-9]+)?$/.test(v))process.exit(1);console.log(v)' "${BB_PACKAGE_PATH}/package.json" 2>/dev/null
+}
+
+bb_latest_package_version() {
+    local _feed
+    _feed=$(curl --fail --silent --show-error --location --max-time 30 https://github.com/scowalt/bb/releases/download/bb-app-latest/bb-app-version.json 2>/dev/null) || return 1
+    node -e 'const v=JSON.parse(process.argv[1])?.version;if(typeof v!=="string"||!/^[0-9]+\.[0-9]+\.[0-9]+(-fork\.[0-9]+)?$/.test(v))process.exit(1);console.log(v)' "${_feed}" 2>/dev/null
+}
+
+bb_config_current() {
+    node -e 'const fs=require("node:fs"),[configPath,envPath,origin]=process.argv.slice(1);const read=f=>{try{return JSON.parse(fs.readFileSync(f,"utf8"))}catch(e){if(e.code==="ENOENT")return {};throw e}};const config=read(configPath),env=read(envPath)?.env;process.exit(config?.config?.BB_APP_URL===origin&&!(env&&typeof env==="object"&&Object.hasOwn(env,"BB_APP_URL"))?0:1)' "${HOME}/.bb/config.json" "${HOME}/.bb/env.json" "$1" >/dev/null 2>&1
+}
+
+bb_server_current() {
+    local _app="$1" _app_unit="$2" _serve="$3" _serve_unit="$4" _guard="$5" _origin="$6" _installed _latest _contents _modes _unit _value
+    [[ "${BB_PACKAGE_OWNER}" == "${BB_PACKAGE_PATH}" && ! -e "${HOME}/.config/setup-bb-server/package-owner.next" ]] || return 1
+    _installed=$(bb_installed_package_version) && _latest=$(bb_latest_package_version) && [[ "${_installed}" == "${_latest}" ]] || return 1
+    _modes=$(stat -c %a -- "${_app}" "${_serve}" 2>/dev/null) && [[ "${_modes}" == $'600\n600' ]] || return 1
+    { _contents=$(<"${_app}"); } 2>/dev/null && [[ "${_contents}" == "${_app_unit}" ]] || return 1
+    { _contents=$(<"${_serve}"); } 2>/dev/null && [[ "${_contents}" == "${_serve_unit}" ]] || return 1
+    bb_guard_current "${_guard}" || return 1
+    _value=$(systemctl --user is-enabled setup-bb-app.service 2>/dev/null) && [[ "${_value}" == enabled ]] || return 1
+    for _unit in setup-bb-app.service setup-bb-ingress.service; do
+        _value=$(systemctl --user show "${_unit}" --property=NeedDaemonReload --value 2>/dev/null) && [[ "${_value}" == no ]] || return 1
+    done
+    bb_config_current "${_origin}" || return 1
+    curl --noproxy '*' --fail --silent --max-time 3 "${_origin}/" -o /dev/null 2>/dev/null || return 1
+    BB_CURRENT_VERSION="${_installed}"
+}
+
 bb_tailnet_version_ready() {
     local _versions
     _versions=$(tailscale version --daemon --json 2>/dev/null) || return 1
@@ -10583,10 +10614,8 @@ bb_native_app_ready() {
     node -e 'const fs=require("node:fs"),home=process.argv[3];let expected="";for(const p of [home+"/.bb/host-id",home+"/.bb/auth.json",home+"/.bb/env.json"]){try{const s=fs.lstatSync(p);if(!s.isFile()||s.isSymbolicLink()||s.nlink!==1||s.uid!==process.getuid()||(s.mode&0o057)!==0)process.exit(1);const v=fs.readFileSync(p,"utf8");if(p.endsWith("host-id"))expected=v.trim();else{const j=JSON.parse(v);expected ||= j.hostId||j.env?.BB_HOST_ID||""}}catch(e){if(e.code!=="ENOENT")process.exit(1)}}const h=JSON.parse(process.argv[1]),d=JSON.parse(process.argv[2]),norm=x=>{try{const u=new URL(x);if(u.hostname==="localhost")u.hostname="127.0.0.1";return u.href.replace(/\/$/,"")}catch{return ""}};process.exit(h?.ok===true&&typeof h.launchId==="string"&&h.launchId.length>0&&typeof expected==="string"&&expected.length>0&&d?.connected===true&&d.hostId===expected&&norm(d.serverUrl)==="http://127.0.0.1:38886"?0:1)' "${_health}" "${_status}" "${HOME}" >/dev/null 2>&1
 }
 
-bb_write_bb_guard() {
-    local _target="$1" _temporary _target_metadata _uid
-    _temporary=$(mktemp "${_target}.XXXXXX" 2>/dev/null) || return 1
-    if ! cat 2>/dev/null > "${_temporary}" <<'BB_GUARD'
+bb_guard_content() {
+    cat <<'BB_GUARD'
 #!/usr/bin/env bash
 # setup-managed bb lifecycle guard v1
 set -euo pipefail
@@ -10769,16 +10798,23 @@ case "${mode}" in
     *) exit 2 ;;
 esac
 BB_GUARD
-    then
-        rm -f -- "${_temporary}" 2>/dev/null
-        return 1
-    fi
-    if [[ -f "${_target}" && ! -L "${_target}" ]] &&
+}
+
+bb_guard_current() {
+    local _target="$1" _target_metadata _uid
+    [[ -f "${_target}" && ! -L "${_target}" ]] &&
         _target_metadata=$(stat -c '%u %h %a' -- "${_target}" 2>/dev/null) &&
         _uid=$(id -u 2>/dev/null) && [[ "${_target_metadata}" == "${_uid} 1 700" || "${_target_metadata}" == "${_uid} 1 720" ]] &&
-        cmp -s -- "${_temporary}" "${_target}"; then
-        rm -f -- "${_temporary}" 2>/dev/null || return 1
-        return 0
+        bb_guard_content | cmp -s -- - "${_target}"
+}
+
+bb_write_bb_guard() {
+    local _target="$1" _temporary
+    bb_guard_current "${_target}" && return 0
+    _temporary=$(mktemp "${_target}.XXXXXX" 2>/dev/null) || return 1
+    if ! bb_guard_content 2>/dev/null > "${_temporary}"; then
+        rm -f -- "${_temporary}" 2>/dev/null
+        return 1
     fi
     if ! chmod 700 "${_temporary}" 2>/dev/null || ! mv -f -- "${_temporary}" "${_target}" 2>/dev/null; then
         rm -f -- "${_temporary}" 2>/dev/null
@@ -10881,7 +10917,7 @@ BB_CONFIG
 
 setup_bb_server() {
     local _dir="${HOME}/.config/setup-bb-server" _units="${HOME}/.config/systemd/user"
-    local _state="${HOME}/.config/setup-bb-server/endpoint" _app _serve _guard _dns='' _port='' _origin='' _current_dns _i _root _mode _user _linger _tailscale_bin _app_active=0 _ingress_active=0 _app_enabled=0 _new_state=0 _old_app='' _old_serve='' _old_guard='' _app_unit _serve_unit _ready_check
+    local _state="${HOME}/.config/setup-bb-server/endpoint" BB_CURRENT_VERSION='' _app _serve _guard _dns='' _port='' _origin='' _current_dns _i _root _mode _user _linger _tailscale_bin _app_active=0 _ingress_active=0 _app_enabled=0 _new_state=0 _old_app='' _old_serve='' _old_guard='' _app_unit _serve_unit _ready_check
     local BB_SERVER_READY_CHECK=readiness.native
     if [[ "${HEADLESS:-}" != "1" ]]; then
         print_message 'Skipping BB server setup: managed only with HEADLESS=1; existing BB installation left untouched.'
@@ -10982,6 +11018,14 @@ if not isinstance(obj,dict): raise ValueError("invalid metadata")' "${_root}" >/
         ( umask 077; set -C; printf '%s %s %s\n' "${_dns}" "${_port}" "${_origin}" > "${_state}" ) 2>/dev/null || { bb_server_failure update.endpoint-write; return 1; }
         _new_state=1
     fi
+    local _path="${HOME}/.local/share/mise/shims:${BB_PACKAGE_PREFIX}/bin:${HOME}/.local/bin:${HOME}/.bun/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin"
+    _app_unit=$(printf '%s\n' '# setup-managed bb app v1' '[Unit]' 'Description=Setup-managed bb main server and local execution daemon' 'StartLimitIntervalSec=0' '[Service]' 'Type=simple' 'TimeoutStartSec=180' "Environment=HOME=${HOME}" "Environment=PATH=${_path}" "Environment=BB_PACKAGE_BINARY=${BB_PACKAGE_PREFIX}/bin/bb-app" "Environment=BB_TAILSCALE_BIN=${_tailscale_bin}" "Environment=BB_APP_URL=${_origin}" "ExecStart=${_guard} app-start" "ExecStartPost=${_guard} app-ready" 'Restart=always' 'RestartSec=10' '[Install]' 'WantedBy=default.target') || { bb_server_failure update.app-unit-render; return 1; }
+    _serve_unit=$(printf '%s\n' '# setup-managed bb ingress v1' '[Unit]' 'Description=Setup-managed bb private HTTPS ingress' 'BindsTo=setup-bb-app.service' 'After=setup-bb-app.service' 'StartLimitIntervalSec=0' '[Service]' 'Type=simple' "Environment=HOME=${HOME}" "Environment=PATH=${_path}" "Environment=BB_PACKAGE_BINARY=${BB_PACKAGE_PREFIX}/bin/bb-app" "Environment=BB_TAILSCALE_BIN=${_tailscale_bin}" "ExecStart=${_guard} ingress-start" 'Restart=always' 'RestartSec=15') || { bb_server_failure update.ingress-unit-render; return 1; }
+    if [[ "${_app_active}" -eq 1 && "${_ingress_active}" -eq 1 && "${_new_state}" -eq 0 ]] &&
+        bb_server_current "${_app}" "${_app_unit}" "${_serve}" "${_serve_unit}" "${_guard}" "${_origin}"; then
+        print_success "BB ${BB_CURRENT_VERSION} is current at ${_origin}; left it running."
+        return 0
+    fi
     if [[ "${_ingress_active}" -eq 1 ]]; then
         systemctl --user stop setup-bb-ingress.service >/dev/null 2>&1 || { bb_server_failure update.stop-ingress; return 1; }
         ! systemctl --user is-active --quiet setup-bb-ingress.service >/dev/null 2>&1 || { bb_server_failure update.ingress-stopped; return 1; }
@@ -11027,9 +11071,6 @@ if not isinstance(obj,dict): raise ValueError("invalid metadata")' "${_root}" >/
         if [[ "${_app_active}" -eq 1 ]]; then bb_restore_bb_services "${_app}" "${_serve}" "${_guard}" "${_old_app}" "${_old_serve}" "${_old_guard}" "${_app_active}" "${_ingress_active}" "${BB_PACKAGE_OWNER:-}" "${_app_enabled}" || true; fi
         return 1
     fi
-    local _path="${HOME}/.local/share/mise/shims:${BB_PACKAGE_PREFIX}/bin:${HOME}/.local/bin:${HOME}/.bun/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin"
-    _app_unit=$(printf '%s\n' '# setup-managed bb app v1' '[Unit]' 'Description=Setup-managed bb main server and local execution daemon' 'StartLimitIntervalSec=0' '[Service]' 'Type=simple' 'TimeoutStartSec=180' "Environment=HOME=${HOME}" "Environment=PATH=${_path}" "Environment=BB_PACKAGE_BINARY=${BB_PACKAGE_PREFIX}/bin/bb-app" "Environment=BB_TAILSCALE_BIN=${_tailscale_bin}" "Environment=BB_APP_URL=${_origin}" "ExecStart=${_guard} app-start" "ExecStartPost=${_guard} app-ready" 'Restart=always' 'RestartSec=10' '[Install]' 'WantedBy=default.target') || { bb_server_failure update.app-unit-render; return 1; }
-    _serve_unit=$(printf '%s\n' '# setup-managed bb ingress v1' '[Unit]' 'Description=Setup-managed bb private HTTPS ingress' 'BindsTo=setup-bb-app.service' 'After=setup-bb-app.service' 'StartLimitIntervalSec=0' '[Service]' 'Type=simple' "Environment=HOME=${HOME}" "Environment=PATH=${_path}" "Environment=BB_PACKAGE_BINARY=${BB_PACKAGE_PREFIX}/bin/bb-app" "Environment=BB_TAILSCALE_BIN=${_tailscale_bin}" "ExecStart=${_guard} ingress-start" 'Restart=always' 'RestartSec=15') || { bb_server_failure update.ingress-unit-render; return 1; }
     _mode=update.app-unit-write
     if ! { bb_write_owned_unit "${_app}" "${_app_unit}" && { _mode=update.ingress-unit-write; bb_write_owned_unit "${_serve}" "${_serve_unit}"; }; }; then
         bb_server_failure "${_mode}"
@@ -11257,7 +11298,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 Ubuntu Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 371 | Last changed: Count every bb thread before an idle rerun"
+    echo -e "${GRAY}Version 372 | Last changed: Leave a current bb server running"
 
     if ! acquire_setup_lock; then
         return 1
