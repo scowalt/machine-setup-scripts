@@ -114,7 +114,9 @@ MOCK
 cat > "${tmp}/bin/bb" <<'MOCK'
 #!/bin/sh
 [ "${BB_STATUS:-0}" = 0 ] || exit 1
-printf '%s\n' "${BB_THREADS}"
+limit=200
+while [ "$#" -gt 0 ]; do [ "$1" = --limit ] && limit=$2; shift; done
+printf '%s\n' "${BB_THREADS}" | jq -c --argjson n "${limit}" '.[:$n]'
 MOCK
 cat > "${tmp}/setup-v1.sh" <<'MOCK'
 #!/bin/sh
@@ -139,6 +141,9 @@ runs() { [[ ! -f "${tmp}/ran" ]] || wc -l < "${tmp}/ran"; }
 
 out=$(BB_THREADS='[{"status":"active"},{"status":"pending"},{"status":"idle"}]' "${tmp}/autorun")
 [[ "${out}" == 'skip: 2 bb thread(s) running' ]] || fail 'busy threads skip'
+many=$(jq -nc '[range(250) | {status: "idle"}] + [{status: "active"}]')
+out=$(BB_THREADS="${many}" "${tmp}/autorun")
+[[ "${out}" == 'skip: 1 bb thread(s) running' ]] || fail 'a busy thread past the first 200 skips'
 out=$(BB_STATUS=1 "${tmp}/autorun" 2> /dev/null)
 [[ "${out}" == 'skip: could not list bb threads' ]] || fail 'bb failure skips'
 out=$(CURL_STATUS=1 "${tmp}/autorun")
