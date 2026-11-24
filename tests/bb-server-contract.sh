@@ -389,6 +389,8 @@ tailscale() {
 systemctl() {
     case " $* " in
         *' show '*MainPID*) cat "$BB_TEST_ROOT/main-pid";;
+        *' show '*NeedDaemonReload*) printf '%s\nno\n' "${BB_TEST_NEED_RELOAD:-no}";;
+        *' is-enabled '*setup-bb-app.service*) [[ "${BB_TEST_APP_ENABLED:-0}" == 1 ]] && printf 'enabled\n';;
         *' show '*)
             if [[ "$3" == setup-bb-app.service && ( -n "${BB_TEST_REFERENCE_NAME:-}" || -f "$HOME/.config/systemd/user/$3.d/10-tmpdir.conf" ) ]]; then
                 printf 'FragmentPath=%s\n' "$HOME/.config/systemd/user/$3"
@@ -428,6 +430,7 @@ curl() {
         *)
             [[ "$*" == *'https://test.example.ts.net:38443/ -o /dev/null' ]] || return 97
             printf 'private-https\n' >> "$BB_TEST_EVENTS"
+            if [[ -n "${BB_TEST_HTTPS_FAIL_ONCE:-}" && -e "${BB_TEST_HTTPS_FAIL_ONCE}" ]]; then rm -f -- "${BB_TEST_HTTPS_FAIL_ONCE}"; return 22; fi
             [[ "${BB_TEST_HTTPS_FAIL:-0}" != 1 ]];;
     esac
 }
@@ -567,6 +570,60 @@ if "$BB_TEST_RUNNER" app ExecStart > "$BB_TEST_ROOT/missing-source.log" 2>&1; th
 grep -qx 'fixture required environment source unavailable' "$BB_TEST_ROOT/missing-source.log"
 mv "$BB_TEST_ROOT/required-source" "$HOME/.env.local"
 printf 'inherited generated-unit/child/readiness cases passed\n'
+
+# A server that is already current is left running: no stop, install or start.
+# Any difference in version, units, guard, systemd state or config updates it.
+export BB_TEST_APP_ENABLED=1 BB_TEST_LATEST=0.44.0
+bb_latest_package_version() { [[ -n "${BB_TEST_LATEST}" ]] && printf '%s\n' "${BB_TEST_LATEST}"; }
+left_running() {
+    : > "$BB_TEST_EVENTS"
+    setup_bb_server
+    ! grep -Eq '^(stop-|install$|start-app$|daemon-reload$)' "$BB_TEST_EVENTS"
+    grep -qx 'private-https' "$BB_TEST_EVENTS"
+}
+updated() {
+    : > "$BB_TEST_EVENTS"
+    setup_bb_server
+    grep -qx 'stop-app' "$BB_TEST_EVENTS"
+    grep -qx 'install' "$BB_TEST_EVENTS"
+    grep -qx 'start-app' "$BB_TEST_EVENTS"
+    [[ -e "$BB_TEST_ROOT/app-active" && -e "$BB_TEST_ROOT/ingress-active" ]]
+}
+left_running
+left_running
+BB_TEST_LATEST=0.45.0 updated
+BB_TEST_LATEST='' updated
+BB_TEST_NEED_RELOAD=yes updated
+BB_TEST_APP_ENABLED=0 updated
+left_running
+printf 'Environment=DRIFT=1\n' >> "$HOME/.config/systemd/user/setup-bb-app.service"
+updated
+! grep -q DRIFT "$HOME/.config/systemd/user/setup-bb-app.service"
+left_running
+printf '# drift\n' >> "$HOME/.config/systemd/user/setup-bb-ingress.service"
+updated
+chmod 644 "$HOME/.config/systemd/user/setup-bb-app.service"
+updated
+[[ "$(stat -c %a "$HOME/.config/systemd/user/setup-bb-app.service")" == 600 ]]
+printf '# drift\n' >> "$HOME/.config/setup-bb-server/bb-guard"
+updated
+cmp <(bb_guard_content) "$HOME/.config/setup-bb-server/bb-guard"
+left_running
+node -e 'const fs=require("fs"),f=process.argv[1],c=JSON.parse(fs.readFileSync(f));c.config.BB_APP_URL="https://old.example.ts.net";fs.writeFileSync(f,JSON.stringify(c))' "$HOME/.bb/config.json"
+updated
+node -e 'const fs=require("fs"),f=process.argv[1],e=JSON.parse(fs.readFileSync(f));e.env.BB_APP_URL="https://old.example.ts.net";fs.writeFileSync(f,JSON.stringify(e))' "$HOME/.bb/env.json"
+updated
+left_running
+printf '%s\n' "$HOME/.local/share/mise/installs/node/24.18.0/lib/node_modules/bb-app" > "$HOME/.config/setup-bb-server/package-owner"
+updated
+[[ "$(<"$HOME/.config/setup-bb-server/package-owner")" == "$HOME/.local/share/mise/installs/node/24.20.0/lib/node_modules/bb-app" ]]
+BB_TEST_HTTPS_FAIL_ONCE="$BB_TEST_ROOT/https-fail-once"
+: > "$BB_TEST_HTTPS_FAIL_ONCE"
+updated
+left_running
+unset BB_TEST_APP_ENABLED BB_TEST_LATEST BB_TEST_HTTPS_FAIL_ONCE
+unset -f bb_latest_package_version left_running updated
+printf 'current-server cases passed\n'
 
 # A native-lock timeout during an update leaves metadata byte-for-byte intact,
 # then restores the formerly running app and ingress without a stale rollback.

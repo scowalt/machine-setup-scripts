@@ -16,7 +16,7 @@ npm 12 defaults `allow-remote` to `none`, which refuses any package named by URL
 
 ## Consequences
 
-- Each setup run reinstalls whatever `bb-app-latest` points to; a broken fork release reaches the next server or prepared machine that runs setup, and a server's in-app updater may reach it first.
+- A setup run reinstalls `bb-app-latest` when its `bb-app-version.json` names a different version from the installed package. A running server that already has that version, with the units, guard, private endpoint and config setup would write, is left running, so hourly idle reruns ([ADR 0027](0027-rerun-setup-when-bb-is-idle.md)) don't restart it; an unreadable feed or any difference falls back to the stop, install and restart. A broken fork release reaches the next server or prepared machine that runs setup, and a server's in-app updater may reach it first.
 - A compromised fork release reaches servers and prepared machines, the same loss of setup-side detection ADR 0022 accepts for npm.
 - Upstream releases reach machines only after the owner merges or rebases them into the fork.
 - `tests/bb-server-contract.sh` and `tests/test_bb_machine_preparation.py` cover the package source and the version checks offline. Installing a real fork release on a server is unverified until a server runs setup.
