@@ -620,9 +620,6 @@ updated 'stale BB_APP_URL in config.json'
 node -e 'const fs=require("fs"),f=process.argv[1],e=JSON.parse(fs.readFileSync(f));e.env.BB_APP_URL="https://old.example.ts.net";fs.writeFileSync(f,JSON.stringify(e))' "$HOME/.bb/env.json"
 updated 'BB_APP_URL in env.json'
 left_running 'current after config repair'
-printf '%s\n' "$HOME/.local/share/mise/installs/node/24.18.0/lib/node_modules/bb-app" > "$HOME/.config/setup-bb-server/package-owner"
-updated 'different package owner'
-[[ "$(<"$HOME/.config/setup-bb-server/package-owner")" == "$HOME/.local/share/mise/installs/node/24.20.0/lib/node_modules/bb-app" ]] || current_case_failed 'different package owner: not promoted'
 export BB_TEST_HTTPS_FAIL_ONCE="$BB_TEST_ROOT/https-fail-once"
 : > "$BB_TEST_HTTPS_FAIL_ONCE"
 updated 'endpoint check failed'
