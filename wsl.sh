@@ -1673,6 +1673,13 @@ install_codex_cli() {
             fi
         fi
     fi
+    if command -v brew &> /dev/null && brew list --cask codex &> /dev/null; then
+        print_message "Removing retired Homebrew Codex cask..."
+        if ! brew uninstall --cask codex > /dev/null; then
+            print_error "Failed to remove Homebrew's codex cask."
+            return 1
+        fi
+    fi
     hash -r 2>/dev/null || true
 
     if ! curl_bin=$(claude_code_trusted_curl); then
@@ -9539,7 +9546,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 288 | Last changed: Retire Gemini CLI${NC}"
+    echo -e "${GRAY}Version 289 | Last changed: Remove the retired Homebrew Codex cask${NC}"
 
     if ! acquire_setup_lock; then
         return 1
