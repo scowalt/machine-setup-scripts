@@ -12,6 +12,16 @@ SCRIPTS = ('ubuntu.sh', 'wsl.sh', 'pi.sh', 'bazzite.sh')
 PROFILES = ('.profile', '.bashrc', '.bash_profile', '.zshrc', '.zprofile')
 CLEANUP_WARNING = 'WARNING: Could not safely inspect old Codex releases; skipped remaining cleanup.'
 CLEANUP_DEFERRAL = 'Codex deferred optional old-release cleanup; remaining releases were retained.'
+BREW_FIXTURE = '''
+brew() {
+    printf '%s\\n' "$*" >> "$TEST_BREW_LOG"
+    case "$*" in
+        'list --cask codex') [[ "$TEST_BREW" != absent ]] ;;
+        'uninstall --cask codex') [[ "$TEST_BREW" != uninstall-fails ]] ;;
+        *) return 99 ;;
+    esac
+}
+'''
 
 
 def function(script, name):
@@ -56,12 +66,13 @@ case "${TEST_BINARY:-working}" in
 esac
 ''')
 
-    def invoke(self, script, custom=False, fail=False, stderr='', status=None, binary='working', block_stderr=False):
+    def invoke(self, script, custom=False, fail=False, stderr='', status=None, binary='working', block_stderr=False, brew=None):
         env = {'HOME': str(self.home), 'PATH': os.defpath, 'LC_ALL': 'C',
                'TEST_INSTALLER': str(self.installer), 'TEST_CAPTURE': str(self.root / 'installer-home'),
                'TEST_STATUS': str(status if status is not None else (42 if fail else 0)),
                'TEST_STDERR': stderr, 'TEST_BINARY': binary,
-               'TEST_BLOCK_STDERR': '1' if block_stderr else '0', 'TMPDIR': str(self.root)}
+               'TEST_BLOCK_STDERR': '1' if block_stderr else '0', 'TMPDIR': str(self.root),
+               'TEST_BREW': brew or '', 'TEST_BREW_LOG': str(self.root / 'brew.log')}
         if custom:
             env['CODEX_HOME'] = str(self.home / 'custom codex')
         code = '''
@@ -71,7 +82,7 @@ print_debug() { printf 'DEBUG: %s\\n' "$*"; }
 print_success() { printf '%s\\n' "$*"; }
 print_error() { printf '%s\\n' "$*" >&2; }
 bun() { :; }
-claude_code_trusted_curl() { printf /fixture-curl; }
+''' + (BREW_FIXTURE if brew else '') + '''claude_code_trusted_curl() { printf /fixture-curl; }
 claude_code_run_safely() {
     if [[ "$1" == /fixture-curl ]]; then
         shift
@@ -185,6 +196,32 @@ claude_code_run_safely() {
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('codex: probe failure\n', result.stderr)
                 self.assertIn('smoke test failed without Node.js on PATH (exit code 17).', result.stderr)
+
+    def test_retired_homebrew_cask_is_removed_so_it_cannot_shadow_the_native_binary(self):
+        for script in SCRIPTS:
+            with self.subTest(script=script):
+                (self.root / 'brew.log').unlink(missing_ok=True)
+                result = self.invoke(script, brew='installed')
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((self.root / 'brew.log').read_text(), 'list --cask codex\nuninstall --cask codex\n')
+                self.assertIn('Codex CLI installed/updated (codex-cli 9.9.9)', result.stdout)
+
+    def test_homebrew_without_the_cask_is_left_alone(self):
+        for script in SCRIPTS:
+            with self.subTest(script=script):
+                (self.root / 'brew.log').unlink(missing_ok=True)
+                result = self.invoke(script, brew='absent')
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((self.root / 'brew.log').read_text(), 'list --cask codex\n')
+
+    def test_failed_cask_removal_stops_before_the_installer(self):
+        for script in SCRIPTS:
+            with self.subTest(script=script):
+                result = self.invoke(script, brew='uninstall-fails')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Failed to remove Homebrew's codex cask.", result.stderr)
+                self.assertFalse((self.root / 'installer-home').exists())
+                self.assertNotIn('Codex CLI installed/updated', result.stdout)
 
     def test_failed_installer_preserves_profiles_and_cleans_temporary_home(self):
         for script in SCRIPTS:
