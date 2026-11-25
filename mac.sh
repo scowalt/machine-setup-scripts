@@ -1395,9 +1395,7 @@ install_homebrew() {
 }
 
 bootstrap_ssh_config() {
-    if is_main_user; then
-        return
-    fi
+    [[ -f ~/.ssh/dotfiles-deploy-key ]] || return 0
 
     if ! awk 'tolower($1) == "host" { for (i=2; i<=NF; i++) if ($i == "github-dotfiles") found=1 } END { exit !found }' ~/.ssh/config 2>/dev/null; then
         print_message "Bootstrapping SSH config for dotfiles access..."
@@ -1405,7 +1403,7 @@ bootstrap_ssh_config() {
         chmod 700 ~/.ssh
         cat >> ~/.ssh/config << 'EOF'
 
-# Deploy key for read-only access to scowalt/dotfiles (secondary users only)
+# Deploy key for read-only access to scowalt/dotfiles
 Host github-dotfiles
     HostName github.com
     User git
@@ -10246,7 +10244,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 339 | Last changed: Retire Gemini CLI${NC}"
+    echo -e "${GRAY}Version 340 | Last changed: Add the github-dotfiles SSH alias only with a deploy key, and leave it to dotfiles after apply${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -10364,7 +10362,6 @@ HELPER_EOF
             print_error "Failed to apply chezmoi dotfiles."
             _setup_had_errors=1
         fi
-        bootstrap_ssh_config
     else
         print_warning "Skipping dotfiles management - no access to repository."
     fi

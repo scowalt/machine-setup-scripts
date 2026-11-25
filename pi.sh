@@ -266,6 +266,8 @@ ensure_not_root() {
 }
 
 bootstrap_ssh_config() {
+    [[ -f ~/.ssh/dotfiles-deploy-key ]] || return 0
+
     if ! awk 'tolower($1) == "host" { for (i=2; i<=NF; i++) if ($i == "github-dotfiles") found=1 } END { exit !found }' ~/.ssh/config 2>/dev/null; then
         print_message "Bootstrapping SSH config for dotfiles access..."
         mkdir -p ~/.ssh
@@ -10084,7 +10086,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 308 | Last changed: Install GitHub CLI from its official apt repository"
+    echo -e "${GRAY}Version 309 | Last changed: Add the github-dotfiles SSH alias only with a deploy key, and leave it to dotfiles after apply"
 
     if ! acquire_setup_lock; then
         return 1
@@ -10170,7 +10172,6 @@ run_setup_tasks() {
             print_error "Failed to apply chezmoi dotfiles."
             _setup_had_errors=1
         fi
-        bootstrap_ssh_config
     else
         print_warning "Skipping dotfiles management - no access to repository."
     fi

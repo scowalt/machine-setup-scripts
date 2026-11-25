@@ -173,15 +173,26 @@ dotfiles_output=$(SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${s
 grep -q '^remote=git@github.com:scowalt/dotfiles.git$' <<< "${dotfiles_output}" || fail 'ubuntu.sh: personal SSH key did not restore the direct chezmoi remote'
 rm -rf "${dotfiles_tmp}"
 
-alias_tmp=$(mktemp -d)
-mkdir -p "${alias_tmp}/home/.ssh"
-printf '%s\n' '# Host github-dotfiles' 'Host github-dotfiles-old' > "${alias_tmp}/home/.ssh/config"
-SETUP_SCRIPT="${repo_root}/ubuntu.sh" SOURCE_WITHOUT_MAIN="${source_without_main}" HOME="${alias_tmp}/home" bash -c '
-    source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
-    bootstrap_ssh_config > /dev/null
-'
-awk 'tolower($1) == "host" { for (i=2; i<=NF; i++) if ($i == "github-dotfiles") found=1 } END { exit !found }' "${alias_tmp}/home/.ssh/config" || fail 'ubuntu.sh: exact github-dotfiles alias was not restored'
-rm -rf "${alias_tmp}"
+for file in "${dotfiles_setup_scripts[@]}"; do
+    alias_tmp=$(mktemp -d)
+    mkdir -p "${alias_tmp}/home/.ssh"
+    printf '%s\n' '# Host github-dotfiles' 'Host github-dotfiles-old' > "${alias_tmp}/home/.ssh/config"
+    cp "${alias_tmp}/home/.ssh/config" "${alias_tmp}/expected"
+    SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" HOME="${alias_tmp}/home" bash -c '
+        source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+        bootstrap_ssh_config > /dev/null
+    '
+    cmp -s "${alias_tmp}/expected" "${alias_tmp}/home/.ssh/config" || fail "${file}: github-dotfiles alias was added without a deploy key"
+    touch "${alias_tmp}/home/.ssh/dotfiles-deploy-key"
+    SETUP_SCRIPT="${repo_root}/${file}" SOURCE_WITHOUT_MAIN="${source_without_main}" HOME="${alias_tmp}/home" bash -c '
+        source <(sed "${SOURCE_WITHOUT_MAIN}" "${SETUP_SCRIPT}")
+        bootstrap_ssh_config > /dev/null
+    '
+    awk 'tolower($1) == "host" { for (i=2; i<=NF; i++) if ($i == "github-dotfiles") found=1 } END { exit !found }' "${alias_tmp}/home/.ssh/config" || fail "${file}: exact github-dotfiles alias was not restored for the deploy key"
+    alias_mode=$(stat -c %a "${alias_tmp}/home/.ssh/config")
+    [[ "${alias_mode}" == 600 ]] || fail "${file}: bootstrapped SSH config is not private"
+    rm -rf "${alias_tmp}"
+done
 
 for file in "${dotfiles_setup_scripts[@]}"; do
     for method in ssh token deploy; do
@@ -214,13 +225,9 @@ for file in "${dotfiles_setup_scripts[@]}"; do
 done
 
 for file in "${dotfiles_setup_scripts[@]}"; do
-    if [[ "${file}" == "pi.sh" ]]; then
-        apply_line=$(grep -n 'apply_chezmoi_config' "${file}" | tail -n 1 | cut -d: -f1)
-    else
-        apply_line=$(grep -n 'chezmoi apply --force' "${file}" | tail -n 1 | cut -d: -f1)
-    fi
+    update_line=$(grep -n '^[[:space:]]*update_chezmoi$' "${file}" | tail -n 1 | cut -d: -f1)
     bootstrap_line=$(grep -n '^[[:space:]]*bootstrap_ssh_config$' "${file}" | tail -n 1 | cut -d: -f1)
-    [[ -n "${apply_line}" && -n "${bootstrap_line}" && "${bootstrap_line}" -gt "${apply_line}" ]] || fail "${file}: github-dotfiles alias is not restored after the final chezmoi apply"
+    [[ -n "${update_line}" && -n "${bootstrap_line}" && "${bootstrap_line}" -lt "${update_line}" ]] || fail "${file}: github-dotfiles alias is not bootstrapped before chezmoi update, or setup rewrites the dotfiles-owned SSH config after apply"
 done
 
 for file in "${apt_setup_scripts[@]}"; do

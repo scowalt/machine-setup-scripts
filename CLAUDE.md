@@ -548,7 +548,7 @@ The scripts support running dotfiles setup for users other than the main user (s
 **Architecture**:
 
 1. **Deploy key generation**: `~/.ssh/dotfiles-deploy-key` (ed25519)
-2. **SSH config alias**: `github-dotfiles` host that uses the deploy key
+2. **SSH config alias**: `github-dotfiles` host that uses the deploy key. `bootstrap_ssh_config` appends it only when `~/.ssh/dotfiles-deploy-key` exists and only before chezmoi clones or updates; after that, dotfiles' `private_dot_ssh/private_config.tmpl` owns it and writes it whenever that key exists, for any user
 3. **Chezmoi initialization**: Uses `git@github-dotfiles:scowalt/dotfiles.git` instead of the default SSH URL
 
 **How it works**:
