@@ -149,7 +149,7 @@ All scripts follow a consistent pattern:
 
 ### Common Tools Installed
 
-- Version Control: git, gh (GitHub CLI)
+- Version Control: git, gh (GitHub CLI). Ubuntu, WSL and Pi install gh from GitHub's apt repository, not the distribution archive, whose 2.46.0 is broken ([ADR 0028](docs/adr/0028-install-gh-from-githubs-apt-repository.md)). Run `bash tests/github-cli-installation-contract.sh`.
 - Shell: fish (with completions), tmux
 - Node.js: shared mise runtime. Pi requires >=22.19 and `fs.globSync`; the skills CLI requires >=22.20. Preserve a compatible global selection even when setup inherits another Node. If needed, provision Node 24 or official Node 22 binaries on Linux ARMv7 without compilation. Validate ordinary HOME selection and fresh-shell activation before Pi package mutations. Preserve project pins and conflicting HOME overrides. Chezmoi owns shell activation and retires managed fnm startup. All six scripts enable Node idiomatic project pins additively and native `activate_aggressive` PATH precedence, require the process-local activation revision plus runtime/policy checks, and repair failure through one targeted Chezmoi apply before independently rechecking. Preserve unrelated files/scripts, runtime installations, native config precedence, intentional overrides, and npm security. Keep Bash helpers identical and repair failures blocking dependent setup. Do not add private Pi runtimes, launchers, or npm adapters. Run `bash tests/shared-node-runtime-contract.sh`; set `PI_RUNTIME_DOTFILES_SOURCE` for native repair-to-skills integration and `PWSH_BIN` for PowerShell fixtures.
 - Python: pyenv (Python version management)

@@ -584,40 +584,55 @@ update_and_install_core() {
 install_github_cli() {
     local _keyring=/etc/apt/keyrings/githubcli-archive-keyring.gpg
     local _keyring_sha256=6084d5d7bd8e288441e0e94fc6275570895da18e6751f70f057485dc2d1a811b
+    local _dir=/etc/apt/sources.list.d
     local _list=/etc/apt/sources.list.d/github-cli.list
     local _minimum_version=2.102
-    local _download _arch _version
+    local _download _arch _version _other
 
     if ! can_sudo; then
         print_warning "No sudo access - cannot install GitHub CLI from cli.github.com."
         return 0
     fi
 
-    print_message "Installing GitHub CLI from cli.github.com..."
-    _download=$(mktemp) || return 1
-    if ! curl -fsSL --retry 3 --tlsv1.2 --proto "=https" -o "${_download}" \
-        https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-        || ! sha256sum --check --status <<< "${_keyring_sha256}  ${_download}"; then
-        rm -f "${_download}"
-        print_error "Could not download the GitHub CLI signing keyring with the expected checksum."
-        return 1
+    if apt-mark showhold 2> /dev/null | grep -Fxq gh; then
+        print_debug "GitHub CLI is held with apt-mark; leaving it unchanged."
+        return 0
     fi
-    if ! sudo install -D -m 0644 "${_download}" "${_keyring}"; then
-        rm -f "${_download}"
-        print_error "Could not install the GitHub CLI signing keyring."
-        return 1
-    fi
-    rm -f "${_download}"
 
-    _arch=$(dpkg --print-architecture) || return 1
-    if ! printf 'deb [arch=%s signed-by=%s] https://cli.github.com/packages stable main\n' "${_arch}" "${_keyring}" \
-        | sudo tee "${_list}" > /dev/null; then
-        print_error "Could not write the GitHub CLI apt source."
-        return 1
+    print_message "Installing GitHub CLI from cli.github.com..."
+    _other=$(grep -lsF cli.github.com/packages "${_dir}"/*.list "${_dir}"/*.sources | grep -v '/github-cli\.list$' | head -n 1 || true)
+    if [[ -n "${_other}" ]]; then
+        print_debug "Using the GitHub CLI apt source already in ${_other}."
+        if ! sudo rm -f "${_list}"; then
+            print_error "Could not remove the duplicate GitHub CLI apt source."
+            return 1
+        fi
+    else
+        _download=$(mktemp) || return 1
+        if ! curl -fsSL --retry 3 --tlsv1.2 --proto "=https" -o "${_download}" \
+            https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+            || ! sha256sum --check --status <<< "${_keyring_sha256}  ${_download}"; then
+            rm -f "${_download}"
+            print_error "Could not download the GitHub CLI signing keyring with the expected checksum."
+            return 1
+        fi
+        if ! sudo install -D -m 0644 "${_download}" "${_keyring}"; then
+            rm -f "${_download}"
+            print_error "Could not install the GitHub CLI signing keyring."
+            return 1
+        fi
+        rm -f "${_download}"
+
+        _arch=$(dpkg --print-architecture) || return 1
+        if ! printf 'deb [arch=%s signed-by=%s] https://cli.github.com/packages stable main\n' "${_arch}" "${_keyring}" \
+            | sudo tee "${_list}" > /dev/null; then
+            print_error "Could not write the GitHub CLI apt source."
+            return 1
+        fi
     fi
 
     if ! sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq \
-        -o Dir::Etc::sourcelist="${_list}" -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0; then
+        -o Dir::Etc::sourcelist="${_other:-${_list}}" -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0; then
         print_error "Could not refresh the GitHub CLI apt source."
         return 1
     fi
@@ -10086,7 +10101,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🍓 Raspberry Pi Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 309 | Last changed: Add the github-dotfiles SSH alias only with a deploy key, and leave it to dotfiles after apply"
+    echo -e "${GRAY}Version 310 | Last changed: Reuse an existing GitHub CLI apt source"
 
     if ! acquire_setup_lock; then
         return 1
