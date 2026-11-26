@@ -1487,7 +1487,8 @@ update_chezmoi() {
         if with_bb_dotfiles_umask mac chezmoi update --force > /dev/null; then
             print_success "chezmoi dotfiles repository updated."
         else
-            print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
+            print_error "Failed to update chezmoi dotfiles repository. Applying the local copy; setup will exit with an error."
+            return 1
         fi
     elif [[ -d "${chez_src}" ]]; then
         print_warning "Broken chezmoi directory detected, reinitializing..."
@@ -10244,7 +10245,7 @@ run_setup_tasks() {
 
     current_user=$(whoami || true)
     echo -e "\n${BOLD}🍎 macOS Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 340 | Last changed: Add the github-dotfiles SSH alias only with a deploy key, and leave it to dotfiles after apply${NC}"
+    echo -e "${GRAY}Version 341 | Last changed: Fail setup when the dotfiles update fails${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -10357,7 +10358,9 @@ HELPER_EOF
         fi
         bootstrap_ssh_config
         configure_chezmoi_git
-        update_chezmoi
+        if ! update_chezmoi; then
+            _setup_had_errors=1
+        fi
         if ! with_bb_dotfiles_umask mac chezmoi apply --force; then
             print_error "Failed to apply chezmoi dotfiles."
             _setup_had_errors=1

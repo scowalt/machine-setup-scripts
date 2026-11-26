@@ -93,9 +93,8 @@ umask "$1"
             for stage in ['init', 'update', 'apply']:
                 out = self.run_stage(case, apply, stage, failure='17')
                 self.assertNotIn('SUCCESS:', out.stdout)
-                self.assertTrue('ERROR:' in out.stdout or 'WARNING:' in out.stdout, out)
-                if stage != 'update':
-                    self.assertEqual(out.returncode, 1, out)
+                self.assertIn('ERROR:', out.stdout)
+                self.assertEqual(out.returncode, 1, out)
 
     def test_native_managed_arcane_modes_converge_then_preparation_succeeds_twice(self):
         for platform in ('mac', 'ubuntu', 'pi', 'bazzite'):

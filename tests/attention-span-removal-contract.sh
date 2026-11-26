@@ -58,7 +58,7 @@ assert_contains win.ps1 '\$env:CODEX_HOME' 'PowerShell custom Codex directory cl
 # shellcheck disable=SC2016
 assert_contains win.ps1 '\$env:PI_CODING_AGENT_DIR' 'PowerShell custom Pi directory cleanup'
 assert_not_contains win.ps1 'Install-AttentionSpanStyle|raw\.githubusercontent\.com/alexgreensh/attention-span' 'active PowerShell Attention-kind installation support'
-windows_dotfiles_line=$(grep -En '^[[:space:]]+Update-Chezmoi$' win.ps1 | tail -n 1 | cut -d: -f1)
+windows_dotfiles_line=$(grep -En '^[[:space:]]+if \(-not \(Update-Chezmoi\)\)' win.ps1 | tail -n 1 | cut -d: -f1)
 windows_cleanup_line=$(grep -En '^[[:space:]]+Remove-AttentionSpanResources$' win.ps1 | tail -n 1 | cut -d: -f1)
 [[ -n "${windows_dotfiles_line}" && -n "${windows_cleanup_line}" && "${windows_dotfiles_line}" -lt "${windows_cleanup_line}" ]] ||
     fail 'win.ps1: Attention-kind cleanup does not run after dotfiles'

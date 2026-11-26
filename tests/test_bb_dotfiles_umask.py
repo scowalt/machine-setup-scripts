@@ -274,8 +274,7 @@ umask "$2"
                 with self.subTest(selection=selection, stage=stage, method=method):
                     result = self.run_stage(stage, selection=selection, method=method, fail="17")
                     self.assertIn("Failed to", result.stdout)
-                    if stage != "update":
-                        self.assertEqual(result.returncode, 1, result)
+                    self.assertEqual(result.returncode, 1, result)
                     self.assertNotIn("SUCCESS:", result.stdout)
 
     def test_native_apply_converges_existing_writable_and_missing_managed_directories(self):
@@ -406,7 +405,7 @@ bb_machine_package_state preflight
                         self.assertEqual(command['args'], args)
                         failure = self.run_stage(stage, mask, '0', method, fail='17')
                         self.assertNotIn('SUCCESS:', failure.stdout)
-                        self.assertEqual(failure.returncode, 0 if stage == 'update' else 1, failure)
+                        self.assertEqual(failure.returncode, 1, failure)
             if platform == 'pi':
                 fallback.rename(self.bin / 'chezmoi')
 
