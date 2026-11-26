@@ -225,7 +225,7 @@ for file in "${dotfiles_setup_scripts[@]}"; do
 done
 
 for file in "${dotfiles_setup_scripts[@]}"; do
-    update_line=$(grep -n '^[[:space:]]*update_chezmoi$' "${file}" | tail -n 1 | cut -d: -f1)
+    update_line=$(grep -n '^[[:space:]]*if ! update_chezmoi; then$' "${file}" | tail -n 1 | cut -d: -f1)
     bootstrap_line=$(grep -n '^[[:space:]]*bootstrap_ssh_config$' "${file}" | tail -n 1 | cut -d: -f1)
     [[ -n "${update_line}" && -n "${bootstrap_line}" && "${bootstrap_line}" -lt "${update_line}" ]] || fail "${file}: github-dotfiles alias is not bootstrapped before chezmoi update, or setup rewrites the dotfiles-owned SSH config after apply"
 done

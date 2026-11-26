@@ -46,9 +46,9 @@ done
 assert_contains win.ps1 '^function Remove-RtkResources' 'PowerShell retired RTK cleanup interface'
 assert_contains win.ps1 '^[[:space:]]+Remove-RtkResources$' 'strict PowerShell RTK cleanup call'
 assert_not_contains win.ps1 'Install-RtkCli|Setup-RtkIntegrations|BAN_RTK|api\.github\.com/repos/rtk-ai' 'active PowerShell RTK installation support'
-windows_dotfiles_line=$(grep -En '^[[:space:]]+Update-Chezmoi$' win.ps1 | tail -n 1 | cut -d: -f1)
+windows_dotfiles_line=$(grep -En '^[[:space:]]+if \(-not \(Update-Chezmoi\)\)' win.ps1 | tail -n 1 | cut -d: -f1)
 windows_cleanup_line=$(grep -En '^[[:space:]]+Remove-RtkResources$' win.ps1 | tail -n 1 | cut -d: -f1)
-[[ "${windows_dotfiles_line}" -lt "${windows_cleanup_line}" ]] || fail 'win.ps1: RTK cleanup does not run after dotfiles'
+[[ -n "${windows_dotfiles_line}" && -n "${windows_cleanup_line}" && "${windows_dotfiles_line}" -lt "${windows_cleanup_line}" ]] || fail 'win.ps1: RTK cleanup does not run after dotfiles'
 
 for file in "${all_setup_scripts[@]}"; do
     assert_not_contains "${file}" 'raw\.githubusercontent\.com/rtk-ai/rtk|rtk telemetry (enable|disable)' 'RTK download or telemetry setup'

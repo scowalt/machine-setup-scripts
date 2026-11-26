@@ -429,16 +429,17 @@ function Update-Chezmoi {
             git -C $chezmoiConfigPath clean -fd 2>$null | Out-Null
         }
         $updateOutput = chezmoi update --force 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "$success chezmoi dotfiles repository updated." -ForegroundColor Green
+        if ($LASTEXITCODE -ne 0) {
+            $updateOutput | ForEach-Object { Write-Host "$_" }
+            Write-Host "$failIcon Failed to update chezmoi dotfiles repository. The local copy stays applied; setup will exit with an error." -ForegroundColor Red
+            return $false
         }
-        else {
-            Write-Host "$warnIcon Failed to update chezmoi dotfiles repository. Continuing anyway." -ForegroundColor Yellow
-        }
+        Write-Host "$success chezmoi dotfiles repository updated." -ForegroundColor Green
     }
     else {
         Write-Debug "chezmoi not initialized yet, skipping update."
     }
+    return $true
 }
 
 $githubUsername = "scowalt"
@@ -9346,9 +9347,10 @@ function Invoke-WindowsSetupTasks {
     $prLensSetupFailed = $false
     $agySetupFailed = $false
     $geminiRetirementFailed = $false
+    $dotfilesUpdateFailed = $false
     $windowsIcon = [char]0xf17a   
     Write-Host "`n$windowsIcon Windows Development Environment Setup" -ForegroundColor White -BackgroundColor DarkBlue
-    Write-Host "Version 218 | Last changed: Retire Gemini CLI"
+    Write-Host "Version 219 | Last changed: Fail setup when the dotfiles update fails"
 
     Assert-HeadlessUnsupported
 
@@ -9371,7 +9373,7 @@ function Invoke-WindowsSetupTasks {
 
         Write-Section "Dotfiles Management"
         Install-Chezmoi
-        Update-Chezmoi
+        if (-not (Update-Chezmoi)) { $dotfilesUpdateFailed = $true }
     }
 
     if (-not (Remove-GlobalBacklogMcp)) { $piSetupFailed = $true }
@@ -9505,6 +9507,9 @@ function Invoke-WindowsSetupTasks {
     }
     if ($agySetupFailed) {
         throw 'Antigravity CLI installation failed.'
+    }
+    if ($dotfilesUpdateFailed) {
+        throw 'Dotfiles update failed.'
     }
 
     Write-Host "`n$sparkles Setup complete!" -ForegroundColor Green -BackgroundColor DarkGreen

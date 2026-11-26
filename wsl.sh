@@ -730,7 +730,8 @@ update_chezmoi() {
         if with_bb_dotfiles_umask wsl chezmoi update --force > /dev/null; then
             print_success "chezmoi dotfiles repository updated."
         else
-            print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
+            print_error "Failed to update chezmoi dotfiles repository. Applying the local copy; setup will exit with an error."
+            return 1
         fi
     else
         print_debug "chezmoi not initialized yet, skipping update."
@@ -9616,7 +9617,7 @@ run_setup_tasks() {
     local PI_PROFILE_MUTATIONS_BLOCKED=0
 
     echo -e "\n${BOLD}🐧 WSL Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 292 | Last changed: Reuse an existing GitHub CLI apt source${NC}"
+    echo -e "${GRAY}Version 293 | Last changed: Fail setup when the dotfiles update fails${NC}"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9677,7 +9678,9 @@ run_setup_tasks() {
         fi
         bootstrap_ssh_config
         configure_chezmoi_git
-        update_chezmoi
+        if ! update_chezmoi; then
+            _setup_had_errors=1
+        fi
         if ! with_bb_dotfiles_umask wsl chezmoi apply --force; then
             print_error "Failed to apply chezmoi dotfiles."
             _setup_had_errors=1

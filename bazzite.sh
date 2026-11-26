@@ -955,7 +955,8 @@ update_chezmoi() {
         if with_bb_dotfiles_umask bazzite chezmoi update --force > /dev/null; then
             print_success "chezmoi dotfiles repository updated."
         else
-            print_warning "Failed to update chezmoi dotfiles repository. Continuing anyway."
+            print_error "Failed to update chezmoi dotfiles repository. Applying the local copy; setup will exit with an error."
+            return 1
         fi
     else
         print_debug "chezmoi not initialized yet, skipping update."
@@ -9571,7 +9572,7 @@ run_setup_tasks() {
     local _pi_go_ready=0
     local PI_PROFILE_MUTATIONS_BLOCKED=0
     echo -e "\n${BOLD}🎮 Bazzite Development Environment Setup${NC}"
-    echo -e "${GRAY}Version 211 | Last changed: Add the github-dotfiles SSH alias only with a deploy key, and leave it to dotfiles after apply"
+    echo -e "${GRAY}Version 212 | Last changed: Fail setup when the dotfiles update fails"
 
     if ! acquire_setup_lock; then
         return 1
@@ -9664,7 +9665,9 @@ HELPER_EOF
         if ! fix_chezmoi_remote_for_deploy_key; then
             _setup_had_errors=1
         fi
-        update_chezmoi
+        if ! update_chezmoi; then
+            _setup_had_errors=1
+        fi
         if ! with_bb_dotfiles_umask bazzite chezmoi apply --force; then
             print_error "Failed to apply chezmoi dotfiles."
             _setup_had_errors=1
